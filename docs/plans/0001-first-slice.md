@@ -64,7 +64,7 @@ Location: one SQLite file at the *main* checkout, `<repo>/.air/ledger.db` (found
 | # | Table | Row = | Written by | Lives until |
 |---|---|---|---|---|
 | 1 | `verify_runs` | worker, sha, kind (`verify`/`docs-check`/`fitness`), exit, start/finish, log path | `air record <kind> -- <cmd>` (fallback: parse `logs/verify.log` END trailer) | keep last 50 per worker+kind, plus any row referenced by a landing (`air gc`) |
-| 2 | `edit_journal` | worker, path, first/last seen, session id — *intent to touch* | `PostToolUse(Edit\|Write)` hook, zero tokens | the path is no longer in that worker's diff vs main (landed/reverted) or the branch/worktree is gone |
+| 2 | `edit_journal` | worker, path, first/last seen, session id — *intent to touch*; **file paths only** — directory overlap is derived at query time, never stored ([lane granularity tick](../research/verification/ticks/2026-08-18-0400-lane-granularity.md)) | `PostToolUse(Edit\|Write)` hook, zero tokens | the path is no longer in that worker's diff vs main (landed/reverted) or the branch/worktree is gone |
 | 3 | `claims` | worker, bead, claimed-at, optional declared files, optional preconditions (`--after peer@sha`) — *the intent record* | `air claim` / `air release` (wraps `bd update --claim` with CAS + actor) | bead leaves `in_progress` in bd (bd is truth; reconciled on every command) |
 | 4 | `sessions` | worker, session id, transcript path, state ∈ {working, running(tool) since, stuck(permission) since, idle since}, changed-at | `SessionStart`/`PreToolUse`/`PostToolUse`/`PermissionRequest`/`Stop`/`SessionEnd` hooks | `SessionEnd`, or transcript/worktree gone |
 | 5 | `landings` | worker, sha, result (+ failing step), verify_run id, ts — *the receipt* | `air land` | forever (audit trail; measures review latency = green → landed) |
@@ -83,8 +83,12 @@ Derived on demand, never stored: holdings (who has edits in which file: `git sta
 - `air holdings [--file X]` — who has edits in which files, uncommitted vs committed, with shas.
   ("compared 4 worktrees, 6 pairs".)
 - `air next` — `bd ready --json` filtered live (already claimed, runtime label, WIP), ranked by
-  file overlap with live holdings; shows *which peer, which file*, and whether the bead's
-  `file:line` citations still resolve. Leaves the choice to worker/coordinator.
+  **same-file** overlap with live holdings, then same-directory overlap as a tie-breaker only;
+  files on the committed cross-cutting list (`shared_files` in `.air/config.toml`: `features.md`,
+  `authorization-matrix.md`, openapi, lockfiles, Makefile) held by a live peer are always flagged
+  regardless of rank ([lane granularity tick](../research/verification/ticks/2026-08-18-0400-lane-granularity.md)); shows *which peer, which file*, and whether the bead's
+  `file:line` citations still resolve. A declared lane on the claim is a hint that seeds ranking
+  before the first edit; the journal supersedes it. Leaves the choice to worker/coordinator.
 - `air peer <name>` — peer's HEAD, last recorded green sha, red-or-green, whether it already
   contains my HEAD ("merge-back is cheap"), the exact `git merge <sha>` to run.
 - `air merge-advice` — "main moved to X touching your files [list]; peer P is green at Y touching
