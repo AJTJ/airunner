@@ -130,11 +130,11 @@ path is the binary, not a worktree copy (enforcement rank 10).
 | `SessionStart` | inject `status` for this worker (claims, green sha, holdings, main moved?) as `additionalContext` |
 | `PreToolUse(Edit\|Write\|MultiEdit)` | if the target path is held by a peer (uncommitted or committed since my merge-base): **warn** with peer + sha in `additionalContext`; never deny (fourth §7b: "before I start, not after"; third: derive from diff, don't ask) |
 | `PostToolUse(Edit\|Write)` | journal `holding(intent)` — zero token cost (0022 §5.3) |
-| `PreCompact` | write the compaction packet: claims, holdings, promises, green sha, merged peers |
+| `PreCompact` | write the compaction packet: claims, holdings, green sha, merged peers. Caveat: PreCompact fires late for *evidence capture*; the Stop hook is the primary point, PreCompact a re-injection point ([hook edge cases](../research/verification/ticks/2026-08-18-0245-claude-code-hook-edge-cases.md)) |
 | `Stop` / `SubagentStop` | advisory `handover` result as context in M0; **blocking** only when the worker has set `awaiting_review`/close in this turn and evidence is missing (M1, after one round of advisory data) |
 
 Liveness for the coordinator/`status`: last **tool call** (transcript mtime), not last message
-(coord §6(v)).
+(coord §6(v)). Verified constraints ([hook edge cases](../research/verification/ticks/2026-08-18-0245-claude-code-hook-edge-cases.md)): `PermissionRequest` is a real hook event (can auto-allow/deny) — the `stuck` state is observable; `SessionEnd` is **not guaranteed** on SIGKILL/crash — the `sessions` row must also expire when the transcript stops changing and the worktree/process is gone; hooks run in parallel with a 600 s default timeout — Air sets its own short `timeout`; Stop-hook blocking must honour `stop_hook_active` to avoid loops.
 
 ## 6. What stays with people
 
