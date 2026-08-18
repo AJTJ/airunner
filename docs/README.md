@@ -17,4 +17,4 @@
 | Skills/reference material to port before building | a private skills inventory |
 | Starting a session in a worktree: which checkout am I in, what may I do, how to hand over (and what Air enforces) | [`rules/worktree-protocol.md`](rules/worktree-protocol.md) |
 | Reading adopter's original research notes (verbatim copies, provenance-pinned) | [`research/adopter-notes/`](research/adopter-notes/PROVENANCE.md) |
-| Checking whether a corpus claim survived independent source verification | [`research/verification/`](research/verification/) (in progress: 5 slices) |
+| Checking whether a corpus claim survived independent source verification | [`research/verification/`](research/verification/) — 5 slices done; ticks in `verification/ticks/` with [`SUMMARY.md`](research/verification/ticks/SUMMARY.md) |
