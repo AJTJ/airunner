@@ -48,6 +48,22 @@ hours, imported-red incidents, stale-`next` rate, WIP as a counter.
 features, run an LLM coordinator, keep phase labels, batch/bisect merges, resolve conflicts, or
 store anything git or `bd` can re-derive.
 
+## Quick start (dev)
+
+```bash
+cargo build                                  # workspace: crates/{ledger,bd,hooks,cli}
+cargo nextest run --workspace                # 24 tests, ~0.2 s
+target/debug/air selftest                    # red/green probes for every check
+target/debug/air record verify -- make verify
+target/debug/air handover                    # advisory; --enforce to refuse (exit 2)
+target/debug/air holdings                    # who has edits in which files, across worktrees
+target/debug/air doctor
+```
+
+Hook wiring: `.claude/settings.json` in the target repo calls `air hook` for
+PreToolUse/PostToolUse/Stop/SessionStart/SessionEnd/PermissionRequest (installer to come);
+`AIR_ENFORCE=1` turns the hand-over check from advisory into a refusal.
+
 ## Layout
 
 | Path | What |
@@ -55,6 +71,8 @@ store anything git or `bd` can re-derive.
 | `docs/research/` | Sourced research reports — every claim traces to a file:line or URL |
 | `docs/plans/` | Design arguments and decisions (ADR-style) |
 | `docs/README.md` | Index and read-when triggers |
+| `crates/` | `ledger`, `bd`, `hooks`, `cli` (binary `air`) |
+| `.claude/skills/` | Ported/written skills with provenance |
 
 ## Rules
 

@@ -31,7 +31,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Wanting the "why", framing, and every owner decision (dated) | [`docs/decisions.md`](docs/decisions.md) |
 | Orienting in the research | [`docs/README.md`](docs/README.md) — index of all reports |
 | Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
-| Building the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
+| Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
 | Thinking about feature → epics → tasks and how agents traverse an epic | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) (draft; six owner decisions in §7) |
 | Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
 | Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
@@ -40,15 +40,15 @@ Index items are 1–3 lines; detail lives behind the link.
 | Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
 | Working with `bd` (versions, leases trap) | [`docs/research/beads-and-gastown.md`](docs/research/beads-and-gastown.md) §0 |
 
-## Index — systems and subsystems (planned; see plan 0001)
+## Index — systems and subsystems (first slice built 2026-08-18; see plan 0001)
 
 | System | One line |
 |---|---|
-| Ledger (`.air/ledger.db` + `.air/events/`) | SQLite of facts git/bd can't re-derive: `verify_runs`, `edit_journal`, `claims`, `sessions`, `landings`; NDJSON events. No time-based expiry. |
-| `air hook` | One binary behind Claude Code hooks (SessionStart / PreToolUse / PostToolUse / PermissionRequest / PreCompact / Stop); answers in <300 ms; advisory first. |
-| `air` CLI | `record`, `claim`/`release`, `holdings`, `next`, `peer`, `merge-advice`, `handover`, `status`, `land`, `gc`, `doctor`, `selftest`; `--json`; prints denominators. |
+| `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) + NDJSON events (`.air/events/`): `verify_runs`, `edit_journal`, `claims`, `sessions`, `landings`. No time-based expiry. **Built.** |
+| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, edit journal; `air hook` dispatches SessionStart/PreToolUse/PostToolUse/PermissionRequest/Stop/SessionEnd, fails open, ~100 ms. Advisory unless `AIR_ENFORCE=1`. **Built.** |
+| `crates/cli` (`air`) | Built: `record`, `handover`, `holdings`, `hook`, `doctor`, `selftest` (`--json`, denominators). Next: `claim`/`release`, `capture`, `next`, `peer`, `merge-advice`, `status`, `land`, `gc`, `install`. |
 | Hand-over gate | The one refusal: `awaiting_review`/close needs recorded green at HEAD + main merged. Never blocks a prompt or a WIP commit. |
-| Beads boundary | Read via `bd --json`; write only through `bd` (CAS); leases mirrored in ledger; `bd` pinned. |
+| `crates/bd` (`air-bd`) | `WorkLedger` trait + `bd --json` shell-out (bd 1.2.2 surface); CAS/leases live in the ledger; never called from a hook. **Built (minimal).** |
 | Coordinator (human-facing session) | Steers, triages, priorities/lanes, rulings, arbitration, `land`. SendMessage stays the channel. |
 
 ## Essentials
