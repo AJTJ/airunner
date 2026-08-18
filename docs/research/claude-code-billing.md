@@ -1,5 +1,5 @@
 # Claude Code Billing & Pricing Research
-**Verified 2026-08-17 | Primary Anthropic Sources Only**
+**Verified 2026-08-17 (re-verified 2026-08-18) | Primary Anthropic Sources Only**
 
 ---
 
@@ -102,7 +102,7 @@ Anthropic paused planned changes on June 15, 2026. Current status:
 **Rate limit constraint** ([code.claude.com/docs/en/costs.md](https://code.claude.com/docs/en/costs.md), verified 2026-08-17):
 - Rate limits pool across all sessions on your account
 - Pro and Max have shared 5-hour session + weekly window across all concurrent instances
-- Practical limit: 3–5 concurrent agents sustainable on Max; beyond that, switch to API key billing
+- Practical limit: **~4 concurrent agents observed on Max** (ESTIMATE based on adopter 4-agent fleet, SESSION_SOFT=4); measurement via `rate_limits.five_hour.used_percentage` recommended before scaling beyond 5.
 
 **Workspace rate limits** ([code.claude.com/docs/en/costs.md](https://code.claude.com/docs/en/costs.md), verified 2026-08-17):
 - Per-user TPM/RPM recommendations by org size (10k–300k TPM per user for 1–500+ users)
