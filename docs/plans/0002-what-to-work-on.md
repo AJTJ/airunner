@@ -110,7 +110,10 @@ code-enforced epic phase machine; a spec/plan/tasks markdown triple; an LLM deco
 daemon; automated feature selection; timer/gh gates and per-state caps for every state; task
 checklists and `waits-for` fan-in beads; automatic re-cutting. Reasons and citations: tick note §4.
 
-## 7. Open decisions for the owner
+## 7. Open decisions for the owner — ANSWERED 2026-08-18 (see `docs/decisions.md`)
+
+Answers: (1) before children; (2) inline; (3) `--validate` on, and *workers capture, they do not file* — triage is a separate pass that validates/dedupes/groups before promotion; (4) tabled — derive, don't store; (5) measure, don't enforce; (6) not pursued. Original questions kept below for the record.
+
 
 1. Is the epic's own end-to-end check (a command in `--design`) required before children may be
    claimed, or only before the epic may close? (Recommended: required at design; it is the spec.)
