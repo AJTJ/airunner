@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/ledger", "crates/bd", "crates/hooks", "crates/cli"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/ajtj/ai_runner"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+air-ledger = { path = "crates/ledger" }
+air-bd = { path = "crates/bd" }
+air-hooks = { path = "crates/hooks" }
+
+# Ledger and data (docs/plans/0003 §7a; tick 0315)
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jiff = "0.2"
+ulid = "1"
+
+# CLI and process
+clap = { version = "4.6", features = ["derive"] }
+wait-timeout = "0.2"
+thiserror = "2"
+
+# Test-only
+rstest = "0.26"
+tempfile = "3"
+insta = { version = "1", features = ["json"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+# The small deny-list (docs/decisions.md 2026-08-18; plan 0003 §2). Warn first; deny in CI once green.
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
+as_conversions = "warn"
+arithmetic_side_effects = "warn"
+dbg_macro = "warn"
+
+# Speed: optimise dependencies once (libsqlite3-sys), keep our own crates fast to rebuild.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.test]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

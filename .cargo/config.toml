@@ -1,0 +1,4 @@
+# Repo-local cargo config. Keep RUSTFLAGS out of shells; put shared settings here.
+[alias]
+verify = "nextest run --workspace"
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
