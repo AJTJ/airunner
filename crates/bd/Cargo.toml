@@ -1,0 +1,20 @@
+[package]
+name = "air-bd"
+description = "Air's boundary to beads: read via `bd --json`, write only through `bd`; the WorkLedger trait and its shell-out implementation (bd 1.2.2 surface)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+wait-timeout = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
