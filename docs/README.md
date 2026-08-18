@@ -2,7 +2,7 @@
 
 | Read when | Document |
 |---|---|
-| Wanting the "why" for the project | [`../README.md`](../README.md) |
+| Wanting the "why" for the project | [`../README.md`](../README.md) · [`decisions.md`](decisions.md) (owner framing + dated decisions) |
 | Understanding adopter's fleet as-built and its pain points | [`research/adopter-as-built.md`](research/adopter-as-built.md) |
 | Which adopter rules are prose vs enforced; which skills to lift | [`research/adopter-enforcement-and-skills.md`](research/adopter-enforcement-and-skills.md) |
 | Mining adopter's prior-art research (with original sources) | [`research/adopter-research-corpus.md`](research/adopter-research-corpus.md) |
@@ -13,3 +13,5 @@
 | Subscription vs API billing, mixed-backend cost arithmetic (primary sources) | [`research/claude-code-billing.md`](research/claude-code-billing.md) |
 | What the live coordinator and workers say about the loop (interviews, verbatim) | [`research/coordinator-interview-2026-08-17.md`](research/coordinator-interview-2026-08-17.md) · [`research/worker-interviews-2026-08-17.md`](research/worker-interviews-2026-08-17.md) |
 | The synthesis: do we need a runtime, and what shape | [`research/SYNTHESIS.md`](research/SYNTHESIS.md) |
+| Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
+| Skills/reference material to port before building | a private skills inventory (in progress) |

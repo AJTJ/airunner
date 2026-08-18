@@ -1,48 +1,53 @@
-# CLAUDE.md — ai_runner
+# CLAUDE.md — Air (`ai_runner`)
 
-Rules that apply without being looked up, and an index of where everything else lives.
-Detail lives behind links in [`docs/README.md`](docs/README.md).
+Rules that apply without being looked up, and indexes of where everything else lives.
+Index items are 1–3 lines; detail lives behind the link.
 
-## Hard rules
+## Rules
 
-- **No Claude memory for this project. Ever.** The `~/.claude/projects/…/memory/` directory is an
-  opaque surface that cannot be tracked. Anything worth remembering goes in this file (rules,
-  constraints, owner decisions) or in `docs/` (research, plans). If you find memory files for this
-  project, delete them and move the content here.
-- **Source trail always.** Every research claim cites its primary source — a URL with access date,
-  or `path:line-range`. A claim derived from an adopter note cites the adopter file *and* the
-  original source that note cited. No "mysterious bunch of claims".
-- **Rust.** Prefer using or borrowing heavily from an existing good project over building; the
-  research must show why not before we build.
-- **Productive sooner than later.** Learn from and improve adopter's *current* process
-  incrementally; do not start from scratch or wander far afield. Every early milestone must be
-  something adopter can actually run. Prefer replacing one prose rule with one enforced check
-  over designing a platform.
-- **Steal avidly** from `~/projects/adopter` (research, skills, retrospectives) and
-  `~/projects/metis`. Cite what was taken.
+- **No Claude memory for this project. Ever.** It is an opaque, untrackable surface. Rules and
+  decisions live here and in `docs/`. If memory files exist for this project, delete them and
+  move the content into `docs/decisions.md`.
+- **Source trail always.** Every research claim cites a primary source — URL with access date,
+  or `path:line-range`. Claims derived from adopter notes cite the note *and* the source it
+  cited. No "mysterious bunch of claims".
+- **Only build what makes sense.** Nothing is built without a named pain from the record it
+  removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
+  case (`docs/research/beads-and-gastown.md §2.5`).
+- **Productive sooner than later.** Improve adopter's current process incrementally; every early
+  milestone is something adopter can run. Prefer replacing one prose rule with one enforced
+  check over designing a platform.
+- **Rust.** Prefer using or borrowing from an existing good project; research must show why not
+  before we build. Never make a target repo's tooling depend on Air's *build* — install a binary.
+- **Steal avidly** from `~/projects/adopter` and `~/projects/metis` (and cite what was taken).
+- **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
-## What this project is (owner's framing, 2026-08-17 — treat as hypotheses, not decisions)
+## Index — documents
 
-- Upgrade the multi-agent fleet system in `~/projects/adopter` (Claude Code agents in git
-  worktrees, coordinated by `bd`/beads, landed via `make land`).
-- Diagnosis: the process there (claim → worktree → work → verify → review → land → close) is prose
-  in `CLAUDE.md`/`docs/rules` — not binding. Goal: codify it into steps and checks enforced by
-  machinery, i.e. a codified coordination layer rather than docs.
-- **Beads works already** and should stay as the coordination layer.
-- Topology: today one coordinator + many workers (+ possibly other services later). Topology should
-  be **flexible and named** — declared, pluggable topologies as a first-class feature.
-- Cost: workers should be Claude Code sessions in worktrees (subscription billing); API-key/SDK
-  usage is a different pricing model that could "start costing tons of money". Open to a better
-  way if it is cheap. See `docs/research/claude-code-billing.md`.
-- Worker backends should be pluggable: a role may be backed by a Claude Code session (subscription)
-  OR a direct AI API call (any provider), with cost reported in a common unit. Billing info must be
-  current and from Anthropic primary sources.
-- **Open questions the owner has NOT answered — do not assume:**
-  1. Is a full "runtime" needed, or a thinner enforcement layer on top of beads + Claude Code?
-  2. Should the runtime *drive* Claude Code (spawn/supervise), or should Claude Code *call into*
-     the runtime (MCP/CLI, the way beads and metis work)? Or both?
+| Read when | Document |
+|---|---|
+| Wanting the "why", framing, and every owner decision (dated) | [`docs/decisions.md`](docs/decisions.md) |
+| Orienting in the research | [`docs/README.md`](docs/README.md) — index of all reports |
+| Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
+| Building the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
+| Thinking about feature → epics → tasks and how agents traverse an epic | `docs/plans/0002-what-to-work-on.md` (to be written) |
+| Porting or writing a skill | a private skills inventory (in progress) |
+| Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
+| Working with `bd` (versions, leases trap) | [`docs/research/beads-and-gastown.md`](docs/research/beads-and-gastown.md) §0 |
 
-## Index
+## Index — systems and subsystems (planned; see plan 0001)
 
-See [`docs/README.md`](docs/README.md) — research reports under `docs/research/`, the synthesis at
-`docs/research/SYNTHESIS.md`, design arguments under `docs/plans/`.
+| System | One line |
+|---|---|
+| Ledger (`.air/ledger.db` + `.air/events/`) | SQLite of facts git/bd can't re-derive: `verify_runs`, `edit_journal`, `claims`, `sessions`, `landings`; NDJSON events. No time-based expiry. |
+| `air hook` | One binary behind Claude Code hooks (SessionStart / PreToolUse / PostToolUse / PermissionRequest / PreCompact / Stop); answers in <300 ms; advisory first. |
+| `air` CLI | `record`, `claim`/`release`, `holdings`, `next`, `peer`, `merge-advice`, `handover`, `status`, `land`, `gc`, `doctor`, `selftest`; `--json`; prints denominators. |
+| Hand-over gate | The one refusal: `awaiting_review`/close needs recorded green at HEAD + main merged. Never blocks a prompt or a WIP commit. |
+| Beads boundary | Read via `bd --json`; write only through `bd` (CAS); leases mirrored in ledger; `bd` pinned. |
+| Coordinator (human-facing session) | Steers, triages, priorities/lanes, rulings, arbitration, `land`. SendMessage stays the channel. |
+
+## Essentials
+
+- Live adopter fleet is running on this machine (`~/projects/adopter`); never modify its state
+  from here.
+- Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
