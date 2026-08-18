@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "jq -r '.tool_input.file_path' | { read -r f; case \"$f\" in *.rs) dir=$(dirname \"$f\"); while [ \"$dir\" != \"/\" ] && [ ! -f \"$dir/Cargo.toml\" ]; do dir=$(dirname \"$dir\"); done; if [ -f \"$dir/Cargo.toml\" ]; then cd \"$dir\" && cargo fmt --all 2>/dev/null; fi; echo '{\"suppressOutput\":true}' ;; *) echo '{}' ;; esac; }",
+            "statusMessage": "Formatting...",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write"
+      }
+    ]
+  }
+}
