@@ -4,7 +4,7 @@ Status: proposed, 2026-08-17. Argument for what to build first and the contract 
 Sources: `docs/research/SYNTHESIS.md`, `coordinator-interview-2026-08-17.md`,
 `worker-interviews-2026-08-17.md`, `adopter-enforcement-and-skills.md §3`,
 `claude-code-control-surfaces.md`, `beads-and-gastown.md §5`, `prior-art-landscape.md §H`.
-Binary name is written `<bin>` — undecided.
+Binary name: **Air** (`air`), owner's choice 2026-08-17.
 
 ## 1. The bet
 
@@ -52,42 +52,54 @@ Rule for the rest of this plan: an item appears in §3–§5 only if it is **str
 
 ## 2. Facts the ledger holds (state that dies today)
 
-Per worktree/worker (`.claude/worktrees/<name>`, actor from `BEADS_ACTOR`/worktree name):
+Principle: store only what cannot be re-derived from git/bd; recompute everything else on demand.
+No time-based expiry anywhere — a row lives until its state condition is provably false (owner,
+2026-08-17: "we either want to keep state or not").
 
-| Fact | Written by | Today lives in | Source |
-|---|---|---|---|
-| `verified(sha, exit, run_id, ts, kind=verify|docs-check|fitness)` | `<bin> record verify` wrapped around `make verify` (or read from `logs/verify.log` END trailer / `durations.tsv` as fallback) | prose in chat + `bd close --reason`; accidentally `durations.tsv` | coord §5(a), §6(iv); backend §4,§7e; frontend §4,§7a; third §4; fourth §4,§7a |
-| `holding(worker, path, since, kind=uncommitted|committed, sha)` — files a worker has edits in | derived: `git status`/`git diff <merge-base>` across worktrees on demand + `PostToolUse(Edit|Write)` journal for intent | chat ("are you in X?"), `make fleet` after divergence | 4/4 workers §3; coord §4 |
-| `merged(worker, peer, sha, ts)` — which peer shas a worker already contains | derived from `git merge-base --is-ancestor` on demand | chat | third §3, §7b; frontend §5 |
-| `announced_next(worker, bead)` / `promise(worker, peer, text, ts)` | `<bin> note` (optional, cheap) | chat | coord §4; frontend §5 |
-| `claim(bead, worker, ts)` mirror + `lease(generation, heartbeat_ts)` | from `bd --json` + hooks | bd (1.2.1 leases — untested release) | beads-and-gastown §0 |
-| event log (every question asked, every answer, every refusal + reason) | the binary | nowhere | corpus "code fails confidently"; third §7 denominator |
+Location: one SQLite file at the *main* checkout, `<repo>/.air/ledger.db` (found via
+`git rev-parse --git-common-dir`, shared by all worktrees; gitignored; WAL), plus
+`<repo>/.air/events/YYYY-MM-DD.ndjson` (append-only), plus `<repo>/.air/config.toml`
+(verify command, worktree root, `bd` path — human-diffable, committed).
 
-Storage: SQLite at `<repo>/.<bin>/ledger.db` (WAL), plus append-only NDJSON events. Filesystem
-facts (git) are re-derived, never trusted from cache (level-triggered, third/fourth §7).
+| # | Table | Row = | Written by | Lives until |
+|---|---|---|---|---|
+| 1 | `verify_runs` | worker, sha, kind (`verify`/`docs-check`/`fitness`), exit, start/finish, log path | `air record <kind> -- <cmd>` (fallback: parse `logs/verify.log` END trailer) | keep last 50 per worker+kind, plus any row referenced by a landing (`air gc`) |
+| 2 | `edit_journal` | worker, path, first/last seen, session id — *intent to touch* | `PostToolUse(Edit\|Write)` hook, zero tokens | the path is no longer in that worker's diff vs main (landed/reverted) or the branch/worktree is gone |
+| 3 | `claims` | worker, bead, claimed-at, optional declared files, optional preconditions (`--after peer@sha`) — *the intent record* | `air claim` / `air release` (wraps `bd update --claim` with CAS + actor) | bead leaves `in_progress` in bd (bd is truth; reconciled on every command) |
+| 4 | `sessions` | worker, session id, transcript path, state ∈ {working, running(tool) since, stuck(permission) since, idle since}, changed-at | `SessionStart`/`PreToolUse`/`PostToolUse`/`PermissionRequest`/`Stop`/`SessionEnd` hooks | `SessionEnd`, or transcript/worktree gone |
+| 5 | `landings` | worker, sha, result (+ failing step), verify_run id, ts — *the receipt* | `air land` | forever (audit trail; measures review latency = green → landed) |
+| 6 | events (NDJSON) | ts, worker, command, inputs, answer, decision, reason, denominator | every Air invocation | kept (small text); pruning is an owner decision, not a default |
+| 7 | `leases` (M1) | worker, generation, heartbeat ts | hooks | expire by generation/TTL semantics of the lease itself (M1 design) |
+
+Derived on demand, never stored: holdings (who has edits in which file: `git status`/`git diff
+<merge-base>` across worktrees, cross-checked with `edit_journal`), `merged(worker, peer, sha)`
+(`git merge-base --is-ancestor`), main-moved-and-touched-your-files, peer red/green (peer HEAD ⋈
+`verify_runs`), the ranked `next` list.
+
+`rm -rf .air/` is always safe: only verify history and landing receipts are lost.
 
 ## 3. Questions it answers (CLI, `--json` always; each prints its denominator)
 
-- `<bin> holdings [--file X]` — who has edits in which files, uncommitted vs committed, with shas.
+- `air holdings [--file X]` — who has edits in which files, uncommitted vs committed, with shas.
   ("compared 4 worktrees, 6 pairs".)
-- `<bin> next` — `bd ready --json` filtered live (already claimed, runtime label, WIP), ranked by
+- `air next` — `bd ready --json` filtered live (already claimed, runtime label, WIP), ranked by
   file overlap with live holdings; shows *which peer, which file*, and whether the bead's
   `file:line` citations still resolve. Leaves the choice to worker/coordinator.
-- `<bin> peer <name>` — peer's HEAD, last recorded green sha, red-or-green, whether it already
+- `air peer <name>` — peer's HEAD, last recorded green sha, red-or-green, whether it already
   contains my HEAD ("merge-back is cheap"), the exact `git merge <sha>` to run.
-- `<bin> merge-advice` — "main moved to X touching your files [list]; peer P is green at Y touching
+- `air merge-advice` — "main moved to X touching your files [list]; peer P is green at Y touching
   [list]; P has merged your Z". Never performs the merge.
-- `<bin> handover [--bead]` — the one gate (§4).
-- `<bin> record verify -- make verify` — runs the command, records `(HEAD, exit, run_id)`; also
+- `air handover [--bead]` — the one gate (§4).
+- `air record verify -- make verify` — runs the command, records `(HEAD, exit, run_id)`; also
   `--kind docs-check|fitness`. Docs-only delta ⇒ docs-check suffices, no full re-run (fourth §7a).
-- `<bin> post-merge` — after any merge: run the citation/fitness check and print the fix (fourth
+- `air post-merge` — after any merge: run the citation/fitness check and print the fix (fourth
   §7; matrix-citation churn was the most repeated merge cost).
-- `<bin> status` — the coordinator's dashboard: per worker HEAD/green sha/holdings/last tool call
+- `air status` — the coordinator's dashboard: per worker HEAD/green sha/holdings/last tool call
   age/claims; replaces reading `bd list --status in_progress` + `make fleet` by hand (coord §3).
 
 ## 4. The one refusal: hand-over
 
-`<bin> handover` (and, wired as a `Stop`/`SubagentStop` hook in **advisory** mode first) refuses
+`air handover` (and, wired as a `Stop`/`SubagentStop` hook in **advisory** mode first) refuses
 `awaiting_review`/close unless **all** hold, and prints exactly which failed and the command to fix:
 
 1. `verified(HEAD, exit=0, kind=verify)` exists for this worktree — *evidence, never model text*
@@ -101,7 +113,7 @@ facts (git) are re-derived, never trusted from cache (level-triggered, third/fou
 WIP checkpoint commits on the worker's own branch are **never** blocked (frontend §7). Merges are
 **never** refused (backend §7). No hook ever blocks on a question (all workers §7).
 
-`land`: `<bin> land <worker> [--sha X]` — port of `scripts/land.sh` semantics
+`land`: `air land <worker> [--sha X]` — port of `scripts/land.sh` semantics
 (refuse dirty/main/agent → digest → `--no-ff` → regenerate generated inputs → verify merged tree
 with output captured → rewind on red → close attributable beads by evidence), plus **land by sha**
 so a green point survives later commits (backend §7d), and a check that the recorded green sha ==
@@ -110,7 +122,7 @@ what is being landed (frontend §7a). Ships behind `land-prove` staying green.
 ## 5. Hook wiring (Claude Code)
 
 All hooks call the same binary; each returns in < 300 ms or degrades to "unknown" (backend: 3×
-`bd` per stop ≈ 4 s is too slow). Installed by `<bin> install`, which verifies the *resolved*
+`bd` per stop ≈ 4 s is too slow). Installed by `air install`, which verifies the *resolved*
 path is the binary, not a worktree copy (enforcement rank 10).
 
 | Event | Action |
@@ -140,7 +152,7 @@ tooling depend on this repo's *build* — install a binary (`corpus §5.4`).
 
 ## 8. Probes and measurement
 
-- Every check ships with a red/green probe (`<bin> selftest` runs them; a check that matches
+- Every check ships with a red/green probe (`air selftest` runs them; a check that matches
   nothing prints red).
 - Metrics the ledger makes free: relays about merge/overlap per round (coordinator's ~5/30
   messages), imported-red incidents (1–2/round today), drift incidents ("green" ≠ landed), stale
@@ -159,7 +171,7 @@ running Gas Town, named topologies (config comes once two shapes exist). All rem
 
 `Cargo.toml` workspace: `crates/ledger` (SQLite + events + git derivations), `crates/bd`
 (`WorkLedger` over `bd --json`, version-gated), `crates/hooks` (Claude Code hook I/O types),
-`crates/cli` (`<bin>`). Crates from the shortlist: clap, rusqlite (bundled), serde/serde_json,
+`crates/cli` (`air`). Crates from the shortlist: clap, rusqlite (bundled), serde/serde_json,
 gix (read-only) + shell `git`, tokio only where needed, tracing. No async in hooks (latency).
 
 ## 11. Open decisions for the owner
