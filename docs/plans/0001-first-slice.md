@@ -121,8 +121,12 @@ WIP checkpoint commits on the worker's own branch are **never** blocked (fronten
 `land`: `air land <worker> [--sha X]` — port of `scripts/land.sh` semantics
 (refuse dirty/main/agent → digest → `--no-ff` → regenerate generated inputs → verify merged tree
 with output captured → rewind on red → close attributable beads by evidence), plus **land by sha**
-so a green point survives later commits (backend §7d), and a check that the recorded green sha ==
-what is being landed (frontend §7a). Ships behind `land-prove` staying green.
+so a green point survives later commits (backend §7d), and an **advisory** check that the recorded
+green sha == what is being landed (frontend §7a) — never a refusal on a missing record; the
+merged-tree verify stays the gate. Ships behind `land-prove` staying green (one-line shim). Step
+list, refuse strings, `--sha` semantics, regenerate/capture, the `landings` receipt (`sha`,
+`tip_sha`, `commits_left`, `verify_run_at_sha`), the batching trigger (not M1) and probes: [air
+land spec](../research/verification/ticks/2026-08-18-0445-air-land-spec.md).
 
 ## 5. Hook wiring (Claude Code)
 
