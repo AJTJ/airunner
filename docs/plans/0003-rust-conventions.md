@@ -122,6 +122,17 @@ Not open here: `crates/{ledger,bd,hooks,cli}`, `rusqlite` (bundled), `clap`, `se
 `gix` (read-only) + shell `git`, `tracing`, `tokio` only where needed, no async in hooks. Listed so
 the conventions above are read against the actual dependency set.
 
+## 7a. Proposed (2026-08-18) — crates, settings, hook latency budget
+
+Not decided. The tick
+[`2026-08-18-0315-rust-crates-latency.md`](../research/verification/ticks/2026-08-18-0315-rust-crates-latency.md)
+verifies today's crate versions/licences/MSRVs, measures `git`/`bd` spawn cost on this Mac (`git`
+≈ 10–25 ms per call; `bd ready --json` ≈ 1.1 s — never on a hook path), and proposes a per-hook budget
+(p50 ≈ 10–25 ms, p99 ≤ 150 ms, 250 ms watchdog) plus eleven candidate decisions (§6 there): rusqlite
+`bundled` + WAL/`busy_timeout`/`synchronous=NORMAL`, per-invocation open (no daemon in M0), shell `git`
+first with `gix` deferred to measured need, `wait-timeout` not tokio, `panic="unwind"` + `catch_unwind`
+for fail-open, `rust-version = "1.88"` floor. Owner accepts/rejects alongside §8.
+
 ## 8. What the owner needs to say
 
 1. Error crate: `thiserror` only / `thiserror`+`error-stack` / defer until first named pain.
@@ -129,6 +140,7 @@ the conventions above are read against the actual dependency set.
 3. Formatting: default rustfmt (yes/no to another-project's two import options).
 4. Tests: `rstest` yes/no; inline modules + per-crate integration binary (§5).
 5. Edition 2024 + `stable` toolchain + explicit `rust-version` (§6).
+6. The crate/settings/latency proposals in §7a (tick 0315 §6) — accept, reject, or defer to M0 measurement.
 
 Once answered, move the decisions to `docs/decisions.md`, tighten `rust-safety` and
 `writing-rust-tests` to drop their "if adopted" hedges, and encode §2 in `Cargo.toml`.
