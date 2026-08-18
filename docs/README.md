@@ -11,4 +11,5 @@
 | beads / Gas Town in depth (the coordination layer) | [`research/beads-and-gastown.md`](research/beads-and-gastown.md) |
 | How a supervisor can drive/constrain Claude Code | [`research/claude-code-control-surfaces.md`](research/claude-code-control-surfaces.md) |
 | Subscription vs API billing, mixed-backend cost arithmetic (primary sources) | [`research/claude-code-billing.md`](research/claude-code-billing.md) |
+| What the live coordinator and workers say about the loop (interviews, verbatim) | [`research/coordinator-interview-2026-08-17.md`](research/coordinator-interview-2026-08-17.md) · [`research/worker-interviews-2026-08-17.md`](research/worker-interviews-2026-08-17.md) |
 | The synthesis: do we need a runtime, and what shape | [`research/SYNTHESIS.md`](research/SYNTHESIS.md) |
