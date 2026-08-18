@@ -63,12 +63,12 @@ Location: one SQLite file at the *main* checkout, `<repo>/.air/ledger.db` (found
 
 | # | Table | Row = | Written by | Lives until |
 |---|---|---|---|---|
-| 1 | `verify_runs` | worker, sha, kind (`verify`/`docs-check`/`fitness`), exit, start/finish, log path | `air record <kind> -- <cmd>` (fallback: parse `logs/verify.log` END trailer) | keep last 50 per worker+kind, plus any row referenced by a landing (`air gc`) |
+| 1 | `verify_runs` | worker, sha, kind (`verify`/`docs-check`/`fitness`), exit, start/finish, log path, `trigger` (`cli`/`handover`/`land`/`post-merge`/`stop-advisory`/`stop-blocking`/`selftest`), `failing_step` ([measurement spec](../research/verification/ticks/2026-08-18-0430-measurement-spec.md) §3) | `air record <kind> -- <cmd>` (fallback: parse `logs/verify.log` END trailer) | keep last 50 per worker+kind, plus any row referenced by a landing (`air gc`) |
 | 2 | `edit_journal` | worker, path, first/last seen, session id — *intent to touch*; **file paths only** — directory overlap is derived at query time, never stored ([lane granularity tick](../research/verification/ticks/2026-08-18-0400-lane-granularity.md)) | `PostToolUse(Edit\|Write)` hook, zero tokens | the path is no longer in that worker's diff vs main (landed/reverted) or the branch/worktree is gone |
-| 3 | `claims` | worker, bead, claimed-at, optional declared files, optional preconditions (`--after peer@sha`) — *the intent record* | `air claim` / `air release` (wraps `bd update --claim` with CAS + actor) | bead leaves `in_progress` in bd (bd is truth; reconciled on every command) |
+| 3 | `claims` | worker, bead, claimed-at, optional declared files, optional preconditions (`--after peer@sha`), `first_handover_at`/`last_handover_at` + `handover_source` (`air`/`bd-reconcile`), `handover_attempts`, `released_at` + `release_reason` (`landed`/`abandoned`/`reassigned`/`superseded`/`false-premise`/`owner-gated`/`unknown`), `suggested_by_next_id` — *the intent record and the review-latency / success / discarded-work clock* ([measurement spec](../research/verification/ticks/2026-08-18-0430-measurement-spec.md) §3) | `air claim` / `air release` (wraps `bd update --claim` with CAS + actor) | bead leaves `in_progress` in bd (bd is truth; reconciled on every command) |
 | 4 | `sessions` | worker, session id, transcript path, state ∈ {working, running(tool) since, stuck(permission) since, idle since}, changed-at | `SessionStart`/`PreToolUse`/`PostToolUse`/`PermissionRequest`/`Stop`/`SessionEnd` hooks | `SessionEnd`, or transcript/worktree gone |
-| 5 | `landings` | worker, sha, result (+ failing step), verify_run id, ts — *the receipt* | `air land` | forever (audit trail; measures review latency = green → landed) |
-| 6 | events (NDJSON) | ts, worker, command, inputs, answer, decision, reason, denominator | every Air invocation | kept (small text); pruning is an owner decision, not a default |
+| 5 | `landings` | worker, sha, result (+ failing step), verify_run id, `attempt_no` (per worker/branch since last landed), `started_at`/`finished_at`, `beads` (closed by this landing), `merge_commit` — *the receipt* | `air land` | forever (audit trail; with `claims.first_handover_at` gives review latency L, reviewer wait, and rewind cost — [measurement spec](../research/verification/ticks/2026-08-18-0430-measurement-spec.md) §2.1) |
+| 6 | events (NDJSON) | ts, worker, command, inputs, answer, decision, reason, denominator; plus kinds `next` (ranked list as shown), `session_state` (every transition; `sessions` keeps only the current row), `message`/`note` (relay class + length, never bodies — [measurement spec](../research/verification/ticks/2026-08-18-0430-measurement-spec.md) §2.6) | every Air invocation; hooks | kept (small text); pruning is an owner decision, not a default |
 | 7 | `leases` (M1) | worker, generation, heartbeat ts | hooks | expire by generation/TTL semantics of the lease itself (M1 design) |
 
 Derived on demand, never stored: holdings (who has edits in which file: `git status`/`git diff
@@ -163,10 +163,19 @@ tooling depend on this repo's *build* — install a binary (`corpus §5.4`).
 
 - Every check ships with a red/green probe (`air selftest` runs them; a check that matches
   nothing prints red).
-- Metrics the ledger makes free: relays about merge/overlap per round (coordinator's ~5/30
-  messages), imported-red incidents (1–2/round today), drift incidents ("green" ≠ landed), stale
-  suggestions in `next` (frontend: ~40%), review latency (awaiting_review → landed), time from
-  green to land, single-agent success per bead.
+- Metrics the ledger makes free — definitions, source columns, formulas, edge cases and
+  what each must not be confused with are fixed in the
+  [measurement spec](../research/verification/ticks/2026-08-18-0430-measurement-spec.md);
+  `air metrics --round --json` emits them with denominators: review latency L per bead
+  (`first_handover_at` → landed; split into reviewer wait `L_wait` and rewind cost `L_rewind`;
+  2606.22721's approval/effort/latency-by-index series as the habituation instrument),
+  single-agent success per bead as two tiers (S1 first-hand-over green; S2 landed at first
+  attempt without rework — explicitly *not* pass@1; E1 replay stays an offline run), discarded
+  work hours (abandoned claims + rewind loops, active-time basis), imported-red incidents
+  (1–2/round today; distinct from "green alone, red together"), stale-suggestion rate for
+  `next` (frontend: ~40%; top-1/3/5), and merge/overlap relays (~5/30 today; measurable only via
+  the `PostToolUse(SendMessage)` hook or opt-in `air note relay`, else printed `unmeasured`).
+  Drift incidents ("green" ≠ landed) remain a landing-time check, not a round metric.
 - Success for M0: adopter runs one round with the binary installed; `make fitness` "enforced"
   count rises (5/14 → ≥ 8/14); coordinator reports fewer merge/overlap relays; zero imported-red.
 
