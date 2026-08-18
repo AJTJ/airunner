@@ -20,6 +20,8 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Rust.** Prefer using or borrowing from an existing good project; research must show why not
   before we build. Never make a target repo's tooling depend on Air's *build* — install a binary.
 - **Steal avidly** from `~/projects/adopter` and `~/projects/metis` (and cite what was taken).
+- **Tests are optimized for speed, always.** They run constantly; per-test cost is a first-class
+  constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
