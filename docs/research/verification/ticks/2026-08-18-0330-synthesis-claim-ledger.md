@@ -176,3 +176,16 @@ Not changed: the enforcement report's rank-3 row still repeats the retracted `--
 - Origin reports: `adopter-as-built.md`, `adopter-enforcement-and-skills.md`, `adopter-research-corpus.md`, `claude-code-billing.md`, `beads-and-gastown.md`, `prior-art-landscape.md`, `claude-code-control-surfaces.md`, `metis-deep-dive.md`, `coordinator-interview-2026-08-17.md`, `worker-interviews-2026-08-17.md`
 - `docs/research/adopter-notes/` verbatim copies (commit `f2ca891`): `notes/{round-2026-08-15-evening-retrospective,overnight-fleet-retrospective,research-actions,bead-dedup-audit-2026-08-17,bead-admission-control,guard-inventory,repo-tooling-language,metis-comparison,does-the-prior-art-transfer,defer-sweep-2026-08-17}.md`, `plans/{0010,0022}*.md`, `rules/main-agent-protocol.md`, `reference/multi-agent.md`
 - Git history: commits 7676440, 3e208d8 (prior SYNTHESIS corrections), cf65fad (plan 0001 ledger owns CAS)
+
+
+## Addendum 2026-08-18 03:45 — adopter-internal rows closed
+
+| Row | Item | Now | Evidence |
+|---|---|---|---|
+| 19 | `make land` step order | VERIFIED-LOCAL | `adopter-notes/config/land.sh:554-663`: "what lands" → merge `--no-ff` (560) → `yarn install` (601) → fast checks (622) → `make verify` on the MERGED result (649) → `close_beads` (663); digest tiering at 305; rewind logic in the merge/verify blocks. |
+| 20 | "for a month the ship path has been…" | VERIFIED-LOCAL | `adopter-notes/plans/0021-release-cut.md:48`. |
+| 21 | 113/304 closed beads fleet-on-fleet | VERIFIED-LOCAL | `adopter-notes/plans/0021-release-cut.md:29,35` ("Of 304 closed beads, 113 are pure agent infrastructure"; 145 product-only, 26 mixed, 20 unlabelled). |
+| 32 | `validation.on-create: warn` teaches fabrication | VERIFIED-LOCAL | `adopter-notes/config/beads-config.yaml:89-94,109-110` ("`on-create: warn` does NOT refuse"). |
+| 89 | guard/land/land-prove paths | VERIFIED-LOCAL (paths exist 2026-08-18) | `scripts/lib/cmd-guard.py` (28.6K), `scripts/land.sh` (39.3K), `scripts/lib/stop_guard.py` (8.6K) present in the adopter checkout; `make fitness` prints "still prose only — not enforced by anything" at `scripts/fitness.sh:531-537`. |
+
+Remaining UNVERIFIED after this tick: external/design rows 5, 6, 8, 11, 50, 69, 71, 73, 74(part), 75, 76(part), 79, 80(part), 92 (14).
