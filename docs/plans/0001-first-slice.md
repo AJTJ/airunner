@@ -106,8 +106,9 @@ Derived on demand, never stored: holdings (who has edits in which file: `git sta
    (0022 §5.2; enforcement rank 2).
 2. HEAD contains current `main` (`merge-base --is-ancestor main HEAD`) — "merge main first".
 3. `fitness`/`docs-check` green at HEAD *as a peer would see it* (third §7a).
-4. The bead is claimed by this actor (CAS via `bd --if-assignee`), and closing is refused if the
-   commit is not on `main` yet — `awaiting_review` is the correct transition (frontend §6e).
+4. The bead is claimed by this actor — CAS is owned by the **ledger** (`bd` 1.2.2 has no
+   `--if-assignee/--if-status`, [bd facts tick](../research/verification/ticks/2026-08-18-0300-bd-1-2-x-facts.md)) — and closing is refused if the commit is not on `main` yet —
+   `awaiting_review` is the correct transition (frontend §6e).
 5. Optional (M1): digest present (`docs-check` already enforces size).
 
 WIP checkpoint commits on the worker's own branch are **never** blocked (frontend §7). Merges are
@@ -145,9 +146,13 @@ were the problem — coord §1).
 
 ## 7. Beads boundary
 
-Read via `bd --json` only; write only through `bd` (claim/CAS/status/comment). Leases mirrored
-in the ledger with generations; **do not** rely on `bd 1.2.1` lease fields (accidental release).
-Pin `bd` in adopter before the next round (`beads-and-gastown.md §0`). Never make adopter's
+Read via `bd --json` only; write only through `bd` (claim/status/comment). CAS and leases are
+owned by the ledger — `bd` 1.2.2 (the only supported release, 2026-08-18) has no CAS flags,
+leases, heartbeat, reclaim, events, or `--force`; 1.2.1 is an accidental release. Recommendation:
+adopter moves to 1.2.2 + `brew pin` after the documented cursor rollback
+([bd facts tick](../research/verification/ticks/2026-08-18-0300-bd-1-2-x-facts.md)). Minimal
+`WorkLedger` surface verified present in 1.2.2: `ready`, `show`, `list`, `update --claim`,
+`update -s/-a`, `comment`, `close`, `dep`, `blocked`, `recompute-blocked`. Never make adopter's
 tooling depend on this repo's *build* — install a binary (`corpus §5.4`).
 
 ## 8. Probes and measurement
