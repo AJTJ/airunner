@@ -112,6 +112,7 @@ A topology is data: roles (name, backend, allowed transitions, tools), gates bet
 - **`refinery`** — workers + a merge-queue role that batches/bisects (Gas Town shape).
 - **`pair-review`** — worker + separate rubric-grader role before `awaiting_review`.
 Backends per role: `claude-code-session` (subscription), `api` (provider/model/effort, metered USD), later `codex`/ACP.
+Minimal declaration (`.air/topology.toml`: roles/limits/gates/escalation, ~25 lines; the `adopter` preset filled in; what a topology does *not* declare; `air topology check`; build only when the second shape is about to run): [tick 0509](verification/ticks/2026-08-18-0509-topology-declaration.md).
 
 ## 5. First productive slice (adopter can run each)
 
