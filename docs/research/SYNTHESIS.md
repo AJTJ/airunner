@@ -97,12 +97,12 @@ Binary name: **Air** (`air`), owner's choice 2026-08-17 ("for now").
 1. Stall detection + escalation + sane reclaim (Stop/idle hook + watchdog).
 2. Exit gated on evidence: `verify` exit 0 at HEAD or a filed blocker bead (Stop hook).
 3. Claim/close as a real state machine with actor; refuse illegal transitions; CAS.
-4. Triage commitment point: a bead is not `ready` until acceptance + labels + edges exist.
+4. Capture → triage commitment point: workers **capture** (one line, into an inbox that is not `ready`); the coordinator triages inline — valid? duplicate? superseded? grouped? — and only then promotes to a bead with executable acceptance + lane + edges (`bd create --validate` on). Workers never decide placement (owner 2026-08-18; `docs/decisions.md`).
 5. Citation check before claim (`file:line` opens and matches, or acknowledge).
 6. Lane declaration at claim; refuse overlapping second claim.
 7. Machinery-written checkpoints (PostToolUse journal: bead, lane, touched files).
 8. Non-empty `--design` before feature/epic claim.
-9. WIP ≤ 2 and build-slot admission counters.
+9. WIP and build-slot **counters** — measured and shown, not enforced (owner 2026-08-18: usefulness of WIP caps uncertain; `docs/decisions.md`).
 10. Hook installation currency + resolved-path check.
 
 ### 4.4 Named topologies
