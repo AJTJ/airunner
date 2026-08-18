@@ -1,0 +1,65 @@
+//! Subcommands. Each returns a process exit code (0 ok, 1 error, 2 refused).
+
+pub mod doctor;
+pub mod handover;
+pub mod holdings;
+pub mod hook;
+pub mod record;
+pub mod selftest;
+
+use std::path::Path;
+
+use air_ledger::{Ledger, paths};
+
+/// Current time as RFC 3339 UTC. The ledger never reads the clock itself; commands do, once.
+pub fn now() -> String {
+    jiff::Timestamp::now().to_string()
+}
+
+pub fn today() -> String {
+    now().get(..10).unwrap_or("1970-01-01").to_string()
+}
+
+/// Open the shared ledger and resolve the worker name for `repo`.
+pub fn open(repo: &Path) -> Result<(Ledger, String), String> {
+    let ledger = Ledger::open_for_repo(repo).map_err(|e| e.to_string())?;
+    let worker = paths::worker_name_for(repo).map_err(|e| e.to_string())?;
+    Ok((ledger, worker))
+}
+
+/// Print a value as JSON or as its text form.
+pub fn emit<T: serde::Serialize>(json: bool, value: &T, text: impl FnOnce() -> String) {
+    if json {
+        match serde_json::to_string_pretty(value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => eprintln!("air: json error: {e}"),
+        }
+    } else {
+        println!("{}", text());
+    }
+}
+
+/// Append an event line; errors are reported to stderr, never fatal.
+pub fn log_event<T: serde::Serialize>(
+    ledger: &Ledger,
+    worker: &str,
+    command: &str,
+    inputs: &T,
+    decision: &str,
+    reason: &str,
+    denominator: &str,
+) {
+    let at = now();
+    let ev = air_ledger::events::Event {
+        at: &at,
+        worker,
+        command,
+        inputs,
+        decision,
+        reason,
+        denominator,
+    };
+    if let Err(e) = air_ledger::events::append(ledger.dir(), &today(), &ev) {
+        eprintln!("air: could not append event: {e}");
+    }
+}

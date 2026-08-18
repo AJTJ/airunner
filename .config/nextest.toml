@@ -1,0 +1,12 @@
+# cargo-nextest configuration (rust-toolchain/references/cargo-and-tooling.md §E).
+[profile.default]
+slow-timeout = { period = "2s", terminate-after = 3 }
+final-status-level = "slow"
+fail-fast = true
+
+[profile.ci]
+retries = 0
+fail-fast = false
+final-status-level = "slow"
+[profile.ci.junit]
+path = "junit.xml"

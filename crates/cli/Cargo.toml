@@ -1,0 +1,31 @@
+[package]
+name = "air"
+description = "Air: a hub and referee for a few concurrent coding agents in git worktrees — records verify runs and holdings, answers merge/overlap questions, refuses one thing (hand-over without evidence)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "air"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+air-ledger = { workspace = true }
+air-bd = { workspace = true }
+air-hooks = { workspace = true }
+rusqlite = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jiff = { workspace = true }
+thiserror = { workspace = true }
+wait-timeout = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tempfile = { workspace = true }
