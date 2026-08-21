@@ -40,7 +40,12 @@ next bead. Success: one round of Air built by an Air-run fleet with the event lo
 
 In the order the ledger says, not this one: `air next` (route by shared state, overlap-ranked),
 `air peer` / `merge-advice` (level-triggered behind-main), `air land` (land.sh
-behaviour-for-behaviour, regenerate generated inputs, receipt, owns the generated-files list),
+behaviour-for-behaviour, regenerate generated inputs, receipt, owns the generated-files list;
+**named pain 2026-08-21**: `make land` left eight beads in `awaiting_review` it could not
+attribute because it closes by assignee = worktree and their assignee was unset or a human
+name; design: close on "bead's commits are in the merge range and acceptance met", with the
+ledger's claim row, keyed to the worktree, as the authority for who did it, never the assignee
+field alone; and a `landed-but-open` measurement for code on main whose bead is still open),
 `gc`, PreCompact re-inject, `air metrics --round` (review latency W/L, S1/S2, per-session
 budget; replaces adopter's `make agents` / `queue.sh` sections that `bd events` removal
 darkened), `AIR_ENFORCE=1` for the hand-over gate once a round of advisory
