@@ -228,16 +228,39 @@ fn dispatch(
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
-            // Silence is the signal that all is well (adopter adoption log §9): speak only
-            // on a refusal. The ok path is still on the event line.
-            let context = if v.pass {
+            // Silence is the signal that all is well, and silence when nothing has changed:
+            // the advisory is spoken once per (session, HEAD, missing checks, latest verify)
+            // and again only when one of those moves. A blocked worker is not nagged every
+            // turn about a blocker it cannot clear (adopter, 2026-08-21).
+            let latest = ledger
+                .latest_run(worker, &f.head, air_ledger::verify::Kind::Verify)
+                .ok()
+                .flatten()
+                .map(|r| r.id)
+                .unwrap_or_default();
+            let fingerprint = if v.pass {
+                String::new()
+            } else {
+                let checks: Vec<&str> = v.missing.iter().map(|m| m.check).collect();
+                format!("{}|{}|{latest}", f.head, checks.join(","))
+            };
+            let speak = ledger
+                .emit_if_changed(&input.session_id, "stop", &fingerprint, &now())
+                .unwrap_or(true);
+            let context = if v.pass || !speak {
                 None
             } else {
                 Some(format!("air: {}", v.message))
             };
             Dispatched::new(
                 HookOutcome::Allow { context },
-                if v.pass { "pass" } else { "would-refuse" },
+                if v.pass {
+                    "pass"
+                } else if speak {
+                    "would-refuse"
+                } else {
+                    "would-refuse-repeat"
+                },
                 format!("{}; {}", transition(&prev, "idle"), v.message),
             )
             .inputs(serde_json::json!({
@@ -297,6 +320,29 @@ fn pre_tool_use(
             let peers = journal::peers_on(ledger, worker, &rel).map_err(|e| e.to_string())?;
             let inputs = serde_json::json!({"path": rel, "peers": peers});
             let denominator = format!("{} peer(s) journaled on path", peers.len());
+            // Same peers on the same path: warned once per session, not on every edit.
+            let fingerprint = if peers.is_empty() {
+                String::new()
+            } else {
+                peers.join(",")
+            };
+            let speak = ledger
+                .emit_if_changed(
+                    &input.session_id,
+                    &format!("peer:{rel}"),
+                    &fingerprint,
+                    &now(),
+                )
+                .unwrap_or(true);
+            if !peers.is_empty() && !speak {
+                return Ok(Dispatched::new(
+                    HookOutcome::Allow { context: None },
+                    "warn-repeat",
+                    format!("{moved}; peer on file (already warned)"),
+                )
+                .inputs(inputs)
+                .denominator(denominator));
+            }
             if !peers.is_empty() {
                 return Ok(Dispatched::new(
                     HookOutcome::Allow {
@@ -620,9 +666,37 @@ mod tests {
             .unwrap();
             dispatch(ledger, "wt", &wt, &input).unwrap()
         };
-        // No green recorded: speaks.
+        // No green recorded: speaks once, then the identical gap is silent.
         let d = stop(&ledger);
         assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
+        assert_eq!(d.decision, "would-refuse");
+        let d = stop(&ledger);
+        assert!(
+            matches!(d.outcome, HookOutcome::Allow { context: None }),
+            "{:?}",
+            d.outcome
+        );
+        assert_eq!(d.decision, "would-refuse-repeat");
+        // A new (red) verify at HEAD is a change: speaks again.
+        ledger
+            .record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "wt".into(),
+                sha: crate::git::head(&wt).unwrap(),
+                kind: Kind::Verify,
+                exit_code: 1,
+                trigger: "test".into(),
+                failing_step: None,
+                started_at: "2026-01-01T00:00:01Z".into(),
+                finished_at: "2026-01-01T00:00:01Z".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+            })
+            .unwrap();
+        let d = stop(&ledger);
         assert_eq!(d.decision, "would-refuse");
         // Green at HEAD: silent, but still on the event line as "pass".
         let head = crate::git::head(&wt).unwrap();
@@ -635,8 +709,8 @@ mod tests {
                 exit_code: 0,
                 trigger: "test".into(),
                 failing_step: None,
-                started_at: "t".into(),
-                finished_at: "t".into(),
+                started_at: "2026-01-01T00:00:02Z".into(),
+                finished_at: "2026-01-01T00:00:02Z".into(),
                 log_path: None,
                 command: None,
                 duration_ms: None,
