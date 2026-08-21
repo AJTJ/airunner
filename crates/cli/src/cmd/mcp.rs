@@ -30,7 +30,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use wait_timeout::ChildExt;
 
 use crate::cmd::status::{self, Attention, Thresholds};
 
@@ -45,11 +44,12 @@ struct Out(Arc<Mutex<std::io::Stdout>>);
 
 impl Out {
     fn send(&self, v: &Value) {
-        if let Ok(mut o) = self.0.lock() {
-            let _ = serde_json::to_writer(&mut *o, v);
-            let _ = o.write_all(b"\n");
-            let _ = o.flush();
-        }
+        // A poisoned lock (a panic while writing) must not silence the channel for the rest
+        // of the session: recover the guard and keep writing.
+        let mut o = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = serde_json::to_writer(&mut *o, v);
+        let _ = o.write_all(b"\n");
+        let _ = o.flush();
     }
 }
 
@@ -102,8 +102,16 @@ pub fn run(repo: &Path) -> i32 {
         }
         match serde_json::from_str::<Value>(trimmed) {
             Ok(msg) => {
-                if let Some(resp) = handle(&ctx, &msg) {
-                    out.send(&resp);
+                let id = msg.get("id").cloned().unwrap_or(Value::Null);
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&ctx, &msg)))
+                {
+                    Ok(Some(resp)) => out.send(&resp),
+                    Ok(None) => {}
+                    Err(_) => out.send(&error(
+                        id,
+                        -32603,
+                        "internal error (panic); server continues",
+                    )),
                 }
             }
             Err(e) => out.send(&error(Value::Null, -32700, &format!("parse error: {e}"))),
@@ -373,7 +381,7 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
 
 /// Run this binary with `--repo <repo>`; time-bounded, always reaped.
 fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(&ctx.exe)
+    let child = Command::new(&ctx.exe)
         .arg("--repo")
         .arg(&ctx.repo)
         .args(argv)
@@ -383,27 +391,20 @@ fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String>
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", ctx.exe.display()))?;
-    let status = match child.wait_timeout(TOOL_TIMEOUT) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
-                "air {} timed out after {TOOL_TIMEOUT:?}",
-                argv.join(" ")
-            ));
-        }
-        Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(e.to_string());
-        }
-    };
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let (status, stdout, stderr) =
+        match crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string())? {
+            Some(x) => x,
+            None => {
+                return Err(format!(
+                    "air {} timed out after {TOOL_TIMEOUT:?}",
+                    argv.join(" ")
+                ));
+            }
+        };
     Ok((
         status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).to_string(),
-        String::from_utf8_lossy(&out.stderr).to_string(),
+        String::from_utf8_lossy(&stdout).to_string(),
+        String::from_utf8_lossy(&stderr).to_string(),
     ))
 }
 
@@ -454,14 +455,22 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
     let mut pushed = Pushed::new();
     let thresholds = Thresholds::from_env();
     loop {
-        match status::gather(repo) {
-            Ok(snap) => {
-                let att = status::attention(&snap, &snap.at, thresholds);
-                for a in select_new(&mut pushed, &att) {
-                    out.send(&channel_event(&a));
+        // One bad tick (a panic in git parsing, a malformed row) must not end the thread:
+        // the process lives as long as the coordinator session.
+        let tick =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match status::gather(repo) {
+                    Ok(snap) => {
+                        let att = status::attention(&snap, &snap.at, thresholds);
+                        for a in select_new(&mut pushed, &att) {
+                            out.send(&channel_event(&a));
+                        }
+                    }
+                    Err(e) => eprintln!("air mcp: poll: {e}"),
                 }
-            }
-            Err(e) => eprintln!("air mcp: poll: {e}"),
+            }));
+        if tick.is_err() {
+            eprintln!("air mcp: poll: tick panicked; continuing");
         }
         std::thread::sleep(every);
     }

@@ -26,7 +26,7 @@ pub type Result<T> = std::result::Result<T, GitError>;
 const TIMEOUT: Duration = Duration::from_millis(1500);
 
 pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
-    let mut child = Command::new("git")
+    let child = Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -35,24 +35,61 @@ pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(GitError::Spawn)?;
-    let status = match child.wait_timeout(TIMEOUT) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(GitError::Timeout(TIMEOUT));
-        }
-        Err(e) => return Err(GitError::Spawn(e)),
+    let (status, stdout, stderr) = match wait_drained(child, TIMEOUT).map_err(GitError::Spawn)? {
+        Some(x) => x,
+        None => return Err(GitError::Timeout(TIMEOUT)),
     };
-    let out = child.wait_with_output().map_err(GitError::Spawn)?;
     if !status.success() {
         return Err(GitError::Failed {
             args: args.iter().map(|s| s.to_string()).collect(),
             code: status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    Ok(String::from_utf8_lossy(&stdout).trim_end().to_string())
+}
+
+/// (exit status, stdout, stderr) of a finished child.
+pub(crate) type Drained = (std::process::ExitStatus, Vec<u8>, Vec<u8>);
+
+/// Wait for a child with a timeout while draining its pipes on threads, so a child that
+/// writes more than the pipe buffer (64 KB) cannot deadlock against us and be mistaken for
+/// a hang. Kills and reaps on timeout. Returns (status, stdout, stderr).
+pub(crate) fn wait_drained(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<Drained>> {
+    use std::io::Read;
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+    let err_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+    let status = match child.wait_timeout(timeout)? {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Pipes close when the child dies; the drain threads finish.
+            let _ = out_t.join();
+            let _ = err_t.join();
+            return Ok(None);
+        }
+    };
+    let stdout = out_t.join().unwrap_or_default();
+    let stderr = err_t.join().unwrap_or_default();
+    Ok(Some((status, stdout, stderr)))
 }
 
 pub fn head(cwd: &Path) -> Result<String> {
@@ -115,4 +152,50 @@ pub fn worktrees(cwd: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
         res.push(c);
     }
     Ok(res)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod drain_tests {
+    use super::wait_drained;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    #[test]
+    fn large_output_is_drained_not_mistaken_for_a_hang() {
+        let child = Command::new("sh")
+            .args([
+                "-c",
+                "head -c 1048576 /dev/zero | tr '\\0' 'x'; echo err >&2",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (status, out, err) = wait_drained(child, Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(out.len(), 1_048_576);
+        assert_eq!(String::from_utf8_lossy(&err).trim(), "err");
+    }
+
+    #[test]
+    fn a_real_hang_is_killed_and_reported() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let t = std::time::Instant::now();
+        assert!(
+            wait_drained(child, Duration::from_millis(100))
+                .unwrap()
+                .is_none()
+        );
+        assert!(t.elapsed() < Duration::from_secs(2));
+    }
 }
