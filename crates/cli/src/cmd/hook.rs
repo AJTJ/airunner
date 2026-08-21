@@ -9,6 +9,11 @@
 //!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason).
 //! - Stop / SubagentStop: advisory hand-over summary as context; never blocks in this slice.
 //! - SessionStart / PostToolUse / PermissionRequest / SessionEnd: session state rows.
+//!
+//! Every invocation appends exactly one event line to `.air/events/` (`hook.<event>`), including
+//! the silent ones (journal touches, session transitions, ignored events, fail-open). The
+//! `sessions` table is current state; the event stream is the history (owner, 2026-08-20:
+//! "all events should be new events, never overwritten").
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,7 +27,12 @@ use crate::git;
 
 pub fn run(repo: &Path) -> i32 {
     // Everything below is wrapped so a panic or error becomes "allow" + a log line.
-    let result = std::panic::catch_unwind(|| inner(repo));
+    let mut raw = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut raw) {
+        eprintln!("air hook: fail-open: {e}");
+        return 0;
+    }
+    let result = std::panic::catch_unwind(|| inner(repo, &raw));
     match result {
         Ok(Ok((event, outcome))) => {
             let code = outcome.exit_code();
@@ -40,21 +50,48 @@ pub fn run(repo: &Path) -> i32 {
         }
         Ok(Err(e)) => {
             eprintln!("air hook: fail-open: {e}");
+            log_fail_open(repo, &raw, &e);
             0
         }
         Err(_) => {
             eprintln!("air hook: fail-open: panic");
+            log_fail_open(repo, &raw, "panic");
             0
         }
     }
 }
 
-fn inner(repo: &Path) -> Result<(HookEvent, HookOutcome), String> {
-    let mut raw = String::new();
-    std::io::stdin()
-        .read_to_string(&mut raw)
-        .map_err(|e| e.to_string())?;
-    let input = HookInput::parse(&raw).map_err(|e| e.to_string())?;
+/// Best effort: a fail-open must still leave a trace when the ledger itself is reachable.
+fn log_fail_open(repo: &Path, raw: &str, error: &str) {
+    let input = HookInput::parse(raw).ok();
+    let cwd = input
+        .as_ref()
+        .and_then(|i| i.cwd.as_deref())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo.to_path_buf());
+    if let Ok((ledger, worker)) = open(&cwd) {
+        let name = input
+            .as_ref()
+            .map(|i| i.event().as_str())
+            .unwrap_or("unparsed");
+        let session = input
+            .as_ref()
+            .map(|i| i.session_id.clone())
+            .unwrap_or_default();
+        log_event(
+            &ledger,
+            &worker,
+            &format!("hook.{name}"),
+            &serde_json::json!({"session_id": session}),
+            "fail-open",
+            error,
+            "0 checks",
+        );
+    }
+}
+
+fn inner(repo: &Path, raw: &str) -> Result<(HookEvent, HookOutcome), String> {
+    let input = HookInput::parse(raw).map_err(|e| e.to_string())?;
     let cwd = input
         .cwd
         .as_deref()
@@ -62,14 +99,74 @@ fn inner(repo: &Path) -> Result<(HookEvent, HookOutcome), String> {
         .unwrap_or_else(|| repo.to_path_buf());
     let (ledger, worker) = open(&cwd)?;
     let event = input.event();
-    let outcome = match event {
+    let d = dispatch(&ledger, &worker, &cwd, &input)?;
+    let mut inputs = d.inputs;
+    if let serde_json::Value::Object(m) = &mut inputs {
+        m.insert("session_id".into(), input.session_id.clone().into());
+        if let Some(t) = &input.tool_name {
+            m.insert("tool".into(), t.clone().into());
+        }
+    }
+    log_event(
+        &ledger,
+        &worker,
+        &format!("hook.{}", event.as_str()),
+        &inputs,
+        &d.decision,
+        &d.reason,
+        &d.denominator,
+    );
+    Ok((event, d.outcome))
+}
+
+/// What one hook invocation decided, in the shape the event line needs.
+struct Dispatched {
+    outcome: HookOutcome,
+    inputs: serde_json::Value,
+    decision: String,
+    reason: String,
+    denominator: String,
+}
+
+impl Dispatched {
+    fn new(outcome: HookOutcome, decision: &str, reason: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            inputs: serde_json::json!({}),
+            decision: decision.to_string(),
+            reason: reason.into(),
+            denominator: "0 checks".to_string(),
+        }
+    }
+    fn inputs(mut self, v: serde_json::Value) -> Self {
+        self.inputs = v;
+        self
+    }
+    fn denominator(mut self, d: impl Into<String>) -> Self {
+        self.denominator = d.into();
+        self
+    }
+}
+
+fn dispatch(
+    ledger: &Ledger,
+    worker: &str,
+    cwd: &Path,
+    input: &HookInput,
+) -> Result<Dispatched, String> {
+    Ok(match input.event() {
         HookEvent::SessionStart => {
-            set_session(&ledger, &input, &worker, "working", None)?;
-            HookOutcome::Allow {
-                context: Some(format!("air: worker `{worker}` session registered")),
-            }
+            let prev = set_session(ledger, input, worker, "working", None)?;
+            Dispatched::new(
+                HookOutcome::Allow {
+                    context: Some(format!("air: worker `{worker}` session registered")),
+                },
+                "registered",
+                transition(&prev, "working"),
+            )
         }
         HookEvent::SessionEnd => {
+            let prev = session_state(ledger, &input.session_id)?;
             ledger
                 .conn()
                 .execute(
@@ -77,51 +174,68 @@ fn inner(repo: &Path) -> Result<(HookEvent, HookOutcome), String> {
                     params![input.session_id],
                 )
                 .map_err(|e| e.to_string())?;
-            HookOutcome::Allow { context: None }
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
+                "ended",
+                transition(&prev, "gone"),
+            )
+            .inputs(serde_json::json!({"reason": input.reason}))
         }
         HookEvent::PermissionRequest => {
-            set_session(
-                &ledger,
-                &input,
-                &worker,
+            let prev = set_session(ledger, input, worker, "stuck", input.tool_name.as_deref())?;
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
                 "stuck",
-                input.tool_name.as_deref(),
-            )?;
-            HookOutcome::Allow { context: None }
+                transition(&prev, "stuck"),
+            )
         }
-        HookEvent::PreToolUse => pre_tool_use(&ledger, &worker, &cwd, &input)?,
+        HookEvent::PreToolUse => pre_tool_use(ledger, worker, cwd, input)?,
         HookEvent::PostToolUse => {
-            set_session(&ledger, &input, &worker, "working", None)?;
+            let prev = set_session(ledger, input, worker, "working", None)?;
+            let mut d = Dispatched::new(
+                HookOutcome::Allow { context: None },
+                "observed",
+                transition(&prev, "working"),
+            );
             if let Some(abs) = input.edited_path()
-                && let Ok(root) = git::toplevel(&cwd)
+                && let Ok(root) = git::toplevel(cwd)
                 && let Some(rel) = journal::relative_to(&root, Path::new(&abs))
             {
-                journal::touch(&ledger, &worker, &rel, Some(&input.session_id), &now())
+                journal::touch(ledger, worker, &rel, Some(&input.session_id), &now())
                     .map_err(|e| e.to_string())?;
+                d.decision = "journaled".to_string();
+                d.inputs = serde_json::json!({"path": rel});
             }
-            HookOutcome::Allow { context: None }
+            d
         }
         HookEvent::Stop | HookEvent::SubagentStop => {
-            set_session(&ledger, &input, &worker, "idle", None)?;
+            let prev = set_session(ledger, input, worker, "idle", None)?;
             // Advisory only in this slice; never block, and never when stop_hook_active.
-            let f = handover::facts(&ledger, &worker, &cwd, None, true)?;
+            let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
-            log_event(
-                &ledger,
-                &worker,
-                "hook.stop",
-                &serde_json::json!({"head": f.head}),
+            Dispatched::new(
+                HookOutcome::Allow {
+                    context: Some(format!("air: {}", v.message)),
+                },
                 if v.pass { "pass" } else { "would-refuse" },
-                &v.message,
-                "3 checks",
-            );
-            HookOutcome::Allow {
-                context: Some(format!("air: {}", v.message)),
-            }
+                format!("{}; {}", transition(&prev, "idle"), v.message),
+            )
+            .inputs(serde_json::json!({
+                "head": f.head,
+                "stop_hook_active": input.stop_hook_active,
+            }))
+            .denominator("3 checks")
         }
-        _ => HookOutcome::Allow { context: None },
-    };
-    Ok((event, outcome))
+        _ => Dispatched::new(
+            HookOutcome::Allow { context: None },
+            "ignored",
+            "no handler",
+        ),
+    })
+}
+
+fn transition(prev: &Option<String>, next: &str) -> String {
+    format!("{} -> {next}", prev.as_deref().unwrap_or("none"))
 }
 
 fn pre_tool_use(
@@ -129,25 +243,45 @@ fn pre_tool_use(
     worker: &str,
     cwd: &Path,
     input: &HookInput,
-) -> Result<HookOutcome, String> {
-    set_session(ledger, input, worker, "running", input.tool_name.as_deref())?;
+) -> Result<Dispatched, String> {
+    let prev = set_session(ledger, input, worker, "running", input.tool_name.as_deref())?;
+    let moved = transition(&prev, "running");
     // Peer-on-file warning.
     if let Some(abs) = input.edited_path() {
         if let Ok(root) = git::toplevel(cwd)
             && let Some(rel) = journal::relative_to(&root, Path::new(&abs))
         {
             let peers = journal::peers_on(ledger, worker, &rel).map_err(|e| e.to_string())?;
+            let inputs = serde_json::json!({"path": rel, "peers": peers});
+            let denominator = format!("{} peer(s) journaled on path", peers.len());
             if !peers.is_empty() {
-                return Ok(HookOutcome::Allow {
-                    context: Some(format!(
-                        "air: {} is also being edited by {} — coordinate before overlapping edits (run `air peer <name>` for their green sha)",
-                        rel,
-                        peers.join(", ")
-                    )),
-                });
+                return Ok(Dispatched::new(
+                    HookOutcome::Allow {
+                        context: Some(format!(
+                            "air: {} is also being edited by {} — coordinate before overlapping edits (run `air peer <name>` for their green sha)",
+                            rel,
+                            peers.join(", ")
+                        )),
+                    },
+                    "warn",
+                    format!("{moved}; peer on file"),
+                )
+                .inputs(inputs)
+                .denominator(denominator));
             }
+            return Ok(Dispatched::new(
+                HookOutcome::Allow { context: None },
+                "clear",
+                format!("{moved}; no peer on file"),
+            )
+            .inputs(inputs)
+            .denominator(denominator));
         }
-        return Ok(HookOutcome::Allow { context: None });
+        return Ok(Dispatched::new(
+            HookOutcome::Allow { context: None },
+            "clear",
+            format!("{moved}; path outside repo"),
+        ));
     }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
@@ -156,33 +290,33 @@ fn pre_tool_use(
         let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
         let f = handover::facts(ledger, worker, cwd, None, !enforce)?;
         let v = handover_verdict(&f);
-        log_event(
-            ledger,
-            worker,
-            "hook.handover",
-            &serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce}),
-            if v.pass {
-                "pass"
-            } else if v.block {
-                "refuse"
-            } else {
-                "would-refuse"
-            },
-            &v.message,
-            "3 checks",
-        );
-        if v.block {
-            return Ok(HookOutcome::Block {
+        let decision = if v.pass {
+            "pass"
+        } else if v.block {
+            "refuse"
+        } else {
+            "would-refuse"
+        };
+        let outcome = if v.block {
+            HookOutcome::Block {
                 reason: format!("air: {}", v.message),
-            });
-        }
-        if !v.pass {
-            return Ok(HookOutcome::Allow {
+            }
+        } else if !v.pass {
+            HookOutcome::Allow {
                 context: Some(format!("air: {}", v.message)),
-            });
-        }
+            }
+        } else {
+            HookOutcome::Allow { context: None }
+        };
+        return Ok(Dispatched::new(outcome, decision, v.message.clone())
+            .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce}))
+            .denominator("3 checks"));
     }
-    Ok(HookOutcome::Allow { context: None })
+    Ok(Dispatched::new(
+        HookOutcome::Allow { context: None },
+        "observed",
+        moved,
+    ))
 }
 
 /// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
@@ -229,13 +363,32 @@ pub fn is_handover_command(cmd: &str) -> bool {
     false
 }
 
+/// Current state of a session row, if any.
+fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, String> {
+    ledger
+        .conn()
+        .query_row(
+            "SELECT state FROM sessions WHERE session_id=?1",
+            params![session_id],
+            |r| r.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e.to_string()),
+        })
+}
+
+/// Upsert the session row; returns the state it had before (None for a new session) so the
+/// caller can put the transition on the event line.
 fn set_session(
     ledger: &Ledger,
     input: &HookInput,
     worker: &str,
     state: &str,
     detail: Option<&str>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
+    let prev = session_state(ledger, &input.session_id)?;
     let t = now();
     ledger
         .conn()
@@ -247,12 +400,126 @@ fn set_session(
             params![input.session_id, worker, input.transcript_path, state, detail, t],
         )
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(prev)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::is_handover_command;
+    use super::{inner, is_handover_command};
+    use std::path::Path;
+    use std::process::Command;
+
+    /// A scratch repo with one commit; the ledger lands in `<dir>/.air`.
+    fn scratch_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let g = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        g(&["init", "-q", "-b", "main"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "a"]);
+        dir
+    }
+
+    fn fire(repo: &Path, body: serde_json::Value) {
+        let mut v = body;
+        v["session_id"] = "s1".into();
+        v["cwd"] = repo.to_string_lossy().to_string().into();
+        inner(repo, &v.to_string()).unwrap();
+    }
+
+    fn events(repo: &Path) -> Vec<serde_json::Value> {
+        let dir = repo.join(".air").join("events");
+        let mut lines = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            lines.extend(text.lines().map(|l| serde_json::from_str(l).unwrap()));
+        }
+        lines
+    }
+
+    #[test]
+    fn every_invocation_appends_one_event_with_the_transition() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        let file = repo.join("src.rs").to_string_lossy().to_string();
+        fire(repo, serde_json::json!({"hook_event_name": "SessionStart"}));
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Edit",
+            "tool_input": {"file_path": file}}),
+        );
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+            "tool_input": {"file_path": file}}),
+        );
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}),
+        );
+        fire(repo, serde_json::json!({"hook_event_name": "Notification"}));
+        fire(repo, serde_json::json!({"hook_event_name": "Stop"}));
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "SessionEnd", "reason": "exit"}),
+        );
+
+        let ev = events(repo);
+        let got: Vec<(String, String, String)> = ev
+            .iter()
+            .map(|e| {
+                (
+                    e["command"].as_str().unwrap().to_string(),
+                    e["decision"].as_str().unwrap().to_string(),
+                    e["reason"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(got.len(), 7, "one line per invocation: {got:?}");
+        assert_eq!(got[0].0, "hook.SessionStart");
+        assert_eq!(got[0].2, "none -> working");
+        assert_eq!(
+            (got[1].0.as_str(), got[1].1.as_str()),
+            ("hook.PreToolUse", "clear")
+        );
+        assert_eq!(got[1].2, "working -> running; no peer on file");
+        assert_eq!(
+            (got[2].0.as_str(), got[2].1.as_str()),
+            ("hook.PostToolUse", "journaled")
+        );
+        assert_eq!(ev[2]["inputs"]["path"], "src.rs");
+        assert_eq!(
+            (got[3].1.as_str(), got[3].2.as_str()),
+            ("stuck", "working -> stuck")
+        );
+        assert_eq!(
+            (got[4].0.as_str(), got[4].1.as_str()),
+            ("hook.Notification", "ignored")
+        );
+        assert_eq!(got[5].0, "hook.Stop");
+        assert!(got[5].2.starts_with("stuck -> idle; "), "{}", got[5].2);
+        assert_eq!(
+            (got[6].1.as_str(), got[6].2.as_str()),
+            ("ended", "idle -> gone")
+        );
+        assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));
+    }
 
     #[test]
     fn matches_only_handover_writes() {
