@@ -223,6 +223,10 @@ fn probe_ledger_roundtrip() -> Probe {
             started_at: "2026-01-01T00:00:00Z".into(),
             finished_at: "2026-01-01T00:00:00Z".into(),
             log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l

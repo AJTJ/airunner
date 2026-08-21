@@ -124,3 +124,64 @@ fn launchers_print_the_exact_command() {
     assert_eq!(code, 0);
     assert!(out.starts_with("claude --channels server:air "), "{out}");
 }
+
+#[test]
+fn repo_deny_rules_are_appended_from_claude_air_json() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": ["Bash(rm -rf *)"]}"#,
+    )
+    .unwrap();
+    let (_, out, _) = air(&repo, None, &["worker", "w", "--print"]);
+    assert!(out.contains("'Bash(make deploy*)'"), "{out}");
+    let (_, out, _) = air(&repo, None, &["coordinator", "--print"]);
+    assert!(out.contains("'Bash(rm -rf *)'"), "{out}");
+    assert!(!out.contains("deploy"), "{out}");
+}
+
+#[test]
+fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    // Refuses backgrounding.
+    let (code, _, err) = air(
+        &repo,
+        None,
+        &["record", "verify", "--", "sh", "-c", "true", "&"],
+    );
+    assert_eq!(code, 1);
+    assert!(err.contains("backgrounded"));
+    // A silent, instant green is recorded and flagged.
+    let (code, _, err) = air(&repo, None, &["record", "verify", "--", "true"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("suspicious"), "{err}");
+    // A different command next time is flagged as changed; output is counted.
+    let (code, out, err) = air(
+        &repo,
+        None,
+        &["--json", "record", "verify", "--", "sh", "-c", "echo hello"],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("command-changed"), "{err}");
+    assert!(
+        out.starts_with("hello\n"),
+        "child output is streamed: {out}"
+    );
+    let json_start = out.find('{').unwrap();
+    let run: serde_json::Value = serde_json::from_str(&out[json_start..]).unwrap();
+    assert_eq!(run["command"], "sh -c echo hello");
+    assert_eq!(run["output_bytes"], 6);
+    assert_eq!(run["dirty"], false);
+    let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+    let n: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM verify_runs WHERE command IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 2);
+}
