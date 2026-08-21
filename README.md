@@ -101,7 +101,7 @@ What `air install --write` touches, and only that:
 - `.mcp.json`: adds the `air` server (`air mcp`). Existing servers are preserved.
 - `.air/roles.md`: the roles document the launchers append to the system prompt.
 - `.claude/skills/air-decomposition/`, `.claude/skills/air-phase-transitions/`: the
-  coordinator's procedures, also served as MCP prompts (`/mcp__air__decompose`, `/mcp__air__phase`).
+  coordinator's procedures, loaded on demand.
 
 Beads side: always create beads with `bd create --validate --estimate <minutes>`. bd refuses a
 task, feature, or bug whose description lacks an `## Acceptance Criteria` heading (compiled

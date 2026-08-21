@@ -228,6 +228,12 @@ fn dispatch(
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
+            // Nothing to hand over if this worker holds no claim: say nothing (guardrails
+            // audit 2026-08-21; a non-green stop after a WIP commit is not a gap).
+            let holds_claim = ledger
+                .open_claims()
+                .map(|v| v.iter().any(|c| c.worker == worker))
+                .unwrap_or(false);
             // Silence is the signal that all is well, and silence when nothing has changed:
             // the advisory is spoken once per (session, HEAD, missing checks, latest verify)
             // and again only when one of those moves. A blocked worker is not nagged every
@@ -238,7 +244,7 @@ fn dispatch(
                 .flatten()
                 .map(|r| r.id)
                 .unwrap_or_default();
-            let fingerprint = if v.pass {
+            let fingerprint = if v.pass || !holds_claim {
                 String::new()
             } else {
                 let checks: Vec<&str> = v.missing.iter().map(|m| m.check).collect();
@@ -247,7 +253,7 @@ fn dispatch(
             let speak = ledger
                 .emit_if_changed(&input.session_id, "stop", &fingerprint, &now())
                 .unwrap_or(true);
-            let context = if v.pass || !speak {
+            let context = if v.pass || !holds_claim || !speak {
                 None
             } else {
                 Some(format!("air: {}", v.message))
@@ -256,6 +262,8 @@ fn dispatch(
                 HookOutcome::Allow { context },
                 if v.pass {
                     "pass"
+                } else if !holds_claim {
+                    "no-claim"
                 } else if speak {
                     "would-refuse"
                 } else {
@@ -666,7 +674,12 @@ mod tests {
             .unwrap();
             dispatch(ledger, "wt", &wt, &input).unwrap()
         };
-        // No green recorded: speaks once, then the identical gap is silent.
+        // No claim: nothing to hand over, silent.
+        let d = stop(&ledger);
+        assert_eq!(d.decision, "no-claim");
+        assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
+        ledger.record_claim("fd-1", "wt", &[], "t0").unwrap();
+        // Claim held, no green recorded: speaks once, then the identical gap is silent.
         let d = stop(&ledger);
         assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
         assert_eq!(d.decision, "would-refuse");
