@@ -1,82 +1,140 @@
-# ai_runner
+# Air
 
-An AI orchestration runtime, in Rust.
+A hub and referee for a few Claude Code agents working in git worktrees on one repository,
+coordinated by [beads](https://github.com/steveyegge/beads). One Rust binary, `air`. It keeps
+the loop you already run (claim, worktree, work, verify, review, land) and removes the parts that
+cost turns: facts relayed through chat, "green" that drifts from the commit it was measured on,
+and not knowing who is in which file.
 
-**Problem.** `projects/adopter` runs a fleet of Claude Code agents in git worktrees, coordinated
-by [beads](https://github.com/steveyegge/beads), landed through a `make land` gate. It works
-somewhat well — but the *process* (claim → worktree → work → verify → review → land → close) lives
-as prose in `CLAUDE.md` and `docs/rules/`, which is not binding. Steps get skipped; checks drift.
+Air does not run agents, does not replace beads, and does not take the human out of the loop.
+Every agent session is a terminal you can watch and type into.
 
-**Goal.** Codify that process into steps and checks that are enforced by machinery. Keep beads as
-the coordination layer. Steal avidly from adopter (its research, its skills, its retrospectives)
-and from [metis](https://github.com/colliery-io/metis); reuse existing prior art wherever a good
-project already exists.
+## What Air offers
 
-**Open question (honest).** It is not yet established that a full "runtime" is what is needed, as
-opposed to a thinner enforcement layer (hooks + gates) on top of beads and Claude Code. The
-research in `docs/research/` is meant to settle that before code is written.
+**Records** (in `<repo>/.air/`, shared by every worktree, gitignored)
 
-## What Air does (first slice, as designed — see `docs/plans/0001-first-slice.md`)
+- `air record verify -- <cmd>`: "commit X passed check Y at time T". The fact the hand-over gate
+  checks; never model text.
+- An edit journal filled by hooks at zero token cost: who is touching which file.
+- `air claim <bead>` / `air release <bead> --reason <r>`: the claim history beads does not keep
+  (when, declared files, hand-over attempts, why it was given back). Wraps `bd update --claim`;
+  beads stays the atomic source of truth.
+- `air capture "<text>"`: one line into an inbox that is not `ready`. Workers capture; they
+  never file beads.
+- An append-only event log (`.air/events/YYYY-MM-DD.ndjson`): every question Air was asked,
+  its answer, its reason, and what it looked at. Nothing is overwritten.
 
-Air is a hub and a referee for a few concurrent coding agents working in git worktrees on one
-repo, coordinated by beads. It keeps the loop you already have and removes the parts that cost
-turns: relayed facts, "green" that drifts, and not knowing who is in which file.
+**Answers**
 
-**Records** — `record verify` (commit X passed at T), an edit journal (who is touching which
-file), `claim`/`release` (the intent record; CAS lives here), `capture` (one line into an inbox
-that is not ready — workers never decide placement), session state (working / running / stuck /
-idle), landing receipts, an events log with reasons and denominators.
+- `air status`: every worker's session state, HEAD, green-at-HEAD, open claims with hand-over
+  attempts, files held, file overlaps between workers, inbox depth.
+- `air status --attention`: only what needs a human or the coordinator right now: a worker
+  stuck on a permission prompt, idle or silent while holding a claim, gone with a claim, handing
+  over without green, captures waiting. Thresholds via `AIR_ATTENTION_*_MIN`.
+- `air holdings [--file X]`: who has edits in which files across worktrees.
+- `air handover`: is this worktree ready to hand over, and if not, exactly which command fixes it.
 
-**Answers** — `holdings`, `peer <name>` (green sha, red or green, the exact merge to run),
-`merge-advice`, `next` (live, overlap-ranked, shows why), `status` (the coordinator's one
-screen), `post-merge` (citation/fitness check + the fix).
+**Refuses one thing**
 
-**Refuses one thing** — `handover`: awaiting_review/close needs recorded green at HEAD and main
-merged; prints what is missing and the command. Advisory for the first round. Never blocks a
-prompt, a WIP commit, or a merge.
+- Setting a bead to `awaiting_review` or closing it without a recorded green verify at HEAD
+  that contains current `main`. Advisory for the first round (prints what it would refuse);
+  `AIR_ENFORCE=1` makes it real. It never blocks a prompt, a WIP commit, or a merge.
 
-**Lands** — `land <worker> [--sha X]`: adopter's `land.sh` behaviour-for-behaviour, plus
-land-by-sha, generated-input regeneration, and a receipt.
+**Informs the coordinator instead of waking it**
 
-**Keeps itself honest** — `selftest` (every check has a red/green probe), `doctor`, `gc`
-(state-based, no timers), `install` (verifies the resolved hook path).
+- `air mcp` is one MCP server that is both a Claude Code *channel* and a tool surface. It
+  re-evaluates the attention conditions from the ledger every 30 s and pushes new or escalated
+  ones into the coordinator's session. No cron, no polling by the agent. The same surface is
+  available as tools (`air_status`, `air_claim`, `air_capture`, …) and resources
+  (`@air://status`, `@air://inbox`).
 
-**Measures for free** — review latency (wait vs rewind), first-hand-over success, discarded
-hours, imported-red incidents, stale-`next` rate, WIP as a counter.
+**Launches sessions with their role applied**
 
-**Deliberately does not** — send messages, spawn or supervise sessions (a later layer), choose
-features, run an LLM coordinator, keep phase labels, batch/bisect merges, resolve conflicts, or
-store anything git or `bd` can re-derive.
+- `air worker <name>`: `claude --worktree <name>` with the roles document appended to the
+  system prompt, a deny list that holds in every permission mode (`air land`, `git push`,
+  `bd create`, `bd sync`, raw `bd update --claim`, nested `claude`, leaving the worktree), and
+  `AIR_ROLE` / `BEADS_ACTOR` set by flag instead of by files that drift.
+- `air coordinator`: `claude` in the main checkout with the Air channel attached and commits
+  and pushes denied (the coordinator steers; it does not do worker work on main).
 
-## Quick start (2026-08-20)
+## What a target repository needs
+
+Verified 2026-08-20 against adopter (the first target) and Claude Code 2.1.238.
+
+| Needs | Why |
+|---|---|
+| A git repository using linked worktrees (`git worktree add`, or `claude --worktree`) | Role is the checkout: main is the coordinator, each worktree a worker. The ledger lives at the main checkout and is found via `git rev-parse --git-common-dir`. |
+| [beads](https://github.com/steveyegge/beads) initialised (`.beads/`), bd 1.2.x on PATH | Air wraps `bd update --claim`, `bd update -s open`, and reads `bd --json`. Pin 1.2.2. |
+| A verify command that exits non-zero on red (`make verify`, `cargo test`, …) | `air record verify -- <cmd>` records its exit against HEAD. The gate needs this fact. |
+| Claude Code ≥ 2.1.211 | Per-worktree `settings.local.json` moved to the main checkout in 2.1.211, which is why Air sets role and env by launch flag. `--append-system-prompt-file`, `--disallowed-tools`, `--settings`, `--worktree`, and the channel flags parse on 2.1.238. |
+| `.air/` in `.gitignore` | The ledger and event log are local state. `air install` advises if missing. |
+
+Nothing in the target repo's build or tooling depends on this repository. Install the binary;
+the repo only ever sees `air` on PATH.
+
+## Onboarding a repository
 
 ```bash
-cargo install --path crates/cli          # `air` on PATH must be this binary
-cd ~/projects/<target-repo>
-air install                              # dry run: shows the hook + .mcp.json merge
-air install --write
-air coordinator                          # main checkout, channel attached
-air worker <name>                        # one per worktree; interactive
-air status --attention                   # what needs a human right now
-air selftest                             # 10 red/green probes
+# 1. Install the binary so the `air` on PATH is this build.
+cargo install --path crates/cli
+air selftest                      # 10 red/green probes; every check proves it fires
+
+# 2. In the target repo's main checkout: see what install would change, then apply it.
+cd ~/projects/<repo>
+air install                       # dry run: prints the merged .claude/settings.json and .mcp.json
+air install --write               # refuses if `air` on PATH is not this binary
+
+# 3. Record verify runs. Either change the habit or the Makefile target:
+air record verify -- make verify
+
+# 4. Start the sessions, one per terminal.
+air coordinator                   # main checkout; channel attached
+air worker frontend               # creates or reuses the worktree; interactive
+air worker backend
 ```
 
-See `docs/plans/0004-first-round-surface.md` for what each command is for and the adopter-side
-steps (beads template, bd pin, `air record verify`).
+What `air install --write` touches, and only that:
 
-## Layout
+- `.claude/settings.json`: adds `air hook` entries for `SessionStart`, `PreToolUse`,
+  `PostToolUse`, `PermissionRequest`, `Stop`, `SubagentStop`, `SessionEnd` (5 s timeout).
+  Existing entries are preserved; re-running changes nothing.
+- `.mcp.json`: adds the `air` server (`air mcp`). Existing servers are preserved.
+- `.air/roles.md`: the roles document the launchers append to the system prompt.
 
-| Path | What |
-|---|---|
-| `docs/research/` | Sourced research reports — every claim traces to a file:line or URL |
-| `docs/plans/` | Design arguments and decisions (ADR-style) |
-| `docs/README.md` | Index and read-when triggers |
-| `crates/` | `ledger`, `bd`, `hooks`, `cli` (binary `air`) |
-| `.claude/skills/` | Ported/written skills with provenance |
+Beads side: always create beads with `bd create --validate --estimate <minutes>`. bd refuses a
+task, feature, or bug whose description lacks an `## Acceptance Criteria` heading (compiled
+in; `bd lint --help`). The coordinator then links the capture: `air triage <id> --bead <new>`.
 
-## Rules
+## Day to day, by role
 
-- **Source trail always.** Any research claim cites its primary source (URL with access date, or
-  `path:line`). Notes derived from adopter cite the adopter file *and* the original source it
-  cited.
-- Rust. `cargo` workspace once design is settled.
+**Worker** (in a worktree): `bd ready` → `air claim <bead> --files a,b` → work, commit small →
+`git merge main` → `air record verify -- <cmd>` → `air handover` → `bd update <bead> -s
+awaiting_review`. Anything discovered outside the bead: `air capture "<one line>"`. Giving up:
+`air release <bead> --reason abandoned|false-premise|…`.
+
+**Coordinator** (main checkout): reads `air status`; gets attention conditions pushed by the
+channel; triages with `air inbox` then `bd create --validate --estimate N` and `air triage <id>
+--bead <new>` (or `--drop "<why>"`); builds each worker's queue with beads fields only
+(`assignee`, priority, `blocks` edges); lands (landing command is the repo's own until `air
+land` is built).
+
+**You**: any terminal, `air status --attention`, `air holdings`, `jq` over
+`.air/events/*.ndjson`.
+
+## What Air never does
+
+Sends messages between agents (that stays `SendMessage`), writes to beads except through the
+`bd` commands above, runs anything headless, pushes, decides what to work on, or expires a
+record on a timer. Everything it refuses names the rule and the fixing command.
+
+## Repository map
+
+`crates/ledger` (SQLite + events), `crates/hooks` (hook I/O, the pure gate, journal),
+`crates/bd` (the beads boundary), `crates/cli` (`air`). `docs/decisions.md` holds every owner
+decision, dated; `docs/plans/0001` and `0004` say what was built and why; `docs/rules/roles.md`
+is what agents read; `docs/research/` is the evidence, every claim with a source.
+
+## Uninstall
+
+Remove the `air hook` entries from `.claude/settings.json` and the `air` server from
+`.mcp.json`; delete `.air/`. Beads state is untouched.
