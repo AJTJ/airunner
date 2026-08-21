@@ -28,8 +28,14 @@ queue honest.
 
 **Does**
 
-- Triages captures against the backlog and plan; files beads with acceptance (`bd create
-  --validate`), lanes, and edges. Workers never do this. [prose, plan 0002 §5]
+- Triages captures (`air inbox`) against the backlog and plan; files beads with acceptance
+  (`bd create --validate --estimate <min>`; acceptance is required by the beads template), lanes,
+  and edges; then `air triage <id> --bead <new-id>` or `--drop "<why>"`. Workers never do this.
+  [prose, plan 0002 §5; decisions 2026-08-20]
+- Is informed, not woken: the Air channel (`air mcp`, attached by `air coordinator`) delivers
+  attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim,
+  handover-not-green, inbox-waiting) into the session as they arise. `air status --attention`
+  is the same list on demand. [Air enforces: deterministic conditions, decisions 2026-08-20]
 - Builds each worker's queue in beads fields only: `assignee`, priority, `blocks`. [prose,
   decisions 2026-08-20]
 - Reads `air status` / `air holdings` before relaying any fact about who holds what. Relayed
@@ -50,8 +56,10 @@ queue honest.
 - Pushes. Nothing in Air pushes. [Air enforces, via the launcher deny list]
 - Answers a worker's question with an interactive prompt to the owner. File it. [prose]
 
-**Commands:** `air status`, `air holdings`, `air land`, `bd create --validate`, `bd update`,
-`bd comment`, `bd human`, `git show main:<path>` and other reads.
+**Commands:** `air status [--attention]`, `air inbox`, `air triage`, `air holdings`, `air land`,
+`bd create --validate --estimate`, `bd update`, `bd comment`, `bd human`, `git show main:<path>`
+and other reads. The same surface is available as MCP tools (`air_status`, `air_inbox`, …) and
+resources (`@air://status`).
 
 ## Worker
 
@@ -61,16 +69,18 @@ by hand.
 
 **Does**
 
-- Claims with `bd update <id> --claim`. Air records the claim from that command on `PostToolUse`.
-  [Air advises]
+- Claims with `air claim <id> [--files a,b]`, the only claim path: it runs `bd update --claim`
+  (bd's atomic CAS decides races) and records the claim. Gives a bead back with
+  `air release <id> --reason <why>`. Raw `bd update --claim` is denied by the launcher.
+  [Air enforces, decisions 2026-08-20]
 - Commits small and often on its own branch. WIP commits are never blocked. [Air enforces: never
   refused]
 - Merges `main` into its branch early and resolves conflicts itself. Merges are never refused.
   [Air enforces: never refused]
 - Runs verify in the foreground and records it: `air record verify -- <cmd>`. [Air enforces at
   hand-over]
-- Captures anything discovered outside the bead with one line (`air capture`, until built:
-  `bd comment` on the current bead). It does not file beads. [prose, decisions 2026-08-18]
+- Captures anything discovered outside the bead with one line: `air capture "<text>"`. It does
+  not file beads; `bd create` is denied. [Air enforces, decisions 2026-08-18/20]
 - Talks to peers directly by name; announces before touching a shared file. [Air advises:
   `PreToolUse(Edit|Write)` warns when a peer holds the path]
 - Stops and says so on the stop conditions in `worktree-protocol.md §7`. [prose]
@@ -79,9 +89,9 @@ by hand.
 
 - Edits, runs commands in, or points git at the main checkout. Claude Code blocks all three for
   any session started with `--worktree`, in every permission mode. [Air enforces, native]
-- Runs `air land`, `git push`, `bd create`, `bd sync`, or a nested `claude`. The launcher passes
-  these as deny rules; `air hook` also flags them by role for the shapes a pattern cannot see.
-  [Air enforces once `AIR_ENFORCE=1`; Air advises until then]
+- Runs `air land`, `git push`, `bd create`, `bd sync`, raw `bd update --claim`, or a nested
+  `claude`. The launcher passes these as deny rules (they hold in every permission mode).
+  [Air enforces]
 - Leaves its worktree (`EnterWorktree`/`ExitWorktree` are removed by the launcher). [Air enforces]
 - Touches another worktree's tree. Read with `git show <branch>:<path>`. [prose; see research §7
   probe 1]
@@ -90,9 +100,9 @@ by hand.
 - Asks a peer to run what it was denied, or accepts a peer's green for its own branch. [prose]
 - Prints a `bd` command for the owner to run. [prose]
 
-**Commands:** `bd ready`, `bd show`, `bd update --claim`, `bd comment`, `git commit`,
-`git merge main`, `cargo test` / `cargo clippy`, `air record verify -- <cmd>`, `air handover`,
-`air holdings`, `air peer` (when built).
+**Commands:** `bd ready`, `bd show`, `air claim`, `air release`, `air capture`, `bd comment`,
+`git commit`, `git merge main`, `cargo test` / `cargo clippy`, `air record verify -- <cmd>`,
+`air handover`, `air holdings`, `air peer` (when built).
 
 **Hand-over, in order** (`worktree-protocol.md §6`): merge `main`; `air record verify`; short
 architecture digest; close your own beads with evidence in the reason, or set `awaiting_review`;
