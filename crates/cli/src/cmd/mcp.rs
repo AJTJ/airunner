@@ -183,6 +183,7 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 "capabilities": {
                     "tools": {},
                     "resources": {},
+                    "prompts": {},
                     "experimental": {"claude/channel": {}}
                 },
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
@@ -213,7 +214,15 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 Err(e) => error(id, -32002, &e),
             }
         }
-        "prompts/list" => result(id, json!({"prompts": []})),
+        "prompts/list" => result(id, json!({"prompts": prompts()})),
+        "prompts/get" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            match get_prompt(name, &args) {
+                Some(v) => result(id, v),
+                None => error(id, -32602, &format!("unknown prompt: {name}")),
+            }
+        }
         _ => error(id, -32601, &format!("method not found: {method}")),
     })
 }
@@ -280,6 +289,40 @@ fn tools() -> Vec<Value> {
         .into_iter()
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.schema}))
         .collect()
+}
+
+/// The coordinator's procedures as prompts: the same skill text `air install` writes into the
+/// target repo, invocable as a command instead of remembered.
+fn prompts() -> Vec<Value> {
+    vec![
+        json!({"name": "decompose", "description": "Break a feature into epics, or an epic into claimable beads, and cut the first wave and per-worker queues (Metis reasoning + story splitting). Argument: the feature paragraph or epic id.", "arguments": [{"name": "target", "description": "feature text or epic id", "required": true}]}),
+        json!({"name": "phase", "description": "May this bead or epic move state? Exit criteria per transition in Air's vocabulary. Argument: bead or epic id and the intended state.", "arguments": [{"name": "target", "description": "bead/epic id and intended state", "required": true}]}),
+    ]
+}
+
+fn get_prompt(name: &str, args: &Value) -> Option<Value> {
+    let target = args.get("target").and_then(Value::as_str).unwrap_or("");
+    let (skill, ask) = match name {
+        "decompose" => (
+            crate::cmd::install::SKILLS.first()?.1,
+            format!(
+                "Decompose this, following the procedure above, and end with the exact `bd` and `air` commands to run:\n\n{target}"
+            ),
+        ),
+        "phase" => (
+            crate::cmd::install::SKILLS.get(1)?.1,
+            format!(
+                "Apply the state machine above to:\n\n{target}\n\nAnswer: may it move, what evidence is missing, and the commands."
+            ),
+        ),
+        _ => return None,
+    };
+    Some(json!({
+        "description": format!("air {name}"),
+        "messages": [
+            {"role": "user", "content": {"type": "text", "text": format!("{skill}\n\n---\n\n{ask}")}}
+        ]
+    }))
 }
 
 fn resources() -> Vec<Value> {
@@ -672,6 +715,18 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"air_claim") && names.contains(&"air_attention"));
+        let pl = handle(
+            &ctx,
+            &json!({"jsonrpc":"2.0","id":9,"method":"prompts/list"}),
+        )
+        .unwrap();
+        assert_eq!(pl["result"]["prompts"].as_array().unwrap().len(), 2);
+        let pg = handle(&ctx, &json!({"jsonrpc":"2.0","id":10,"method":"prompts/get","params":{"name":"decompose","arguments":{"target":"fd-1"}}})).unwrap();
+        let text = pg["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("Provenance") && text.ends_with("fd-1"));
+        assert_eq!(resp["result"]["capabilities"]["prompts"], json!({}));
         let bad = handle(&ctx, &json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
         assert_eq!(bad["error"]["code"], -32601);
         let meta = channel_event(&att("w", "idle-with-claim", 3));

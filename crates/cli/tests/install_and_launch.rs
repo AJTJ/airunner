@@ -82,6 +82,17 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         serde_json::from_str(&std::fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
     assert_eq!(mcp["mcpServers"]["air"]["args"][0], "mcp");
     assert!(repo.join(".air/roles.md").exists());
+    let skill =
+        std::fs::read_to_string(repo.join(".claude/skills/air-decomposition/SKILL.md")).unwrap();
+    assert!(
+        skill.starts_with("---\nname: air-decomposition\n"),
+        "{}",
+        &skill[..60]
+    );
+    assert!(
+        repo.join(".claude/skills/air-phase-transitions/SKILL.md")
+            .exists()
+    );
 
     // Second --write: no change.
     let before = std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
