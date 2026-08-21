@@ -25,4 +25,5 @@
 | Which role am I (coordinator or worker), what I do, what I never do, how I hand over | [`rules/roles.md`](rules/roles.md) |
 | What each role is allowed and required to do, and how far Claude Code can confine a worktree session to its role (settings, launch flags, `--agent`, hooks, native worktree isolation; verified against docs 2026-08-20) | [`research/agent-roles-and-confinement.md`](research/agent-roles-and-confinement.md) |
 | Reading adopter's original research notes (verbatim copies, provenance-pinned) | [`research/adopter-notes/`](research/adopter-notes/PROVENANCE.md) |
+| Deciding whether a hook, deny rule, attention condition, roles.md paragraph, or gate check still pays its way as models improve (evidence, taxonomy, audit of every Air mechanism with removal conditions) | [`research/guardrails-as-throttles.md`](research/guardrails-as-throttles.md) |
 | Checking whether a corpus claim survived independent source verification | [`research/verification/`](research/verification/) — 5 slices done; ticks in `verification/ticks/` with [`SUMMARY.md`](research/verification/ticks/SUMMARY.md) |
