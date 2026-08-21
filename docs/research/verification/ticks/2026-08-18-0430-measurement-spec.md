@@ -208,6 +208,21 @@ confused with total SendMessage volume (steering, priorities, rulings are *suppo
 plan 0001 §6) or with `air merge-advice` calls (which are the replacement, and are counted
 separately as `advice_calls`; the success criterion is `relay_est ↓` while `advice_calls ↑`).
 
+### 2.7 Estimate accuracy (per bead; added 2026-08-20)
+
+Definition: `actual / estimate` where `estimate` is the minutes recorded at filing
+(`bd create --estimate`, read via `bd show --json`) and `actual` is active time from first
+claim to first green hand-over (same basis as §2.3's active-time rule). Report the median ratio
+and the spread per round, and the share of beads with no estimate (denominator). Never gated;
+the coordinator reads it to calibrate sizing (decomposition skill). Confusions: a bead re-cut
+mid-flight keeps its original estimate and is flagged `recut`; rewind loops count toward actual.
+
+### 2.8 Capture inbox depth and time-to-triage (added 2026-08-20)
+
+Definition: open captures at each tick (depth) and, per capture, `promoted_at - captured_at` or
+`dropped_at - captured_at`. Median and p90 per round. This is the number that decides whether
+triage leaves the coordinator for a dedicated session (decisions 2026-08-20).
+
 ## 3. Column and event additions to plan 0001 §2
 
 Only what cannot be re-derived from git/bd. Everything else (merge parents, ancestry, branch
