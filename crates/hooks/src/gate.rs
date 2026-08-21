@@ -21,6 +21,12 @@ pub struct GateFacts {
     /// The bead being handed over is claimed by this worker in the ledger.
     pub bead_claimed_by_worker: bool,
     pub bead: Option<String>,
+    /// Digest check (owner ruling D, 2026-08-21): `None` when the repo configures no digest
+    /// directory (check not applicable); `Some(false)` when no digest file for this worker is
+    /// newer than the claim.
+    pub digest_present: Option<bool>,
+    /// Where digests live (for the fixing message).
+    pub digest_dir: Option<String>,
     /// Advisory mode: report what would be refused but allow (first round; decisions.md).
     pub advisory: bool,
 }
@@ -72,6 +78,17 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             fix: format!("air claim {bead}"),
         });
     }
+    if f.digest_present == Some(false) {
+        let dir = f.digest_dir.as_deref().unwrap_or("docs/log.d");
+        missing.push(Missing {
+            check: "digest-present",
+            detail: format!("no digest by {} in {dir} newer than the claim", f.worker),
+            fix: format!(
+                "write {dir}/<date>-{}-<topic>.md (short architecture digest)",
+                f.worker
+            ),
+        });
+    }
     let pass = missing.is_empty();
     let block = !pass && !f.advisory;
     let message = if pass {
@@ -115,6 +132,8 @@ mod tests {
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
             bead_claimed_by_worker: true,
+            digest_present: None,
+            digest_dir: None,
             bead: Some("ad-o5fi".into()),
             advisory: false,
         }

@@ -144,5 +144,137 @@ fn capture_inbox_triage_round_trip() {
     let (code, _, _) = air(&repo, &bd, &["triage", &id, "--drop", "dup"]);
     assert_eq!(code, 2);
     let (_, out, _) = air(&repo, &bd, &["inbox"]);
-    assert_eq!(out.trim(), "inbox empty");
+    assert_eq!(out.trim(), "coordinator queue empty");
+}
+
+/// Two worktrees contend for one resource; the dead-holder path is exercised by pointing
+/// the holder's pid at a process that has already exited.
+#[test]
+fn lease_take_deny_break_across_worktrees_and_owner_queue() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // Second worktree.
+    let wt = repo.join("wt-b");
+    let out = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "b",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A pid that is certainly dead: spawn `true` and wait for it.
+    let dead = Command::new("true").spawn().unwrap();
+    let dead_pid = dead.id().to_string();
+    let _ = dead.wait_with_output();
+
+    let run = |cwd: &Path, pid: &str, args: &[&str]| -> (i32, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(cwd)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("AIR_LEASE_PID", pid)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+        )
+    };
+    let me = std::process::id().to_string();
+
+    // main takes runtime with a live pid (this test process); b is denied.
+    let (c, o) = run(&repo, &me, &["lease", "take", "--reason", "api"]);
+    assert_eq!(c, 0, "{o}");
+    let (c, o) = run(&wt, &me, &["lease", "take", "--reason", "sim"]);
+    assert_eq!(c, 1);
+    assert!(o.contains("HELD by main"), "{o}");
+    let (_, o) = run(&repo, &me, &["lease", "status"]);
+    assert!(o.contains("wanted by") && o.contains("wt-b"), "{o}");
+    // Healthy lease cannot be broken without --force.
+    let (c, _) = run(&wt, &me, &["lease", "break"]);
+    assert_eq!(c, 1);
+    // Re-take by main with a dead pid recorded; b now breaks it and takes it.
+    let (c, _) = run(&repo, &me, &["lease", "release"]);
+    assert_eq!(c, 0);
+    let (c, _) = run(&repo, &dead_pid, &["lease", "take", "--reason", "api"]);
+    assert_eq!(c, 0);
+    let (_, o) = run(&repo, &me, &["--json", "status", "--attention"]);
+    assert!(o.contains("lease-held-by-dead-session"), "{o}");
+    let (c, o) = run(&wt, &me, &["lease", "take", "--reason", "sim"]);
+    assert_eq!(c, 0, "{o}");
+    assert!(o.contains("was dead"), "{o}");
+    let (_, o) = run(&repo, &me, &["--json", "lease", "status"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert_eq!(v[0]["holder"], "wt-b");
+
+    // Owner queue: separate audience, separate attention condition.
+    let (c, _) = run(&wt, &me, &["capture", "--for", "owner", "rule on ports"]);
+    assert_eq!(c, 0);
+    let (_, o) = run(&repo, &me, &["inbox"]);
+    assert!(o.contains("coordinator queue empty"), "{o}");
+    let (_, o) = run(&repo, &me, &["inbox", "--owner"]);
+    assert!(o.contains("rule on ports"), "{o}");
+    let (_, o) = run(&repo, &me, &["--json", "status", "--attention"]);
+    assert!(o.contains("owner-decision-waiting"), "{o}");
+}
+
+/// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.
+#[test]
+fn digest_gate_is_configured_per_repo() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        !v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"digest_dir":"docs/log.d"}"#,
+    )
+    .unwrap();
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
+    std::fs::create_dir_all(repo.join("docs/log.d")).unwrap();
+    std::fs::write(repo.join("docs/log.d/2026-08-21-main-round.md"), "digest").unwrap();
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        !v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
 }

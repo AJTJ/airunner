@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use air_ledger::claims::Claim;
+use air_ledger::leases::Lease;
 use air_ledger::verify::Kind;
 use serde::Serialize;
 
@@ -41,6 +42,10 @@ pub struct Snapshot {
     pub workers: Vec<WorkerView>,
     pub inbox_depth: usize,
     pub oldest_capture_at: Option<String>,
+    pub owner_queue_depth: usize,
+    pub oldest_owner_capture_at: Option<String>,
+    /// Every lease, with the defect the CLI found (None = healthy).
+    pub leases: Vec<(Lease, Option<String>)>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -86,7 +91,8 @@ impl Thresholds {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Attention {
     pub worker: String,
-    /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green | inbox-waiting
+    /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green |
+    /// inbox-waiting | owner-decision-waiting | lease-held-by-dead-session | lease-stale
     pub kind: &'static str,
     pub detail: String,
     pub for_minutes: i64,
@@ -182,6 +188,35 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 });
             }
         }
+    }
+    for (l, defect) in &s.leases {
+        let Some(d) = defect else { continue };
+        let kind = if d.starts_with("dead") {
+            "lease-held-by-dead-session"
+        } else {
+            "lease-stale"
+        };
+        out.push(Attention {
+            worker: l.worker.clone(),
+            kind,
+            detail: format!(
+                "{} lease held by {} is {d} (reason: {}); `air lease break {}` or let the next taker break it",
+                l.resource, l.worker, l.reason, l.resource
+            ),
+            for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
+        });
+    }
+    if let Some(oldest) = &s.oldest_owner_capture_at {
+        out.push(Attention {
+            worker: "owner".to_string(),
+            kind: "owner-decision-waiting",
+            detail: format!(
+                "{} decision(s) waiting for the owner, oldest {} min; `air inbox --owner`",
+                s.owner_queue_depth,
+                minutes_between(oldest, now).unwrap_or(0)
+            ),
+            for_minutes: minutes_between(oldest, now).unwrap_or(0),
+        });
     }
     if let Some(oldest) = &s.oldest_capture_at {
         let age = minutes_between(oldest, now).unwrap_or(0);
@@ -302,11 +337,28 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     }
 
     let inbox = ledger.inbox().map_err(|e| e.to_string())?;
+    let owner_q = ledger.inbox_for("owner").map_err(|e| e.to_string())?;
+    let stale = std::env::var("AIR_LEASE_STALE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    let leases = ledger
+        .leases()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|l| {
+            let d = super::lease::defect(&l, &at, stale);
+            (l, d)
+        })
+        .collect();
     Ok(Snapshot {
         at,
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
+        owner_queue_depth: owner_q.len(),
+        oldest_owner_capture_at: owner_q.first().map(|c| c.captured_at.clone()),
+        leases,
         overlaps,
         errors,
     })
@@ -348,7 +400,19 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             }
         ));
     }
-    out.push_str(&format!("inbox: {} open\n", s.inbox_depth));
+    out.push_str(&format!(
+        "inbox: {} open; owner queue: {} open\n",
+        s.inbox_depth, s.owner_queue_depth
+    ));
+    for (l, d) in &s.leases {
+        out.push_str(&format!(
+            "lease: {} held by {} ({}){}\n",
+            l.resource,
+            l.worker,
+            l.reason,
+            d.as_deref().map(|d| format!(" [{d}]")).unwrap_or_default()
+        ));
+    }
     for (f, who) in &s.overlaps {
         out.push_str(&format!("overlap: {f} held by {}\n", who.join(", ")));
     }
@@ -539,6 +603,42 @@ mod tests {
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+    }
+
+    #[test]
+    fn lease_defects_and_owner_queue_fire() {
+        let lease = |res: &str, beat: &str| Lease {
+            resource: res.into(),
+            worker: "a".into(),
+            session_id: None,
+            pid: Some(1),
+            pid_started: None,
+            reason: "api".into(),
+            taken_at: T_30.into(),
+            heartbeat_at: beat.into(),
+        };
+        let s = Snapshot {
+            leases: vec![
+                (lease(":8080", T_30), Some("dead (pid 1 gone)".into())),
+                (lease("chrome", T_30), Some("stale (idle 30 min)".into())),
+                (lease("runtime", T_2), None),
+            ],
+            owner_queue_depth: 2,
+            oldest_owner_capture_at: Some(T_2.into()),
+            ..Default::default()
+        };
+        let kinds: Vec<&str> = attention(&s, NOW, Thresholds::default())
+            .iter()
+            .map(|a| a.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "lease-held-by-dead-session",
+                "lease-stale",
+                "owner-decision-waiting"
+            ]
+        );
     }
 
     #[test]

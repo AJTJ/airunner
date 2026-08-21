@@ -38,6 +38,8 @@ pub fn run(json: bool) -> i32 {
         probe_attention(),
         probe_channel_dedupe(),
         probe_install_merge(),
+        probe_gate_digest(),
+        probe_lease_take(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -55,6 +57,65 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// Check 5 (ruling D): digest configured but absent → missing `digest-present`; not
+/// configured → not applicable.
+fn probe_gate_digest() -> Probe {
+    let mut red = base_facts();
+    red.digest_present = Some(false);
+    red.digest_dir = Some("docs/log.d".into());
+    let mut green = base_facts();
+    green.digest_present = None;
+    Probe {
+        name: "gate: digest required when the repo configures digest_dir",
+        red_fires: handover_verdict(&red)
+            .missing
+            .iter()
+            .any(|m| m.check == "digest-present"),
+        green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// Leases: a healthy holder denies a second taker; a dead holder is broken and taken.
+fn probe_lease_take() -> Probe {
+    use air_ledger::leases::{Holder, Lease, Take};
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let a = Holder {
+            worker: "a",
+            session_id: None,
+            pid: Some(1),
+            pid_started: None,
+        };
+        let b = Holder {
+            worker: "b",
+            session_id: None,
+            pid: Some(2),
+            pid_started: None,
+        };
+        let healthy = |_: &Lease| None;
+        l.lease_take("runtime", &a, "api", "t0", healthy)
+            .map_err(|e| e.to_string())?;
+        let denied = matches!(
+            l.lease_take("runtime", &b, "sim", "t1", healthy)
+                .map_err(|e| e.to_string())?,
+            Take::Held(_)
+        );
+        let dead = |_: &Lease| Some("dead".to_string());
+        let taken = matches!(
+            l.lease_take("runtime", &b, "sim", "t2", dead)
+                .map_err(|e| e.to_string())?,
+            Take::TakenAfter(_)
+        );
+        Ok((denied, taken))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "lease: healthy holder denies; dead holder is broken and taken",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// Check 4: a hand-over names a bead the worker does not hold → missing `claim`.
@@ -170,6 +231,8 @@ fn base_facts() -> GateFacts {
         last_green_sha: None,
         main_is_ancestor: true,
         bead_claimed_by_worker: true,
+        digest_present: None,
+        digest_dir: None,
         bead: None,
         advisory: false,
     }

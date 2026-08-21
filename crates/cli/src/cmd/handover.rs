@@ -41,6 +41,18 @@ pub fn facts(
             .map(|n| n > 0)
             .unwrap_or(false),
     };
+    let digest_dir = digest_dir(repo);
+    let digest_present = digest_dir.as_deref().map(|d| {
+        // Newer than this worker's oldest open claim; with no claim, any digest by this
+        // worker counts (the check is about the hand-over, not a specific bead).
+        let since = ledger.open_claims().ok().and_then(|v| {
+            v.into_iter()
+                .filter(|c| c.worker == worker)
+                .map(|c| c.claimed_at)
+                .min()
+        });
+        digest_newer_than(&repo.join(d), worker, since.as_deref())
+    });
     Ok(GateFacts {
         worker: worker.to_string(),
         head,
@@ -49,7 +61,36 @@ pub fn facts(
         main_is_ancestor,
         bead_claimed_by_worker,
         bead: bead.map(str::to_string),
+        digest_present,
+        digest_dir,
         advisory,
+    })
+}
+
+/// `digest_dir` from `<main>/.claude/air.json`; None disables the check.
+pub fn digest_dir(repo: &Path) -> Option<String> {
+    let air_dir = air_ledger::paths::air_dir_for(repo).ok()?;
+    let path = air_dir.parent()?.join(".claude/air.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    v.get("digest_dir")?.as_str().map(str::to_string)
+}
+
+/// Is there a `*<worker>*.md` in `dir` modified after `since` (RFC 3339)? Pure over the fs.
+pub fn digest_newer_than(dir: &Path, worker: &str, since: Option<&str>) -> bool {
+    let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".md") || !name.contains(worker) {
+            return false;
+        }
+        match (since_ts, e.metadata().and_then(|m| m.modified()).ok()) {
+            (Some(since), Some(m)) => jiff::Timestamp::try_from(m).is_ok_and(|t| t > since),
+            (None, _) => true,
+            _ => false,
+        }
     })
 }
 
@@ -85,8 +126,39 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
             "would-refuse"
         },
         &v.message,
-        "3 checks",
+        "4 checks",
     );
     emit(json, &v, || v.message.clone());
     if v.block { 2 } else { 0 }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod digest_tests {
+    use super::digest_newer_than;
+
+    #[test]
+    fn digest_must_match_worker_and_be_newer_than_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("2026-08-21-frontend-icons.md"), "x").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+        assert!(digest_newer_than(dir.path(), "frontend", None));
+        assert!(!digest_newer_than(dir.path(), "backend", None));
+        // A claim in the future: nothing is newer.
+        assert!(!digest_newer_than(
+            dir.path(),
+            "frontend",
+            Some("2999-01-01T00:00:00Z")
+        ));
+        assert!(digest_newer_than(
+            dir.path(),
+            "frontend",
+            Some("2000-01-01T00:00:00Z")
+        ));
+        assert!(!digest_newer_than(
+            &dir.path().join("missing"),
+            "frontend",
+            None
+        ));
+    }
 }
