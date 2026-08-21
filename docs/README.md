@@ -20,6 +20,7 @@
 | Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
 | Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (one procedure; enforced vs judgement; metrics; rejected items) | [`plans/0002-what-to-work-on.md`](plans/0002-what-to-work-on.md) |
 | Skills/reference material to port before building | a private skills inventory |
+| Position notes answering live questions from target repos (per-worker queues, 2026-08-21) | [`notes/`](notes/) |
 | Integrating Air into a target repo: install, rules to change, what Air now does, keeping it current | [`rules/adopting-air.md`](rules/adopting-air.md) |
 | Starting a session in a worktree: which checkout am I in, what may I do, how to hand over (and what Air enforces) | [`rules/worktree-protocol.md`](rules/worktree-protocol.md) |
 | Which role am I (coordinator or worker), what I do, what I never do, how I hand over | [`rules/roles.md`](rules/roles.md) |
