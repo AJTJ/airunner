@@ -1,0 +1,564 @@
+//! `air mcp`: one stdio MCP server that is both the coordinator's channel (push) and the
+//! tool/resource surface (pull). Decisions 2026-08-20.
+//!
+//! Protocol facts (https://code.claude.com/docs/en/channels-reference, accessed 2026-08-20):
+//! newline-delimited JSON-RPC 2.0 over stdio; a server is a channel when `initialize` returns
+//! `capabilities.experimental["claude/channel"] = {}`; it pushes with the notification
+//! `notifications/claude/channel` `{content, meta}` (meta keys: identifiers only); the same
+//! process may also serve `tools/*` and `resources/*`.
+//!
+//! Why hand-rolled and synchronous rather than an SDK: this process lives as long as the
+//! coordinator session (days). It must not leak, must not block on a stuck child, and must
+//! keep serving after any single bad line. The surface we need is six methods; owning the
+//! read loop, the write lock, and the poll thread is smaller than auditing an async runtime
+//! for the same guarantees (rust-safety skill; plan 0003 "no async in hooks").
+//!
+//! Push design: there is no documented way for an outside process to talk to a channel
+//! server, and every attention condition is a clock condition anyway ("stuck for N min").
+//! So a poll thread re-evaluates `status::attention` from the ledger every
+//! `AIR_CHANNEL_POLL_SECS` (default 30) and pushes only *new or escalated* conditions; the
+//! de-dupe map is bounded by workers × kinds and pruned when a condition clears.
+//!
+//! Tools and resources shell out to this same binary with `--json` (one implementation, the
+//! CLI; time-bounded by `wait-timeout`), so MCP can never disagree with the command line.
+
+use std::collections::BTreeMap;
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use wait_timeout::ChildExt;
+
+use crate::cmd::status::{self, Attention, Thresholds};
+
+const PROTOCOL_VERSION: &str = "2025-06-18";
+const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
+/// A line longer than this is an error, not a buffer we keep growing.
+const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Shared, locked stdout: the read loop and the poll thread both write whole lines.
+#[derive(Clone)]
+struct Out(Arc<Mutex<std::io::Stdout>>);
+
+impl Out {
+    fn send(&self, v: &Value) {
+        if let Ok(mut o) = self.0.lock() {
+            let _ = serde_json::to_writer(&mut *o, v);
+            let _ = o.write_all(b"\n");
+            let _ = o.flush();
+        }
+    }
+}
+
+impl std::fmt::Debug for Out {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Out")
+    }
+}
+
+pub fn run(repo: &Path) -> i32 {
+    let out = Out(Arc::new(Mutex::new(std::io::stdout())));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("air"));
+    let ctx = Ctx {
+        repo: repo.to_path_buf(),
+        exe,
+    };
+    let poll_secs: u64 = std::env::var("AIR_CHANNEL_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    let poll_ms: u64 = std::env::var("AIR_CHANNEL_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| poll_secs.saturating_mul(1000));
+    {
+        let out = out.clone();
+        let repo = repo.to_path_buf();
+        std::thread::Builder::new()
+            .name("air-channel-poll".into())
+            .spawn(move || poll_loop(&repo, &out, Duration::from_millis(poll_ms)))
+            .map_err(|e| eprintln!("air mcp: poll thread: {e}"))
+            .ok();
+    }
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        // Bounded read: take_line refuses to accumulate past MAX_LINE_BYTES.
+        match read_bounded_line(&mut stdin.lock(), &mut line) {
+            Ok(0) => return 0, // EOF: the session ended; exit cleanly.
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("air mcp: stdin: {e}");
+                return 0;
+            }
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(msg) => {
+                if let Some(resp) = handle(&ctx, &msg) {
+                    out.send(&resp);
+                }
+            }
+            Err(e) => out.send(&error(Value::Null, -32700, &format!("parse error: {e}"))),
+        }
+    }
+}
+
+/// `read_line` with a ceiling: a runaway line is discarded and reported, never buffered whole.
+fn read_bounded_line<R: BufRead>(r: &mut R, buf: &mut String) -> std::io::Result<usize> {
+    let mut total = 0usize;
+    let mut overflow = false;
+    loop {
+        let avail = r.fill_buf()?;
+        if avail.is_empty() {
+            return Ok(total);
+        }
+        let (chunk, done) = match avail.iter().position(|b| *b == b'\n') {
+            Some(i) => (&avail[..=i], true),
+            None => (avail, false),
+        };
+        let n = chunk.len();
+        total = total.saturating_add(n);
+        if !overflow && total <= MAX_LINE_BYTES {
+            buf.push_str(&String::from_utf8_lossy(chunk));
+        } else {
+            overflow = true;
+        }
+        r.consume(n);
+        if done {
+            if overflow {
+                buf.clear();
+                return Err(std::io::Error::other(format!(
+                    "line exceeded {MAX_LINE_BYTES} bytes; dropped"
+                )));
+            }
+            return Ok(total);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Ctx {
+    repo: PathBuf,
+    exe: PathBuf,
+}
+
+fn error(id: Value, code: i64, msg: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}})
+}
+
+fn result(id: Value, v: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "result": v})
+}
+
+/// Dispatch one message. Notifications (no id) return None.
+fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let id = msg.get("id").cloned();
+    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let Some(id) = id else {
+        // Notifications: initialized, cancelled, … nothing to do.
+        return None;
+    };
+    Some(match method {
+        "initialize" => result(
+            id,
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                    "experimental": {"claude/channel": {}}
+                },
+                "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, handover-not-green, inbox-waiting) as they arise."
+            }),
+        ),
+        "ping" => result(id, json!({})),
+        "tools/list" => result(id, json!({"tools": tools()})),
+        "tools/call" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            match call_tool(ctx, name, &args) {
+                Ok((text, is_error)) => result(
+                    id,
+                    json!({"content": [{"type": "text", "text": text}], "isError": is_error}),
+                ),
+                Err(e) => error(id, -32602, &e),
+            }
+        }
+        "resources/list" => result(id, json!({"resources": resources()})),
+        "resources/read" => {
+            let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
+            match read_resource(ctx, uri) {
+                Ok(text) => result(
+                    id,
+                    json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": text}]}),
+                ),
+                Err(e) => error(id, -32002, &e),
+            }
+        }
+        "prompts/list" => result(id, json!({"prompts": []})),
+        _ => error(id, -32601, &format!("method not found: {method}")),
+    })
+}
+
+/// Tool catalogue: name, description, JSON schema, and the CLI argv it maps to.
+struct Tool {
+    name: &'static str,
+    description: &'static str,
+    schema: Value,
+}
+
+fn tool_defs() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "air_status",
+            description: "The coordinator's one screen: every worker's session state, HEAD, green-at-HEAD, open claims with hand-over attempts, files held, overlaps, and the capture inbox depth.",
+            schema: json!({"type":"object","properties":{}}),
+        },
+        Tool {
+            name: "air_attention",
+            description: "Only the conditions that need a human or the coordinator right now (empty array when the fleet is quiet).",
+            schema: json!({"type":"object","properties":{}}),
+        },
+        Tool {
+            name: "air_holdings",
+            description: "Who has edits in which files across worktrees (uncommitted, committed since main, journaled). Optional file filter.",
+            schema: json!({"type":"object","properties":{"file":{"type":"string","description":"repo-relative path"}}}),
+        },
+        Tool {
+            name: "air_handover",
+            description: "Is this worktree ready to hand over? Reports what is missing and the fixing command. Advisory.",
+            schema: json!({"type":"object","properties":{"bead":{"type":"string"}}}),
+        },
+        Tool {
+            name: "air_claim",
+            description: "Claim a bead: runs `bd update --claim` (atomic) and records the claim. The only claim path. Refuses if another worker holds it.",
+            schema: json!({"type":"object","required":["bead"],"properties":{"bead":{"type":"string"},"files":{"type":"array","items":{"type":"string"},"description":"repo-relative files you expect to touch"}}}),
+        },
+        Tool {
+            name: "air_release",
+            description: "Give a bead back: bd status → open and the claim closed with a reason.",
+            schema: json!({"type":"object","required":["bead","reason"],"properties":{"bead":{"type":"string"},"reason":{"type":"string","enum":["landed","abandoned","reassigned","superseded","false-premise","owner-gated","unknown"]}}}),
+        },
+        Tool {
+            name: "air_capture",
+            description: "One line into the inbox for the coordinator to triage. Workers capture; they never create beads. Never blocks you.",
+            schema: json!({"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}),
+        },
+        Tool {
+            name: "air_inbox",
+            description: "Open captures, oldest first (coordinator).",
+            schema: json!({"type":"object","properties":{}}),
+        },
+        Tool {
+            name: "air_triage",
+            description: "Resolve a capture: promote it to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop).",
+            schema: json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"},"bead":{"type":"string"},"drop":{"type":"string"}}}),
+        },
+    ]
+}
+
+fn tools() -> Vec<Value> {
+    tool_defs()
+        .into_iter()
+        .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.schema}))
+        .collect()
+}
+
+fn resources() -> Vec<Value> {
+    [
+        ("air://status", "Fleet status snapshot (JSON)"),
+        ("air://attention", "Current attention conditions (JSON array)"),
+        ("air://inbox", "Open captures (JSON array)"),
+        ("air://holdings", "File holdings across worktrees (JSON)"),
+    ]
+    .iter()
+    .map(|(uri, d)| json!({"uri": uri, "name": uri.trim_start_matches("air://"), "description": d, "mimeType": "application/json"}))
+    .collect()
+}
+
+fn str_arg<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
+    args.get(k)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+/// Map a tool call to `air --json <argv>`; returns (text, is_error).
+fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), String> {
+    let mut argv: Vec<String> = vec!["--json".into()];
+    match name {
+        "air_status" => argv.push("status".into()),
+        "air_attention" => argv.extend(["status".into(), "--attention".into()]),
+        "air_holdings" => {
+            argv.push("holdings".into());
+            if let Some(f) = str_arg(args, "file") {
+                argv.extend(["--file".into(), f.into()]);
+            }
+        }
+        "air_handover" => {
+            argv.push("handover".into());
+            if let Some(b) = str_arg(args, "bead") {
+                argv.extend(["--bead".into(), b.into()]);
+            }
+        }
+        "air_claim" => {
+            let bead = str_arg(args, "bead").ok_or("bead is required")?;
+            argv.extend(["claim".into(), bead.into()]);
+            if let Some(files) = args.get("files").and_then(Value::as_array) {
+                let list: Vec<&str> = files.iter().filter_map(Value::as_str).collect();
+                if !list.is_empty() {
+                    argv.extend(["--files".into(), list.join(",")]);
+                }
+            }
+        }
+        "air_release" => {
+            let bead = str_arg(args, "bead").ok_or("bead is required")?;
+            let reason = str_arg(args, "reason").ok_or("reason is required")?;
+            argv.extend([
+                "release".into(),
+                bead.into(),
+                "--reason".into(),
+                reason.into(),
+            ]);
+        }
+        "air_capture" => {
+            let text = str_arg(args, "text").ok_or("text is required")?;
+            argv.extend(["capture".into(), text.into()]);
+        }
+        "air_inbox" => argv.push("inbox".into()),
+        "air_triage" => {
+            let id = str_arg(args, "id").ok_or("id is required")?;
+            argv.extend(["triage".into(), id.into()]);
+            match (str_arg(args, "bead"), str_arg(args, "drop")) {
+                (Some(b), None) => argv.extend(["--bead".into(), b.into()]),
+                (None, Some(d)) => argv.extend(["--drop".into(), d.into()]),
+                _ => return Err("give exactly one of bead or drop".into()),
+            }
+        }
+        _ => return Err(format!("unknown tool: {name}")),
+    }
+    let (code, stdout, stderr) = run_self(ctx, &argv)?;
+    let text = if stdout.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        stdout
+    };
+    Ok((text, code != 0))
+}
+
+fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
+    let argv: &[&str] = match uri {
+        "air://status" => &["--json", "status"],
+        "air://attention" => &["--json", "status", "--attention"],
+        "air://inbox" => &["--json", "inbox"],
+        "air://holdings" => &["--json", "holdings"],
+        _ => return Err(format!("unknown resource: {uri}")),
+    };
+    let argv: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
+    let (code, stdout, stderr) = run_self(ctx, &argv)?;
+    if code != 0 {
+        return Err(format!("air exited {code}: {}", stderr.trim()));
+    }
+    Ok(stdout)
+}
+
+/// Run this binary with `--repo <repo>`; time-bounded, always reaped.
+fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String> {
+    let mut child = Command::new(&ctx.exe)
+        .arg("--repo")
+        .arg(&ctx.repo)
+        .args(argv)
+        .current_dir(&ctx.repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn {}: {e}", ctx.exe.display()))?;
+    let status = match child.wait_timeout(TOOL_TIMEOUT) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "air {} timed out after {TOOL_TIMEOUT:?}",
+                argv.join(" ")
+            ));
+        }
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e.to_string());
+        }
+    };
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok((
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    ))
+}
+
+// ---------- channel push ----------
+
+/// What has been pushed, keyed by (worker, kind): the minutes at which we last notified.
+/// Bounded by workers × kinds; entries vanish when the condition clears.
+pub type Pushed = BTreeMap<(String, &'static str), i64>;
+
+/// Pure: which conditions to push now. New ones always; existing ones again once their
+/// duration has at least doubled since the last push (escalation without spam). Clears
+/// entries whose condition is gone.
+pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> {
+    let mut out = Vec::new();
+    let mut seen: Vec<(String, &'static str)> = Vec::with_capacity(current.len());
+    for a in current {
+        let key = (a.worker.clone(), a.kind);
+        seen.push(key.clone());
+        let again = match pushed.get(&key) {
+            None => true,
+            Some(prev) => a.for_minutes >= prev.saturating_mul(2).max(prev.saturating_add(10)),
+        };
+        if again {
+            pushed.insert(key, a.for_minutes);
+            out.push(a.clone());
+        }
+    }
+    pushed.retain(|k, _| seen.contains(k));
+    out
+}
+
+fn channel_event(a: &Attention) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {
+            "content": format!("[{}] {}: {}", a.kind, a.worker, a.detail),
+            "meta": {
+                "kind": a.kind.replace('-', "_"),
+                "worker": a.worker,
+                "for_minutes": a.for_minutes.to_string()
+            }
+        }
+    })
+}
+
+fn poll_loop(repo: &Path, out: &Out, every: Duration) {
+    let mut pushed = Pushed::new();
+    let thresholds = Thresholds::from_env();
+    loop {
+        match status::gather(repo) {
+            Ok(snap) => {
+                let att = status::attention(&snap, &snap.at, thresholds);
+                for a in select_new(&mut pushed, &att) {
+                    out.send(&channel_event(&a));
+                }
+            }
+            Err(e) => eprintln!("air mcp: poll: {e}"),
+        }
+        std::thread::sleep(every);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    fn att(worker: &str, kind: &'static str, mins: i64) -> Attention {
+        Attention {
+            worker: worker.into(),
+            kind,
+            detail: String::new(),
+            for_minutes: mins,
+        }
+    }
+
+    #[test]
+    fn pushes_new_then_escalates_then_clears() {
+        let mut p = Pushed::new();
+        let first = select_new(&mut p, &[att("a", "stuck", 5)]);
+        assert_eq!(first.len(), 1);
+        // Same condition a little later: silent.
+        assert!(select_new(&mut p, &[att("a", "stuck", 9)]).is_empty());
+        // Doubled (and +10): pushed again.
+        assert_eq!(select_new(&mut p, &[att("a", "stuck", 15)]).len(), 1);
+        // Condition gone: map empties; nothing pushed.
+        assert!(select_new(&mut p, &[]).is_empty());
+        assert!(p.is_empty());
+        // Reappears: new again.
+        assert_eq!(select_new(&mut p, &[att("a", "stuck", 5)]).len(), 1);
+    }
+
+    #[test]
+    fn pushed_map_stays_bounded_over_many_ticks() {
+        let mut p = Pushed::new();
+        for tick in 0..10_000i64 {
+            let cur = vec![
+                att("a", "stuck", tick),
+                att("b", "idle-with-claim", tick / 2),
+                att(
+                    if tick % 2 == 0 { "c" } else { "d" },
+                    "silent-with-claim",
+                    1,
+                ),
+            ];
+            let _ = select_new(&mut p, &cur);
+            assert!(p.len() <= 3, "tick {tick}: {}", p.len());
+        }
+    }
+
+    #[test]
+    fn bounded_line_reader_drops_oversized_lines_and_continues() {
+        let big = "x".repeat(MAX_LINE_BYTES + 10);
+        let input = format!("{big}\n{{\"ok\":1}}\n");
+        let mut r = std::io::Cursor::new(input.into_bytes());
+        let mut buf = String::new();
+        assert!(read_bounded_line(&mut r, &mut buf).is_err());
+        assert!(buf.is_empty());
+        buf.clear();
+        assert!(read_bounded_line(&mut r, &mut buf).unwrap() > 0);
+        assert_eq!(buf.trim(), "{\"ok\":1}");
+        assert_eq!(read_bounded_line(&mut r, &mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn initialize_declares_channel_and_tools() {
+        let ctx = Ctx {
+            repo: PathBuf::from("."),
+            exe: PathBuf::from("air"),
+        };
+        let resp = handle(
+            &ctx,
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        )
+        .unwrap();
+        assert!(resp["result"]["capabilities"]["experimental"]["claude/channel"].is_object());
+        assert!(
+            handle(
+                &ctx,
+                &json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+            )
+            .is_none()
+        );
+        let list = handle(&ctx, &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
+        let names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"air_claim") && names.contains(&"air_attention"));
+        let bad = handle(&ctx, &json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
+        assert_eq!(bad["error"]["code"], -32601);
+        let meta = channel_event(&att("w", "idle-with-claim", 3));
+        assert_eq!(meta["params"]["meta"]["kind"], "idle_with_claim");
+    }
+}
