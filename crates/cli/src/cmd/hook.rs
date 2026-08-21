@@ -192,6 +192,8 @@ fn dispatch(
         HookEvent::PreToolUse => pre_tool_use(ledger, worker, cwd, input)?,
         HookEvent::PostToolUse => {
             let prev = set_session(ledger, input, worker, "working", None)?;
+            // Every tool call is a sign of life for the leases this worktree holds.
+            let _ = ledger.lease_beat(worker, &now());
             let mut d = Dispatched::new(
                 HookOutcome::Allow { context: None },
                 "observed",
@@ -224,7 +226,7 @@ fn dispatch(
                 "head": f.head,
                 "stop_hook_active": input.stop_hook_active,
             }))
-            .denominator("3 checks")
+            .denominator("4 checks")
         }
         _ => Dispatched::new(
             HookOutcome::Allow { context: None },
@@ -338,7 +340,7 @@ fn pre_tool_use(
         };
         return Ok(Dispatched::new(outcome, decision, v.message.clone())
             .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
-            .denominator("3 checks"));
+            .denominator("4 checks"));
     }
     Ok(Dispatched::new(
         HookOutcome::Allow { context: None },

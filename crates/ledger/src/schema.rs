@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 3;
+pub const CURRENT_VERSION: i64 = 4;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -101,6 +101,30 @@ ALTER TABLE verify_runs ADD COLUMN output_bytes INTEGER;
 ALTER TABLE verify_runs ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
 "#;
 
+/// v4 (2026-08-21, owner rulings A and E): named-resource leases (ported from
+/// `adopter/scripts/lease.sh`: identity is the worktree, liveness is the pid + its start
+/// time, stale is heartbeat age) and an audience on captures (`coordinator` | `owner`).
+const V4: &str = r#"
+CREATE TABLE IF NOT EXISTS leases (
+    resource      TEXT PRIMARY KEY,           -- e.g. runtime, :8080, simulator, chrome
+    worker        TEXT NOT NULL,
+    session_id    TEXT,
+    pid           INTEGER,
+    pid_started   TEXT,                       -- `ps -o lstart=` of pid, guards reuse
+    reason        TEXT NOT NULL,
+    taken_at      TEXT NOT NULL,
+    heartbeat_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lease_wants (
+    resource   TEXT NOT NULL,
+    worker     TEXT NOT NULL,
+    reason     TEXT,
+    wanted_at  TEXT NOT NULL,
+    PRIMARY KEY (resource, worker)
+);
+ALTER TABLE captures ADD COLUMN audience TEXT NOT NULL DEFAULT 'coordinator';
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -115,6 +139,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 3 {
         conn.execute_batch(V3)?;
         conn.pragma_update(None, "user_version", 3)?;
+    }
+    if version < 4 {
+        conn.execute_batch(V4)?;
+        conn.pragma_update(None, "user_version", 4)?;
     }
     Ok(())
 }
@@ -136,11 +164,11 @@ mod tests {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('verify_runs','edit_journal','claims','sessions','landings','captures')",
+                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 6);
+        assert_eq!(n, 8);
     }
 }

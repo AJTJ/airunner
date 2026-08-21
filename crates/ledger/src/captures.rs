@@ -18,9 +18,12 @@ pub struct Capture {
     pub resolved_at: Option<String>,
     pub bead: Option<String>,
     pub note: Option<String>,
+    /// `coordinator` (default) or `owner` (the owner's decision queue; ruling E).
+    pub audience: String,
 }
 
-const COLS: &str = "id, worker, session_id, text, captured_at, status, resolved_at, bead, note";
+const COLS: &str =
+    "id, worker, session_id, text, captured_at, status, resolved_at, bead, note, audience";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Capture> {
     Ok(Capture {
@@ -33,6 +36,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Capture> {
         resolved_at: r.get(6)?,
         bead: r.get(7)?,
         note: r.get(8)?,
+        audience: r.get(9)?,
     })
 }
 
@@ -45,9 +49,21 @@ impl Ledger {
         text: &str,
         at: &str,
     ) -> Result<()> {
+        self.capture_for(id, worker, session_id, text, at, "coordinator")
+    }
+
+    pub fn capture_for(
+        &self,
+        id: &str,
+        worker: &str,
+        session_id: Option<&str>,
+        text: &str,
+        at: &str,
+        audience: &str,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO captures (id, worker, session_id, text, captured_at) VALUES (?1,?2,?3,?4,?5)",
-            params![id, worker, session_id, text, at],
+            "INSERT INTO captures (id, worker, session_id, text, captured_at, audience) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![id, worker, session_id, text, at, audience],
         )?;
         Ok(())
     }
@@ -63,13 +79,18 @@ impl Ledger {
             .optional()?)
     }
 
-    /// Open captures, oldest first (the inbox).
+    /// Open captures for the coordinator, oldest first (the inbox).
     pub fn inbox(&self) -> Result<Vec<Capture>> {
+        self.inbox_for("coordinator")
+    }
+
+    /// Open captures for an audience (`coordinator` or `owner`), oldest first.
+    pub fn inbox_for(&self, audience: &str) -> Result<Vec<Capture>> {
         let mut st = self.conn.prepare(&format!(
-            "SELECT {COLS} FROM captures WHERE status='open' ORDER BY captured_at"
+            "SELECT {COLS} FROM captures WHERE status='open' AND audience=?1 ORDER BY captured_at"
         ))?;
         let v = st
-            .query_map([], row)?
+            .query_map(params![audience], row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(v)
     }

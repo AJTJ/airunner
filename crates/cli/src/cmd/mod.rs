@@ -8,6 +8,7 @@ pub mod holdings;
 pub mod hook;
 pub mod install;
 pub mod launch;
+pub mod lease;
 pub mod mcp;
 pub mod record;
 pub mod selftest;

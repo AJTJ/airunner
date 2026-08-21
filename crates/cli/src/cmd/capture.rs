@@ -8,10 +8,14 @@ use std::path::Path;
 
 use crate::cmd::{emit, log_event, now, open};
 
-pub fn capture(repo: &Path, text: &str, json: bool) -> i32 {
+pub fn capture(repo: &Path, text: &str, audience: &str, json: bool) -> i32 {
     let text = text.trim();
     if text.is_empty() {
         eprintln!("air capture: empty text");
+        return 1;
+    }
+    if !matches!(audience, "coordinator" | "owner") {
+        eprintln!("air capture: --for must be coordinator or owner");
         return 1;
     }
     let (ledger, worker) = match open(repo) {
@@ -24,7 +28,7 @@ pub fn capture(repo: &Path, text: &str, json: bool) -> i32 {
     let id = air_ledger::verify::new_id();
     let at = now();
     let session = std::env::var("CLAUDE_SESSION_ID").ok();
-    if let Err(e) = ledger.capture(&id, &worker, session.as_deref(), text, &at) {
+    if let Err(e) = ledger.capture_for(&id, &worker, session.as_deref(), text, &at, audience) {
         eprintln!("air capture: {e}");
         return 1;
     }
@@ -47,7 +51,7 @@ pub fn capture(repo: &Path, text: &str, json: bool) -> i32 {
     0
 }
 
-pub fn inbox(repo: &Path, json: bool) -> i32 {
+pub fn inbox(repo: &Path, owner: bool, json: bool) -> i32 {
     let (ledger, _worker) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -55,7 +59,8 @@ pub fn inbox(repo: &Path, json: bool) -> i32 {
             return 1;
         }
     };
-    let items = match ledger.inbox() {
+    let audience = if owner { "owner" } else { "coordinator" };
+    let items = match ledger.inbox_for(audience) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air inbox: {e}");
@@ -64,9 +69,9 @@ pub fn inbox(repo: &Path, json: bool) -> i32 {
     };
     emit(json, &items, || {
         if items.is_empty() {
-            return "inbox empty".to_string();
+            return format!("{audience} queue empty");
         }
-        let mut s = format!("{} open capture(s)\n", items.len());
+        let mut s = format!("{} open capture(s) for {audience}\n", items.len());
         for c in &items {
             s.push_str(&format!(
                 "{}  {}  {}  {}\n",

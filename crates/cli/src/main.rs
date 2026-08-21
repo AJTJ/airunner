@@ -30,6 +30,33 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+enum LeaseOp {
+    /// Acquire, or print the holder and exit 1. Breaks a dead or stale holder's lease.
+    Take {
+        #[arg(default_value = "runtime")]
+        resource: String,
+        #[arg(long, default_value = "unspecified")]
+        reason: String,
+    },
+    /// Release if this worktree holds it.
+    Release {
+        #[arg(default_value = "runtime")]
+        resource: String,
+    },
+    /// Who holds what, with defects and waiters.
+    Status,
+    /// Clear a dead or stale lease; a healthy one needs --force.
+    Break {
+        #[arg(default_value = "runtime")]
+        resource: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Refresh heartbeats on every lease this worktree holds (hooks do this automatically).
+    Beat,
+}
+
+#[derive(Debug, Subcommand)]
 enum Cmd {
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
@@ -70,9 +97,22 @@ enum Cmd {
         reason: String,
     },
     /// One line into the inbox. Workers capture; the coordinator triages. Never blocks you.
-    Capture { text: String },
-    /// Open captures, oldest first (coordinator).
-    Inbox,
+    Capture {
+        text: String,
+        /// Audience: coordinator (default) or owner (the owner's decision queue).
+        #[arg(long = "for", default_value = "coordinator")]
+        audience: String,
+    },
+    /// Open captures, oldest first (coordinator). --owner shows the owner's decision queue.
+    Inbox {
+        #[arg(long)]
+        owner: bool,
+    },
+    /// Mutual exclusion for what two agents cannot share (ports, simulator, Docker, browser).
+    Lease {
+        #[command(subcommand)]
+        op: LeaseOp,
+    },
     /// Resolve a capture: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
     Triage {
         id: String,
@@ -135,8 +175,19 @@ fn main() -> ExitCode {
         Cmd::Holdings { file } => cmd::holdings::run(&repo, file.as_deref(), cli.json),
         Cmd::Claim { bead, files } => cmd::claim::claim(&repo, &bead, &files, cli.json),
         Cmd::Release { bead, reason } => cmd::claim::release(&repo, &bead, &reason, cli.json),
-        Cmd::Capture { text } => cmd::capture::capture(&repo, &text, cli.json),
-        Cmd::Inbox => cmd::capture::inbox(&repo, cli.json),
+        Cmd::Capture { text, audience } => cmd::capture::capture(&repo, &text, &audience, cli.json),
+        Cmd::Inbox { owner } => cmd::capture::inbox(&repo, owner, cli.json),
+        Cmd::Lease { op } => match op {
+            LeaseOp::Take { resource, reason } => {
+                cmd::lease::take(&repo, &resource, &reason, cli.json)
+            }
+            LeaseOp::Release { resource } => cmd::lease::release(&repo, &resource, cli.json),
+            LeaseOp::Status => cmd::lease::status(&repo, cli.json),
+            LeaseOp::Break { resource, force } => {
+                cmd::lease::break_lease(&repo, &resource, force, cli.json)
+            }
+            LeaseOp::Beat => cmd::lease::beat(&repo),
+        },
         Cmd::Triage { id, bead, drop } => {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }

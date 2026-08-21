@@ -288,6 +288,8 @@ fn resources() -> Vec<Value> {
         ("air://attention", "Current attention conditions (JSON array)"),
         ("air://inbox", "Open captures (JSON array)"),
         ("air://holdings", "File holdings across worktrees (JSON)"),
+        ("air://owner-queue", "The owner's decision queue (JSON array)"),
+        ("air://leases", "Held resources with defects and waiters (JSON)"),
     ]
     .iter()
     .map(|(uri, d)| json!({"uri": uri, "name": uri.trim_start_matches("air://"), "description": d, "mimeType": "application/json"}))
@@ -341,8 +343,34 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
         "air_capture" => {
             let text = str_arg(args, "text").ok_or("text is required")?;
             argv.extend(["capture".into(), text.into()]);
+            if let Some(a) = str_arg(args, "audience") {
+                argv.extend(["--for".into(), a.into()]);
+            }
         }
-        "air_inbox" => argv.push("inbox".into()),
+        "air_inbox" => {
+            argv.push("inbox".into());
+            if args.get("owner").and_then(Value::as_bool) == Some(true) {
+                argv.push("--owner".into());
+            }
+        }
+        "air_lease_take" => {
+            argv.extend([
+                "lease".into(),
+                "take".into(),
+                str_arg(args, "resource").unwrap_or("runtime").into(),
+            ]);
+            if let Some(r) = str_arg(args, "reason") {
+                argv.extend(["--reason".into(), r.into()]);
+            }
+        }
+        "air_lease_release" => {
+            argv.extend([
+                "lease".into(),
+                "release".into(),
+                str_arg(args, "resource").unwrap_or("runtime").into(),
+            ]);
+        }
+        "air_lease_status" => argv.extend(["lease".into(), "status".into()]),
         "air_triage" => {
             let id = str_arg(args, "id").ok_or("id is required")?;
             argv.extend(["triage".into(), id.into()]);
@@ -369,6 +397,8 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
         "air://attention" => &["--json", "status", "--attention"],
         "air://inbox" => &["--json", "inbox"],
         "air://holdings" => &["--json", "holdings"],
+        "air://owner-queue" => &["--json", "inbox", "--owner"],
+        "air://leases" => &["--json", "lease", "status"],
         _ => return Err(format!("unknown resource: {uri}")),
     };
     let argv: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
