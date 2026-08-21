@@ -228,3 +228,30 @@ fn doctor_gates_on_bd_answering() {
     assert_eq!(v["bd"]["version_ok"], false);
     assert_eq!(v["bd"]["list_count"], 0);
 }
+
+#[test]
+fn flaky_head_is_reported_by_record_and_handover() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let (c, _, _) = air(
+        &repo,
+        None,
+        &["record", "verify", "--", "sh", "-c", "echo ok"],
+    );
+    assert_eq!(c, 0);
+    let (_, _, err) = air(
+        &repo,
+        None,
+        &["record", "verify", "--", "sh", "-c", "echo boom; exit 1"],
+    );
+    assert!(err.contains("flaky at HEAD: 1 green / 1 red"), "{err}");
+    let (_, out, _) = air(&repo, None, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let m = v["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["check"] == "verify-green-at-head")
+        .unwrap();
+    assert!(m["detail"].as_str().unwrap().contains("flaky"), "{m}");
+}

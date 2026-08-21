@@ -90,6 +90,22 @@ impl Ledger {
         Ok(())
     }
 
+    /// (green, red) counts of `kind` for (`worker`, `sha`): disagreement at one sha is
+    /// flakiness made visible (adopter adoption log §9, ad-jklh).
+    pub fn runs_at(&self, worker: &str, sha: &str, kind: Kind) -> Result<(i64, i64)> {
+        Ok(self.conn().query_row(
+            "SELECT sum(exit_code = 0), sum(exit_code <> 0) FROM verify_runs \
+             WHERE worker=?1 AND sha=?2 AND kind=?3",
+            params![worker, sha, kind.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                    r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                ))
+            },
+        )?)
+    }
+
     /// The most recent run of `kind` for `worker` at any sha (for "did the command change").
     pub fn latest_run_any(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         Ok(self
@@ -197,6 +213,15 @@ mod tests {
             output_bytes: None,
             dirty: false,
         }
+    }
+
+    #[rstest]
+    fn runs_at_counts_disagreement(ledger: Ledger) {
+        ledger.record_verify(&run("w", "s1", 0, "t1")).unwrap();
+        ledger.record_verify(&run("w", "s1", 1, "t2")).unwrap();
+        ledger.record_verify(&run("w", "s1", 0, "t3")).unwrap();
+        assert_eq!(ledger.runs_at("w", "s1", Kind::Verify).unwrap(), (2, 1));
+        assert_eq!(ledger.runs_at("w", "none", Kind::Verify).unwrap(), (0, 0));
     }
 
     #[rstest]

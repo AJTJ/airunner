@@ -231,6 +231,7 @@ fn base_facts() -> GateFacts {
         last_green_sha: None,
         main_is_ancestor: true,
         bead_claimed_by_worker: true,
+        runs_at_head: (1, 0),
         digest_present: None,
         digest_dir: None,
         bead: None,
