@@ -438,7 +438,9 @@ fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, St
 }
 
 /// Upsert the session row; returns the state it had before (None for a new session) so the
-/// caller can put the transition on the event line.
+/// caller can put the transition on the event line. `worker`/`role` are updated on every
+/// hook: `claude --worktree` can fire SessionStart with `cwd` still at the main checkout, and
+/// a row stuck on `main` made a live worker look gone (adopter ad-lpqp).
 fn set_session(
     ledger: &Ledger,
     input: &HookInput,
@@ -448,14 +450,19 @@ fn set_session(
 ) -> Result<Option<String>, String> {
     let prev = session_state(ledger, &input.session_id)?;
     let t = now();
+    // The pid is the `claude` process when Claude Code exports it; hooks run in its env.
+    let pid: Option<i64> = std::env::var("CLAUDE_PID")
+        .ok()
+        .and_then(|v| v.parse().ok());
     ledger
         .conn()
         .execute(
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
-             changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path)",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker)],
+             changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
+             worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid)",
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)

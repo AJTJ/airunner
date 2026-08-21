@@ -40,7 +40,7 @@ pub fn compute(repo: &Path, only: Option<&str>) -> Result<Report, String> {
                 .unwrap_or_default()
         });
         let mut mark = |p: String, f: fn(&mut Holding)| {
-            if only.is_some_and(|o| o != p) {
+            if only.is_some_and(|o| o != p) || is_tooling_path(&p) {
                 return;
             }
             let holders = files.entry(p).or_default();
@@ -145,4 +145,29 @@ pub fn run(repo: &Path, only: Option<&str>, json: bool) -> i32 {
         out.trim_end().to_string()
     });
     0
+}
+
+/// Paths that are tooling state, never a worker's holding: Air's ledger, beads' store and its
+/// recovery backups, nested worktrees (adopter: a 320 MB `.beads.backup-pre-recovery/`
+/// showed up as "uncommitted main files").
+pub fn is_tooling_path(p: &str) -> bool {
+    p.starts_with(".air/")
+        || p.starts_with(".beads")
+        || p.starts_with(".claude/worktrees/")
+        || p == ".air"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_tooling_path;
+
+    #[test]
+    fn tooling_paths_are_not_holdings() {
+        assert!(is_tooling_path(".beads.backup-pre-recovery/x.db"));
+        assert!(is_tooling_path(".beads/issues.jsonl"));
+        assert!(is_tooling_path(".air/ledger.db"));
+        assert!(is_tooling_path(".claude/worktrees/a/src.rs"));
+        assert!(!is_tooling_path("src/.beads_like.rs"));
+        assert!(!is_tooling_path(".claude/settings.json"));
+    }
 }

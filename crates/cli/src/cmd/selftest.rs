@@ -172,6 +172,8 @@ fn probe_attention() -> Probe {
                 state: "stuck".into(),
                 detail: None,
                 changed_at: changed.into(),
+                pid: None,
+                pid_alive: None,
             }),
             ..Default::default()
         }],
