@@ -30,7 +30,9 @@ was tricky in the migration; whatever was tricky there must be absent from `init
 
 Run this repository the way adopter runs: `bd init` here, a coordinator session on main,
 workers in worktrees, `air install --write` on this repo, beads for the remaining commands
-(`next`, `peer`, `merge-advice`, `land`, `gc`, PreCompact re-inject, per-worker env in
+(`next`, `peer`, `merge-advice`, `land`, `gc`, PreCompact re-inject, `air metrics --round` (review latency W/L, S1/S2, per-session
+budget; replaces adopter's `make agents` / `queue.sh` sections that `bd events` removal
+darkened), per-worker env in
 `air.json`). Every pain Air's own development hits is recorded as a capture and becomes the
 next bead. Success: one round of Air built by an Air-run fleet with the event log as the record.
 
@@ -39,6 +41,8 @@ next bead. Success: one round of Air built by an Air-run fleet with the event lo
 In the order the ledger says, not this one: `air next` (route by shared state, overlap-ranked),
 `air peer` / `merge-advice` (level-triggered behind-main), `air land` (land.sh
 behaviour-for-behaviour, regenerate generated inputs, receipt, owns the generated-files list),
-`gc`, PreCompact re-inject, `AIR_ENFORCE=1` for the hand-over gate once a round of advisory
+`gc`, PreCompact re-inject, `air metrics --round` (review latency W/L, S1/S2, per-session
+budget; replaces adopter's `make agents` / `queue.sh` sections that `bd events` removal
+darkened), `AIR_ENFORCE=1` for the hand-over gate once a round of advisory
 data shows no false refusals, per-worker env and capabilities (`--with chrome`) in
 `.claude/air.json`.

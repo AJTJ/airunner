@@ -43,7 +43,10 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
      "coordinator_deny": []
    }
    ```
-   `digest_dir` turns on the fourth hand-over check. Deny entries are *patterns* so a new
+   Add `"wip_cap": 2` to get the `awaiting-review-over-cap` condition (measured and pushed to
+   the coordinator, never enforced; owner decision 2026-08-18). **[adopter]** the rule that
+   most governs throughput when the owner is the sole reviewer (22 beads once sat behind one
+   branch). `digest_dir` turns on the fourth hand-over check. Deny entries are *patterns* so a new
    publish target is covered the day it exists (**[adopter]** `make deploy-site` shipped
    outside an enumerated list).
 
@@ -97,6 +100,9 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 - **bd upgrades**: Air uses only `update --claim --actor`, `update -s`, `list/show/ready
   --json`, `comment`, `close`. Anything else bd adds is not assumed. Run `air doctor` after
   every bd upgrade; a version or a schema it refuses is reported before any gate sees it.
+- **Air owns the loop; the repo owns the craft.** A worker reads both `.air/roles.md` (claim,
+  verify, hand over, capture) and the repo's CLAUDE.md (domain rules). Keep domain rules out of
+  roles.md and loop mechanics out of CLAUDE.md.
 - **A role carries its drive, not just its commands.** **[adopter §9]** A worker that knows
   `air claim` and `air handover` but is not told "work it to completion now" claims and waits.
   roles.md opens the Worker section with the run-to-completion loop; the launch prompt should
