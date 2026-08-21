@@ -37,7 +37,7 @@ fn seed_stuck(repo: &Path) {
     let out = Command::new(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
-        .arg("doctor")
+        .arg("status")
         .current_dir(repo)
         .output()
         .unwrap();

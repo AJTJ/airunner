@@ -210,6 +210,19 @@ fn dispatch(
             }
             d
         }
+        HookEvent::Stop | HookEvent::SubagentStop if role_for(worker) == "coordinator" => {
+            // The coordinator holds no lane and never hands over: no advisory (adopter
+            // adoption log §9: the coordinator received a worker's hand-over advisory).
+            let prev = set_session(ledger, input, worker, "idle", None)?;
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
+                "observed",
+                format!(
+                    "{}; coordinator: no hand-over check",
+                    transition(&prev, "idle")
+                ),
+            )
+        }
         HookEvent::Stop | HookEvent::SubagentStop => {
             let prev = set_session(ledger, input, worker, "idle", None)?;
             // Advisory only in this slice; never block, and never when stop_hook_active.
@@ -552,8 +565,11 @@ mod tests {
             (got[4].0.as_str(), got[4].1.as_str()),
             ("hook.Notification", "ignored")
         );
-        assert_eq!(got[5].0, "hook.Stop");
-        assert!(got[5].2.starts_with("stuck -> idle; "), "{}", got[5].2);
+        assert_eq!(
+            (got[5].0.as_str(), got[5].1.as_str()),
+            ("hook.Stop", "observed")
+        );
+        assert_eq!(got[5].2, "stuck -> idle; coordinator: no hand-over check");
         assert_eq!(
             (got[6].1.as_str(), got[6].2.as_str()),
             ("ended", "idle -> gone")
