@@ -21,6 +21,43 @@ use crate::cmd::emit;
 /// The roles document, embedded so installs are self-contained.
 pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 
+/// The coordinator's procedures, embedded and installed as skills in the target repo so every
+/// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21). The
+/// same text is served as MCP prompts by `air mcp`.
+pub const SKILLS: &[(&str, &str)] = &[
+    (
+        "air-decomposition",
+        include_str!("../../../../.claude/skills/decomposition/SKILL.md"),
+    ),
+    (
+        "air-phase-transitions",
+        include_str!("../../../../.claude/skills/phase-transitions/SKILL.md"),
+    ),
+];
+
+/// Rename the frontmatter `name:` so the installed copy does not collide with a repo's own
+/// skill of the same name. Pure.
+pub fn skill_with_name(text: &str, name: &str) -> String {
+    let mut out = String::with_capacity(text.len().saturating_add(16));
+    let mut in_front = false;
+    let mut renamed = false;
+    for (i, line) in text.lines().enumerate() {
+        if i == 0 && line.trim() == "---" {
+            in_front = true;
+        } else if in_front && line.trim() == "---" {
+            in_front = false;
+        }
+        if in_front && !renamed && line.starts_with("name:") {
+            out.push_str(&format!("name: {name}\n"));
+            renamed = true;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 const HOOK_TIMEOUT_SECS: u64 = 5;
 
 /// The hook table (plan 0001 §5): one command for every event, short timeout.
@@ -136,6 +173,7 @@ struct Plan {
     mcp_path: PathBuf,
     mcp_changed: bool,
     air_dir: PathBuf,
+    skills_dir: PathBuf,
     gitignore_has_air: bool,
     written: bool,
 }
@@ -157,6 +195,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     let settings_path = repo.join(".claude/settings.json");
     let mcp_path = repo.join(".mcp.json");
     let air_dir = repo.join(".air");
+    let skills_dir = repo.join(".claude/skills");
 
     let before_settings = match read_json(&settings_path) {
         Ok(v) => v,
@@ -191,6 +230,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         mcp_path: mcp_path.clone(),
         mcp_changed: before_mcp != after_mcp,
         air_dir: air_dir.clone(),
+        skills_dir: skills_dir.clone(),
         gitignore_has_air,
         written: false,
     };
@@ -217,6 +257,12 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             std::fs::create_dir_all(&air_dir).map_err(|e| format!("{}: {e}", air_dir.display()))?;
             std::fs::write(air_dir.join("roles.md"), ROLES_MD)
                 .map_err(|e| format!("{}: {e}", air_dir.display()))?;
+            for (name, text) in SKILLS {
+                let dir = skills_dir.join(name);
+                std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                std::fs::write(dir.join("SKILL.md"), skill_with_name(text, name))
+                    .map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
             Ok(())
         })();
         if let Err(e) = steps {
@@ -303,6 +349,16 @@ mod tests {
         for (event, _) in hook_entries() {
             assert!(once["hooks"][event].is_array(), "{event}");
         }
+    }
+
+    #[test]
+    fn skill_rename_touches_only_the_frontmatter_name() {
+        let t = "---\nname: decomposition\ndescription: x\n---\n# Title\nname: not frontmatter\n";
+        let r = skill_with_name(t, "air-decomposition");
+        assert!(r.starts_with("---\nname: air-decomposition\ndescription: x\n---\n"));
+        assert!(r.contains("name: not frontmatter"));
+        assert_eq!(SKILLS.len(), 2);
+        assert!(SKILLS[0].1.contains("Provenance"));
     }
 
     #[test]
