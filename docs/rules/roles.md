@@ -65,11 +65,10 @@ whether to assign it work; it sat idle.)
 
 **Never**
 
-- `git add` / `git commit` in the main checkout. A coordinator session is an agent session, and
-  adopter's `pre-commit` refuses it; Air keeps that check. [Air enforces]
+- `git add` / `git commit` in the main checkout. [Air enforces: the coordinator launcher denies
+  `git commit` and `git push`]
 - Holds a lane or claims implementation beads. If the task is real work, open a worktree and do
-  it there as a worker. [Air advises: an `Edit`/`Write` under the main checkout by a `main`
-  session while workers are live is warned]
+  it there as a worker. [prose; no Air warning exists for a coordinator edit under main]
 - Pushes. Nothing in Air pushes. [Air enforces, via the launcher deny list]
 - Answers a worker's question with an interactive prompt to the owner. File it. [prose]
 
