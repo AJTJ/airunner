@@ -11,13 +11,16 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Source trail always.** Every research claim cites a primary source — URL with access date,
   or `path:line-range`. Claims derived from adopter notes cite the note *and* the source it
   cited. No "mysterious bunch of claims".
-- **Do less.** The goal is the model's productivity, not the framework's completeness. Air
-  removes friction (relayed facts, drift, collisions); it does not direct the work. Every
-  constraint, hook, deny rule, or procedure must name the recorded failure it prevents AND the
-  condition under which it is removed; guardrails that are never re-examined become the
-  throttles a more capable model does not need. When in doubt, leave it out; when a rule can be
-  a measurement instead, measure. Gas Town is the opposite and the warning. Use the `do-less`
-  skill before adding anything (owner, 2026-08-21).
+- **Do less. Nothing is sacred.** The goal is the model's productivity, not the framework's
+  completeness. Air removes friction (relayed facts, drift, collisions); it does not direct the
+  work. **Invoke the `do-less` skill before any change or addition**, and when reviewing what
+  exists; it is the most important skill in this repo. Every constraint, hook, deny rule, role
+  line, or procedure must name the recorded failure it prevents AND the condition under which
+  it is removed; guardrails that are never re-examined become the throttles a more capable model
+  does not need. When a rule can be a measurement, measure; when in doubt, leave it out. Nothing
+  is off the table, including the multi-agent pattern itself: if one capable session does the
+  work better than a coordinator plus workers, the fleet goes. Gas Town is the opposite and the
+  warning. Evidence: `docs/research/guardrails-as-throttles.md` (owner, 2026-08-21).
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
   case (`docs/research/beads-and-gastown.md §2.5`).

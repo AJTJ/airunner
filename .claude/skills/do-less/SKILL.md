@@ -1,6 +1,6 @@
 ---
 name: do-less
-description: Use before adding any rule, hook, deny entry, attention condition, procedure, prompt, or role text to Air or a target repo, and when reviewing existing ones. Asks whether the addition removes a recorded failure or merely directs a capable model; requires a named removal condition; prefers measurement over enforcement and silence over advice. Trigger on "should we add", "add a check", "add a rule", "enforce", "require", "the agent should always", or when a mechanism is proposed without an incident behind it.
+description: The most important skill in this repo; invoke before ANY change, addition, or review of Air's mechanisms or shape (including whether the multi-agent pattern is still worth it). Use before adding any rule, hook, deny entry, attention condition, procedure, prompt, or role text to Air or a target repo, and when reviewing existing ones. Asks whether the addition removes a recorded failure or merely directs a capable model; requires a named removal condition; prefers measurement over enforcement and silence over advice. Trigger on "should we add", "add a check", "add a rule", "enforce", "require", "the agent should always", or when a mechanism is proposed without an incident behind it.
 metadata:
   version: 1.0.0
 ---
@@ -30,6 +30,14 @@ molecules, convoys, merge slots) are the cautionary case: mechanisms ahead of me
    A mechanism without one is not accepted.
 6. **What is the smallest version?** A pattern over an enumeration; a flag over a file; a count
    over a queue; one check over a state machine; nothing over prose.
+
+## Nothing is sacred
+
+The questions above apply to Air's own shape, not only to additions. The multi-agent pattern
+(coordinator plus workers in worktrees), beads, the hooks, the channel, Air itself: each is a
+bet about what a model cannot do alone at the time it was made. Re-ask, with the ledger and the
+current model in front of you: would one capable session with the facts do this better? If yes,
+the answer is to remove the structure, not to refine it.
 
 ## Reviewing what exists
 
