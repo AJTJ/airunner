@@ -81,6 +81,12 @@ enum Cmd {
         #[arg(long)]
         drop: Option<String>,
     },
+    /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
+    Status {
+        /// Only the conditions that need a human or the coordinator (empty when quiet).
+        #[arg(long)]
+        attention: bool,
+    },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
     /// Ledger location, sizes, row counts, and the pragmas in effect.
@@ -109,6 +115,7 @@ fn main() -> ExitCode {
         Cmd::Triage { id, bead, drop } => {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }
+        Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),

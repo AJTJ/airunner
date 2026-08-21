@@ -8,6 +8,7 @@ pub mod holdings;
 pub mod hook;
 pub mod record;
 pub mod selftest;
+pub mod status;
 
 use std::path::Path;
 
