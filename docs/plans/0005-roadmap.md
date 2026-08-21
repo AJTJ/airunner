@@ -16,6 +16,11 @@ claim`; capture with `air capture`" and points at the adoption doc, and a printe
 `air coordinator`, `air worker <name>`. Ships with a probe (`init` on a temp dir, then
 `selftest` and `status` succeed) and an integration test.
 
+`init` starts with the bd gate (`air doctor`: version pin, `bd list --json` answers) and ends
+with `air record verify -- <cmd>` as its first proof. It scans the repo for publish/destroy
+targets (Makefile `deploy*`/`publish*`/`ota*`, `eas`, `fastlane`, `fly`, `wrangler`) and
+proposes `worker_deny` patterns instead of leaving the list to judgement.
+
 Input: the adopter adoption log (`adopter/docs/notes/air-adoption.md`), which records what
 was tricky in the migration; whatever was tricky there must be absent from `init`.
 

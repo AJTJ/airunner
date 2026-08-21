@@ -7,10 +7,21 @@
 > adopter-specific items are marked **[adopter]** and come from its coordinator's report of
 > 2026-08-21 (`../decisions.md`, same date).
 
+## 0. The bd gate comes first
+
+A repo whose gates read bd inherits every breaking change in bd. **[adopter, 2026-08-21]**
+bd 1.2.1 had silently corrupted the Dolt schema; 1.2.2 refused it and `bd list` returned 4 of
+144 beads, breaking every bd-reading make target (recovered via bd's `RECOVERY-1.2.1.md`).
+1.2.2 also removed `bd events`, which an adopter script depended on. So, before anything
+else: `air doctor`. It reports the installed bd version against the pin (1.2.2) and whether
+`bd list --json` actually answers, and exits 2 when it does not. Fix bd first; then install.
+`air record verify` is what made the corruption visible (a recorded red at HEAD), which is why
+it is the first proof below.
+
 ## 1. Install (owner runs; Air never writes into the target repo on its own)
 
 1. `cargo install --path crates/cli` in the Air checkout. `which air` must be that binary.
-2. `brew upgrade beads && brew pin beads`; `bd --version` reads 1.2.2. **[adopter: 1.2.1 today]**
+2. `brew upgrade beads && brew pin beads`; `bd --version` reads 1.2.2; `air doctor` exits 0.
 3. In the target's main checkout: `air install` (read it), then `air install --write`. It adds
    `air hook` under seven events in `.claude/settings.json`, the `air` server in `.mcp.json`,
    and `.air/roles.md`. Add `.air/` to `.gitignore`.
@@ -26,7 +37,16 @@
    publish target is covered the day it exists (**[adopter]** `make deploy-site` shipped
    outside an enumerated list).
 
-## 2. Rules to change in the repo (prose that Air replaces or that is wrong)
+## 2. Coexistence, not retirement (default adoption model)
+
+**[adopter, owner reframing 2026-08-21]** Do not retire the repo's make targets and
+scripts; map the boundary. bd stays truth for ownership; `.air` becomes truth for evidence
+(verify-at-sha, sessions, claims history, leases); make targets read both and write neither.
+A script that depended on something bd no longer provides (`bd events`) should say "moved to
+`air status`" rather than error. Retire a target only when its Air replacement has a passed
+check beside it in the adoption log.
+
+## 3. Rules to change in the repo (prose that Air replaces or that is wrong)
 
 | Today | Change to | Why |
 |---|---|---|
@@ -42,7 +62,7 @@
 | Generated-files exclusion list duplicated in `land.sh` and `fleet.sh` **[adopter]** | One file sourced by both until `air land` owns it | Drift |
 | "Verify is complete" assumed **[adopter]** (jest silently skipped; a deleted generated `router.d.ts` silenced tsc) | Add a fitness check: verify invokes every test runner the repo has; land regenerates generated inputs before verify | Air records the exit honestly; completeness is the repo's |
 
-## 3. What Air now does that the repo's rules used to say
+## 4. What Air now does that the repo's rules used to say
 
 | Prose rule | Machinery |
 |---|---|
@@ -55,7 +75,7 @@
 
 Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over Markdown).
 
-## 4. Keeping the integration current
+## 5. Keeping the integration current
 
 - **Air version**: `air selftest` after every `cargo install`; every check proves it fires.
   `air doctor` shows the ledger version (schema migrates forward automatically).
@@ -65,12 +85,15 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 - **Claude Code upgrades**: `air worker <name> --print` shows the exact `claude` invocation;
   if a flag is rejected, that line is the bug report.
 - **bd upgrades**: Air uses only `update --claim --actor`, `update -s`, `list/show/ready
-  --json`, `comment`, `close`. Anything else bd adds is not assumed.
+  --json`, `comment`, `close`. Anything else bd adds is not assumed. Run `air doctor` after
+  every bd upgrade; a version or a schema it refuses is reported before any gate sees it.
+- **Sessions started before install** have the CLI but no channel and no hooks; restart them
+  through `air coordinator` / `air worker`.
 - **Round review**: `jq` over `.air/events/*.ndjson` and `air status --json`; the measurement
   spec (`../research/verification/ticks/2026-08-18-0430-measurement-spec.md`) says what each
   number means. What still had to be relayed by hand is the next thing Air builds.
 
-## 5. Day one, in order
+## 6. Day one, in order
 
 `air coordinator` in the main terminal. `air worker <name>` per worktree terminal (re-enters an
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →

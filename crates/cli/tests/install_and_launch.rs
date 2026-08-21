@@ -185,3 +185,46 @@ fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
         .unwrap();
     assert_eq!(n, 2);
 }
+
+#[test]
+fn doctor_gates_on_bd_answering() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    // No bd on PATH: doctor reports and exits 2.
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .arg("doctor")
+        .env("AIR_BD_BIN", repo.join("no-such-bd"))
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("bd list --json: FAILED"), "{text}");
+    // A bd that answers `list --json` with an array: ok, and the version mismatch is named.
+    let fake = repo.join("bd");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.2.1';; *) echo '[]';; esac\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["--json", "doctor"])
+        .env("AIR_BD_BIN", &fake)
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["bd"]["version"], "1.2.1");
+    assert_eq!(v["bd"]["version_ok"], false);
+    assert_eq!(v["bd"]["list_count"], 0);
+}
