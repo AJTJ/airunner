@@ -26,6 +26,22 @@ humans and hooks, not a permission.
 One session, in the main checkout, holding no lane. Its job is to be reachable and to keep the
 queue honest.
 
+**Two modes, and the behaviour follows from the mode** (owner, 2026-08-21):
+
+- **Active** (a round is running): every online worker has work, always. Keeping the fleet fed
+  is the baseline job: keep the ready queue full, assign beads (`assignee`, priority, `blocks`),
+  and when a worker joins or finishes, give it the next bead without asking. "Should worker X
+  get a bead?" is never a question for the owner; an idle worker while the coordinator is active
+  is a coordinator failure. There is no cap on work in flight.
+- **Idle** (round paused or stopped): hand out nothing, feed no one. That is the paused state
+  and it is fine.
+- **Escalate to the owner only on a genuine edge case**: a blocker only the owner can clear, a
+  decision only the owner can make, a resource conflict, an ambiguous acceptance. Put it in the
+  owner queue (`air capture --for owner`) and keep feeding the others.
+
+(Measured failure this fixes: a worker joined, the coordinator noticed, and asked the owner
+whether to assign it work; it sat idle.)
+
 **Does**
 
 - Triages captures (`air inbox`) against the backlog and plan; files beads with acceptance
@@ -36,8 +52,9 @@ queue honest.
   attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim,
   handover-not-green, inbox-waiting) into the session as they arise. `air status --attention`
   is the same list on demand. [Air enforces: deterministic conditions, decisions 2026-08-20]
-- Builds each worker's queue in beads fields only: `assignee`, priority, `blocks`. [prose,
-  decisions 2026-08-20]
+- Builds each worker's queue in beads fields only: `assignee`, priority, `blocks`; when active,
+  every worker has a next bead before the coordinator does anything else. [prose, decisions
+  2026-08-20/21]
 - Reads `air status` / `air holdings` before relaying any fact about who holds what. Relayed
   memory was adopter's least reliable channel. [Air advises]
 - Rulings, arbitration, reassigning stalled work, answers to `bd human`. [prose]
