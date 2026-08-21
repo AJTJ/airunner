@@ -105,6 +105,9 @@ Beads side: always create beads with `bd create --validate --estimate <minutes>`
 task, feature, or bug whose description lacks an `## Acceptance Criteria` heading (compiled
 in; `bd lint --help`). The coordinator then links the capture: `air triage <id> --bead <new>`.
 
+For the full integration package (rules to change in the repo, what Air replaces, how the
+integration stays current) see `docs/rules/adopting-air.md`.
+
 ## Day to day, by role
 
 **Worker** (in a worktree): `bd ready` → `air claim <bead> --files a,b` → work, commit small →
