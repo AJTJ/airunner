@@ -18,6 +18,7 @@
 | The first-round surface as built and how to operate it | [`plans/0004-first-round-surface.md`](plans/0004-first-round-surface.md) |
 | Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
 | Skills/reference material to port before building | a private skills inventory |
+| Integrating Air into a target repo: install, rules to change, what Air now does, keeping it current | [`rules/adopting-air.md`](rules/adopting-air.md) |
 | Starting a session in a worktree: which checkout am I in, what may I do, how to hand over (and what Air enforces) | [`rules/worktree-protocol.md`](rules/worktree-protocol.md) |
 | Which role am I (coordinator or worker), what I do, what I never do, how I hand over | [`rules/roles.md`](rules/roles.md) |
 | What each role is allowed and required to do, and how far Claude Code can confine a worktree session to its role (settings, launch flags, `--agent`, hooks, native worktree isolation; verified against docs 2026-08-20) | [`research/agent-roles-and-confinement.md`](research/agent-roles-and-confinement.md) |
