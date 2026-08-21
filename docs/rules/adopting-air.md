@@ -97,6 +97,10 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 - **bd upgrades**: Air uses only `update --claim --actor`, `update -s`, `list/show/ready
   --json`, `comment`, `close`. Anything else bd adds is not assumed. Run `air doctor` after
   every bd upgrade; a version or a schema it refuses is reported before any gate sees it.
+- **A role carries its drive, not just its commands.** **[adopter §9]** A worker that knows
+  `air claim` and `air handover` but is not told "work it to completion now" claims and waits.
+  roles.md opens the Worker section with the run-to-completion loop; the launch prompt should
+  also be a complete task, not a bead id.
 - **Hooks are quiet unless actionable.** A human reads every line a Stop hook prints. Air's
   hooks say nothing on the ok path (the event line records it) and speak only on a gap or an
   attention condition. **[adopter §9]** "handover ok" on every turn was noise in a happier
