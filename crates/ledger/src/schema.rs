@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 5;
+pub const CURRENT_VERSION: i64 = 6;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -131,6 +131,18 @@ const V5: &str = r#"
 ALTER TABLE sessions ADD COLUMN pid INTEGER;
 "#;
 
+/// v6 (2026-08-21, adopter: Stop advisory repeated every turn while a worker was blocked):
+/// what each session was last told, per key, so a hook speaks only on change.
+const V6: &str = r#"
+CREATE TABLE IF NOT EXISTS hook_emissions (
+    session_id   TEXT NOT NULL,
+    key          TEXT NOT NULL,               -- e.g. stop, peer:<path>
+    fingerprint  TEXT NOT NULL,
+    emitted_at   TEXT NOT NULL,
+    PRIMARY KEY (session_id, key)
+);
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -153,6 +165,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 5 {
         conn.execute_batch(V5)?;
         conn.pragma_update(None, "user_version", 5)?;
+    }
+    if version < 6 {
+        conn.execute_batch(V6)?;
+        conn.pragma_update(None, "user_version", 6)?;
     }
     Ok(())
 }

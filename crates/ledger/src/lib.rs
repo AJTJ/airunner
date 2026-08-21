@@ -93,6 +93,35 @@ impl Ledger {
     }
 }
 
+impl Ledger {
+    /// Should a hook say this now? True when `fingerprint` differs from what this session was
+    /// last told under `key` (or nothing was); records it. A repeat of the identical message
+    /// is silent; it re-arms when the fingerprint changes. Pass an empty fingerprint to clear
+    /// (the condition went away) so the next occurrence speaks again.
+    pub fn emit_if_changed(
+        &self,
+        session_id: &str,
+        key: &str,
+        fingerprint: &str,
+        now: &str,
+    ) -> Result<bool> {
+        if fingerprint.is_empty() {
+            self.conn.execute(
+                "DELETE FROM hook_emissions WHERE session_id=?1 AND key=?2",
+                rusqlite::params![session_id, key],
+            )?;
+            return Ok(false);
+        }
+        let n = self.conn.execute(
+            "INSERT INTO hook_emissions (session_id, key, fingerprint, emitted_at) VALUES (?1,?2,?3,?4) \
+             ON CONFLICT(session_id, key) DO UPDATE SET fingerprint=excluded.fingerprint, emitted_at=excluded.emitted_at \
+             WHERE hook_emissions.fingerprint <> excluded.fingerprint",
+            rusqlite::params![session_id, key, fingerprint, now],
+        )?;
+        Ok(n > 0)
+    }
+}
+
 fn configure(conn: &Connection) -> Result<()> {
     // WAL: concurrent readers with one writer across worktrees; NORMAL is durable enough for
     // a ledger that can be rebuilt (only verify history and receipts have lasting value).
@@ -101,4 +130,36 @@ fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.busy_timeout(std::time::Duration::from_millis(200))?;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod emission_tests {
+    use super::Ledger;
+
+    #[test]
+    fn speaks_once_per_change_and_rearms_on_clear() {
+        let l = Ledger::open_in_memory().unwrap();
+        assert!(
+            l.emit_if_changed("s", "stop", "head1:verify", "t1")
+                .unwrap()
+        );
+        assert!(
+            !l.emit_if_changed("s", "stop", "head1:verify", "t2")
+                .unwrap()
+        );
+        assert!(
+            l.emit_if_changed("s", "stop", "head2:verify", "t3")
+                .unwrap()
+        );
+        assert!(!l.emit_if_changed("s", "stop", "", "t4").unwrap()); // cleared
+        assert!(
+            l.emit_if_changed("s", "stop", "head2:verify", "t5")
+                .unwrap()
+        ); // re-armed
+        assert!(
+            l.emit_if_changed("other", "stop", "head2:verify", "t5")
+                .unwrap()
+        ); // per session
+    }
 }

@@ -111,9 +111,12 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
   `air claim` and `air handover` but is not told "work it to completion now" claims and waits.
   roles.md opens the Worker section with the run-to-completion loop; the launch prompt should
   also be a complete task, not a bead id.
-- **Hooks are quiet unless actionable.** A human reads every line a Stop hook prints. Air's
-  hooks say nothing on the ok path (the event line records it) and speak only on a gap or an
-  attention condition. **[adopter §9]** "handover ok" on every turn was noise in a happier
+- **Hooks are quiet unless actionable, and quiet unless changed.** A human reads every line
+  a Stop hook prints. Air's hooks say nothing on the ok path (the event line records it), speak
+  once when a gap appears, and again only when something moved (HEAD, the set of missing
+  checks, a new verify run; for peer warnings, the set of peers on that path). A blocked
+  worker is not nagged every turn about a blocker it cannot clear. **[adopter, 2026-08-21]**
+  The channel applies the same rule (new or escalated conditions only). **[adopter §9]** "handover ok" on every turn was noise in a happier
   costume; fixed 2026-08-21.
 - **Sessions started before install** have the CLI but no channel and no hooks; restart them
   through `air coordinator` / `air worker`.
