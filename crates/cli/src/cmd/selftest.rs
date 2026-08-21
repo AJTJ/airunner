@@ -8,6 +8,7 @@ use air_hooks::{GateFacts, handover_verdict};
 use air_ledger::Ledger;
 use air_ledger::verify::{Kind, VerifyRun, new_id};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::cmd::emit;
 use crate::cmd::hook::is_handover_command;
@@ -32,6 +33,11 @@ pub fn run(json: bool) -> i32 {
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_git_ancestor(),
+        probe_gate_claim(),
+        probe_claim_cas(),
+        probe_attention(),
+        probe_channel_dedupe(),
+        probe_install_merge(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -49,6 +55,111 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// Check 4: a hand-over names a bead the worker does not hold → missing `claim`.
+fn probe_gate_claim() -> Probe {
+    let mut red = base_facts();
+    red.bead = Some("fd-1".into());
+    red.bead_claimed_by_worker = false;
+    let mut green = base_facts();
+    green.bead = Some("fd-1".into());
+    green.bead_claimed_by_worker = true;
+    Probe {
+        name: "gate: claim required for the named bead",
+        red_fires: handover_verdict(&red)
+            .missing
+            .iter()
+            .any(|m| m.check == "claim"),
+        green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// The ledger half of `air claim`: a second worker finds the open claim; the same worker
+/// re-claiming after release gets a fresh row.
+fn probe_claim_cas() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w1", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        let held_by_other = l
+            .open_claim("fd-1")
+            .map_err(|e| e.to_string())?
+            .is_some_and(|c| c.worker != "w2");
+        l.release_claim("fd-1", "w1", "abandoned", "t1")
+            .map_err(|e| e.to_string())?;
+        let free = l.open_claim("fd-1").map_err(|e| e.to_string())?.is_none();
+        Ok((held_by_other, free))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "claim: ledger sees another worker's open claim; release frees it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// Attention conditions fire on a stale stuck session and stay quiet on a fresh one.
+fn probe_attention() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let mk = |changed: &str| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "stuck".into(),
+                detail: None,
+                changed_at: changed.into(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let red = attention(&mk("2026-08-20T11:00:00Z"), now, Thresholds::default());
+    let green = attention(&mk("2026-08-20T11:59:00Z"), now, Thresholds::default());
+    Probe {
+        name: "attention: stale stuck session fires; fresh one is quiet",
+        red_fires: red.iter().any(|a| a.kind == "stuck"),
+        green_passes: green.is_empty(),
+    }
+}
+
+/// The channel pushes a new condition once and not again until it escalates.
+fn probe_channel_dedupe() -> Probe {
+    use crate::cmd::mcp::{Pushed, select_new};
+    use crate::cmd::status::Attention;
+    let a = |m: i64| Attention {
+        worker: "w".into(),
+        kind: "stuck",
+        detail: String::new(),
+        for_minutes: m,
+    };
+    let mut p = Pushed::new();
+    let first = select_new(&mut p, &[a(5)]).len() == 1;
+    let quiet = select_new(&mut p, &[a(6)]).is_empty();
+    Probe {
+        name: "channel: new condition pushed once, repeat suppressed",
+        red_fires: first,
+        green_passes: quiet,
+    }
+}
+
+/// `air install` merge adds our hooks to an empty config and changes nothing the second time.
+fn probe_install_merge() -> Probe {
+    use crate::cmd::install::merge_hooks;
+    let once = merge_hooks(serde_json::json!({}));
+    let added = once
+        .get("hooks")
+        .and_then(|h| h.get("Stop"))
+        .is_some_and(Value::is_array);
+    let idempotent = merge_hooks(once.clone()) == once;
+    Probe {
+        name: "install: hook merge adds once, idempotent after",
+        red_fires: added,
+        green_passes: idempotent,
+    }
 }
 
 fn base_facts() -> GateFacts {

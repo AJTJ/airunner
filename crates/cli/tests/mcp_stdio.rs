@@ -130,6 +130,43 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let bad = next_matching(&|v| v["id"] == 4);
     assert_eq!(bad["error"]["code"], -32602);
 
+    // Memory canary: a few thousand in-process requests must not grow the server.
+    let rss = |pid: u32| -> u64 {
+        let out = Command::new("ps")
+            .args(["-o", "rss=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    };
+    let pid = child.id();
+    for i in 0..500 {
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/list"}}"#,
+            1000 + i
+        )
+        .unwrap();
+        let _ = next_matching(&|v| v["id"] == 1000 + i);
+    }
+    let before = rss(pid);
+    for i in 0..3000 {
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":{},"method":"resources/list"}}"#,
+            5000 + i
+        )
+        .unwrap();
+        let _ = next_matching(&|v| v["id"] == 5000 + i);
+    }
+    let after = rss(pid);
+    assert!(
+        after <= before.saturating_add(8 * 1024),
+        "rss grew from {before} KB to {after} KB over 3000 requests"
+    );
+
     // EOF on stdin: clean exit, no orphan.
     drop(stdin);
     let deadline = Instant::now() + Duration::from_secs(5);
