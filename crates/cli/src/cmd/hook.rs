@@ -234,6 +234,29 @@ fn dispatch(
     })
 }
 
+/// The bead id in a hand-over command: first token after `close`/`update` that is not a flag.
+pub fn handover_bead(cmd: &str) -> Option<String> {
+    let toks: Vec<&str> = cmd.split_whitespace().collect();
+    let i = toks.iter().position(|t| *t == "close" || *t == "update")?;
+    let mut skip_next = false;
+    for t in toks.get(i.saturating_add(1)..)? {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if let Some(flag) = t.strip_prefix('-') {
+            // A flag without `=` takes the next token as its value, except bare switches.
+            skip_next = !flag.contains('=') && !matches!(*t, "--claim" | "--force" | "--json");
+            continue;
+        }
+        if matches!(*t, "&&" | ";" | "||" | "|") {
+            return None;
+        }
+        return Some((*t).to_string());
+    }
+    None
+}
+
 fn transition(prev: &Option<String>, next: &str) -> String {
     format!("{} -> {next}", prev.as_deref().unwrap_or("none"))
 }
@@ -288,8 +311,13 @@ fn pre_tool_use(
         && is_handover_command(cmd)
     {
         let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
-        let f = handover::facts(ledger, worker, cwd, None, !enforce)?;
+        let bead = handover_bead(cmd);
+        let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
         let v = handover_verdict(&f);
+        let stamped = match &bead {
+            Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
+            None => false,
+        };
         let decision = if v.pass {
             "pass"
         } else if v.block {
@@ -309,7 +337,7 @@ fn pre_tool_use(
             HookOutcome::Allow { context: None }
         };
         return Ok(Dispatched::new(outcome, decision, v.message.clone())
-            .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce}))
+            .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
             .denominator("3 checks"));
     }
     Ok(Dispatched::new(
@@ -363,6 +391,16 @@ pub fn is_handover_command(cmd: &str) -> bool {
     false
 }
 
+/// Role is a property of the checkout (research: agent-roles-and-confinement §1): the main
+/// checkout is the coordinator, every worktree is a worker.
+pub fn role_for(worker: &str) -> &'static str {
+    if worker == "main" {
+        "coordinator"
+    } else {
+        "worker"
+    }
+}
+
 /// Current state of a session row, if any.
 fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, String> {
     ledger
@@ -393,11 +431,11 @@ fn set_session(
     ledger
         .conn()
         .execute(
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path)",
-            params![input.session_id, worker, input.transcript_path, state, detail, t],
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker)],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
@@ -519,6 +557,24 @@ mod tests {
             ("ended", "idle -> gone")
         );
         assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));
+    }
+
+    #[test]
+    fn extracts_the_bead_from_handover_commands() {
+        use super::handover_bead;
+        assert_eq!(
+            handover_bead("bd close fd-1 --reason done").as_deref(),
+            Some("fd-1")
+        );
+        assert_eq!(
+            handover_bead("bd update fd-2 -s awaiting_review").as_deref(),
+            Some("fd-2")
+        );
+        assert_eq!(
+            handover_bead("bd update --status closed fd-3").as_deref(),
+            Some("fd-3")
+        );
+        assert_eq!(handover_bead("make verify"), None);
     }
 
     #[test]

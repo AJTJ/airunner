@@ -55,6 +55,32 @@ enum Cmd {
         #[arg(long)]
         file: Option<String>,
     },
+    /// Claim a bead: `bd update --claim` (atomic) then the ledger row. The only claim path.
+    Claim {
+        bead: String,
+        /// Files you expect to touch (repo-relative, comma-separated); informs peers' warnings.
+        #[arg(long, value_delimiter = ',')]
+        files: Vec<String>,
+    },
+    /// Give a bead back: bd status → open, ledger claim closed with a reason.
+    Release {
+        bead: String,
+        /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
+        #[arg(long)]
+        reason: String,
+    },
+    /// One line into the inbox. Workers capture; the coordinator triages. Never blocks you.
+    Capture { text: String },
+    /// Open captures, oldest first (coordinator).
+    Inbox,
+    /// Resolve a capture: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    Triage {
+        id: String,
+        #[arg(long)]
+        bead: Option<String>,
+        #[arg(long)]
+        drop: Option<String>,
+    },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
     /// Ledger location, sizes, row counts, and the pragmas in effect.
@@ -76,6 +102,13 @@ fn main() -> ExitCode {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }
         Cmd::Holdings { file } => cmd::holdings::run(&repo, file.as_deref(), cli.json),
+        Cmd::Claim { bead, files } => cmd::claim::claim(&repo, &bead, &files, cli.json),
+        Cmd::Release { bead, reason } => cmd::claim::release(&repo, &bead, &reason, cli.json),
+        Cmd::Capture { text } => cmd::capture::capture(&repo, &text, cli.json),
+        Cmd::Inbox => cmd::capture::inbox(&repo, cli.json),
+        Cmd::Triage { id, bead, drop } => {
+            cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
+        }
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),

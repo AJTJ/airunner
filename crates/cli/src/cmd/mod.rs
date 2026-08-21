@@ -1,5 +1,7 @@
 //! Subcommands. Each returns a process exit code (0 ok, 1 error, 2 refused).
 
+pub mod capture;
+pub mod claim;
 pub mod doctor;
 pub mod handover;
 pub mod holdings;
