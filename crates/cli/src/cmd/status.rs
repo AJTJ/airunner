@@ -9,10 +9,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use air_ledger::Ledger;
 use air_ledger::claims::Claim;
 use air_ledger::verify::Kind;
-use rusqlite::params;
 use serde::Serialize;
 
 use crate::cmd::{emit, holdings, log_event, now, open};
@@ -98,7 +96,7 @@ pub struct Attention {
 pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
     let b: jiff::Timestamp = later.parse().ok()?;
-    Some(b.duration_since(a).as_secs().checked_div(60)?)
+    b.duration_since(a).as_secs().checked_div(60)
 }
 
 /// The pure part. Every condition names the worker, how long, and what to do.

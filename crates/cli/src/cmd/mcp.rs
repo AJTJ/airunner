@@ -121,7 +121,7 @@ fn read_bounded_line<R: BufRead>(r: &mut R, buf: &mut String) -> std::io::Result
             return Ok(total);
         }
         let (chunk, done) = match avail.iter().position(|b| *b == b'\n') {
-            Some(i) => (&avail[..=i], true),
+            Some(i) => (avail.get(..=i).unwrap_or(avail), true),
             None => (avail, false),
         };
         let n = chunk.len();

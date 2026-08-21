@@ -89,6 +89,29 @@ enum Cmd {
     },
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
+    /// Wire Air into this repo's Claude Code config (hooks, MCP server, .air/). Dry run by default.
+    Install {
+        /// Apply the changes (refuses if `air` on PATH is not this binary).
+        #[arg(long)]
+        write: bool,
+    },
+    /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
+    Worker {
+        name: String,
+        /// Print the command instead of running it.
+        #[arg(long)]
+        print: bool,
+        /// Extra arguments passed to `claude` (after `--`).
+        #[arg(last = true)]
+        extra: Vec<String>,
+    },
+    /// Start the interactive coordinator session in the main checkout with the Air channel attached.
+    Coordinator {
+        #[arg(long)]
+        print: bool,
+        #[arg(last = true)]
+        extra: Vec<String>,
+    },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
     /// Ledger location, sizes, row counts, and the pragmas in effect.
@@ -119,6 +142,9 @@ fn main() -> ExitCode {
         }
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
+        Cmd::Install { write } => cmd::install::run(&repo, write, cli.json),
+        Cmd::Worker { name, print, extra } => cmd::launch::worker(&repo, &name, &extra, print),
+        Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),
