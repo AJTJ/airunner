@@ -24,6 +24,10 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
   case (`docs/research/beads-and-gastown.md §2.5`).
+- **Building the projects comes first; building Air is secondary.** Air exists so the owner's
+  projects get built. When a round is running, Air records and does not change; findings go to
+  `docs/notes/air-backlog.md` and the round log, and are reviewed in one pass when there are no
+  tasks left (owner, 2026-08-21).
 - **A human is always in the loop.** Core requirement, not a phase. Every agent session is a
   terminal the owner can watch and type into (today: one coordinator + three workers); Air's
   launchers start interactive sessions, never headless ones, and nothing Air builds may take the
