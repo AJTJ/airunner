@@ -21,6 +21,7 @@
 | Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (one procedure; enforced vs judgement; metrics; rejected items) | [`plans/0002-what-to-work-on.md`](plans/0002-what-to-work-on.md) |
 | Skills/reference material to port before building | a private skills inventory |
 | The adopter adoption and first round, verbatim from the coordinator, with Air's synthesis | [`notes/2026-08-21-adopter-round-verbatim.md`](notes/2026-08-21-adopter-round-verbatim.md) |
+| What the ledger can and cannot say about interruptions (adopter round, counts and gaps) | [`notes/2026-08-21-interruption-counts.md`](notes/2026-08-21-interruption-counts.md) |
 | Air's backlog, incident-first, until Air runs beads on itself | [`notes/air-backlog.md`](notes/air-backlog.md) |
 | Position notes answering live questions from target repos (per-worker queues, 2026-08-21) | [`notes/`](notes/) |
 | Integrating Air into a target repo: install, rules to change, what Air now does, keeping it current | [`rules/adopting-air.md`](rules/adopting-air.md) |
