@@ -21,6 +21,8 @@ pub struct GateFacts {
     /// The bead being handed over is claimed by this worker in the ledger.
     pub bead_claimed_by_worker: bool,
     pub bead: Option<String>,
+    /// (green, red) runs recorded at HEAD; disagreement is reported as flakiness.
+    pub runs_at_head: (i64, i64),
     /// Digest check (owner ruling D, 2026-08-21): `None` when the repo configures no digest
     /// directory (check not applicable); `Some(false)` when no digest file for this worker is
     /// newer than the claim.
@@ -57,10 +59,25 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             .as_deref()
             .map(|s| format!(" (last green: {s})"))
             .unwrap_or_default();
+        let (g, r) = f.runs_at_head;
+        let (detail, fix) = if g > 0 && r > 0 {
+            (
+                format!(
+                    "verify at HEAD {} is flaky: {g} green / {r} red; latest is red",
+                    short(&f.head)
+                ),
+                "fix or quarantine the flaky test (file it), then: air record verify -- make verify".to_string(),
+            )
+        } else {
+            (
+                format!("no green verify recorded at HEAD {}{last}", short(&f.head)),
+                "air record verify -- make verify".to_string(),
+            )
+        };
         missing.push(Missing {
             check: "verify-green-at-head",
-            detail: format!("no green verify recorded at HEAD {}{last}", short(&f.head)),
-            fix: "air record verify -- make verify".to_string(),
+            detail,
+            fix,
         });
     }
     if !f.main_is_ancestor {
@@ -132,11 +149,26 @@ mod tests {
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
             bead_claimed_by_worker: true,
+            runs_at_head: (1, 0),
             digest_present: None,
             digest_dir: None,
             bead: Some("ad-o5fi".into()),
             advisory: false,
         }
+    }
+
+    #[test]
+    fn flaky_head_is_named_in_the_refusal() {
+        let mut f = facts();
+        f.green_at_head = false;
+        f.runs_at_head = (2, 1);
+        let v = handover_verdict(&f);
+        assert!(
+            v.missing[0].detail.contains("flaky"),
+            "{}",
+            v.missing[0].detail
+        );
+        assert!(v.missing[0].fix.contains("quarantine"));
     }
 
     #[test]

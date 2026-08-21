@@ -53,6 +53,9 @@ pub fn facts(
         });
         digest_newer_than(&repo.join(d), worker, since.as_deref())
     });
+    let runs_at_head = ledger
+        .runs_at(worker, &head, Kind::Verify)
+        .unwrap_or((0, 0));
     Ok(GateFacts {
         worker: worker.to_string(),
         head,
@@ -61,6 +64,7 @@ pub fn facts(
         main_is_ancestor,
         bead_claimed_by_worker,
         bead: bead.map(str::to_string),
+        runs_at_head,
         digest_present,
         digest_dir,
         advisory,

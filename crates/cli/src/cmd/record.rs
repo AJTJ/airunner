@@ -97,16 +97,28 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     if dirty {
         flags.push("dirty-tree");
     }
+    let (greens, reds) = ledger.runs_at(&worker, &head, kind).unwrap_or((0, 0));
+    let flaky = greens > 0 && reds > 0;
+    let flaky_note = if flaky {
+        format!(
+            "; flaky at HEAD: {greens} green / {reds} red (the repo's test is the bug; file it, then re-run)"
+        )
+    } else {
+        String::new()
+    };
+    if flaky {
+        flags.push("flaky-at-head");
+    }
     let reason = if flags.is_empty() {
         format!("exit {exit_code} in {duration_ms} ms, {output_bytes} bytes")
     } else {
         format!(
-            "exit {exit_code} in {duration_ms} ms, {output_bytes} bytes; {}",
+            "exit {exit_code} in {duration_ms} ms, {output_bytes} bytes; {}{flaky_note}",
             flags.join(", ")
         )
     };
     if !flags.is_empty() {
-        eprintln!("air record: {}", flags.join(", "));
+        eprintln!("air record: {}{flaky_note}", flags.join(", "));
     }
     log_event(
         &ledger,

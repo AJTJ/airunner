@@ -18,6 +18,16 @@ else: `air doctor`. It reports the installed bd version against the pin (1.2.2) 
 `air record verify` is what made the corruption visible (a recorded red at HEAD), which is why
 it is the first proof below.
 
+## 0a. Flakiness becomes load-bearing
+
+**[adopter, 2026-08-21, ad-jklh]** Once a machine gates on "green at HEAD", a flaky test is no
+longer a nuisance: a real green can record red and hold a hand-over, and a flake can mask a
+real red. Air does not retry (a retry hides real reds); it makes the disagreement visible:
+`air record` flags `flaky-at-head: N green / M red` when runs at one sha disagree, and
+`air handover` names it with the fix "fix or quarantine the flaky test, then re-run". Before
+adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
+first. Whether the gate should require N-of-M agreement is an owner policy, not built.
+
 ## 1. Install (owner runs; Air never writes into the target repo on its own)
 
 1. `cargo install --path crates/cli` in the Air checkout. `which air` must be that binary.
