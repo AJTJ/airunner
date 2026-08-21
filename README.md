@@ -48,21 +48,21 @@ hours, imported-red incidents, stale-`next` rate, WIP as a counter.
 features, run an LLM coordinator, keep phase labels, batch/bisect merges, resolve conflicts, or
 store anything git or `bd` can re-derive.
 
-## Quick start (dev)
+## Quick start (2026-08-20)
 
 ```bash
-cargo build                                  # workspace: crates/{ledger,bd,hooks,cli}
-cargo nextest run --workspace                # 24 tests, ~0.2 s
-target/debug/air selftest                    # red/green probes for every check
-target/debug/air record verify -- make verify
-target/debug/air handover                    # advisory; --enforce to refuse (exit 2)
-target/debug/air holdings                    # who has edits in which files, across worktrees
-target/debug/air doctor
+cargo install --path crates/cli          # `air` on PATH must be this binary
+cd ~/projects/<target-repo>
+air install                              # dry run: shows the hook + .mcp.json merge
+air install --write
+air coordinator                          # main checkout, channel attached
+air worker <name>                        # one per worktree; interactive
+air status --attention                   # what needs a human right now
+air selftest                             # 10 red/green probes
 ```
 
-Hook wiring: `.claude/settings.json` in the target repo calls `air hook` for
-PreToolUse/PostToolUse/Stop/SessionStart/SessionEnd/PermissionRequest (installer to come);
-`AIR_ENFORCE=1` turns the hand-over check from advisory into a refusal.
+See `docs/plans/0004-first-round-surface.md` for what each command is for and the adopter-side
+steps (beads template, bd pin, `air record verify`).
 
 ## Layout
 
