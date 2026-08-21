@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 4;
+pub const CURRENT_VERSION: i64 = 5;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -125,6 +125,12 @@ CREATE TABLE IF NOT EXISTS lease_wants (
 ALTER TABLE captures ADD COLUMN audience TEXT NOT NULL DEFAULT 'coordinator';
 "#;
 
+/// v5 (2026-08-21, adopter ad-lpqp): the `claude` pid on the session row so "gone" can
+/// mean the process is gone, not "no hook yet".
+const V5: &str = r#"
+ALTER TABLE sessions ADD COLUMN pid INTEGER;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -143,6 +149,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 4 {
         conn.execute_batch(V4)?;
         conn.pragma_update(None, "user_version", 4)?;
+    }
+    if version < 5 {
+        conn.execute_batch(V5)?;
+        conn.pragma_update(None, "user_version", 5)?;
     }
     Ok(())
 }

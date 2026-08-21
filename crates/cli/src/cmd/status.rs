@@ -23,6 +23,9 @@ pub struct Session {
     pub state: String,
     pub detail: Option<String>,
     pub changed_at: String,
+    pub pid: Option<i64>,
+    /// Filled by `gather` when a pid is known: is that process still running?
+    pub pid_alive: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -57,6 +60,8 @@ pub struct Thresholds {
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
     pub inbox_wait_min: i64,
+    /// A claim younger than this with no session row is a worker still launching, not gone.
+    pub launch_grace_min: i64,
 }
 
 impl Default for Thresholds {
@@ -66,6 +71,7 @@ impl Default for Thresholds {
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             inbox_wait_min: 30,
+            launch_grace_min: 3,
         }
     }
 }
@@ -84,6 +90,7 @@ impl Thresholds {
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.inbox_wait_min = get("AIR_ATTENTION_INBOX_MIN", t.inbox_wait_min);
+        t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
         t
     }
 }
@@ -118,6 +125,20 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 .join(",")
         };
         match &w.session {
+            Some(sess) if sess.pid_alive == Some(false) && has_claim => {
+                let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
+                out.push(Attention {
+                    worker: w.worker.clone(),
+                    kind: "gone-with-claim",
+                    detail: format!(
+                        "claude pid {} is gone but {} is still claimed; restart `air worker {}` or release",
+                        sess.pid.unwrap_or(0),
+                        beads(),
+                        w.worker
+                    ),
+                    for_minutes: age,
+                });
+            }
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
                 match sess.state.as_str() {
@@ -161,6 +182,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     .min()
                     .unwrap_or(now);
                 let age = minutes_between(oldest, now).unwrap_or(0);
+                if age < t.launch_grace_min {
+                    continue; // just launched; the first hook has not fired yet
+                }
                 out.push(Attention {
                     worker: w.worker.clone(),
                     kind: "gone-with-claim",
@@ -276,7 +300,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         let mut st = ledger
             .conn()
             .prepare(
-                "SELECT worker, role, session_id, state, detail, changed_at FROM sessions \
+                "SELECT worker, role, session_id, state, detail, changed_at, pid FROM sessions \
                  ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -290,12 +314,15 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
                         state: r.get(3)?,
                         detail: r.get(4)?,
                         changed_at: r.get(5)?,
+                        pid: r.get(6)?,
+                        pid_alive: None,
                     },
                 ))
             })
             .map_err(|e| e.to_string())?;
         for row in rows {
-            let (worker, role, sess) = row.map_err(|e| e.to_string())?;
+            let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
+            sess.pid_alive = sess.pid.map(super::lease::pid_alive);
             let v = views.entry(worker.clone()).or_insert_with(|| WorkerView {
                 worker: worker.clone(),
                 role: role.clone(),
@@ -511,6 +538,8 @@ mod tests {
                 state: s.into(),
                 detail: Some("Bash".into()),
                 changed_at: changed.into(),
+                pid: None,
+                pid_alive: None,
             }),
             head: Some("abc".into()),
             green_at_head: green,
@@ -599,10 +628,53 @@ mod tests {
             idle_with_claim_min: 60,
             silent_with_claim_min: 60,
             inbox_wait_min: 60,
+            launch_grace_min: 3,
         };
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+    }
+
+    #[test]
+    fn fresh_idle_worker_is_not_gone_and_dead_pid_is() {
+        // Claim 1 minute old, no session row yet: launching, not gone.
+        let fresh = Snapshot {
+            workers: vec![worker(
+                "new",
+                None,
+                T_2,
+                vec![claim("fd-1", "new", T_2, 0)],
+                None,
+            )],
+            ..Default::default()
+        };
+        assert!(attention(&fresh, NOW, Thresholds::default()).is_empty());
+        // Idle at the prompt with a live pid and a claim, 2 min old: quiet.
+        let mut idle = worker(
+            "w",
+            Some("idle"),
+            T_2,
+            vec![claim("fd-2", "w", T_30, 0)],
+            None,
+        );
+        idle.session.as_mut().unwrap().pid = Some(1);
+        idle.session.as_mut().unwrap().pid_alive = Some(true);
+        let s = Snapshot {
+            workers: vec![idle.clone()],
+            ..Default::default()
+        };
+        assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+        // Same row but the pid is gone: gone-with-claim, regardless of age.
+        idle.session.as_mut().unwrap().pid_alive = Some(false);
+        let s = Snapshot {
+            workers: vec![idle],
+            ..Default::default()
+        };
+        let a = attention(&s, NOW, Thresholds::default());
+        assert_eq!(
+            a.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            vec!["gone-with-claim"]
+        );
     }
 
     #[test]
