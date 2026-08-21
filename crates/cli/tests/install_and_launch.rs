@@ -133,7 +133,7 @@ fn launchers_print_the_exact_command() {
 
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
-    assert!(out.starts_with("claude --channels server:air "), "{out}");
+    assert!(out.starts_with("claude --dangerously-load-development-channels server:air "), "{out}");
 }
 
 #[test]

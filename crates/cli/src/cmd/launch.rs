@@ -9,9 +9,9 @@
 //! conditions are delivered into the session.
 //!
 //! `--print` shows the exact command instead of running it. Flags verified against
-//! https://code.claude.com/docs/en/cli-reference (accessed 2026-08-20); the channel flag is
-//! `--channels server:<name>` (override with `AIR_CHANNELS_FLAG` while the feature is in
-//! preview, e.g. `--dangerously-load-development-channels`).
+//! https://code.claude.com/docs/en/cli-reference (accessed 2026-08-20). The channel flag is
+//! `--dangerously-load-development-channels server:air` (a local server is not on the
+//! allowlist; `--channels` rejects it, seen live 2026-08-21); `AIR_CHANNELS_FLAG` overrides.
 
 use std::path::Path;
 use std::process::Command;
@@ -178,7 +178,11 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
             return 1;
         }
     };
-    let flag = std::env::var("AIR_CHANNELS_FLAG").unwrap_or_else(|_| "--channels".into());
+    // A local `.mcp.json` server is not on Claude Code's channel allowlist; the preview flag
+    // is required (verified live on 2.1.239, 2026-08-21: "server air is not on the approved
+    // channels allowlist (use --dangerously-load-development-channels for local dev)").
+    let flag = std::env::var("AIR_CHANNELS_FLAG")
+        .unwrap_or_else(|_| "--dangerously-load-development-channels".into());
     exec_claude(
         repo,
         &coordinator_argv_for(repo, &roles, &flag, extra),
