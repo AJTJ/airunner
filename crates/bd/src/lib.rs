@@ -80,7 +80,7 @@ impl BdCli {
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
-        let mut child = Command::new(&self.bin)
+        let child = Command::new(&self.bin)
             .args(args)
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
@@ -91,32 +91,65 @@ impl BdCli {
                 bin: self.bin.clone(),
                 source,
             })?;
-        let status = match child.wait_timeout(self.timeout) {
-            Ok(Some(status)) => status,
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(BdError::Timeout(self.timeout));
-            }
-            Err(source) => {
-                return Err(BdError::Spawn {
-                    bin: self.bin.clone(),
-                    source,
-                });
-            }
-        };
-        let out = child.wait_with_output().map_err(|source| BdError::Spawn {
-            bin: self.bin.clone(),
-            source,
-        })?;
+        let (status, stdout, stderr) =
+            match wait_drained(child, self.timeout).map_err(|source| BdError::Spawn {
+                bin: self.bin.clone(),
+                source,
+            })? {
+                Some(x) => x,
+                None => return Err(BdError::Timeout(self.timeout)),
+            };
         if !status.success() {
             return Err(BdError::Failed {
                 code: status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
             });
         }
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        Ok(String::from_utf8_lossy(&stdout).to_string())
     }
+}
+
+/// (exit status, stdout, stderr) of a finished child.
+type Drained = (std::process::ExitStatus, Vec<u8>, Vec<u8>);
+
+/// Wait for a child with a timeout while draining its pipes on threads, so a child that
+/// writes more than the pipe buffer (64 KB) cannot deadlock against us and be mistaken for
+/// a hang. Kills and reaps on timeout. Returns (status, stdout, stderr).
+fn wait_drained(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<Drained>> {
+    use std::io::Read;
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+    let err_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+    let status = match child.wait_timeout(timeout)? {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Pipes close when the child dies; the drain threads finish.
+            let _ = out_t.join();
+            let _ = err_t.join();
+            return Ok(None);
+        }
+    };
+    let stdout = out_t.join().unwrap_or_default();
+    let stderr = err_t.join().unwrap_or_default();
+    Ok(Some((status, stdout, stderr)))
 }
 
 /// Parse `bd … --json` list output. Tolerates both a bare array and `{"issues": [...]}`.
