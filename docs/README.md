@@ -18,6 +18,7 @@
 | The first-round surface as built and how to operate it | [`plans/0004-first-round-surface.md`](plans/0004-first-round-surface.md) |
 | What comes next, in order (greenfield `air init`, dogfooding, round-one-driven items) | [`plans/0005-roadmap.md`](plans/0005-roadmap.md) |
 | Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
+| Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (one procedure; enforced vs judgement; metrics; rejected items) | [`plans/0002-what-to-work-on.md`](plans/0002-what-to-work-on.md) |
 | Skills/reference material to port before building | a private skills inventory |
 | Integrating Air into a target repo: install, rules to change, what Air now does, keeping it current | [`rules/adopting-air.md`](rules/adopting-air.md) |
 | Starting a session in a worktree: which checkout am I in, what may I do, how to hand over (and what Air enforces) | [`rules/worktree-protocol.md`](rules/worktree-protocol.md) |
