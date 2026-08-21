@@ -22,6 +22,10 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Productive sooner than later.** Improve adopter's current process incrementally; every early
   milestone is something adopter can run. Prefer replacing one prose rule with one enforced
   check over designing a platform.
+- **Machinery over Markdown.** Every rule that can be a deny rule, a hook check, a launcher flag,
+  a tool schema, or an injected fact should be one; Markdown is for the *why* and for judgement
+  that cannot be encoded. When a prose rule becomes machinery, delete the prose (owner,
+  2026-08-20).
 - **Rust.** Prefer using or borrowing from an existing good project; research must show why not
   before we build. Never make a target repo's tooling depend on Air's *build* — install a binary.
 - **Steal avidly** from `~/projects/adopter` and `~/projects/metis` (and cite what was taken).
