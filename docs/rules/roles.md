@@ -67,8 +67,18 @@ One session per worktree, one bead at a time, started with `air worker <name>` (
 `claude --worktree <name>` with the worker prose and deny list) or with `claude --worktree <name>`
 by hand.
 
+**Run to completion.** Claiming a bead is a commitment to work it end to end, now, without
+pausing between steps or waiting to be told: `air claim <id> --files …` → implement, committing
+small and often → `git merge main` → `air record verify -- <cmd>` → `air handover` → `bd update
+<id> -s awaiting_review` → next bead. Ending a turn after the claim is a failure, not caution
+(adopter, 2026-08-21: a worker claimed and sat idle until messaged). Stop only for a genuine
+blocker or an owner-only decision, and say so in one line: `air capture "<blocker>"` (or
+`--for owner`), then release or take unrelated work. A question you could answer by reading the
+code is not a blocker. [prose; the launcher appends this file to the system prompt]
+
 **Does**
 
+- Works the claimed bead to completion before anything else (above).
 - Claims with `air claim <id> [--files a,b]`, the only claim path: it runs `bd update --claim`
   (bd's atomic CAS decides races) and records the claim. Gives a bead back with
   `air release <id> --reason <why>`. Raw `bd update --claim` is denied by the launcher.
