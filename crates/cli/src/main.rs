@@ -87,6 +87,8 @@ enum Cmd {
         #[arg(long)]
         attention: bool,
     },
+    /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
+    Mcp,
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
     /// Ledger location, sizes, row counts, and the pragmas in effect.
@@ -116,6 +118,7 @@ fn main() -> ExitCode {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
+        Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),
