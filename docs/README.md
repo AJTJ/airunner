@@ -16,6 +16,7 @@
 | The synthesis: do we need a runtime, and what shape | [`research/SYNTHESIS.md`](research/SYNTHESIS.md) |
 | Which metrics Air records, exactly how each is defined (the single list) | [`research/verification/ticks/2026-08-18-0430-measurement-spec.md`](research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
 | The first-round surface as built and how to operate it | [`plans/0004-first-round-surface.md`](plans/0004-first-round-surface.md) |
+| What comes next, in order (greenfield `air init`, dogfooding, round-one-driven items) | [`plans/0005-roadmap.md`](plans/0005-roadmap.md) |
 | Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
 | Skills/reference material to port before building | a private skills inventory |
 | Integrating Air into a target repo: install, rules to change, what Air now does, keeping it current | [`rules/adopting-air.md`](rules/adopting-air.md) |
