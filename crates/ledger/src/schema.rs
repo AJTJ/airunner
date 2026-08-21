@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 1;
+pub const CURRENT_VERSION: i64 = 2;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -73,12 +73,34 @@ CREATE TABLE IF NOT EXISTS landings (
 );
 "#;
 
+/// v2 (2026-08-20): the capture inbox (workers capture, the coordinator triages; decisions
+/// 2026-08-18/20) and a derived `role` on sessions for `air status`.
+const V2: &str = r#"
+CREATE TABLE IF NOT EXISTS captures (
+    id           TEXT PRIMARY KEY,           -- ulid
+    worker       TEXT NOT NULL,
+    session_id   TEXT,
+    text         TEXT NOT NULL,
+    captured_at  TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'open', -- open | promoted | dropped
+    resolved_at  TEXT,
+    bead         TEXT,                       -- when promoted
+    note         TEXT                        -- triage note (why dropped / grouped where)
+);
+CREATE INDEX IF NOT EXISTS captures_status ON captures(status, captured_at);
+ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'worker';
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
         conn.execute_batch(V1)?;
         conn.pragma_update(None, "user_version", 1)?;
+    }
+    if version < 2 {
+        conn.execute_batch(V2)?;
+        conn.pragma_update(None, "user_version", 2)?;
     }
     Ok(())
 }
@@ -100,11 +122,11 @@ mod tests {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('verify_runs','edit_journal','claims','sessions','landings')",
+                 ('verify_runs','edit_journal','claims','sessions','landings','captures')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 5);
+        assert_eq!(n, 6);
     }
 }

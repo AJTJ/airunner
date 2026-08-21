@@ -69,6 +69,9 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
         }
     };
     let v: Verdict = handover_verdict(&f);
+    if let Some(b) = bead {
+        let _ = ledger.stamp_handover(b, &worker, &crate::cmd::now());
+    }
     log_event(
         &ledger,
         &worker,

@@ -9,6 +9,8 @@
 //! statements, and exits. Anything slow (`bd`, cross-worktree `git status`) lives in the CLI,
 //! never on a hook path (tick 0315).
 
+pub mod captures;
+pub mod claims;
 pub mod events;
 pub mod paths;
 pub mod schema;
