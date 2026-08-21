@@ -14,6 +14,11 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
   case (`docs/research/beads-and-gastown.md §2.5`).
+- **A human is always in the loop.** Core requirement, not a phase. Every agent session is a
+  terminal the owner can watch and type into (today: one coordinator + three workers); Air's
+  launchers start interactive sessions, never headless ones, and nothing Air builds may take the
+  owner out of the loop or hide what an agent is doing. Introspection into live state
+  (`air status`, the event stream) is part of the same requirement.
 - **Productive sooner than later.** Improve adopter's current process incrementally; every early
   milestone is something adopter can run. Prefer replacing one prose rule with one enforced
   check over designing a platform.
