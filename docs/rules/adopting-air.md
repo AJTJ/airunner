@@ -18,6 +18,13 @@ else: `air doctor`. It reports the installed bd version against the pin (1.2.2) 
 `air record verify` is what made the corruption visible (a recorded red at HEAD), which is why
 it is the first proof below.
 
+## 0b. No WIP cap
+
+**[owner, 2026-08-21]** "There is no cap; we set our goals and finish them." Air measures the
+`awaiting_review` count and the review wait per bead in `air status`; it never raises a
+condition on them and roles.md carries no two-units-then-stop rule. A cap condition was built
+and removed the same day; do not reintroduce it.
+
 ## 0a. Flakiness becomes load-bearing
 
 **[adopter, 2026-08-21, ad-jklh]** Once a machine gates on "green at HEAD", a flaky test is no
@@ -43,10 +50,7 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
      "coordinator_deny": []
    }
    ```
-   Add `"wip_cap": 2` to get the `awaiting-review-over-cap` condition (measured and pushed to
-   the coordinator, never enforced; owner decision 2026-08-18). **[adopter]** the rule that
-   most governs throughput when the owner is the sole reviewer (22 beads once sat behind one
-   branch). `digest_dir` turns on the fourth hand-over check. Deny entries are *patterns* so a new
+   `digest_dir` turns on the fourth hand-over check. Deny entries are *patterns* so a new
    publish target is covered the day it exists (**[adopter]** `make deploy-site` shipped
    outside an enumerated list).
 
