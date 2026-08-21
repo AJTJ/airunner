@@ -133,14 +133,14 @@ Before filing, every answer is yes:
   same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
   closes."
 - **Citations** (`file:line`) open and match now.
-- Description and acceptance agree; a contradiction gets `bd human`, not a guess.
+- Description and acceptance agree; a contradiction goes to the owner queue (`air capture --for owner`), not a guess.
 - `owner` / `human` / `runtime` labels applied at filing; they are withheld from `next`.
 
 ```bash
 echo "<what and why; cites file:line>" | bd create "<verb-first title>" --type=task -p 2 \
   --parent <epic> --description=- \
   --acceptance "cargo nextest run -p air-ledger claims::" \
-  -l lane:crates/ledger --estimate 45
+  --estimate 45
 bd create "Spike: <question>" --type=spike --parent <epic> -p 1 \
   --acceptance "bd comment on this bead names the chosen approach and the rejected ones, with reasons"
 # order and shared files: edges between CHILDREN, never on the epic
@@ -187,9 +187,9 @@ bd dep tree <epic> --json                         # what each landing unblocks
 
 1. **One live claim per lane.** For each idle worker, the highest-priority ready bead whose lane
    no in-progress bead holds. `bd update <id> --assignee <worker>`; the worker's
-   `bd update --claim` is the fact, the assignee is the suggestion.
-2. **Depth ≤ 2 per worker**, as a counter not a gate (Metis "max 2 active per person"; owner
-   2026-08-18 item 5). The second item is what becomes ready when the first lands.
+   `air claim` is the fact, the assignee is the suggestion.
+2. **No depth cap** (owner 2026-08-21: "there is no cap; we set our goals and finish them").
+   Queue as much as is ready; the next item is what becomes ready when the first lands.
 3. **Priority encodes the wave**: skeleton `-p 1`, its direct dependents `-p 2`, the rest
    `-p 3`; `bd ready --sort priority` orders the frontier with no extra state.
 4. **Shared file → edge, not assignment.** An edge survives a worker swap; an assignment does not.
