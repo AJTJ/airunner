@@ -57,8 +57,8 @@ Filing-time signals:
   (`task-specification-research.md:265`).
 - **Floor as well as ceiling**: not below one reviewable diff; "a bead too small to review as one
   change costs a full merge cycle for a trivial diff" (`task-specification-research.md:757-759`).
-- Prefer three small beads to one medium; they parallelise. More than ~12 children → probably
-  two epics.
+- Prefer three small beads to one medium; they parallelise. No numeric ceiling on children or
+  lines is set until the ledger's estimate-vs-actual metric (measurement spec §2.7) produces one.
 - Set `--estimate <minutes>`; it is a guess the ledger correlates with actuals, never a gate.
 
 ## The procedure (coordinator runs this)
