@@ -11,6 +11,13 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Source trail always.** Every research claim cites a primary source — URL with access date,
   or `path:line-range`. Claims derived from adopter notes cite the note *and* the source it
   cited. No "mysterious bunch of claims".
+- **Do less.** The goal is the model's productivity, not the framework's completeness. Air
+  removes friction (relayed facts, drift, collisions); it does not direct the work. Every
+  constraint, hook, deny rule, or procedure must name the recorded failure it prevents AND the
+  condition under which it is removed; guardrails that are never re-examined become the
+  throttles a more capable model does not need. When in doubt, leave it out; when a rule can be
+  a measurement instead, measure. Gas Town is the opposite and the warning. Use the `do-less`
+  skill before adding anything (owner, 2026-08-21).
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
   case (`docs/research/beads-and-gastown.md §2.5`).
@@ -47,7 +54,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
 | Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
-| Thinking about feature → epics → tasks and how agents traverse an epic | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) (draft; six owner decisions in §7) |
+| Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (the single procedure; what Air enforces vs judgement) | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) |
 | Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
 | Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
 | Rust conventions (errors, lints, MSRV — open decisions) | [`docs/plans/0003-rust-conventions.md`](docs/plans/0003-rust-conventions.md) |
