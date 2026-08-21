@@ -57,7 +57,7 @@ whether to assign it work; it sat idle.)
   2026-08-20/21]
 - Reads `air status` / `air holdings` before relaying any fact about who holds what. Relayed
   memory was adopter's least reliable channel. [Air advises]
-- Rulings, arbitration, reassigning stalled work, answers to `bd human`. [prose]
+- Rulings, arbitration, reassigning stalled work, answers from the owner queue (`air inbox --owner`). [prose]
 - Machine-level actions: installs, dev servers, anything that takes the whole machine. [prose]
 - Lands: `air land <worker> [--sha X]`. Refuses dirty main, verifies the merged tree, rewinds on
   red, closes attributable beads by evidence. [Air enforces]
@@ -74,7 +74,7 @@ whether to assign it work; it sat idle.)
 - Answers a worker's question with an interactive prompt to the owner. File it. [prose]
 
 **Commands:** `air status [--attention]`, `air inbox`, `air triage`, `air holdings`, `air land`,
-`bd create --validate --estimate`, `bd update`, `bd comment`, `bd human`, `git show main:<path>`
+`bd create --validate --estimate`, `bd update`, `bd comment`, `git show main:<path>`
 and other reads. The same surface is available as MCP tools (`air_status`, `air_inbox`, …) and
 resources (`@air://status`).
 
