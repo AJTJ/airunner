@@ -67,7 +67,6 @@ pub struct Thresholds {
     pub stuck_min: i64,
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
-    pub inbox_wait_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
     pub launch_grace_min: i64,
 }
@@ -78,7 +77,6 @@ impl Default for Thresholds {
             stuck_min: 5,
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
-            inbox_wait_min: 30,
             launch_grace_min: 3,
         }
     }
@@ -97,7 +95,6 @@ impl Thresholds {
         t.stuck_min = get("AIR_ATTENTION_STUCK_MIN", t.stuck_min);
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
-        t.inbox_wait_min = get("AIR_ATTENTION_INBOX_MIN", t.inbox_wait_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
         t
     }
@@ -107,7 +104,8 @@ impl Thresholds {
 pub struct Attention {
     pub worker: String,
     /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green |
-    /// inbox-waiting | owner-decision-waiting | lease-held-by-dead-session | lease-stale
+    /// owner-decision-waiting | lease-held-by-dead-session | lease-stale
+    /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21)
     pub kind: &'static str,
     pub detail: String,
     pub for_minutes: i64,
@@ -249,20 +247,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             ),
             for_minutes: minutes_between(oldest, now).unwrap_or(0),
         });
-    }
-    if let Some(oldest) = &s.oldest_capture_at {
-        let age = minutes_between(oldest, now).unwrap_or(0);
-        if age >= t.inbox_wait_min {
-            out.push(Attention {
-                worker: "coordinator".to_string(),
-                kind: "inbox-waiting",
-                detail: format!(
-                    "{} capture(s) waiting, oldest {age} min; run `air inbox` and triage",
-                    s.inbox_depth
-                ),
-                for_minutes: age,
-            });
-        }
     }
     out
 }
@@ -654,7 +638,6 @@ mod tests {
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
                 ("red", "handover-not-green"),
-                ("coordinator", "inbox-waiting"),
             ]
         );
         assert_eq!(att[0].for_minutes, 30);
@@ -663,7 +646,6 @@ mod tests {
             stuck_min: 60,
             idle_with_claim_min: 60,
             silent_with_claim_min: 60,
-            inbox_wait_min: 60,
             launch_grace_min: 3,
         };
         let att = attention(&s, NOW, loose);
