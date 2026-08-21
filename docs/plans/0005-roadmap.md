@@ -21,6 +21,8 @@ with `air record verify -- <cmd>` as its first proof. It scans the repo for publ
 targets (Makefile `deploy*`/`publish*`/`ota*`, `eas`, `fastlane`, `fly`, `wrangler`) and
 proposes `worker_deny` patterns instead of leaving the list to judgement.
 
+Hooks installed by `init` are quiet-unless-actionable by default (adopter §9).
+
 Input: the adopter adoption log (`adopter/docs/notes/air-adoption.md`), which records what
 was tricky in the migration; whatever was tricky there must be absent from `init`.
 

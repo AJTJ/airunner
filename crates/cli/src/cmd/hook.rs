@@ -7,7 +7,8 @@
 //! - PreToolUse(Edit|Write): warn (additionalContext) if a peer is journaled on that file.
 //! - PreToolUse(Bash `bd close`/`bd update … -s awaiting_review|closed`): run the hand-over gate,
 //!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason).
-//! - Stop / SubagentStop: advisory hand-over summary as context; never blocks in this slice.
+//! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
+//!   missing; quiet on the ok path and for the coordinator. Never blocks in this slice.
 //! - SessionStart / PostToolUse / PermissionRequest / SessionEnd: session state rows.
 //!
 //! Every invocation appends exactly one event line to `.air/events/` (`hook.<event>`), including
@@ -157,10 +158,9 @@ fn dispatch(
     Ok(match input.event() {
         HookEvent::SessionStart => {
             let prev = set_session(ledger, input, worker, "working", None)?;
+            // Quiet: the event line records it; a human reads every line a hook prints.
             Dispatched::new(
-                HookOutcome::Allow {
-                    context: Some(format!("air: worker `{worker}` session registered")),
-                },
+                HookOutcome::Allow { context: None },
                 "registered",
                 transition(&prev, "working"),
             )
@@ -228,10 +228,15 @@ fn dispatch(
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
+            // Silence is the signal that all is well (adopter adoption log §9): speak only
+            // on a refusal. The ok path is still on the event line.
+            let context = if v.pass {
+                None
+            } else {
+                Some(format!("air: {}", v.message))
+            };
             Dispatched::new(
-                HookOutcome::Allow {
-                    context: Some(format!("air: {}", v.message)),
-                },
+                HookOutcome::Allow { context },
                 if v.pass { "pass" } else { "would-refuse" },
                 format!("{}; {}", transition(&prev, "idle"), v.message),
             )
@@ -575,6 +580,70 @@ mod tests {
             ("ended", "idle -> gone")
         );
         assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));
+    }
+
+    #[test]
+    fn stop_is_silent_when_all_is_well_and_speaks_on_a_gap() {
+        use super::{HookOutcome, dispatch};
+        use air_ledger::verify::{Kind, VerifyRun, new_id};
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        // A linked worktree is a worker; the main checkout would be the coordinator.
+        let wt = repo.join("wt");
+        let out = Command::new("git")
+            .args([
+                "-C",
+                repo.to_str().unwrap(),
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "w",
+                wt.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let (ledger, worker) = crate::cmd::open(&wt).unwrap();
+        assert_eq!(worker, "wt");
+        let stop = |ledger: &air_ledger::Ledger| {
+            let input = air_hooks::HookInput::parse(
+                &serde_json::json!({"session_id": "s", "hook_event_name": "Stop", "cwd": wt.to_string_lossy()}).to_string(),
+            )
+            .unwrap();
+            dispatch(ledger, "wt", &wt, &input).unwrap()
+        };
+        // No green recorded: speaks.
+        let d = stop(&ledger);
+        assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
+        assert_eq!(d.decision, "would-refuse");
+        // Green at HEAD: silent, but still on the event line as "pass".
+        let head = crate::git::head(&wt).unwrap();
+        ledger
+            .record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "wt".into(),
+                sha: head,
+                kind: Kind::Verify,
+                exit_code: 0,
+                trigger: "test".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+            })
+            .unwrap();
+        let d = stop(&ledger);
+        assert!(
+            matches!(d.outcome, HookOutcome::Allow { context: None }),
+            "{:?}",
+            d.outcome
+        );
+        assert_eq!(d.decision, "pass");
     }
 
     #[test]
