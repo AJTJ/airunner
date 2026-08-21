@@ -41,6 +41,10 @@ Index items are 1–3 lines; detail lives behind the link.
 | Orienting in the research | [`docs/README.md`](docs/README.md) — index of all reports |
 | Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
 | Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
+| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it on adopter | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
+| Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
+| Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
+| Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
 | Thinking about feature → epics → tasks and how agents traverse an epic | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) (draft; six owner decisions in §7) |
 | Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
 | Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
@@ -49,16 +53,18 @@ Index items are 1–3 lines; detail lives behind the link.
 | Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
 | Working with `bd` (versions, leases trap) | [`docs/research/beads-and-gastown.md`](docs/research/beads-and-gastown.md) §0 |
 
-## Index — systems and subsystems (first slice built 2026-08-18; see plan 0001)
+## Index — systems and subsystems (first slice 2026-08-18, plan 0001; first-round surface 2026-08-20, plan 0004)
 
 | System | One line |
 |---|---|
-| `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) + NDJSON events (`.air/events/`): `verify_runs`, `edit_journal`, `claims`, `sessions`, `landings`. No time-based expiry. **Built.** |
-| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, edit journal; `air hook` dispatches SessionStart/PreToolUse/PostToolUse/PermissionRequest/Stop/SessionEnd, fails open, ~100 ms. Advisory unless `AIR_ENFORCE=1`. **Built.** |
-| `crates/cli` (`air`) | Built: `record`, `handover`, `holdings`, `hook`, `doctor`, `selftest` (`--json`, denominators). Next: `claim`/`release`, `capture`, `next`, `peer`, `merge-advice`, `status`, `land`, `gc`, `install`. |
+| `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) + NDJSON events (`.air/events/`): `verify_runs`, `edit_journal`, `claims`, `sessions` (with `role`), `landings`, `captures` (schema v2). No time-based expiry. **Built.** |
+| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, edit journal; `air hook` dispatches SessionStart/PreToolUse/PostToolUse/PermissionRequest/Stop/SessionEnd, fails open, ~100 ms, **one event line per invocation** (transitions included). Advisory unless `AIR_ENFORCE=1`. **Built.** |
+| `crates/cli` (`air`) | Built: `record`, `handover`, `holdings`, `claim`/`release` (wrap `bd --claim`), `capture`/`inbox`/`triage`, `status [--attention]`, `mcp`, `install`, `worker`/`coordinator`, `hook`, `doctor`, `selftest` (10 probes). Next (after round-one data): `next`, `peer`, `merge-advice`, `land`, `gc`. |
+| `air mcp` | One stdio MCP server: the coordinator's **channel** (pushes attention conditions from a ledger poll; no sockets, no timers) plus tools (`air_*`) and resources (`air://status`, …) that invoke the CLI. Synchronous, bounded, panic-isolated. **Built.** |
+| Launchers `air worker <name>` / `air coordinator` | Interactive `claude` with native worktree isolation, roles prose appended, deny list that holds in every permission mode, env instead of drifting files; coordinator gets the channel. **Built.** |
 | Hand-over gate | The one refusal: `awaiting_review`/close needs recorded green at HEAD + main merged. Never blocks a prompt or a WIP commit. |
 | `crates/bd` (`air-bd`) | `WorkLedger` trait + `bd --json` shell-out (bd 1.2.2 surface); CAS/leases live in the ledger; never called from a hook. **Built (minimal).** |
-| Coordinator (human-facing session) | Steers, triages, priorities/lanes, rulings, arbitration, `land`. SendMessage stays the channel. |
+| Coordinator (human-facing session) | Steers, triages the capture inbox, builds per-worker queues in beads fields, rulings, arbitration, `land`. Informed by the Air channel, not woken by cron. SendMessage stays the agent-to-agent channel. |
 
 ## Essentials
 
