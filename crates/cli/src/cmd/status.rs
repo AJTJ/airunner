@@ -49,11 +49,9 @@ pub struct Snapshot {
     pub oldest_owner_capture_at: Option<String>,
     /// Every lease, with the defect the CLI found (None = healthy).
     pub leases: Vec<(Lease, Option<String>)>,
-    /// Beads in `awaiting_review` per bd (None when bd could not answer), and the WIP cap
-    /// from `.claude/air.json` (`wip_cap`; None = not configured). Measured and reported,
-    /// never enforced (owner decision 2026-08-18).
+    /// Beads in `awaiting_review` per bd (None when bd could not answer). A measurement only:
+    /// there is no cap ("we set our goals and finish them", owner 2026-08-21).
     pub awaiting_review: Option<Vec<String>>,
-    pub wip_cap: Option<usize>,
     /// Review wait per open claim that has been handed over: (bead, worker, minutes).
     pub review_waits: Vec<(String, String, i64)>,
     /// file -> workers holding it (only files with 2+ holders)
@@ -106,8 +104,7 @@ impl Thresholds {
 pub struct Attention {
     pub worker: String,
     /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green |
-    /// inbox-waiting | owner-decision-waiting | lease-held-by-dead-session | lease-stale |
-    /// awaiting-review-over-cap
+    /// inbox-waiting | owner-decision-waiting | lease-held-by-dead-session | lease-stale
     pub kind: &'static str,
     pub detail: String,
     pub for_minutes: i64,
@@ -236,21 +233,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 l.resource, l.worker, l.reason, l.resource
             ),
             for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
-        });
-    }
-    if let (Some(ar), Some(cap)) = (&s.awaiting_review, s.wip_cap)
-        && ar.len() > cap
-    {
-        let oldest_wait = s.review_waits.iter().map(|w| w.2).max().unwrap_or(0);
-        out.push(Attention {
-            worker: "coordinator".to_string(),
-            kind: "awaiting-review-over-cap",
-            detail: format!(
-                "{} beads awaiting review (cap {cap}): {}; stop dispatching and land (oldest wait {oldest_wait} min)",
-                ar.len(),
-                ar.join(",")
-            ),
-            for_minutes: oldest_wait,
         });
     }
     if let Some(oldest) = &s.oldest_owner_capture_at {
@@ -395,9 +377,6 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
                 None
             }
         };
-    let wip_cap = super::handover::air_json(repo)
-        .and_then(|v| v.get("wip_cap").and_then(serde_json::Value::as_u64))
-        .and_then(|n| usize::try_from(n).ok());
     let review_waits: Vec<(String, String, i64)> = views
         .values()
         .flat_map(|w| {
@@ -436,7 +415,6 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         oldest_owner_capture_at: owner_q.first().map(|c| c.captured_at.clone()),
         leases,
         awaiting_review,
-        wip_cap,
         review_waits,
         overlaps,
         errors,
@@ -730,28 +708,13 @@ mod tests {
     }
 
     #[test]
-    fn wip_cap_is_reported_not_enforced() {
+    fn awaiting_review_is_measured_never_a_condition() {
         let s = Snapshot {
-            awaiting_review: Some(vec!["a".into(), "b".into(), "c".into()]),
-            wip_cap: Some(2),
+            awaiting_review: Some(vec!["a".into(); 22]),
             review_waits: vec![("a".into(), "w".into(), 45)],
             ..Default::default()
         };
-        let a = attention(&s, NOW, Thresholds::default());
-        assert_eq!(a[0].kind, "awaiting-review-over-cap");
-        assert_eq!(a[0].for_minutes, 45);
-        let under = Snapshot {
-            awaiting_review: Some(vec!["a".into()]),
-            wip_cap: Some(2),
-            ..Default::default()
-        };
-        assert!(attention(&under, NOW, Thresholds::default()).is_empty());
-        let no_cap = Snapshot {
-            awaiting_review: Some(vec!["a".into(); 9]),
-            wip_cap: None,
-            ..Default::default()
-        };
-        assert!(attention(&no_cap, NOW, Thresholds::default()).is_empty());
+        assert!(attention(&s, NOW, Thresholds::default()).is_empty());
     }
 
     #[test]
