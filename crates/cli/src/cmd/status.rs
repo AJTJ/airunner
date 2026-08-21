@@ -54,6 +54,9 @@ pub struct Snapshot {
     pub awaiting_review: Option<Vec<String>>,
     /// Review wait per open claim that has been handed over: (bead, worker, minutes).
     pub review_waits: Vec<(String, String, i64)>,
+    /// Every session row (two sessions in one checkout are two entries; the per-worker view
+    /// above keeps only the latest): (worker, role, session).
+    pub sessions: Vec<(String, String, Session)>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -300,7 +303,8 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         Err(e) => errors.push(format!("git worktree list: {e}")),
     }
 
-    // Sessions (latest row per worker).
+    // Sessions (latest row per worker, plus every row for join/leave detection).
+    let mut all_sessions: Vec<(String, String, Session)> = Vec::new();
     {
         let mut st = ledger
             .conn()
@@ -328,6 +332,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         for row in rows {
             let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
             sess.pid_alive = sess.pid.map(super::lease::pid_alive);
+            all_sessions.push((worker.clone(), role.clone(), sess.clone()));
             let v = views.entry(worker.clone()).or_insert_with(|| WorkerView {
                 worker: worker.clone(),
                 role: role.clone(),
@@ -416,6 +421,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         leases,
         awaiting_review,
         review_waits,
+        sessions: all_sessions,
         overlaps,
         errors,
     })

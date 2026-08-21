@@ -481,8 +481,45 @@ fn channel_event(a: &Attention) -> Value {
     })
 }
 
+/// Pure: session ids that appeared or vanished since the last tick. The first tick seeds
+/// and reports nothing (the coordinator just started; existing sessions are not news).
+pub fn session_changes(
+    known: &mut Option<std::collections::BTreeSet<String>>,
+    current: &[(String, String, status::Session)],
+) -> Vec<(&'static str, String, String)> {
+    let now: std::collections::BTreeSet<String> = current
+        .iter()
+        .map(|(_, _, s)| s.session_id.clone())
+        .collect();
+    let mut events = Vec::new();
+    if let Some(prev) = known.as_ref() {
+        for (w, role, s) in current {
+            if !prev.contains(&s.session_id) {
+                events.push((
+                    "session_joined",
+                    w.clone(),
+                    format!(
+                        "{role} {w} joined (session {})",
+                        s.session_id.get(..8).unwrap_or(&s.session_id)
+                    ),
+                ));
+            }
+        }
+        for id in prev.difference(&now) {
+            events.push((
+                "session_left",
+                String::new(),
+                format!("session {} left", id.get(..8).unwrap_or(id)),
+            ));
+        }
+    }
+    *known = Some(now);
+    events
+}
+
 fn poll_loop(repo: &Path, out: &Out, every: Duration) {
     let mut pushed = Pushed::new();
+    let mut known_sessions: Option<std::collections::BTreeSet<String>> = None;
     let thresholds = Thresholds::from_env();
     loop {
         // One bad tick (a panic in git parsing, a malformed row) must not end the thread:
@@ -494,6 +531,18 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
                         let att = status::attention(&snap, &snap.at, thresholds);
                         for a in select_new(&mut pushed, &att) {
                             out.send(&channel_event(&a));
+                        }
+                        for (kind, worker, text) in
+                            session_changes(&mut known_sessions, &snap.sessions)
+                        {
+                            out.send(&json!({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/claude/channel",
+                                "params": {
+                                    "content": format!("[{kind}] {text}"),
+                                    "meta": {"kind": kind, "worker": worker}
+                                }
+                            }));
                         }
                     }
                     Err(e) => eprintln!("air mcp: poll: {e}"),
@@ -534,6 +583,34 @@ mod tests {
         assert!(p.is_empty());
         // Reappears: new again.
         assert_eq!(select_new(&mut p, &[att("a", "stuck", 5)]).len(), 1);
+    }
+
+    #[test]
+    fn session_joins_and_leaves_are_one_shot_after_seeding() {
+        let sess = |id: &str| status::Session {
+            session_id: id.into(),
+            state: "working".into(),
+            detail: None,
+            changed_at: String::new(),
+            pid: None,
+            pid_alive: None,
+        };
+        let mut known = None;
+        let a = vec![("main".to_string(), "coordinator".to_string(), sess("aaaa"))];
+        assert!(
+            session_changes(&mut known, &a).is_empty(),
+            "first tick seeds silently"
+        );
+        let ab = vec![
+            a[0].clone(),
+            ("w1".to_string(), "worker".to_string(), sess("bbbb")),
+        ];
+        let ev = session_changes(&mut known, &ab);
+        assert_eq!(ev.len(), 1);
+        assert_eq!((ev[0].0, ev[0].1.as_str()), ("session_joined", "w1"));
+        assert!(session_changes(&mut known, &ab).is_empty(), "no repeat");
+        let ev = session_changes(&mut known, &a);
+        assert_eq!(ev[0].0, "session_left");
     }
 
     #[test]
