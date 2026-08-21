@@ -51,8 +51,16 @@ deny list is seen to be bypassed.
 
 1. `cargo install --path crates/cli` so `air` on PATH is this binary.
 2. In the adopter main checkout: `air install` (read the plan), then `air install --write`.
-3. Beads template: make the acceptance section required so `bd create --validate` refuses
-   without it. Pin bd at 1.2.2 (this machine has 1.2.1 on PATH as of 2026-08-20).
+3. Always `bd create --validate --estimate <min>`: bd already refuses a task/feature/bug whose
+   description lacks `## Acceptance Criteria` (compiled in per type, `bd lint --help`; it is a
+   heading grep, not a content check). No config change needed. Pin bd at 1.2.2 (this machine
+   has 1.2.1 on PATH as of 2026-08-20).
 4. `make verify` target (or the habit) becomes `air record verify -- <cmd>`.
 5. Coordinator terminal: `air coordinator`. Worker terminals: `air worker <name>`.
 6. After the round: `jq` over `.air/events/*.ndjson`; `air status --json`.
+
+Verified 2026-08-20 on Claude Code 2.1.238: `--append-system-prompt-file`, `--disallowed-tools`,
+`--settings`, `--worktree` are listed in `--help`; `--channels` and
+`--dangerously-load-development-channels` are accepted by the parser (not listed; research
+preview). adopter's `.claude/settings.json` today has only `bd prime` on `SessionStart` and
+no `.mcp.json`, so `air install` adds rather than conflicts.
