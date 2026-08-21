@@ -48,6 +48,13 @@ pub struct VerifyRun {
     pub started_at: String,
     pub finished_at: String,
     pub log_path: Option<String>,
+    /// The exact argv that ran (v3). `None` for rows written before v3.
+    pub command: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub output_bytes: Option<i64>,
+    /// The worktree had uncommitted changes when the run was recorded: the exit describes
+    /// the tree, not HEAD.
+    pub dirty: bool,
 }
 
 impl VerifyRun {
@@ -61,7 +68,8 @@ impl Ledger {
     pub fn record_verify(&self, run: &VerifyRun) -> Result<()> {
         self.conn().execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, failing_step, \
-             started_at, finished_at, log_path) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+             started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 run.id,
                 run.worker,
@@ -73,9 +81,27 @@ impl Ledger {
                 run.started_at,
                 run.finished_at,
                 run.log_path,
+                run.command,
+                run.duration_ms,
+                run.output_bytes,
+                run.dirty,
             ],
         )?;
         Ok(())
+    }
+
+    /// The most recent run of `kind` for `worker` at any sha (for "did the command change").
+    pub fn latest_run_any(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs \
+                 WHERE worker=?1 AND kind=?2 ORDER BY started_at DESC LIMIT 1",
+                params![worker, kind.as_str()],
+                row_to_run,
+            )
+            .optional()?)
     }
 
     /// The most recent run of `kind` for (`worker`, `sha`), if any.
@@ -84,7 +110,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path FROM verify_runs WHERE worker=?1 AND sha=?2 AND kind=?3 \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs WHERE worker=?1 AND sha=?2 AND kind=?3 \
                  ORDER BY finished_at DESC LIMIT 1",
                 params![worker, sha, kind.as_str()],
                 row_to_run,
@@ -99,7 +125,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
                  ORDER BY finished_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
                 row_to_run,
@@ -130,6 +156,10 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<VerifyRun> {
         started_at: r.get(7)?,
         finished_at: r.get(8)?,
         log_path: r.get(9)?,
+        command: r.get(10)?,
+        duration_ms: r.get(11)?,
+        output_bytes: r.get(12)?,
+        dirty: r.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -162,6 +192,10 @@ mod tests {
             started_at: at.into(),
             finished_at: at.into(),
             log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
         }
     }
 

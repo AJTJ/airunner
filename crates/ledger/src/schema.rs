@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 2;
+pub const CURRENT_VERSION: i64 = 3;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -91,6 +91,16 @@ CREATE INDEX IF NOT EXISTS captures_status ON captures(status, captured_at);
 ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'worker';
 "#;
 
+/// v3 (2026-08-21): what a verify run actually ran. adopter captures 4d1e52/9de453: a green
+/// exit from a command that had stopped measuring what it claimed. The exit stays the fact;
+/// the command line, duration, output size and a dirty-tree flag make a false green visible.
+const V3: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN command TEXT;
+ALTER TABLE verify_runs ADD COLUMN duration_ms INTEGER;
+ALTER TABLE verify_runs ADD COLUMN output_bytes INTEGER;
+ALTER TABLE verify_runs ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -101,6 +111,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 2 {
         conn.execute_batch(V2)?;
         conn.pragma_update(None, "user_version", 2)?;
+    }
+    if version < 3 {
+        conn.execute_batch(V3)?;
+        conn.pragma_update(None, "user_version", 3)?;
     }
     Ok(())
 }

@@ -33,6 +33,30 @@ pub const WORKER_DENY: &[&str] = &[
 /// Deny rules for the coordinator: it steers, it does not commit on main or push.
 pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)", "Bash(git commit *)"];
 
+/// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
+/// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
+/// enumerations, so a new publish target cannot ship outside the list (adopter capture
+/// fcd8ff: `make deploy-site` shipped without being added to a list that named `deploy-api`).
+pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
+    let Ok(air_dir) = air_ledger::paths::air_dir_for(repo) else {
+        return Vec::new();
+    };
+    let path = air_dir
+        .parent()
+        .map(|m| m.join(".claude/air.json"))
+        .unwrap_or_default();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(key).and_then(|a| a.as_array()).cloned())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
     let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -61,6 +85,14 @@ pub fn worker_argv(name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
     v
 }
 
+/// Worker argv including the repo's own deny rules (inserted before any pass-through args).
+fn worker_argv_for(repo: &Path, name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+    let mut base = worker_argv(name, roles, &[]);
+    base.extend(repo_deny(repo, "worker_deny"));
+    base.extend(extra.iter().cloned());
+    base
+}
+
 /// Pure: the argv for the coordinator session.
 pub fn coordinator_argv(roles: &Path, channels_flag: &str, extra: &[String]) -> Vec<String> {
     let settings = serde_json::json!({"env": {"AIR_ROLE": "coordinator"}});
@@ -76,6 +108,13 @@ pub fn coordinator_argv(roles: &Path, channels_flag: &str, extra: &[String]) -> 
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
     v.extend(extra.iter().cloned());
     v
+}
+
+fn coordinator_argv_for(repo: &Path, roles: &Path, flag: &str, extra: &[String]) -> Vec<String> {
+    let mut base = coordinator_argv(roles, flag, &[]);
+    base.extend(repo_deny(repo, "coordinator_deny"));
+    base.extend(extra.iter().cloned());
+    base
 }
 
 fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
@@ -128,7 +167,7 @@ pub fn worker(repo: &Path, name: &str, extra: &[String], print: bool) -> i32 {
             return 1;
         }
     };
-    exec_claude(repo, &worker_argv(name, &roles, extra), print)
+    exec_claude(repo, &worker_argv_for(repo, name, &roles, extra), print)
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
@@ -140,7 +179,11 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
         }
     };
     let flag = std::env::var("AIR_CHANNELS_FLAG").unwrap_or_else(|_| "--channels".into());
-    exec_claude(repo, &coordinator_argv(&roles, &flag, extra), print)
+    exec_claude(
+        repo,
+        &coordinator_argv_for(repo, &roles, &flag, extra),
+        print,
+    )
 }
 
 #[cfg(test)]
