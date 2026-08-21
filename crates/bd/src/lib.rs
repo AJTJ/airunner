@@ -54,6 +54,8 @@ pub struct Issue {
 pub trait WorkLedger {
     fn ready(&self) -> Result<Vec<Issue>>;
     fn in_progress(&self) -> Result<Vec<Issue>>;
+    /// `bd list --status <status> --json` (custom statuses such as `awaiting_review` included).
+    fn by_status(&self, status: &str) -> Result<Vec<Issue>>;
     fn show(&self, id: &str) -> Result<Option<Issue>>;
     /// `bd update <id> --claim` (assignee = actor, status = in_progress). Air's ledger checks
     /// CAS *before* calling this.
@@ -174,7 +176,11 @@ impl WorkLedger for BdCli {
     }
 
     fn in_progress(&self) -> Result<Vec<Issue>> {
-        parse_issues(&self.run(&["list", "--status", "in_progress", "--json"])?)
+        self.by_status("in_progress")
+    }
+
+    fn by_status(&self, status: &str) -> Result<Vec<Issue>> {
+        parse_issues(&self.run(&["list", "--status", status, "--json"])?)
     }
 
     fn show(&self, id: &str) -> Result<Option<Issue>> {

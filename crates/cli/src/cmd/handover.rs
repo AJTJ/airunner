@@ -71,12 +71,19 @@ pub fn facts(
     })
 }
 
-/// `digest_dir` from `<main>/.claude/air.json`; None disables the check.
-pub fn digest_dir(repo: &Path) -> Option<String> {
+/// `<main>/.claude/air.json`, parsed; None when absent or unreadable.
+pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     let air_dir = air_ledger::paths::air_dir_for(repo).ok()?;
     let path = air_dir.parent()?.join(".claude/air.json");
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    v.get("digest_dir")?.as_str().map(str::to_string)
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// `digest_dir` from `.claude/air.json`; None disables the check.
+pub fn digest_dir(repo: &Path) -> Option<String> {
+    air_json(repo)?
+        .get("digest_dir")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Is there a `*<worker>*.md` in `dir` modified after `since` (RFC 3339)? Pure over the fs.
