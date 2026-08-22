@@ -54,6 +54,7 @@ pub fn run(json: bool) -> i32 {
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
+        probe_land_selection_is_never_silent(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -155,6 +156,51 @@ fn probe_review_fact_survives() -> Probe {
     let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
     Probe {
         name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-6u5: selection never answers "nothing" when it means "something broke", and a bead
+/// stays attributed after the branch merges `main`.
+///
+/// Red, the bug that made `air land` unusable in adopter: the old narrowing required a claim
+/// `claimed_at >= branch_point`, and merging `main` moves the branch point FORWARD past the
+/// claim that started the work — while landing requires merging main. So preparing to land
+/// destroyed the attribution. Here the claim is older than the branch point, as it is for
+/// every real branch that has merged main, and it must still be attributed.
+///
+/// Green: a ledger error is an error, not an empty queue. `{"landed": [], "ok": true}` was the
+/// worst answer available because there was nothing to disbelieve.
+fn probe_land_selection_is_never_silent() -> Probe {
+    use crate::cmd::status::Skipped;
+
+    // The narrowing that broke it is gone: what remains is claimed-by-this-worker and
+    // not-already-landed, neither of which moves when git does.
+    let red = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        // Claimed BEFORE the branch point, which is what merging main produces.
+        l.record_claim("fd-1", "alpha", &[], "2026-08-22T10:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let kept = crate::cmd::status::attributable_for_test(&l, &["fd-1".to_string()], "alpha")?;
+        // ...and a bead already landed is dropped, which is the bound that replaced the time.
+        let dropped =
+            crate::cmd::status::attributable_for_test(&l, &["ad-other".to_string()], "alpha")?;
+        Ok(kept == ["fd-1"] && dropped.is_empty())
+    })()
+    .unwrap_or(false);
+
+    // A Skipped row carries the check name and the fixing command, so nothing is ever a bare
+    // absence.
+    let sk = Skipped {
+        worker: "alpha".to_string(),
+        check: "green-at-head",
+        detail: "alpha has no recorded green at its head abc12345".to_string(),
+        fix: "in that worktree: air record verify -- <the repo's verify>".to_string(),
+    };
+    let green = !sk.fix.is_empty() && !sk.detail.is_empty() && sk.check == "green-at-head";
+    Probe {
+        name: "land: a claim older than the branch point still attributes; every skip names its check and fix",
         red_fires: red,
         green_passes: green,
     }
