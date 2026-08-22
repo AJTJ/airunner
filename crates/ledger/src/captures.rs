@@ -112,6 +112,30 @@ impl Ledger {
         )?;
         Ok(n > 0)
     }
+
+    /// Triage a whole pass in ONE transaction: each item is `(capture id, status, bead,
+    /// note)`. Returns one flag per item, in order, false where the capture was not open.
+    /// The coordinator's post-round triage resolved a dozen captures one `air triage` at a
+    /// time (air-869); this is the same work in one ledger open and one event line.
+    pub fn resolve_captures(
+        &self,
+        items: &[(String, String, Option<String>, Option<String>)],
+        at: &str,
+    ) -> Result<Vec<bool>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut done = Vec::with_capacity(items.len());
+        {
+            let mut st = tx.prepare(
+                "UPDATE captures SET status=?2, bead=?3, note=?4, resolved_at=?5 \
+                 WHERE id=?1 AND status='open'",
+            )?;
+            for (id, status, bead, note) in items {
+                done.push(st.execute(params![id, status, bead, note, at])? > 0);
+            }
+        }
+        tx.commit()?;
+        Ok(done)
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +166,52 @@ mod tests {
         assert_eq!(
             (a.status.as_str(), a.bead.as_deref()),
             ("promoted", Some("fd-9"))
+        );
+    }
+
+    /// air-869: one triage pass, one transaction. Already-resolved captures come back
+    /// false instead of failing the whole pass.
+    #[test]
+    fn resolve_captures_triages_a_whole_pass() {
+        let l = Ledger::open_in_memory().unwrap();
+        for (id, text) in [("a", "one"), ("b", "two"), ("c", "three")] {
+            l.capture(id, "w1", None, text, "t0").unwrap();
+        }
+        l.resolve_capture("c", "promoted", Some("fd-3"), None, "t0")
+            .unwrap();
+        let items = vec![
+            (
+                "a".to_string(),
+                "promoted".to_string(),
+                Some("fd-1".to_string()),
+                None,
+            ),
+            (
+                "b".to_string(),
+                "dropped".to_string(),
+                None,
+                Some("dup".to_string()),
+            ),
+            (
+                "c".to_string(),
+                "promoted".to_string(),
+                Some("fd-9".to_string()),
+                None,
+            ),
+        ];
+        assert_eq!(
+            l.resolve_captures(&items, "t1").unwrap(),
+            [true, true, false]
+        );
+        assert!(l.inbox().unwrap().is_empty());
+        assert_eq!(
+            l.capture_by_id("b").unwrap().unwrap().note.as_deref(),
+            Some("dup")
+        );
+        // `c` kept the bead it was already triaged to.
+        assert_eq!(
+            l.capture_by_id("c").unwrap().unwrap().bead.as_deref(),
+            Some("fd-3")
         );
     }
 }

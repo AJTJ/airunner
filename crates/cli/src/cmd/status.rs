@@ -65,6 +65,9 @@ pub struct Snapshot {
     pub errors: Vec<String>,
     /// How long `gather` took; on the event line so a slow status is measured, not felt.
     pub duration_ms: u64,
+    /// Median cost of one `bd` process today, from the event log (air-869). None when
+    /// nothing shelled out to bd today.
+    pub bd_latency: Option<super::bd_latency::BdLatency>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -584,6 +587,9 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
+        // From the lines already on disk: this tick's own bd cost is logged after gather,
+        // so it lands in the next reading.
+        bd_latency: super::bd_latency::for_day(ledger.dir(), &super::today()),
     })
 }
 
@@ -720,6 +726,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         "inbox: {} open; owner queue: {} open\n",
         s.inbox_depth, s.owner_queue_depth
     ));
+    if let Some(l) = &s.bd_latency {
+        out.push_str(&super::bd_latency::line(l));
+    }
     for (l, d) in &s.leases {
         out.push_str(&format!(
             "lease: {} held by {} ({}){}\n",

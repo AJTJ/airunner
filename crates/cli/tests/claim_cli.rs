@@ -266,6 +266,129 @@ fn capture_inbox_triage_round_trip() {
     assert_eq!(out.trim(), "coordinator queue empty");
 }
 
+/// air-869: the incident was ten closes as ten `bd` processes at ~1.4 s each. Ten closes
+/// through Air are ONE bd process and one ledger transaction; the event line carries what
+/// bd cost, and `air status` reads it back. A worker is refused: the one refusal
+/// (hand-over needs green) lives on the worker's path and closing would walk around it.
+#[test]
+fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
+    for id in &ids {
+        let (code, out, _) = air(&repo, &bd, &["claim", id]);
+        assert_eq!(code, 0, "{out}");
+    }
+    // Count only what `air close` runs.
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+
+    let mut argv: Vec<&str> = vec!["--json", "close"];
+    argv.extend(ids.iter().map(String::as_str));
+    argv.extend(["--reason", "landed in 63cc0a5"]);
+    let (code, out, err) = air(&repo, &bd, &argv);
+    assert_eq!(code, 0, "{out}{err}");
+
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| !l.trim().is_empty()).count(),
+        1,
+        "ten closes must be one bd process: {log}"
+    );
+    assert!(log.contains("close fd-1 "), "{log}");
+    assert!(log.contains("fd-10"), "{log}");
+    assert!(log.contains("--reason landed in 63cc0a5"), "{log}");
+
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["bd_processes"], 1);
+    assert_eq!(v["released"].as_array().unwrap().len(), 10);
+    assert!(
+        claims(&repo)
+            .iter()
+            .all(|c| c.2.as_deref() == Some("landed"))
+    );
+
+    // Every event line that shelled out to bd names what it cost.
+    let day = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .next()
+        .unwrap();
+    let events = std::fs::read_to_string(&day).unwrap();
+    let close_line = events
+        .lines()
+        .find(|l| l.contains(r#""command":"close""#))
+        .unwrap_or_else(|| panic!("no close event in {events}"));
+    let e: serde_json::Value = serde_json::from_str(close_line).unwrap();
+    assert_eq!(e["bd_calls"], 1, "{close_line}");
+    assert!(e["bd_ms"].is_u64(), "{close_line}");
+
+    // ...and `air status` reads the median back out of the log.
+    let (code, out, err) = air(&repo, &bd, &["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bd: median"), "{out}");
+
+    // A worker may not close.
+    let wt = repo.join("wt-w");
+    let g = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+    let (code, out, _) = air(&wt, &bd, &["close", "fd-1", "--reason", "x"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("coordinator's landing pass"), "{out}");
+    assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
+}
+
+/// air-869: a triage pass resolves every capture in one ledger transaction, mapping
+/// --bead/--drop positionally the way bd maps `bd close --reason`.
+#[test]
+fn triage_resolves_a_whole_pass_at_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let mut ids = Vec::new();
+    for text in ["one", "two", "three"] {
+        let (_, out, _) = air(&repo, &bd, &["--json", "capture", text]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+    // One --bead for three captures is a mistake, not a fan-out.
+    let (code, _, err) = air(
+        &repo,
+        &bd,
+        &["triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1"],
+    );
+    assert_eq!(code, 1, "{err}");
+
+    let (code, out, err) = air(
+        &repo,
+        &bd,
+        &[
+            "--json", "triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1", "--bead", "fd-2",
+            "--drop", "dup",
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["resolved"], 3);
+    assert_eq!(v["inbox_depth"], 0);
+    // A second pass reports them as no longer open rather than resolving twice.
+    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
+    assert_eq!(code, 2, "{out}");
+}
+
 /// Two worktrees contend for one resource; the dead-holder path is exercised by pointing
 /// the holder's pid at a process that has already exited.
 #[test]

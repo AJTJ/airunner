@@ -45,6 +45,7 @@ pub fn run(json: bool) -> i32 {
         probe_worker_task_prompt(),
         probe_stop_nudge(),
         probe_standstill(),
+        probe_batch_close(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -62,6 +63,36 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-869: `air close` is the coordinator's, and it issues ONE bd process however many
+/// beads it is given. Red: a worker is refused. Green: the coordinator's ten ids build a
+/// single `bd close` argv and release ten claims in one transaction.
+fn probe_batch_close() -> Probe {
+    use crate::cmd::close::may_close;
+
+    let red = may_close("beta").is_err();
+    let green = (|| -> Result<bool, String> {
+        let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
+        let argv = air_bd::close_argv(&ids, "landed", "main");
+        let one_process = argv.first().map(String::as_str) == Some("close")
+            && ids.iter().all(|i| argv.contains(i));
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        for id in &ids {
+            l.record_claim(id, "beta", &[], "t0")
+                .map_err(|e| e.to_string())?;
+        }
+        let released = l
+            .release_claims_on(&ids, "landed", "t1")
+            .map_err(|e| e.to_string())?;
+        Ok(may_close("main").is_ok() && one_process && released.len() == ids.len())
+    })()
+    .unwrap_or(false);
+    Probe {
+        name: "close: a worker is refused; ten coordinator closes are one bd argv, one transaction",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// Check 5 (ruling D): digest configured but absent → missing `digest-present`; not
