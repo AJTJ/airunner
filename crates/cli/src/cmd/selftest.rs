@@ -55,6 +55,7 @@ pub fn run(json: bool) -> i32 {
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
         probe_project_fence(),
+        probe_audit_help_names_only_what_it_prints(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -183,6 +184,50 @@ fn probe_audit_registry() -> Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-ha8: `air audit --help` advertised "how often with nothing following" for a round after
+/// the owner cut that metric — a derived statement reading as an observed one, in the help of
+/// the command built to surface exactly that. The check is the containment: every field the
+/// help names in backticks must appear in what the command prints.
+///
+/// Red: a help text that names one more field than the command prints is caught. Green: the
+/// real help text passes.
+fn probe_audit_help_names_only_what_it_prints() -> Probe {
+    use crate::cmd::audit::{gather_from, render};
+    use clap::CommandFactory;
+
+    // Backticked names are the contract: prose around them is free, the names are checked.
+    fn named(help: &str) -> Vec<String> {
+        help.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    }
+    let help = crate::Cli::command()
+        .find_subcommand("audit")
+        .and_then(|c| c.get_long_about().or_else(|| c.get_about()).cloned())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    // One registered mechanism firing, so a row with a removal condition renders in full.
+    let events = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+        "\n",
+    );
+    let printed = render(&gather_from(
+        &[("2026-08-22".to_string(), events.to_string())],
+        "2026-08-22",
+    ));
+    let all_printed = |h: &str| {
+        let names = named(h);
+        !names.is_empty() && names.iter().all(|n| printed.contains(n.as_str()))
+    };
+    Probe {
+        name: "audit: every field the help names in backticks is one the command prints",
+        red_fires: !all_printed(&format!("{help} and `how often with nothing following`")),
+        green_passes: all_printed(&help),
     }
 }
 

@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
     version,
     about = "Hub and referee for a few concurrent coding agents"
 )]
-struct Cli {
+pub(crate) struct Cli {
     /// Emit JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
@@ -206,15 +206,24 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
-    /// What the ledger says about every mechanism Air ships: how often each fired, how often
-    /// with nothing following, when it last fired, and the removal condition recorded next to
-    /// it. Facts only; the pass over them is the coordinator's. Read-only.
+    /// What the ledger says about every mechanism Air ships: how often each `fired` in the
+    /// window, over how many `subject(s)` and with how many `repeat(s)`, when it `last fired`,
+    /// and what it is `removed when`, with what the `ledger says` about that condition. Facts
+    /// only; the pass over them is the coordinator's. Read-only.
+    ///
+    /// A "fired with nothing following" count was cut from air-zyo before it shipped (Air
+    /// inferring intent it cannot see) but stayed in this help for a round: the same
+    /// derived-reads-like-observed failure the command exists to surface (air-ha8). Every
+    /// backticked name in this help is a field the command prints, and air selftest checks
+    /// the containment, so the drift cannot come back quietly.
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
         since: Option<String>,
     },
-    /// Ledger location, sizes, row counts, and the pragmas in effect.
+    /// Ledger location, sizes, row counts, the journal mode and schema version in effect, and
+    /// whether `bd` is the pinned version. (It printed one pragma while the help said
+    /// "pragmas"; air-ha8.)
     Doctor,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest,
