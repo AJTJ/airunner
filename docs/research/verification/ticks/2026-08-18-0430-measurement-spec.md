@@ -223,6 +223,22 @@ Definition: open captures at each tick (depth) and, per capture, `promoted_at - 
 `dropped_at - captured_at`. Median and p90 per round. This is the number that decides whether
 triage leaves the coordinator for a dedicated session (decisions 2026-08-20).
 
+### 2.9 Time-from-edit-to-red and reds-per-hand-over (added 2026-08-21, ad-j99i)
+
+Definition: for each red `verify_runs` row, minutes from the worker's last journaled edit
+(`edit_journal.last_seen`) to `started_at`; and per hand-over (first `handover` event per bead),
+the count of red runs at that HEAD before the first green. Both per worker per round. They say
+how late the repo's gates report, and what a late gate costs. adopter 2026-08-21: 76 of 123
+verify minutes red; moving doc gates first cut a red from ~10 min to 4 s.
+
+### 2.10 Time-to-unblock and queue depth (added 2026-08-21)
+
+Definition: from the `conditions` table, `cleared_at - first_seen` per (worker, kind); report
+median and p90 per kind per round. Queue depth: `ready_depth` on every `status` event, plotted
+over the round; the moment it falls below the worker count is when decomposition became the
+bottleneck. Capture → bead ratio: captures promoted to a bead that no other capture was promoted
+to (1:1), promoted to a shared bead (merged), dropped.
+
 ## 3. Column and event additions to plan 0001 §2
 
 Only what cannot be re-derived from git/bd. Everything else (merge parents, ancestry, branch
