@@ -42,6 +42,7 @@ pub fn run(json: bool) -> i32 {
         probe_lease_take(),
         probe_worker_task_prompt(),
         probe_stop_nudge(),
+        probe_standstill(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -187,6 +188,57 @@ fn probe_attention() -> Probe {
     Probe {
         name: "attention: stale stuck session fires; fresh one is quiet",
         red_fires: red.iter().any(|a| a.kind == "stuck"),
+        green_passes: green.is_empty(),
+    }
+}
+
+/// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
+/// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
+/// was silent on them). Green: the same fleet with the review landed, the worker fresh, and
+/// nothing ready is quiet.
+fn probe_standstill() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let mk = |changed: &str, waits: Vec<(String, String, i64)>, ready: usize| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            head: Some("abc".into()),
+            green_at_head: Some(true),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                detail: None,
+                changed_at: changed.into(),
+                pid: None,
+                pid_alive: None,
+            }),
+            ..Default::default()
+        }],
+        review_waits: waits,
+        ready_depth: Some(ready),
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let red = attention(
+        &mk(
+            "2026-08-20T11:40:00Z",
+            vec![("fd-1".into(), "w".into(), 20)],
+            5,
+        ),
+        now,
+        Thresholds::default(),
+    );
+    let green = attention(
+        &mk("2026-08-20T11:59:00Z", vec![], 0),
+        now,
+        Thresholds::default(),
+    );
+    Probe {
+        name: "attention: review-waiting and idle-without-claim fire; landed and fresh is quiet",
+        red_fires: red
+            .iter()
+            .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
+            && red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
     }
 }
