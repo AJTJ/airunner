@@ -26,6 +26,21 @@ pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 /// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21). The
 /// same text is served as MCP prompts by `air mcp`.
 pub const SKILLS: &[(&str, &str)] = &[
+    // air-ha8: a project adopting Air got the mechanisms (hooks, deny rules, attention
+    // conditions, the removal-condition registry) and not the discipline for removing them,
+    // which is the exact failure `do-less` describes. `air audit` reports what the registry
+    // holds; this skill is what a reader does with it.
+    //
+    // `beads` was considered and deliberately left out. A target repo does need the bd
+    // vocabulary, but that skill's own frontmatter says it covers "the bd 1.2.1 CLI surface",
+    // and Air pins 1.2.2 because 1.2.1 corrupted the Dolt schema (`doctor::BD_PINNED`;
+    // adopter adoption 2026-08-21). Installing it would ship a document describing the
+    // version Air refuses — the same "surface describes something untrue" failure this bead
+    // exists to fix. Add it when it is rewritten against the pinned version.
+    (
+        "air-do-less",
+        include_str!("../../../../.claude/skills/do-less/SKILL.md"),
+    ),
     (
         "air-decomposition",
         include_str!("../../../../.claude/skills/decomposition/SKILL.md"),
@@ -231,6 +246,15 @@ pub const SURFACE: &[SurfaceChange] = &[
         headline: "Event lines carry bd_ms/bd_calls when the command shelled out to bd.",
         silent_break: false,
         action: "",
+    },
+    SurfaceChange {
+        id: "skill-do-less",
+        since: "2026-08-22 (air-ha8)",
+        headline: "`air install` writes a third skill, `air-do-less`.",
+        silent_break: false,
+        action: "A repo running Air had the mechanisms and not the discipline for removing \
+                 them. Re-run `air install --write` to get it; it is what `air audit`'s \
+                 registry is read with.",
     },
 ];
 
@@ -567,8 +591,11 @@ mod tests {
         let r = skill_with_name(t, "air-decomposition");
         assert!(r.starts_with("---\nname: air-decomposition\ndescription: x\n---\n"));
         assert!(r.contains("name: not frontmatter"));
-        assert_eq!(SKILLS.len(), 2);
-        assert!(SKILLS[0].1.contains("Provenance"));
+        // air-ha8: do-less ships with the mechanisms, because it is the discipline for
+        // removing them. `beads` deliberately does not: see the SKILLS comment.
+        assert_eq!(SKILLS.len(), 3);
+        assert_eq!(SKILLS[0].0, "air-do-less");
+        assert!(SKILLS.iter().all(|(_, text)| text.contains("Provenance")));
     }
 
     #[test]
