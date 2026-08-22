@@ -357,6 +357,12 @@ fn init_gates_then_builds_a_project_from_nothing() {
     );
     assert!(proj.join("CLAUDE.md").exists());
     assert!(proj.join(".mcp.json").exists() && proj.join(".air/roles.md").exists());
+    // air-arq: the roles prose a fresh init writes carries the run-to-completion sentence.
+    assert!(
+        std::fs::read_to_string(proj.join(".air/roles.md"))
+            .unwrap()
+            .contains("A hand-over is not a stop.")
+    );
     assert!(
         proj.join(".claude/skills/air-decomposition/SKILL.md")
             .exists()
