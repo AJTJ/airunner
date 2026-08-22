@@ -853,6 +853,76 @@ fn owner_queue_lists_green_landings_with_their_commands() {
     assert!(v["captures"].as_array().unwrap().is_empty(), "{out}");
 }
 
+/// air-6u5: the adopter case end to end, with NO trailer anywhere.
+///
+/// Claim, commit naming the bead in prose, **merge main**, record the green, land. Merging main
+/// is the step that used to destroy the attribution: it moves the branch point forward past
+/// the claim, and the old narrowing required `claimed_at >= branch_point`. Landing requires
+/// merging main, so preparing to land was what made the branch unlandable — `air land --all`
+/// answered `{"landed": [], "ok": true}` with every precondition satisfied.
+#[test]
+fn a_branch_that_merged_main_is_still_landable_without_a_trailer() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    // Prose only: this is a repo with no `Bead:` trailers, which is every repo that has not
+    // adopted them yet.
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(&alpha, &["commit", "-q", "-m", "feat: the work (fd-1)"]);
+
+    // main moves on, and the worker merges it — the ordinary pre-land step.
+    std::fs::write(main.join("other.txt"), "other\n").unwrap();
+    git(&main, &["add", "other.txt"]);
+    git(&main, &["commit", "-q", "-m", "chore: main moves"]);
+    git(&alpha, &["merge", "--no-edit", "-q", "main"]);
+    // Green LAST, at the merged head.
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+
+    // The branch point is now newer than the claim. It must still be landable.
+    let (code, out, err) = air(&main, &bd, &["--json", "land", "--all"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ok"], true, "{out}");
+    assert_eq!(v["landed"][0], "fd-1", "{out}");
+}
+
+/// air-6u5: nothing landable is a REPORT. `ok: true` with an empty `landed` is impossible,
+/// because there is nothing in it to disbelieve.
+#[test]
+fn nothing_landable_names_every_branch_and_its_fix() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+
+    // alpha exists, is ahead of main, and has no recorded green.
+    let (code, out, _) = air(&main, &bd, &["land", "--all"]);
+    assert_eq!(code, 2, "not landable must not exit 0: {out}");
+    assert!(out.contains("nothing is landable"), "{out}");
+    assert!(out.contains("alpha"), "{out}");
+    assert!(out.contains("green-at-head"), "{out}");
+    assert!(
+        out.contains("air record verify"),
+        "the fixing command: {out}"
+    );
+
+    let (code, out, _) = air(&main, &bd, &["--json", "land", "--all"]);
+    assert_eq!(code, 2, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["ok"], false,
+        "ok:true with nothing landed is the bug: {out}"
+    );
+    assert_eq!(v["skipped"][0]["check"], "green-at-head", "{out}");
+    assert!(
+        !v["skipped"][0]["fix"].as_str().unwrap().is_empty(),
+        "{out}"
+    );
+}
+
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
 /// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
 #[test]

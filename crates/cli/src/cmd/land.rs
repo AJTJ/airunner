@@ -209,7 +209,62 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         return 1;
     }
     // The landings are derived, never stored: the same facts `air status` shows (air-6p5).
-    let ready = super::status::landings_for(repo);
+    let sel = super::status::select(repo);
+    // air-6u5: a failure during selection is NEVER an empty queue. `{"landed": [], "ok": true}`
+    // is the worst answer available — there is nothing to disbelieve, so a caller concludes
+    // the queue is empty. adopter read exactly that with every precondition verified by hand
+    // and fell back to their own `make land`.
+    if !sel.errors.is_empty() {
+        let msg = format!(
+            "refused: could not work out what is landable, so nothing was attempted:\n  {}",
+            sel.errors.join("\n  ")
+        );
+        log_event(
+            &ledger,
+            &worker,
+            "land",
+            &inputs,
+            "error",
+            &msg,
+            "selection",
+        );
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 1;
+    }
+    let ready = sel.landings;
+    // ...and nothing landable is a REPORT, not silence: every branch says which precondition
+    // it failed and the command that fixes it.
+    if all && ready.is_empty() {
+        let mut msg = String::from("nothing is landable right now.");
+        if sel.skipped.is_empty() {
+            msg.push_str(" No worker worktree exists to land from.");
+        }
+        for sk in &sel.skipped {
+            msg.push_str(&format!(
+                "\n  {} [{}]: {}\n    fix: {}",
+                sk.worker, sk.check, sk.detail, sk.fix
+            ));
+        }
+        log_event(
+            &ledger,
+            &worker,
+            "land",
+            &inputs,
+            "none-landable",
+            &msg,
+            &format!("{} branch(es) checked", sel.skipped.len()),
+        );
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "landed": [], "reason": msg, "skipped": sel.skipped}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     let wanted: Vec<super::status::Landing> = if all {
         ready
     } else {
@@ -221,12 +276,24 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             let msg = format!(
                 "refused: no green branch names {} in its merge range. `air status` lists what \
                  is landable (a branch with a recorded green at its head; its beads are the \
-                 ones `main..<head>` names in its commit messages).",
+                 ones its commits declare in a `Bead:` trailer).{}",
                 missing
                     .iter()
                     .map(|b| b.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                // Say what each branch failed on, so the named-bead refusal diagnoses as well
+                // as the --all one (air-6u5).
+                sel.skipped
+                    .iter()
+                    .map(|sk| {
+                        format!(
+                            "\n  {} [{}]: {}\n    fix: {}",
+                            sk.worker, sk.check, sk.detail, sk.fix
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
             );
             log_event(
                 &ledger,
@@ -469,7 +536,15 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     // The acceptance text is fetched HERE, for this branch's beads only: `bd show` costs
     // ~1.4 s per id, which is fine beside a full verify and ruinous on every `air status`
     // (air-7kp).
-    let clauses = super::status::acceptance_for(repo, &batch.beads);
+    let clauses = match super::status::acceptance_for(repo, &batch.beads) {
+        Ok(c) => c,
+        Err(e) => {
+            // The merge already happened and verified; refusing now would be worse than
+            // saying what is unknown. Report it as unread rather than as absent.
+            eprintln!("air land: could not read acceptance from bd, so no clause was checked: {e}");
+            Vec::new()
+        }
+    };
     let judged: Vec<acceptance::Judged> = batch
         .beads
         .iter()
