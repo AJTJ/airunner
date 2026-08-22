@@ -859,10 +859,15 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     }
     // A healthy answer also refreshes `.air/ready.json` for the Stop hook (air-09i); a slow
     // bd leaves that file as it was.
+    // Beads bd shows back in the work queue. Used to clear a `landed-not-closed` report once
+    // somebody reopened the bead (air-dlw); no extra bd call, these lists are already here.
+    let mut back_in_queue: std::collections::BTreeSet<String> =
+        in_progress.iter().flatten().cloned().collect();
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
+            back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             let ids = super::ready_cache::claimable(&v);
             super::ready_cache::write(repo, &ids, &super::now());
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
@@ -911,8 +916,15 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         leases,
         awaiting_review,
         review_waits,
-        // Purely a ledger read, so it costs nothing and survives an absent bd (air-ayp).
-        landed_open: ledger.landed_open().unwrap_or_default(),
+        // A ledger read, so it survives an absent bd (air-ayp). A bead bd shows back in the
+        // work queue has been dealt with: somebody reopened it. Deriving it from the claim row
+        // instead is what made this silent under close-with-proof (air-dlw).
+        landed_open: ledger
+            .landed_open()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|o| !back_in_queue.contains(&o.bead))
+            .collect(),
         sessions: all_sessions,
         ready_depth,
         overlaps,
