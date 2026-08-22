@@ -13,14 +13,19 @@ coordinator; each worktree is a worker. Air records it on every session and even
 
 ## Worker (one per worktree, one bead at a time)
 
+A hand-over is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop only
+when `bd ready` is empty or on a blocker you captured. (Two workers read "next bead" as "wait
+for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of 2026-08-15 was fixed by
+this sentence and never recurred. Removed never.)
+
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
 implement, write the digest (if the repo asks for one) and commit it with the work,
 `git merge main`, `air record verify -- <cmd>` last so the green is at the commit you hand
 over, `air handover`, `bd update <id> -s awaiting_review`, next bead (the Stop hook names the
-ready beads once). A closed bead stays
-closed; unfinished work is a new bead that references it (ask via `air capture`). Stop only for a genuine blocker or an owner-only
-decision; say so in one line with `air capture "<blocker>"` (or `--for owner`), then `air release
-<id> --reason <why>` or take unrelated work.
+ready beads once). A closed bead stays closed; unfinished work is a new bead that references
+it (ask via `air capture`). Stop only for a genuine blocker or an owner-only decision; say so
+in one line with `air capture "<blocker>"` (or `--for owner`), then `air release <id> --reason
+<why>` or take unrelated work.
 
 Facts available to you: `air holdings` (who is in which file), `air status`, `air lease status`,
 `air handover` (what is missing and the command that fixes it). A warning that a peer holds a
@@ -47,9 +52,19 @@ Ask the owner only for a genuine edge case (a blocker only they can clear, an am
 acceptance, a resource conflict), through the owner queue.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD, review
-waits, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent or gone with a
-claim, hand-over not green, lease held by a dead session, owner decision waiting, session
-joined or left). **[fact]**
+waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent or
+gone with a claim, idle without a claim, hand-over not green, review waiting, lease held by a
+dead session, owner decision waiting, session joined or left). **[fact]**
+
+Workers are reached with `SendMessage` to the session name `air status` shows; tmux panes are
+for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
+denied 30 min later by the permission classifier, 2026-08-22; removed never). **[fact]**
+When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
+reports conditions, status reports everything (standstill 2026-08-22; removed when the
+`review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
+**[fact]** Landings wait on the owner until `air land` exists; the coordinator says which
+branches are green and the landing command every time it reports (2026-08-22, the owner was
+not told; removed by `air land`). **[fact]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` (bd refuses without `## Acceptance
 Criteria`) → `air triage <id> --bead <new>` or `--drop "<why>"`. Workers request beads this way,
@@ -70,4 +85,7 @@ A refusal names its rule and the fixing command. Silence from Air is not a denia
 Cut to facts and refusals after `../research/guardrails-as-throttles.md` (2026-08-21): advice
 to a capable model was removed; what remains is what Air records, answers, or refuses. Duties
 adapted from adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
-`../decisions.md` (2026-08-20/21).
+`../decisions.md` (2026-08-20/21). Standstill lines (worker run-to-completion, from
+adopter/CLAUDE.md:683; coordinator reach, poll, and landings) added for the 2026-08-22
+05:26-05:45 incident, bead air-arq. This file is embedded in the `air` binary (`ROLES_MD`,
+`include_str!`) and written to `.air/roles.md` by `air init`; the two cannot differ.

@@ -332,6 +332,21 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
 mod tests {
     use super::*;
 
+    /// air-arq: the embedded roles prose is the checked-in file, and it carries the
+    /// run-to-completion sentence every worker's system prompt gets.
+    #[test]
+    fn embedded_roles_match_the_file_and_say_a_handover_is_not_a_stop() {
+        let on_disk = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/rules/roles.md"
+        ))
+        .unwrap();
+        assert_eq!(ROLES_MD, on_disk);
+        assert!(ROLES_MD.contains("A hand-over is not a stop."));
+        assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
+        assert!(ROLES_MD.contains("Landings wait on the owner until `air land` exists"));
+    }
+
     #[test]
     fn merge_hooks_is_idempotent_and_preserves_others() {
         let existing = json!({
