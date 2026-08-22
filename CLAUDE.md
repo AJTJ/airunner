@@ -121,10 +121,16 @@ no waiting for review:
 
     air claim <id> [--files a,b]
     … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
+    …   it opens with front matter naming the bead:  ---\n bead: <id>\n ---
     git merge main
     air record verify -- make verify        # last, so the green is at the commit containing main
     bd close <id> --reason "<proof>"
     … next bead
+
+The digest's front matter is what the hand-over gate reads (air-agq). It used to find a
+digest by looking for the worker's name in a filename and an mtime newer than the claim, which
+accepted a digest written for a different bead, and accepted `touch` on an old one. A gate that
+guards fails toward permitting, so it now wants the bead declared rather than guessed.
 
 **Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
 the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, 27 probes,

@@ -97,11 +97,15 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     }
     if f.digest_present == Some(false) {
         let dir = f.digest_dir.as_deref().unwrap_or("docs/log.d");
+        let bead = f.bead.as_deref().unwrap_or("<bead>");
         missing.push(Missing {
             check: "digest-present",
-            detail: format!("no digest by {} in {dir} newer than the claim", f.worker),
+            // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
+            // Saying "write a digest" was true of the old filename guess and would leave a
+            // worker with a written digest and a gate that still refuses.
+            detail: format!("no digest in {dir} declaring `bead: {bead}`"),
             fix: format!(
-                "write {dir}/<date>-{}-<topic>.md (short architecture digest)",
+                "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
                 f.worker
             ),
         });
