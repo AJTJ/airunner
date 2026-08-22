@@ -269,7 +269,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_triage",
-            description: "Resolve captures: promote each to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop). Give arrays to triage a whole pass in one ledger transaction; bead/drop map positionally to id, and a single drop covers every id.",
+            description: "Resolve captures: promote each to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop). Every bead is checked against bd first and an id bd does not have is refused, so create the bead before triaging to it. A capture that was already triaged is re-pointed, which is how a wrong pointer gets corrected. Give arrays to triage a whole pass in one ledger transaction and one bd process; bead/drop map positionally to id, and a single drop covers every id.",
             schema: json!({"type":"object","required":["id"],"properties":{
                 "id":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
                 "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},

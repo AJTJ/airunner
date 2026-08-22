@@ -3,8 +3,12 @@
 //! Workers capture; they never file (decisions 2026-08-18/20). Triage is the coordinator's:
 //! it creates the bead itself with `bd create --validate … --estimate N` (acceptance is
 //! required by the beads template, not here) and then links the capture with `--bead`.
+//! Air checks that bead exists before it writes the link, and lets a wrong link be
+//! corrected afterwards (air-76z).
 
 use std::path::Path;
+
+use air_bd::{BdError, WorkLedger};
 
 use crate::cmd::{emit, log_event, now, open};
 
@@ -151,8 +155,45 @@ pub fn plan(ids: &[String], beads: &[String], drops: &[String]) -> Result<Vec<Re
     Ok(out)
 }
 
+/// Beads the pass would point at that bd does not have. `Err` when bd could not answer at
+/// all: the record must not point at an unverified id, so that refuses the pass too
+/// (air-76z). One `bd show` process for every bead in the pass (air-869).
+fn unknown_beads(repo: &Path, plan: &[Resolution]) -> Result<Vec<String>, String> {
+    let want: Vec<String> = plan.iter().filter_map(|r| r.bead.clone()).collect();
+    if want.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bd = super::claim::probe_bd(repo);
+    let known = match bd.show_all(&want) {
+        Ok(v) => v,
+        Err(BdError::Timeout(d)) => {
+            return Err(format!(
+                "bd did not answer in {} s, so no bead was verified and nothing was triaged: \
+                 the record must not point at an unverified id. Re-run when bd answers.",
+                d.as_secs_f64()
+            ));
+        }
+        Err(e) => return Err(format!("bd show: {e}; nothing was triaged")),
+    };
+    Ok(missing_ids(&want, &known))
+}
+
+/// Which of `want` bd did not return. This comparison IS the check (air-76z): bd omits an id
+/// it does not know and still exits 0, so an exit code proves nothing here.
+pub fn missing_ids(want: &[String], known: &[air_bd::Issue]) -> Vec<String> {
+    want.iter()
+        .filter(|w| !known.iter().any(|i| &&i.id == w))
+        .cloned()
+        .collect()
+}
+
 /// Resolve one capture or a whole pass. Every capture in one ledger transaction and one
 /// event line: the post-round pass triaged a dozen one `air triage` at a time (air-869).
+///
+/// A promotion is verified against bd first (air-76z): `air triage C --bead fd-placeholder`
+/// used to succeed before the bead existed, and refusing to touch a resolved capture left
+/// the record pointing at nothing with no way to fix it. Now an unknown bead is refused, and
+/// an already-triaged capture can be re-pointed, its old target named in the event line.
 pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], json: bool) -> i32 {
     let plan = match plan(ids, beads, drops) {
         Ok(p) => p,
@@ -168,6 +209,39 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
             return 1;
         }
     };
+    let refuse = |decision: &str, msg: String, denom: &str| -> i32 {
+        log_event(
+            &ledger,
+            &worker,
+            "triage",
+            &serde_json::json!({"ids": ids, "beads": beads}),
+            decision,
+            &msg,
+            denom,
+        );
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        2
+    };
+    let bead_count = plan.iter().filter(|r| r.bead.is_some()).count();
+    match unknown_beads(repo, &plan) {
+        Ok(missing) if !missing.is_empty() => {
+            return refuse(
+                "no-such-bead",
+                format!(
+                    "refused: bd knows no bead {}; create it first (`bd create --validate \
+                     --estimate N`) and re-run. Nothing was triaged.",
+                    missing.join(", ")
+                ),
+                &format!("{bead_count} bead(s) checked in 1 bd process"),
+            );
+        }
+        Ok(_) => {}
+        Err(msg) => return refuse("unknown", msg, "1 bd process"),
+    }
     let at = now();
     let items: Vec<(String, String, Option<String>, Option<String>)> = plan
         .iter()
@@ -180,7 +254,7 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
             )
         })
         .collect();
-    let done = match ledger.resolve_captures(&items, &at) {
+    let was = match ledger.resolve_captures(&items, &at) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air triage: {e}");
@@ -188,16 +262,28 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
         }
     };
     let mut lines = Vec::new();
+    let mut repointed = Vec::new();
     let mut missed = Vec::new();
-    for (r, ok) in plan.iter().zip(&done) {
-        if !ok {
+    for (r, prev) in plan.iter().zip(&was) {
+        let Some((prev_status, prev_bead)) = prev else {
             missed.push(r.id.clone());
             continue;
+        };
+        let now_reads = match (&r.bead, &r.note) {
+            (Some(b), _) => format!("bead {b}"),
+            (None, Some(w)) => format!("dropped: {w}"),
+            (None, None) => "dropped".to_string(),
+        };
+        if prev_status == "open" {
+            lines.push(format!("{} -> {now_reads}", r.id));
+            continue;
         }
-        lines.push(match &r.bead {
-            Some(b) => format!("{} promoted to {b}", r.id),
-            None => format!("{} dropped: {}", r.id, r.note.clone().unwrap_or_default()),
-        });
+        let from = match prev_bead {
+            Some(b) => format!("bead {b}"),
+            None => prev_status.clone(),
+        };
+        repointed.push(serde_json::json!({"id": r.id, "from": from, "to": now_reads}));
+        lines.push(format!("{} re-pointed from {from} to {now_reads}", r.id));
     }
     let depth = ledger.inbox().map(|v| v.len()).unwrap_or(0);
     let mut msg = lines.join("\n");
@@ -205,26 +291,35 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
         if !msg.is_empty() {
             msg.push('\n');
         }
-        msg.push_str(&format!("not an open capture: {}", missed.join(" ")));
+        msg.push_str(&format!("no such capture: {}", missed.join(" ")));
     }
     log_event(
         &ledger,
         &worker,
         "triage",
-        &serde_json::json!({"ids": ids, "resolved": lines.len(), "missed": missed}),
+        &serde_json::json!({
+            "ids": ids,
+            "resolved": lines.len(),
+            "repointed": repointed,
+            "missed": missed,
+        }),
         if missed.is_empty() {
             "triaged"
         } else {
             "partial"
         },
         &msg,
-        &format!("{} capture(s), inbox depth {depth}", plan.len()),
+        &format!(
+            "{} capture(s), {bead_count} bead(s) verified, inbox depth {depth}",
+            plan.len()
+        ),
     );
     emit(
         json,
         &serde_json::json!({
             "ok": missed.is_empty(),
             "resolved": lines.len(),
+            "repointed": repointed,
             "missed": missed,
             "inbox_depth": depth,
         }),

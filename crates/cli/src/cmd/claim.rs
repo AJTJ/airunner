@@ -58,6 +58,20 @@ fn earliest(bd_time: Option<&str>, now: &str) -> String {
     }
 }
 
+/// A short-budget bd for a read that must not hold a command up: `AIR_BD_PROBE_TIMEOUT_MS`
+/// (default 5000), never longer than the main timeout.
+pub fn probe_bd(repo: &Path) -> BdCli {
+    let bd = bd_for(repo);
+    let ms = std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5000);
+    BdCli {
+        timeout: std::time::Duration::from_millis(ms).min(bd.timeout),
+        ..bd
+    }
+}
+
 /// After a `--claim` timeout: did bd's write land? Probes `bd show` with a short separate
 /// timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 5000, capped at the main timeout), twice.
 fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {

@@ -88,6 +88,12 @@ pub trait WorkLedger {
     /// `bd list --status <status> --json` (custom statuses such as `awaiting_review` included).
     fn by_status(&self, status: &str) -> Result<Vec<Issue>>;
     fn show(&self, id: &str) -> Result<Option<Issue>>;
+    /// `bd show <id> <id> … --json`: every id in ONE process (bd 1.2.2 `bd show [id...]`).
+    /// bd OMITS an id it does not know and still exits 0 — checked 2026-08-22: stderr says
+    /// `Error fetching zz-nope: no issue found matching "zz-nope"` and the exit code is 0 —
+    /// so the caller must compare what came back with what it asked for. Order is bd's, not
+    /// the caller's.
+    fn show_all(&self, ids: &[String]) -> Result<Vec<Issue>>;
     /// `bd update <id> --claim` (assignee = actor, status = in_progress). Air's ledger checks
     /// CAS *before* calling this.
     fn claim(&self, id: &str, actor: &str) -> Result<()>;
@@ -255,6 +261,13 @@ impl WorkLedger for BdCli {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(obj)?))
+    }
+
+    fn show_all(&self, ids: &[String]) -> Result<Vec<Issue>> {
+        let mut argv: Vec<&str> = vec!["show"];
+        argv.extend(ids.iter().map(String::as_str));
+        argv.push("--json");
+        parse_issues(&self.run(&argv)?)
     }
 
     fn claim(&self, id: &str, actor: &str) -> Result<()> {
