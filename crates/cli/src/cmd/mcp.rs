@@ -234,7 +234,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_attention",
-            description: "Only the conditions that need a human or the coordinator right now (empty array when the fleet is quiet).",
+            description: "Only the conditions that need the owner or the coordinator right now (empty array when the fleet is quiet).",
             schema: json!({"type":"object","properties":{}}),
         },
         Tool {
