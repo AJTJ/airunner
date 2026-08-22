@@ -18,6 +18,7 @@ Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the
 | A4 | Coordinator cannot release a peer's claim: `air release <bead> --worker <name> --reason reassigned` from the coordinator role | backlog 5 |
 | A5 | Two verifies per hand-over: green at G carries to HEAD when `git diff --name-only G..HEAD` touches only repo-declared verify-irrelevant paths (`verify_ignores`); event says "carried over N commits (docs-only)" | backlog 1, ad-8m9b; 3 of 5 hand-over refusals |
 | A6 | `status` floods with one `handover-not-green` per handed-over bead: collapse to one line per worker with a count (falls out of A3 + A5) | backlog 18 |
+| A8 | Channel events the coordinator marks "Noise; no action": every pushed kind must be one the coordinator can act on; anything marked noise is removed from the push set, not tuned (list requested from adopter; suspects: repeats on closed beads via A3, `session_joined`/`left` for subagents, escalation re-pushes) | owner, 2026-08-21 |
 | A7 | Confirm ad-lpqp (gone-with-claim on a fresh idle worker) is fixed after reinstall; drop | backlog 3 |
 
 ### B. Text that is wrong about the tools (remove or correct)
@@ -91,6 +92,7 @@ yet or depends on data).
 | A5 | 2 verifies per hand-over | fact (git diff) | **do** | derive, never assert; `verify_ignores` in air.json; event says carried-over; measure first for one round is optional since the incident count (3 of 5) is already in hand |
 | A6 | screen flood | fact | **do** (via A3/A5) | nothing separate |
 | A7 | none new | | **do** (confirm, drop) | |
+| A8 | coordinator logs noise | fact (the coordinator's own verdict) | **do** | remove each noise kind from the push; keep it in `status` if it is a fact; removal condition is the rule itself: a kind stays pushed only while the coordinator acts on it |
 | B1 | 3 collisions | wrong text | **do** | delete the lines; one sentence of bd fact; no new rule |
 | B2 | delegation worked | judgement | **do, smaller** | delete "coordinator runs this"; say nothing about who reads (the model decides); the skill keeps file + decide with the coordinator |
 | B3 | 16 prose-match hits | fact about patterns | **do** | one sentence in adopting-air |
@@ -123,7 +125,8 @@ query time instead.
 
 ### What the pass would build, in order
 
-1. A1, A2, A3 (smaller), A4: the release/claim/timeout correctness set. One slice, one test
+1. A8 first: cut every pushed kind the coordinator called noise. Then A1, A2, A3 (smaller),
+   A4: the release/claim/timeout correctness set. One slice, one test
    each, no new rules.
 2. A5 (+A6): carry-forward green over verify-irrelevant paths. The single largest time cost in
    the round that Air caused.
