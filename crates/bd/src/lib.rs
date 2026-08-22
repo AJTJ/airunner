@@ -143,9 +143,12 @@ fn wait_drained(
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            // Pipes close when the child dies; the drain threads finish.
-            let _ = out_t.join();
-            let _ = err_t.join();
+            // Do not join the drain threads: a grandchild (bd's own helper, or `sleep` in a
+            // stub) may still hold the pipe open, and joining would wait for it, turning a
+            // 2 s budget into a 25 s one (air-19u, seen in the full test run). The threads
+            // end on their own when the pipe finally closes; their buffers are discarded.
+            drop(out_t);
+            drop(err_t);
             return Ok(None);
         }
     };

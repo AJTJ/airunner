@@ -34,35 +34,43 @@ fn scratch_repo() -> tempfile::TempDir {
 /// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
 /// (default: open, unassigned, no labels); `list --status in_progress` answers from
 /// `<dir>/bd.in_progress` (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
-fn fake_bd(dir: &Path) -> PathBuf {
-    let script = dir.join("bd");
-    std::fs::write(
-        &script,
-        format!(
-            r#"#!/bin/sh
-echo "$@" >> {log}
+///
+/// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
+/// passes its environment through to bd): macOS charges ~0.5 s on the first exec of every
+/// freshly written executable, which was the largest single cost in this file (air-4vu,
+/// 2026-08-22). `air()` sets `FAKE_BD_DIR` to the repo.
+fn fake_bd(_dir: &Path) -> PathBuf {
+    static SCRIPT: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> = std::sync::OnceLock::new();
+    SCRIPT
+        .get_or_init(|| {
+            let home = tempfile::tempdir().unwrap();
+            let script = home.path().join("bd");
+            std::fs::write(
+                &script,
+                r#"#!/bin/sh
+d="$FAKE_BD_DIR"
+echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
-  show) if [ -f {issue} ]; then cat {issue}; else echo '{{"id":"'"$2"'","status":"open","labels":[]}}'; fi; exit 0;;
-  list) if [ -f {inprog} ]; then awk '{{printf "%s{{\"id\":\"%s\",\"status\":\"in_progress\"}}", (NR>1?",":""), $0}} BEGIN{{printf "["}} END{{print "]"}}' {inprog}; else echo "[]"; fi; exit 0;;
+  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; else echo '{"id":"'"$2"'","status":"open","labels":[]}'; fi; exit 0;;
+  list) if [ -f "$d/bd.in_progress" ]; then awk '{printf "%s{\"id\":\"%s\",\"status\":\"in_progress\"}", (NR>1?",":""), $0} BEGIN{printf "["} END{print "]"}' "$d/bd.in_progress"; else echo "[]"; fi; exit 0;;
   ready) echo "[]"; exit 0;;
-  update) [ -e {fail} ] && exit 1; exit 0;;
+  update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
   *) exit 0;;
 esac
 "#,
-            log = dir.join("bd.log").display(),
-            issue = dir.join("bd.issue.json").display(),
-            inprog = dir.join("bd.in_progress").display(),
-            fail = dir.join("bd.fail").display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    script
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+            (home, script)
+        })
+        .1
+        .clone()
 }
 
 fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
@@ -71,6 +79,7 @@ fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
         .arg(repo)
         .args(args)
         .env("AIR_BD_BIN", bd)
+        .env("FAKE_BD_DIR", repo)
         .env("BEADS_ACTOR", "tester")
         .current_dir(repo)
         .output()
@@ -124,6 +133,95 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
         "{log}"
     );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+}
+
+/// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
+/// and recorded at the time it was issued (claimed-late); a re-claim keeps that time; a
+/// digest written between the two satisfies the hand-over check.
+#[test]
+fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // `update --claim` writes the issue as in_progress by the actor, then hangs past the
+    // timeout; `show` answers at once.
+    let slow = repo.join("bd-slow");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) printf '%s' '{{\"id\":\"fd-9\",\"status\":\"in_progress\",\"assignee\":\"tester\",\"labels\":[],\"updated_at\":\"2020-01-01T00:00:00Z\"}}' > {issue}; sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            issue = repo.join("bd.issue.json").display(),
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // First exec of a freshly written script pays a macOS security assessment (seen >1.5 s
+    // under load, 2026-08-22); warm it so the short timeout below measures bd, not the OS.
+    let _ = Command::new(&slow)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &slow)
+            .env("FAKE_BD_DIR", &repo)
+            .env("AIR_BD_TIMEOUT_MS", "1500")
+            .env("BEADS_ACTOR", "tester")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let (code, out, err) = run(&["--json", "claim", "fd-9"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(err.contains("confirms the claim landed"), "{err}");
+    assert!(!out.contains("nothing was written"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let first = v["claimed_at"].as_str().unwrap().to_string();
+    assert_eq!(claims(&repo), vec![("fd-9".into(), "main".into(), None)]);
+
+    // A digest written now, after the first claim.
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"digest_dir":"docs/d"}"#).unwrap();
+    std::fs::create_dir_all(repo.join("docs/d")).unwrap();
+    std::fs::write(repo.join("docs/d/2026-main-fd-9.md"), "digest").unwrap();
+
+    // Re-claim: bd already holds it by us; no bd write, the row keeps the first time.
+    let (code, out, _) = run(&["--json", "claim", "fd-9"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["reclaimed"], true);
+    assert_eq!(v["claimed_at"].as_str().unwrap(), first);
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.matches("--claim").count(),
+        0,
+        "re-claim must not write to bd: {log}"
+    );
+
+    let (_, o, _) = run(&["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        !v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
 }
 
 #[test]
@@ -207,6 +305,7 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
             .arg(cwd)
             .args(args)
             .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
             .env("AIR_LEASE_PID", pid)
             .current_dir(cwd)
             .output()
@@ -298,4 +397,72 @@ fn digest_gate_is_configured_per_repo() {
             .any(|m| m["check"] == "digest-present"),
         "{o}"
     );
+}
+
+/// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
+/// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
+/// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
+#[test]
+fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // A claim and a seeded cache via one healthy status.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    let (code, _, _) = air(&repo, &bd, &["claim", "fd-1"]);
+    assert_eq!(code, 0);
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let healthy: serde_json::Value = serde_json::from_str(&o).unwrap();
+    let healthy = &healthy["snapshot"];
+    assert_eq!(healthy["ready_depth"], 0, "{o}");
+
+    let slow = repo.join("slow-bd");
+    // `sleep` runs as a grandchild holding bd's stdout open: killing bd alone must not make
+    // status wait for the pipe to close (wait_drained joined its drain threads; air-19u).
+    std::fs::write(&slow, "#!/bin/sh\nsleep 25 &\nwait\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let t0 = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["--json", "status"])
+        .env("AIR_BD_BIN", &slow)
+        .env("AIR_BD_TIMEOUT_MS", "500")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let took = t0.elapsed();
+    let o = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(0), "{o}");
+    // 3 s is the acceptance bar with the default 2 s budget; 500 ms here keeps the test fast.
+    assert!(
+        took < std::time::Duration::from_secs(3),
+        "status took {took:?}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    let v = &v["snapshot"];
+    let errors = v["errors"].to_string();
+    assert!(
+        errors.contains("bd did not answer in 0.5 s") && errors.contains("stale (last seen "),
+        "{errors}"
+    );
+    assert_eq!(v["ready_depth"], 0, "cached count served: {o}");
+    assert_eq!(
+        v["awaiting_review"], healthy["awaiting_review"],
+        "cached list served: {o}"
+    );
+    let main = v["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["worker"] == "main")
+        .unwrap();
+    assert_eq!(main["claims"][0]["bead"], "fd-1", "claim kept: {o}");
+    assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
 }

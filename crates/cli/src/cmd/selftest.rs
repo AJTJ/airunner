@@ -2,6 +2,7 @@
 //! scratch git repo. A check that matches nothing prints RED (corpus: guards that pass on
 //! nothing are the anti-pattern). Exit 1 if any probe fails.
 
+use std::path::Path;
 use std::process::Command;
 
 use air_hooks::{GateFacts, handover_verdict};
@@ -40,6 +41,10 @@ pub fn run(json: bool) -> i32 {
         probe_install_merge(),
         probe_gate_digest(),
         probe_lease_take(),
+        probe_launch_no_tty(),
+        probe_worker_task_prompt(),
+        probe_stop_nudge(),
+        probe_standstill(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -74,6 +79,51 @@ fn probe_gate_digest() -> Probe {
             .iter()
             .any(|m| m.check == "digest-present"),
         green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// air-tdc: `air worker --task` from a socket stdin (the coordinator's Bash tool) must not
+/// exec `claude --tmux` (tcgetattr fails there). Red: the socket case is routed away from
+/// exec. Green: a detached tmux session is actually created (pure check only when tmux is
+/// absent; the probe name says so).
+fn probe_launch_no_tty() -> Probe {
+    use crate::cmd::launch::{Launch, launch_mode, tmux_detached_argv};
+    let red =
+        launch_mode(false, true) == Launch::Detached && launch_mode(true, true) == Launch::Exec;
+    if Command::new("tmux").arg("-V").output().is_err() {
+        return Probe {
+            name: "launch: socket stdin never execs claude --tmux (tmux absent: pure check only)",
+            red_fires: red,
+            green_passes: launch_mode(false, false) == Launch::Exec,
+        };
+    }
+    let socket = format!("air-selftest-{}", std::process::id());
+    let name = "air-selftest";
+    let argv = tmux_detached_argv(
+        name,
+        Path::new("/"),
+        Some(&socket),
+        "sh",
+        &["-c".to_string(), "sleep 30".to_string()],
+    );
+    let started = Command::new("tmux")
+        .args(&argv)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let exists = started
+        && Command::new("tmux")
+            .args(["-L", &socket, "has-session", "-t", name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let _ = Command::new("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .output();
+    Probe {
+        name: "launch: socket stdin starts a detached tmux session instead of exec",
+        red_fires: red,
+        green_passes: exists,
     }
 }
 
@@ -185,6 +235,57 @@ fn probe_attention() -> Probe {
     Probe {
         name: "attention: stale stuck session fires; fresh one is quiet",
         red_fires: red.iter().any(|a| a.kind == "stuck"),
+        green_passes: green.is_empty(),
+    }
+}
+
+/// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
+/// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
+/// was silent on them). Green: the same fleet with the review landed, the worker fresh, and
+/// nothing ready is quiet.
+fn probe_standstill() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let mk = |changed: &str, waits: Vec<(String, String, i64)>, ready: usize| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            head: Some("abc".into()),
+            green_at_head: Some(true),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                detail: None,
+                changed_at: changed.into(),
+                pid: None,
+                pid_alive: None,
+            }),
+            ..Default::default()
+        }],
+        review_waits: waits,
+        ready_depth: Some(ready),
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let red = attention(
+        &mk(
+            "2026-08-20T11:40:00Z",
+            vec![("fd-1".into(), "w".into(), 20)],
+            5,
+        ),
+        now,
+        Thresholds::default(),
+    );
+    let green = attention(
+        &mk("2026-08-20T11:59:00Z", vec![], 0),
+        now,
+        Thresholds::default(),
+    );
+    Probe {
+        name: "attention: review-waiting and idle-without-claim fire; landed and fresh is quiet",
+        red_fires: red
+            .iter()
+            .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
+            && red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
     }
 }
@@ -349,5 +450,112 @@ fn probe_git_ancestor() -> Probe {
         name: "git: is-ancestor exit codes",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-2ct: the `--task` text must reach claude as the prompt, not as a trailing value of
+/// the variadic `--disallowed-tools` list. Red: the old ordering (task appended after the
+/// deny list) is reported as eaten. Green: `air worker --task` launched against a stub
+/// `claude` (`AIR_CLAUDE_BIN`) hands the stub the task as its first argument.
+fn probe_worker_task_prompt() -> Probe {
+    use crate::cmd::launch::{task_is_prompt, worker_argv};
+    let task = "say hello, it's $HOME";
+    let mut old = worker_argv("w", std::path::Path::new("/r/roles.md"), &[]);
+    old.push(task.to_string());
+    let red = !task_is_prompt(&old, task);
+
+    let green = (|| -> Result<bool, String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let git = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !git.status.success() {
+            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        }
+        // The stub records its argv in a file rather than on stdout: without a tty (this
+        // probe under `air record verify`, a Bash tool) the launcher starts the stub inside a
+        // detached tmux session (air-tdc), where stdout is the pane. With a tty it execs
+        // the stub directly. Either way the file appears; the socket keeps tmux private.
+        let stub = dir.join("claude-stub");
+        let argv_file = dir.join("argv");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\0' \"$@\" > {}.tmp && mv {}.tmp {}\n",
+                argv_file.display(),
+                argv_file.display(),
+                argv_file.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let socket = format!("air-selftest-{}", new_id());
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let out = Command::new(exe)
+            .current_dir(&dir)
+            .env("AIR_CLAUDE_BIN", &stub)
+            .env("AIR_TMUX_SOCKET", &socket)
+            .env_remove("AIR_TMUX_MODE")
+            .args(["worker", "w", "--task", task])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let mut raw = None;
+        // Up to 10 s: a fresh executable's first exec can take seconds on macOS.
+        for _ in 0..1000 {
+            if let Ok(b) = std::fs::read(&argv_file) {
+                raw = Some(b);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = Command::new("tmux")
+            .args(["-L", &socket, "kill-server"])
+            .output();
+        let _ = std::fs::remove_dir_all(&dir);
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).to_string());
+        }
+        let raw = raw.ok_or_else(|| "stub never ran".to_string())?;
+        let argv: Vec<String> = String::from_utf8_lossy(&raw)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(argv.first().is_some_and(|a| a == task) && task_is_prompt(&argv, task))
+    })()
+    .unwrap_or(false);
+    Probe {
+        name: "launch: --task reaches claude as the prompt",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-09i: a worker stopping with no claim while beads are ready is nudged once. Red: the
+/// gate fires on those facts (ready beads, no claim, fresh stop). Green: the block names the
+/// beads, then passes once `stop_hook_active` is set (the loop guard) and never for the
+/// coordinator.
+fn probe_stop_nudge() -> Probe {
+    use air_hooks::stop_nudge;
+    let ready = vec!["fd-1".to_string()];
+    let red = stop_nudge("worker", false, &ready, false, false).is_some();
+    let once = stop_nudge("worker", false, &ready, false, false)
+        .is_some_and(|r| r.contains("air claim fd-1"));
+    let then_pass = stop_nudge("worker", false, &ready, true, false).is_none()
+        && stop_nudge("coordinator", false, &ready, false, false).is_none()
+        && stop_nudge("worker", true, &ready, false, false).is_none();
+    Probe {
+        name: "stop: nudge once when ready beads and no claim",
+        red_fires: red,
+        green_passes: once && then_pass,
     }
 }
