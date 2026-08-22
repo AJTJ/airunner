@@ -2,7 +2,8 @@
 
 > Read at session start. Markers: **[Air enforces]** a refusal, deny rule, or native block;
 > **[fact]** something Air records or answers; everything else is yours to judge. Domain rules
-> live in the repo's own CLAUDE.md, not here. Background:
+> AND the repo's own work flow — how a finished bead is handed on — live in the repo's
+> CLAUDE.md, not here; Air states what it records and what it refuses. Background:
 > [`../research/agent-roles-and-confinement.md`](../research/agent-roles-and-confinement.md).
 
 ## Which role am I
@@ -13,19 +14,30 @@ coordinator; each worktree is a worker. Air records it on every session and even
 
 ## Worker (one per worktree, one bead at a time)
 
-A hand-over is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop only
-when `bd ready` is empty or on a blocker you captured. (Two workers read "next bead" as "wait
-for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of 2026-08-15 was fixed by
-this sentence and never recurred. Removed never.)
+Finishing a bead is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop
+only when `bd ready` is empty or on a blocker you captured. (Two workers read "next bead" as
+"wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of 2026-08-15 was
+fixed by this sentence and never recurred. Removed never.)
 
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
-implement, write the digest (if the repo asks for one) and commit it with the work,
-`git merge main`, `air record verify -- <cmd>` last so the green is at the commit you hand
-over, `air handover`, `bd update <id> -s awaiting_review`, next bead (the Stop hook names the
-ready beads once). A closed bead stays closed; unfinished work is a new bead that references
-it (ask via `air capture`). Stop only for a genuine blocker or an owner-only decision; say so
-in one line with `air capture "<blocker>"` (or `--for owner`), then `air release <id> --reason
-<why>` or take unrelated work.
+then the work. **How a finished bead is handed on is the repo's own flow, in its CLAUDE.md,
+not Air's to prescribe** — some repos hand over for review, some close with proof.
+
+Two constraints, because Air checks them and they are about ordering rather than procedure:
+
+- **The recorded green has to be at the commit you hand on, and that commit has to contain
+  `main`.** So merge `main` first and run `air record verify -- <cmd>` last; a green recorded
+  before the merge is a green for a tree nobody will land.
+- **A digest, where the repo configures `digest_dir`, has to be newer than your claim.** Write
+  it with the work rather than after the fact.
+
+`air handover` names whatever is missing and the command that fixes it, so run it before you
+finish rather than guessing which of the two bit you. **[fact]**
+
+A closed bead stays closed; unfinished work is a new bead that references it (ask via
+`air capture`). Stop only for a genuine blocker or an owner-only decision; say so in one line
+with `air capture "<blocker>"` (or `--for owner`), then `air release <id> --reason <why>` or
+take unrelated work.
 
 Facts available to you: `air holdings` (who is in which file), `air status`, `air lease status`,
 `air handover` (what is missing and the command that fixes it). A warning that a peer holds a
@@ -38,12 +50,12 @@ do not route around it. **[Air enforces: a healthy holder is not broken by `take
 Not available to a worker, by deny rule in every permission mode: `air land`, `air close`,
 `git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
 worktree. Editing
-the main checkout is blocked natively. **[Air enforces]** Setting `awaiting_review` or closing
-without a recorded green at HEAD that contains `main` is the one refusal: worker launches set
-`AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fix (`air record verify -- make
-verify`). Enforced after the first bypass of the advisory gate (tty-fix, 2026-08-22 06:00,
-air-i59); removed when a full round passes with zero `handover-not-green` events.
-**[Air enforces]**
+the main checkout is blocked natively. **[Air enforces]** The one refusal: the `bd` write that
+ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
+whichever your repo uses — is denied without a recorded green at HEAD that contains `main`.
+Worker launches set `AIR_ENFORCE=1` and the hook names the fixing command. Enforced after the
+first bypass of the advisory gate (tty-fix, 2026-08-22 06:00, air-i59); removed when a full
+round passes with zero `handover-not-green` events. **[Air enforces]**
 
 ## Coordinator (the main checkout, holding no lane)
 

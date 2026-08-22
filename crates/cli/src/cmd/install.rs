@@ -533,11 +533,20 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(ROLES_MD, on_disk);
-        assert!(ROLES_MD.contains("A hand-over is not a stop."));
+        assert!(ROLES_MD.contains("Finishing a bead is not a stop."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
         assert!(ROLES_MD.contains("Landing is the coordinator's: `air land --all`"));
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
+        // air-8zu: roles.md states what Air records and refuses, never one repo's closing
+        // procedure. adopter closes with proof and was being told to set awaiting_review by
+        // a file it cannot edit. `awaiting_review` may appear only where the refusal lists
+        // what the gate matches, never as an instruction.
+        assert!(
+            !ROLES_MD.contains("`bd update <id> -s awaiting_review`"),
+            "roles.md must not prescribe a bead-status step"
+        );
+        assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
     }
 
     #[test]

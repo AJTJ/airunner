@@ -98,3 +98,20 @@ Index items are 1–3 lines; detail lives behind the link.
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).
+
+## This repo's work flow
+
+How a finished bead is handed on is **this repo's** choice, not Air's, and it lives here
+because `.air/roles.md` deliberately no longer says it (air-8zu: adopter closes with proof
+and had Air telling its workers otherwise). Air states what it records and what it refuses;
+the sequence below is ours.
+
+A worker, per bead: `air claim <id> [--files a,b]` → implement → write the digest
+(`docs/digests/YYYY-MM-DD-<worker>-<bead>.md`) and commit it with the work → `git merge main`
+→ `air record verify -- make verify` **last**, so the green is at the commit that contains
+`main` → `air handover` → `bd update <id> -s awaiting_review` → next bead.
+
+`awaiting_review` is the point of it: nothing lands here except through the coordinator's
+`air land`, so a bead stops at review rather than being closed by the worker who wrote it.
+A repo that lands differently will have a different last step, and that is not a defect.
+
