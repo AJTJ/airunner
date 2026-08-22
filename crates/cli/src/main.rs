@@ -89,12 +89,15 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         files: Vec<String>,
     },
-    /// Give a bead back: bd status → open, ledger claim closed with a reason.
+    /// Give a bead back: bd in_progress → open (never a closed bead), ledger claim closed with a reason.
     Release {
         bead: String,
         /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
         #[arg(long)]
         reason: String,
+        /// Coordinator only: release a peer's claim (a gone worker's bead).
+        #[arg(long)]
+        worker: Option<String>,
     },
     /// One line into the inbox. Workers capture; the coordinator triages. Never blocks you.
     Capture {
@@ -174,7 +177,11 @@ fn main() -> ExitCode {
         }
         Cmd::Holdings { file } => cmd::holdings::run(&repo, file.as_deref(), cli.json),
         Cmd::Claim { bead, files } => cmd::claim::claim(&repo, &bead, &files, cli.json),
-        Cmd::Release { bead, reason } => cmd::claim::release(&repo, &bead, &reason, cli.json),
+        Cmd::Release {
+            bead,
+            reason,
+            worker,
+        } => cmd::claim::release(&repo, &bead, &reason, worker.as_deref(), cli.json),
         Cmd::Capture { text, audience } => cmd::capture::capture(&repo, &text, &audience, cli.json),
         Cmd::Inbox { owner } => cmd::capture::inbox(&repo, owner, cli.json),
         Cmd::Lease { op } => match op {

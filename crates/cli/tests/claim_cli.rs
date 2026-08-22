@@ -31,14 +31,28 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
-/// A fake bd: appends argv to `<dir>/bd.log`; exits 1 when `<dir>/bd.fail` exists.
+/// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
+/// (default: open, unassigned, no labels); `list --status in_progress` answers from
+/// `<dir>/bd.in_progress` (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
 fn fake_bd(dir: &Path) -> PathBuf {
     let script = dir.join("bd");
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\necho \"$@\" >> {log}\n[ -e {fail} ] && exit 1\nexit 0\n",
+            r#"#!/bin/sh
+echo "$@" >> {log}
+case "$1" in
+  --version) echo "bd version 1.2.2"; exit 0;;
+  show) if [ -f {issue} ]; then cat {issue}; else echo '{{"id":"'"$2"'","status":"open","labels":[]}}'; fi; exit 0;;
+  list) if [ -f {inprog} ]; then awk '{{printf "%s{{\"id\":\"%s\",\"status\":\"in_progress\"}}", (NR>1?",":""), $0}} BEGIN{{printf "["}} END{{print "]"}}' {inprog}; else echo "[]"; fi; exit 0;;
+  ready) echo "[]"; exit 0;;
+  update) [ -e {fail} ] && exit 1; exit 0;;
+  *) exit 0;;
+esac
+"#,
             log = dir.join("bd.log").display(),
+            issue = dir.join("bd.issue.json").display(),
+            inprog = dir.join("bd.in_progress").display(),
             fail = dir.join("bd.fail").display()
         ),
     )
@@ -88,7 +102,14 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["claim", "fd-1", "--files", "a.rs,b.rs"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
-    assert_eq!(log.trim(), "update fd-1 --claim --actor tester");
+    assert!(log.contains("update fd-1 --claim --actor tester"), "{log}");
+    // bd now holds it in_progress by this actor.
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"in_progress","assignee":"tester","labels":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
     assert_eq!(claims(&repo), vec![("fd-1".into(), "main".into(), None)]);
 
     let (code, _, err) = air(&repo, &bd, &["release", "fd-1", "--reason", "bogus"]);
@@ -98,10 +119,7 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["release", "fd-1", "--reason", "abandoned"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
-    assert!(
-        log.lines().nth(1).unwrap().trim() == "update fd-1 -s open",
-        "{log}"
-    );
+    assert!(log.lines().any(|l| l.trim() == "update fd-1 -s open"), "{log}");
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
 }
 
