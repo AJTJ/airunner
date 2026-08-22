@@ -21,6 +21,10 @@ caught three wrong claims on 2026-08-22, one of which both coordinators had back
 checkout is refused; messaging is not fenced and will not be (air-0lk, air-3oq).
 **[Air enforces: tmux targets and `--repo`, and every refusal says what is still allowed]**
 
+Before choosing a closed default, ask what a wrong denial looks like from the outside. For
+`tmux kill-session`, a refusal someone reads. For a message, an empty room nobody notices.
+Closed defaults belong to the first kind (air-5re).
+
 ## Worker (one per worktree, one bead at a time)
 
 Finishing a bead is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop
