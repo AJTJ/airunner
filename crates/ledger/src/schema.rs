@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 8;
+pub const CURRENT_VERSION: i64 = 9;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -167,6 +167,13 @@ CREATE TABLE IF NOT EXISTS bd_cache (
 );
 "#;
 
+/// v9 (2026-08-22, air-0lk): which project a session belongs to, so "is that peer one of
+/// ours?" is answered from the ledger rather than by string-matching a name. `AIR_PROJECT` on
+/// the launcher, the beads prefix underneath.
+const V9: &str = r#"
+ALTER TABLE sessions ADD COLUMN project TEXT NOT NULL DEFAULT '';
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -201,6 +208,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 8 {
         conn.execute_batch(V8)?;
         conn.pragma_update(None, "user_version", 8)?;
+    }
+    if version < 9 {
+        conn.execute_batch(V9)?;
+        conn.pragma_update(None, "user_version", 9)?;
     }
     Ok(())
 }

@@ -141,6 +141,8 @@ fn launchers_print_the_exact_command() {
         "{out}"
     );
     assert!(out.contains("BEADS_ACTOR"), "{out}");
+    // air-0lk: both roles carry the project they may touch. `zz` is scratch_repo's prefix.
+    assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
     assert!(out.trim().ends_with("--model opus"), "{out}");
     assert!(repo.join(".air/roles.md").exists());
 
@@ -153,6 +155,44 @@ fn launchers_print_the_exact_command() {
     assert!(
         out.starts_with("claude --dangerously-load-development-channels server:air "),
         "{out}"
+    );
+    assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
+}
+
+/// air-0lk: `--repo` may not leave this checkout's repository. A worktree of the same repo is
+/// fine (that is how the coordinator reads a worker's state); another project is not.
+#[test]
+fn repo_flag_may_not_point_at_another_project() {
+    let a = scratch_repo();
+    let b = scratch_repo();
+    let (repo_a, repo_b) = (
+        a.path().canonicalize().unwrap(),
+        b.path().canonicalize().unwrap(),
+    );
+    // From inside A, pointing at A: fine.
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo_a)
+        .args(["holdings"])
+        .current_dir(&repo_a)
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    // From inside A, pointing at B: refused, naming the rule.
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo_b)
+        .args(["holdings"])
+        .current_dir(&repo_a)
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("another project") && err.contains("air-0lk"),
+        "{err}"
     );
 }
 
