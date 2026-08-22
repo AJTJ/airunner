@@ -49,6 +49,7 @@ pub fn run(json: bool) -> i32 {
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
+        probe_audit_states_no_verdict(),
         probe_land_refusals(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
@@ -67,6 +68,30 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-zyo: `air audit` supplies facts and stops. Red: a verdict sentence is caught. Green:
+/// the real rendered output over a scratch event log instructs nobody. The line between
+/// reporting and judging is the bead's design point, so it is a probe and not a convention.
+fn probe_audit_states_no_verdict() -> Probe {
+    use crate::cmd::audit::{gather_from, imperative_hits, render};
+
+    let red = !imperative_hits("Consider removing review-waiting; it should be cut.").is_empty();
+    let events = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1","review-waiting:air-2"]},"decision":"attention"}"#,
+        "\n",
+        r#"{"at":"2026-08-22T02:00:00Z","worker":"beta","command":"hook.PreToolUse","decision":"warn"}"#,
+        "\n",
+    );
+    let days = [("2026-08-22".to_string(), events.to_string())];
+    let text = render(&gather_from(&days, "2026-08-22"));
+    // It has to actually say something, or "no imperatives" is trivially true.
+    let green = text.contains("review-waiting") && imperative_hits(&text).is_empty();
+    Probe {
+        name: "audit: a verdict sentence is caught; the real output states facts only",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// air-6g1: a repo installed before a surface change is told about it, and one already
