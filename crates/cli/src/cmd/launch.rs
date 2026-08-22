@@ -13,6 +13,7 @@
 //! `--dangerously-load-development-channels server:air` (a local server is not on the
 //! allowlist; `--channels` rejects it, seen live 2026-08-21); `AIR_CHANNELS_FLAG` overrides.
 
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
@@ -119,20 +120,123 @@ fn coordinator_argv_for(repo: &Path, roles: &Path, flag: &str, extra: &[String])
     base
 }
 
-fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
-    let bin = std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
+fn claude_bin() -> String {
+    std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
+}
+
+/// POSIX single-quote an argument so `sh -c` reconstructs it byte for byte. Bare words pass
+/// through; anything else is wrapped in `'...'` with embedded `'` as `'\''`.
+pub fn shell_quote(a: &str) -> String {
+    let bare = !a.is_empty()
+        && a.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./=:@%+,".contains(&b));
+    if bare {
+        a.to_string()
+    } else {
+        format!("'{}'", a.replace('\'', "'\\''"))
+    }
+}
+
+/// Pure: the `--print` rendering of an exec, one shell line that yields the same argv.
+pub fn print_line(bin: &str, argv: &[String]) -> String {
+    std::iter::once(bin)
+        .chain(argv.iter().map(String::as_str))
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// How a worker session is started. Pure decision so the selftest probe can exercise it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// Replace this process: the caller's terminal talks to claude directly.
+    Exec,
+    /// No controlling tty (stdin is a socket: the coordinator's Bash tool, `</dev/null`), so
+    /// `claude --tmux` cannot run here (`tcgetattr failed: Operation not supported on
+    /// socket`, adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
+    Detached,
+}
+
+pub fn launch_mode(stdin_is_tty: bool, tmux_requested: bool) -> Launch {
+    if tmux_requested && !stdin_is_tty {
+        Launch::Detached
+    } else {
+        Launch::Exec
+    }
+}
+
+/// Pure: `tmux new-session -d -s <name> -c <repo> -- <bin> <argv...>`. `socket` (from
+/// `AIR_TMUX_SOCKET`) becomes `-L <socket>` so tests never touch the user's tmux server.
+pub fn tmux_detached_argv(
+    name: &str,
+    repo: &Path,
+    socket: Option<&str>,
+    bin: &str,
+    argv: &[String],
+) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if let Some(s) = socket.filter(|s| !s.is_empty()) {
+        v.push("-L".into());
+        v.push(s.into());
+    }
+    v.extend(
+        [
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            &repo.display().to_string(),
+            "--",
+            bin,
+        ]
+        .map(String::from),
+    );
+    v.extend(argv.iter().cloned());
+    v
+}
+
+fn tmux_socket() -> Option<String> {
+    std::env::var("AIR_TMUX_SOCKET")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Start `claude` in a detached tmux session and return without touching the caller's
+/// terminal. Prints the session name and the attach command.
+fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 {
+    let bin = claude_bin();
+    let socket = tmux_socket();
+    let targv = tmux_detached_argv(name, repo, socket.as_deref(), &bin, argv);
     if print {
-        let shown: Vec<String> = std::iter::once(bin.clone())
-            .chain(argv.iter().cloned())
-            .map(|a| {
-                if a.contains(' ') || a.contains('"') {
-                    format!("'{a}'")
-                } else {
-                    a
-                }
-            })
-            .collect();
-        println!("{}", shown.join(" "));
+        println!("{}", print_line("tmux", &targv));
+        return 0;
+    }
+    match Command::new("tmux").args(&targv).current_dir(repo).status() {
+        Ok(s) if s.success() => {
+            let l = socket
+                .as_deref()
+                .map(|s| format!("-L {s} "))
+                .unwrap_or_default();
+            println!("started tmux session {name} (stdin is not a tty; detached)");
+            println!("attach: tmux {l}attach -t {name}");
+            0
+        }
+        Ok(s) => {
+            eprintln!("air worker: tmux exited with {s}");
+            1
+        }
+        Err(e) => {
+            eprintln!("air worker: could not run tmux: {e}");
+            1
+        }
+    }
+}
+
+fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
+    let bin = claude_bin();
+    if print {
+        println!("{}", print_line(&bin, argv));
         return 0;
     }
     let mut cmd = Command::new(&bin);
@@ -157,21 +261,48 @@ fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
     }
 }
 
-/// Worker argv with `--tmux` (an attachable pane the owner can open; the coordinator may
-/// launch workers this way, owner ruling 2026-08-21) and an initial task as the prompt.
-/// `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which workers always
-/// have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
-pub fn worker_argv_tmux(base: Vec<String>, task: Option<&str>) -> Vec<String> {
-    let mut v = base;
-    let mode = std::env::var("AIR_TMUX_MODE").ok();
-    v.push(match mode.as_deref() {
-        Some(m) if !m.is_empty() => format!("--tmux={m}"),
-        _ => "--tmux".to_string(),
-    });
+/// Worker argv with an initial task as the prompt and, if `tmux`, `--tmux` (an attachable
+/// pane the owner can open; the coordinator may launch workers this way, owner ruling
+/// 2026-08-21). `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which
+/// workers always have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
+///
+/// The task goes *first*. `--disallowed-tools` takes space-separated values (cli-reference,
+/// https://code.claude.com/docs/en/cli-reference, accessed 2026-08-22: example
+/// `"Bash(git log *)" "Bash(git diff *)" "Edit"`), so a positional appended after the deny
+/// list is read as one more deny rule, not as the prompt (air-2ct: adopter 2026-08-22,
+/// three workers idle at an empty prompt once `--tmux`, the only thing terminating the
+/// list, was stripped). The reference shows the prompt positional before flags
+/// (`claude -p "query" --output-format json`).
+pub fn worker_argv_tmux(base: Vec<String>, tmux: bool, task: Option<&str>) -> Vec<String> {
+    let mut v = Vec::new();
     if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
         v.push(t.to_string());
     }
+    v.extend(base);
+    if tmux {
+        let mode = std::env::var("AIR_TMUX_MODE").ok();
+        v.push(match mode.as_deref() {
+            Some(m) if !m.is_empty() => format!("--tmux={m}"),
+            _ => "--tmux".to_string(),
+        });
+    }
     v
+}
+
+/// Pure: does claude read `task` in `argv` as the prompt? False when it sits in the value
+/// run of a variadic list (`--disallowed-tools`, `--allowed-tools`) with no flag between.
+pub fn task_is_prompt(argv: &[String], task: &str) -> bool {
+    let Some(i) = argv.iter().position(|a| a == task) else {
+        return false;
+    };
+    // Walk back to the nearest flag; if it is variadic, the task is one of its values.
+    match argv.iter().take(i).rev().find(|a| a.starts_with("--")) {
+        Some(f) => !matches!(
+            f.as_str(),
+            "--disallowed-tools" | "--disallowedTools" | "--allowed-tools" | "--allowedTools"
+        ),
+        None => true,
+    }
 }
 
 pub fn worker(
@@ -194,10 +325,21 @@ pub fn worker(
         }
     };
     let mut argv = worker_argv_for(repo, name, &roles, extra);
-    if tmux || task.is_some() {
-        argv = worker_argv_tmux(argv, task);
+    if !(tmux || task.is_some()) {
+        return exec_claude(repo, &argv, print);
     }
-    exec_claude(repo, &argv, print)
+    match launch_mode(std::io::stdin().is_terminal(), true) {
+        Launch::Exec => {
+            argv = worker_argv_tmux(argv, true, task);
+            exec_claude(repo, &argv, print)
+        }
+        Launch::Detached => {
+            // tmux is ours here, so claude gets no `--tmux`; the task still goes first
+            // (air-2ct: after the deny list it reads as one more deny rule).
+            argv = worker_argv_tmux(argv, false, task);
+            spawn_detached(repo, name, &argv, print)
+        }
+    }
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
@@ -246,13 +388,87 @@ mod tests {
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
     }
 
+    /// The prompt must come before `--disallowed-tools`, whose values are space-separated
+    /// (cli-reference, accessed 2026-08-22); after it, claude reads the task as a deny rule.
     #[test]
-    fn tmux_adds_the_flag_and_the_task_last() {
+    fn task_precedes_the_deny_list_and_tmux_is_last() {
         let base = worker_argv("w", Path::new("/r/roles.md"), &[]);
-        let v = worker_argv_tmux(base.clone(), Some("fix fd-1 end to end"));
-        assert_eq!(&v[v.len() - 2..], ["--tmux", "fix fd-1 end to end"]);
-        let v = worker_argv_tmux(base, None);
+        let v = worker_argv_tmux(base.clone(), true, Some("fix fd-1 end to end"));
+        assert_eq!(v[0], "fix fd-1 end to end");
         assert_eq!(v.last().map(String::as_str), Some("--tmux"));
+        let deny = v.iter().position(|a| a == "--disallowed-tools").unwrap();
+        assert!(deny > 0, "task must not follow the variadic deny list");
+        // Without --tmux (a detached launch) the task is still the prompt, not a deny value.
+        let v = worker_argv_tmux(base.clone(), false, Some("say hello"));
+        assert_eq!(v[0], "say hello");
+        assert!(!v.contains(&"--tmux".to_string()));
+        assert_eq!(&v[1..], &base[..]);
+        let v = worker_argv_tmux(base, true, None);
+        assert_eq!(v.last().map(String::as_str), Some("--tmux"));
+        assert_eq!(v[0], "--worktree");
+    }
+
+    /// `--print` pasted into `sh -c` must reproduce the exec argv for a task with a space,
+    /// a single quote, and a `$`.
+    #[test]
+    fn print_line_round_trips_through_sh() {
+        let task = "fix it's $HOME \"now\"";
+        let argv = worker_argv_tmux(
+            worker_argv("w", Path::new("/r/roles.md"), &[]),
+            true,
+            Some(task),
+        );
+        let line = print_line("claude", &argv);
+        let script = format!("{} \"$@\"", "printf '%s\\0'");
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("set -- {}; {script}", line))
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let got: Vec<&str> = std::str::from_utf8(&out.stdout)
+            .unwrap()
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .collect();
+        let want: Vec<&str> = std::iter::once("claude")
+            .chain(argv.iter().map(String::as_str))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn socket_stdin_with_tmux_is_detached_tty_execs() {
+        assert_eq!(launch_mode(false, true), Launch::Detached);
+        assert_eq!(launch_mode(true, true), Launch::Exec);
+        assert_eq!(launch_mode(false, false), Launch::Exec);
+    }
+
+    #[test]
+    fn detached_argv_never_passes_tmux_to_claude() {
+        let argv = vec!["--worktree".to_string(), "w".into(), "do x".into()];
+        let v = tmux_detached_argv("w", Path::new("/r"), Some("air-test"), "claude", &argv);
+        assert_eq!(
+            v,
+            [
+                "-L",
+                "air-test",
+                "new-session",
+                "-d",
+                "-s",
+                "w",
+                "-c",
+                "/r",
+                "--",
+                "claude",
+                "--worktree",
+                "w",
+                "do x"
+            ]
+        );
+        assert!(!v.iter().any(|a| a.starts_with("--tmux")));
+        let v = tmux_detached_argv("w", Path::new("/r"), None, "claude", &argv);
+        assert_eq!(v[0], "new-session");
     }
 
     #[test]

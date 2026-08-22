@@ -50,6 +50,32 @@ pub fn bd_for(repo: &Path) -> BdCli {
     bd
 }
 
+/// The earlier of a bd timestamp (if it parses) and `now`; never later than `now`.
+fn earliest(bd_time: Option<&str>, now: &str) -> String {
+    match bd_time.and_then(|t| t.parse::<jiff::Timestamp>().ok()) {
+        Some(t) if now.parse::<jiff::Timestamp>().is_ok_and(|n| t < n) => t.to_string(),
+        _ => now.to_string(),
+    }
+}
+
+/// After a `--claim` timeout: did bd's write land? Probes `bd show` with a short separate
+/// timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 5000, capped at the main timeout), twice.
+fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {
+    let mut probe = bd.clone();
+    let ms = std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5000);
+    probe.timeout = std::time::Duration::from_millis(ms).min(bd.timeout);
+    (0..2).any(|_| {
+        matches!(
+            probe.show(bead),
+            Ok(Some(Issue { ref assignee, ref status, .. }))
+                if assignee.as_deref() == Some(actor) && status == "in_progress"
+        )
+    })
+}
+
 fn timeout_msg(what: &str, bead: &str) -> String {
     format!(
         "bd timed out during {what}; bd's state is unknown and nothing was written to the ledger: run `bd show {bead}` and re-run"
@@ -123,8 +149,13 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     let actor = actor_for(&worker);
     let bd = bd_for(repo);
     // 2. bd show: facts about the bead before any write.
+    // Some(updated_at) when bd already holds the bead in_progress by this actor.
+    let mut already_mine: Option<Option<String>> = None;
     match bd.show(bead) {
         Ok(Some(issue)) => {
+            if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
+                already_mine = Some(issue.updated_at.clone());
+            }
             if worker != "main" && issue.labels.iter().any(|l| l == OWNER_LABEL) {
                 let msg = format!(
                     "refused: {bead} is labelled `{OWNER_LABEL}` (awaiting the owner); not a worker's to claim. Ask in the owner queue: air capture --for owner \"...\""
@@ -210,18 +241,58 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             return 1;
         }
     }
-    // 3. bd: the atomic claim.
+    // 2b. Already ours in bd (a re-claim after a timeout, or a retry): no bd write, and the
+    // ledger row keeps its original claim time, never a newer one, so the digest check is
+    // not postdated (air-y8m). With no row, the best original time bd gives is `updated_at`.
+    if already_mine.is_some() {
+        let existing = ledger
+            .open_claim(bead)
+            .ok()
+            .flatten()
+            .filter(|c| c.worker == worker)
+            .map(|c| c.claimed_at);
+        let at = match &existing {
+            Some(t) => t.clone(),
+            None => {
+                let at = earliest(already_mine.as_ref().and_then(|u| u.as_deref()), &now());
+                if let Err(e) = ledger.record_claim(bead, &worker, files, &at) {
+                    eprintln!("air claim: ledger write failed: {e}");
+                    return 1;
+                }
+                at
+            }
+        };
+        let msg = format!(
+            "reclaimed {bead} as {worker} (actor {actor}); bd already held it, claim time kept at {at}"
+        );
+        log_event(
+            &ledger,
+            &worker,
+            "claim",
+            &inputs(
+                serde_json::json!({"actor": actor, "files": files, "kept_row": existing.is_some()}),
+            ),
+            "reclaimed",
+            &msg,
+            "bd show + 1 ledger row",
+        );
+        emit(
+            json,
+            &serde_json::json!({"ok": true, "bead": bead, "worker": worker, "claimed_at": at, "reclaimed": true}),
+            || msg.clone(),
+        );
+        return 0;
+    }
+    // 3. bd: the atomic claim. The claim time is when it was issued, not when bd answered.
+    let at = now();
+    let mut decision = "claimed";
     match bd.claim(bead, &actor) {
         Ok(()) => {}
         Err(BdError::Timeout(_)) => {
-            // bd may have completed the write after we stopped waiting: re-read before saying
-            // anything about state.
-            let landed = matches!(
-                bd.show(bead),
-                Ok(Some(Issue { ref assignee, ref status, .. }))
-                    if assignee.as_deref() == Some(actor.as_str()) && status == "in_progress"
-            );
-            if !landed {
+            // bd may have completed the write after we stopped waiting: reconcile before
+            // saying anything about state, with a short separate probe, twice (under load
+            // one probe can time out too; adopter 2026-08-22, load avg ~90).
+            if !claim_landed(&bd, bead, &actor) {
                 return fail(
                     &ledger,
                     &worker,
@@ -237,6 +308,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             eprintln!(
                 "air claim: bd timed out, but `bd show` confirms the claim landed; recording it"
             );
+            decision = "claimed-late";
         }
         Err(e) => {
             let msg = format!("bd refused the claim; nothing recorded: {e}");
@@ -254,20 +326,25 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         }
     }
     // 4. Ledger row, after bd succeeded.
-    let at = now();
     if let Err(e) = ledger.record_claim(bead, &worker, files, &at) {
         eprintln!(
             "air claim: bd claim succeeded but the ledger write failed: {e}. Re-run `air claim {bead}` (bd --claim is idempotent for the same actor)."
         );
         return 1;
     }
-    let msg = format!("claimed {bead} as {worker} (actor {actor}) at {at}");
+    let msg = if decision == "claimed-late" {
+        format!(
+            "claimed {bead} as {worker} (actor {actor}) at {at} (bd was slow; reconciled by `bd show`)"
+        )
+    } else {
+        format!("claimed {bead} as {worker} (actor {actor}) at {at}")
+    };
     log_event(
         &ledger,
         &worker,
         "claim",
         &inputs(serde_json::json!({"actor": actor, "files": files})),
-        "claimed",
+        decision,
         &msg,
         "bd + 1 ledger row",
     );
