@@ -467,6 +467,68 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
 }
 
+/// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
+/// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
+#[test]
+fn claim_labels_the_tmux_window_and_release_clears_it() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::create_dir_all(repo.join(".beads")).unwrap();
+    std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
+    let socket = format!("air-test-label-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .args(["-L", &socket])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let window = || {
+        let o = tmux(&["list-windows", "-t", "zz-main", "-F", "#{window_name}"]);
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let air_tmux = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
+            .env("BEADS_ACTOR", "tester")
+            .env("AIR_TMUX_SOCKET", &socket)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+
+    tmux(&["new-session", "-d", "-s", "zz-main", "sleep", "30"]);
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","title":"the window says what the lane is doing","status":"open","labels":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(air_tmux(&["claim", "fd-1"]).status.code(), Some(0));
+    let labelled = window();
+
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","title":"t","status":"in_progress","assignee":"tester","labels":[]}"#,
+    )
+    .unwrap();
+    let out = air_tmux(&["release", "fd-1", "--reason", "abandoned"]);
+    let cleared = window();
+    tmux(&["kill-server"]);
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(labelled.starts_with("fd-1 the window says"), "{labelled}");
+    assert_eq!(cleared, "main", "release clears the label");
+}
+
 /// air-3eu: a bead that briefly visits `awaiting_review` (a stray `bd update`, reverted a
 /// minute later) was seen by the next status tick and the reconcile released the ledger claim,
 /// leaving the worker "not claimed" while still editing. `awaiting_review` now marks the claim

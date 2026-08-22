@@ -50,6 +50,19 @@ pub fn bd_for(repo: &Path) -> BdCli {
     bd
 }
 
+/// Put the bead on the worker's tmux window so `tmux ls` and `air status` show the lane and
+/// what it is doing now; `bead` empty clears it back to the worker name (air-5lg). A no-op
+/// when the worker has no tmux session, which includes every `air claim` typed by a person in
+/// their own terminal.
+fn label_window(repo: &Path, worker: &str, bead: &str, title: &str) {
+    let label = match (bead, title.trim()) {
+        ("", _) => String::new(),
+        (b, "") => b.to_string(),
+        (b, t) => format!("{b} {t}"),
+    };
+    super::tmux::set_window_label(&super::tmux::project_prefix(repo), worker, &label);
+}
+
 /// The earlier of a bd timestamp (if it parses) and `now`; never later than `now`.
 fn earliest(bd_time: Option<&str>, now: &str) -> String {
     match bd_time.and_then(|t| t.parse::<jiff::Timestamp>().ok()) {
@@ -151,8 +164,11 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     // 2. bd show: facts about the bead before any write.
     // Some(updated_at) when bd already holds the bead in_progress by this actor.
     let mut already_mine: Option<Option<String>> = None;
+    // For the tmux window label (air-5lg); empty when bd could not answer.
+    let mut title = String::new();
     match bd.show(bead) {
         Ok(Some(issue)) => {
+            title.clone_from(&issue.title);
             if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
                 already_mine = Some(issue.updated_at.clone());
             }
@@ -262,6 +278,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 at
             }
         };
+        label_window(repo, &worker, bead, &title);
         let msg = format!(
             "reclaimed {bead} as {worker} (actor {actor}); bd already held it, claim time kept at {at}"
         );
@@ -332,6 +349,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         );
         return 1;
     }
+    label_window(repo, &worker, bead, &title);
     let msg = if decision == "claimed-late" {
         format!(
             "claimed {bead} as {worker} (actor {actor}) at {at} (bd was slow; reconciled by `bd show`)"
@@ -463,6 +481,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
     let at = now();
     match ledger.release_claim(bead, &worker, reason, &at) {
         Ok(true) => {
+            label_window(repo, &worker, "", "");
             let msg = format!(
                 "released {bead} held by {worker} ({reason}) at {at}; bd status was {status}"
             );

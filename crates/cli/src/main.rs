@@ -150,11 +150,12 @@ enum Cmd {
     /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
     ///
     /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
-    /// Bash tool, `</dev/null`) it starts a detached tmux session named <name> instead, prints
-    /// `tmux attach -t <name>`, and exits 0. AIR_CLAUDE_BIN overrides the claude binary;
-    /// AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
+    /// Bash tool, `</dev/null`) it starts a detached tmux session named <project>-<name>
+    /// instead, prints `tmux attach -t <project>-<name>`, and exits 0. AIR_CLAUDE_BIN overrides
+    /// the claude binary; AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
     Worker {
-        name: String,
+        /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
+        name: Option<String>,
         /// Run in a tmux pane the owner can attach to (lets the coordinator launch workers).
         #[arg(long)]
         tmux: bool,
@@ -228,7 +229,7 @@ fn main() -> ExitCode {
             task,
             print,
             extra,
-        } => cmd::launch::worker(&repo, &name, &extra, tmux, task.as_deref(), print),
+        } => cmd::launch::worker(&repo, name.as_deref(), &extra, tmux, task.as_deref(), print),
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),

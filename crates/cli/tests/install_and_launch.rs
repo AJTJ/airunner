@@ -25,7 +25,17 @@ fn scratch_repo() -> tempfile::TempDir {
         );
     };
     g(&["init", "-q", "-b", "main"]);
-    g(&["commit", "-q", "--allow-empty", "-m", "a"]);
+    // A known beads prefix, so tmux session names are deterministic (air-5lg): without it the
+    // prefix falls back to the temp directory's random name. Committed, because `air record`
+    // reports a dirty tree and one test asserts a clean one.
+    std::fs::create_dir_all(dir.path().join(".beads")).unwrap();
+    std::fs::write(
+        dir.path().join(".beads/config.yaml"),
+        "issue-prefix: \"zz\"\n",
+    )
+    .unwrap();
+    g(&["add", "-A"]);
+    g(&["commit", "-q", "-m", "a"]);
     dir
 }
 
@@ -439,7 +449,9 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let has = tmux(&["has-session", "-t", "w"]).status.success();
+    // air-5lg: the session carries the project prefix, so a machine-wide `tmux ls` says which
+    // fleet a pane belongs to.
+    let has = tmux(&["has-session", "-t", "zz-w"]).status.success();
     // Poll for the stub's argv file (normally <0.5 s; macOS scans a freshly written
     // executable on first exec, which has taken >2 s); kill the server regardless.
     let argv_path = repo.join("argv.txt");
@@ -454,8 +466,8 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     tmux(&["kill-server"]);
 
     assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(has, "tmux session w missing: {stdout}{stderr}");
-    assert!(stdout.contains("attach -t w"), "{stdout}");
+    assert!(has, "tmux session zz-w missing: {stdout}{stderr}");
+    assert!(stdout.contains("attach -t zz-w"), "{stdout}");
     assert!(!stderr.contains("tcgetattr"), "{stderr}");
     let lines: Vec<&str> = argv.lines().collect();
     // The task goes first (air-2ct: after the deny list it reads as one more deny rule).
@@ -480,8 +492,76 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.starts_with("tmux new-session -d -s w -c "),
+        stdout.starts_with("tmux new-session -d -s zz-w -c "),
         "{stdout}"
     );
     assert!(!stdout.contains("--tmux"), "{stdout}");
+}
+
+/// air-5lg: `tmux ls` is machine-wide, so `air status` is where the owner goes from a lane to
+/// its pane. The session name shows on the worker's row when a session for it is live.
+#[test]
+fn status_names_the_workers_tmux_session() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let socket = format!("air-test-status-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .args(["-L", &socket])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let status = || -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .arg("status")
+            .current_dir(&repo)
+            .env("AIR_TMUX_SOCKET", &socket)
+            .env("AIR_BD_BIN", "/nonexistent-bd")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    // No server yet: no tmux column, and nothing fails.
+    assert!(!status().contains("tmux "), "{}", status());
+    // The main checkout's own lane, live.
+    tmux(&["new-session", "-d", "-s", "zz-main", "sleep", "30"]);
+    let s = status();
+    tmux(&["kill-server"]);
+    assert!(s.contains("tmux zz-main"), "{s}");
+}
+
+/// air-5lg: `air worker` with no name takes the next free `w<N>` rather than refusing, so a
+/// coordinator that has no semantically useful name to give does not invent one from the bead
+/// (a worker outlives its bead; owner ruling 2026-08-22).
+#[test]
+fn worker_with_no_name_picks_the_next_free_lane() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "--task", "x", "--print"])
+        .current_dir(&repo)
+        .env("AIR_CLAUDE_BIN", "claude")
+        .env("AIR_TMUX_SOCKET", "air-test-noname")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stderr.contains("no name given; using w1"), "{stderr}");
+    assert!(stdout.contains("new-session -d -s zz-w1 -c "), "{stdout}");
+    assert!(
+        stdout.contains("--worktree w1"),
+        "the lane name reaches claude: {stdout}"
+    );
 }
