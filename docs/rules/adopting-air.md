@@ -83,6 +83,32 @@ A script that depended on something bd no longer provides (`bd events`) should s
 `air status`" rather than error. Retire a target only when its Air replacement has a passed
 check beside it in the adoption log.
 
+### The repo owns its work flow; Air does not
+
+`.air/roles.md` is generated from Air's `ROLES_MD` and overwritten on every install, so a
+target repo cannot edit it and should not try. What it says is therefore deliberately limited
+to **what Air records and what Air refuses**:
+
+| Air says | The repo says |
+|---|---|
+| `air claim` is the claim path; a claim is a commitment to finish now | Whether a finished bead is handed over for review, closed with proof, or something else |
+| The recorded green must be at the commit you hand on, and that commit must contain `main` | Which command counts as verify |
+| A digest must be newer than the claim, where `digest_dir` is set | Where digests live and what goes in one |
+| The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
+| `air handover` names what is missing | When in the loop to run it |
+
+**[adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
+`bd update <id> -s awaiting_review` as the closing step. adopter's owner had ruled that step
+out of existence — a worker there closes its own bead with proof — so its workers were told one
+flow by Air at session start and another by their own CLAUDE.md, and could not fix the file.
+The fix was for Air to stop saying it, not to add per-repo configuration: config is a
+mechanism, and the smaller version is Air not saying what it has no business saying.
+
+Put the repo's own sequence in its CLAUDE.md (this repo keeps ai_runner's under "This repo's
+work flow"). The one refusal still covers both shapes: it matches `bd close` as well as
+`bd update -s closed` / `-s awaiting_review`, so a close-with-proof repo is gated exactly as a
+hand-over repo is.
+
 ## 3. Rules to change in the repo (prose that Air replaces or that is wrong)
 
 | Today | Change to | Why |
