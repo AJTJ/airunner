@@ -59,8 +59,9 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
 1. `cargo install --path crates/cli` in the Air checkout. `which air` must be that binary.
 2. `brew upgrade beads && brew pin beads`; `bd --version` reads 1.2.2; `air doctor` exits 0.
 3. In the target's main checkout: `air install` (read it), then `air install --write`. It adds
-   `air hook` under seven events in `.claude/settings.json`, the `air` server in `.mcp.json`,
-   and `.air/roles.md`. Add `.air/` to `.gitignore`.
+   `air hook` under every event in `hook_entries()` (`crates/cli/src/cmd/install.rs`; nine as of
+   2026-08-22), the `air` server in `.mcp.json`, `.air/roles.md`, and the `air-*` skills. Add
+   `.air/` to `.gitignore`.
 4. Create `.claude/air.json` (tracked):
    ```json
    {
@@ -108,13 +109,21 @@ check beside it in the adoption log.
 | "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode |
 | "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
 | "Check on the fleet every N minutes" | Channel push: stuck, idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
+| "The owner merges every green branch at the end of the round" | `air land <bead>` / `air land --all` (coordinator): longest wait first, stopping at the first red (air-3pz) |
+| "Close the landed beads one by one" | `air close <id>… --reason "<why>"`: one `bd` process for the whole pass, and the matching claims released in one ledger transaction. `bd` costs ~1.4 s per process here whatever it is asked, so the count of processes IS the cost (air-869) |
+| "Do not set awaiting_review without green" (advisory) | Refused, not advised: worker launches set `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fixing command (air-i59) |
+| "Say which fleet a pane belongs to" | tmux sessions are `<project>-<worker>`: `tmux ls` is machine-wide, and with two fleets running it said nothing about which project a pane was (air-5lg) |
+| "Say why the tracker feels slow" | Event lines carry `bd_ms`/`bd_calls` when the command shelled out to bd, and `air status` prints the median cost of one bd process (air-869) |
+| "A bead awaiting the owner is labelled `human`" | The label is `owner`; `human` is presence and gates nothing. See §5b before upgrading a repo that used `human` (air-5hw) |
 
 Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over Markdown).
 
 ## 5. Keeping the integration current
 
 - **Air version**: `air selftest` after every `cargo install`; every check proves it fires.
-  `air doctor` shows the ledger version (schema migrates forward automatically).
+  `air doctor` shows the ledger version (schema migrates forward automatically). When Air's own
+  surface has moved — new commands, changed `--json` shapes, a default that became a refusal —
+  §5a is the procedure and `air install` prints the diff.
 - **Repo changes**: a new publish or destructive target goes into `.claude/air.json` deny
   patterns; a new exclusive resource is just a new lease name; a new digest location is
   `digest_dir`.
@@ -151,10 +160,121 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
   spec (`../research/verification/ticks/2026-08-18-0430-measurement-spec.md`) says what each
   number means. What still had to be relayed by hand is the next thing Air builds.
 
+## 5a. Upgrading an existing installation (Air's own surface moved)
+
+§5 keeps the integration current against *bd* and *Claude Code* upgrades. This is the other
+direction: **Air changed under a repo that already has it installed.** That happened for the
+first time on 2026-08-22, when one round added two commands, changed a JSON shape, turned a
+warning into a refusal, and redefined a label — under adopter, which had Air installed and
+was told none of it (air-6g1).
+
+### The one command
+
+    air install            # dry run: prints the SURFACE DIFF, writes nothing, exits 0
+    air install --write    # applies, and records that this repo has been told
+
+`air install` was always a dry run. It now also answers "what moved since this repo last
+installed Air": a list of surface changes, each with what to do about it, and `!!` against the
+ones that **change behaviour without erroring** — the ones a repo discovers by getting a wrong
+answer rather than a stack trace.
+
+The baseline lives in `.air/installed.json`, written by `--write`:
+
+```json
+{ "air_version": "0.0.1", "installed_at": "…", "surface": ["land", "close", "…"] }
+```
+
+The diff is computed against those recorded **ids**, not against `air_version`. A version
+string does not move on its own, so a comparison keyed to one reports nothing the first time
+somebody forgets to bump it, which is the same silence this section exists to end. Adding an
+entry to `SURFACE` in `crates/cli/src/cmd/install.rs` is the whole job: every repo installed
+before it then sees it, and `air selftest` proves an older recorded surface produces a
+non-empty diff and a current one produces nothing.
+
+A repo with no `.air/installed.json` and no Air wiring is a **first install**, not an upgrade,
+and gets no diff: nothing has changed under a repo that never had Air.
+
+### What `air install --write` re-runs safely
+
+| | |
+|---|---|
+| `.claude/settings.json` | Merges the `air hook` entries (`hook_entries()`; nine as of 2026-08-22). Idempotent, and other hooks, permissions and settings are preserved — proved by `merge_hooks_is_idempotent_and_preserves_others` |
+| `.mcp.json` | Adds the `air` server; leaves other servers alone |
+| `.air/roles.md` | **Overwritten** with the version embedded in the binary. Never hand-edit it; it is `include_str!` of `docs/rules/roles.md` and a test asserts the two are identical |
+| `.claude/skills/air-*/SKILL.md` | **Overwritten**, same reason: coordinator procedures are versioned with `air` |
+| `.air/installed.json` | Rewritten with the current surface |
+
+### What it will never touch
+
+`.claude/air.json` (yours: `digest_dir`, deny patterns), `.gitignore` (it advises, you edit),
+the ledger and its events, anything under `.beads/`, and every other file in the repo. It also
+refuses to write at all when the `air` on `PATH` is not the binary being run, so a stale
+install cannot quietly wire a repo to a different Air.
+
+### Order of operations for an upgrade
+
+1. `cargo install --path crates/cli` in the Air checkout; `which air` must be that binary.
+2. `air selftest` — every check proves it fires — then `air doctor`.
+3. In the target's main checkout, `air install` and **read the surface diff**. Do the `!!`
+   items first: those are the ones that are already wrong and not saying so.
+4. `air install --write`.
+5. Restart every agent session. Sessions started before the upgrade hold the old roles text
+   and the old hooks; they do not pick it up.
+
+### Anything the diff cannot know
+
+The surface diff reports what Air changed. It cannot know what the *repo* built on top —
+scripts parsing `air … --json`, make targets wrapping `air` commands, prose in CLAUDE.md
+naming a flag. Grep for `air ` in the repo's Makefile, `scripts/`, and CLAUDE.md after every
+upgrade; that is a judgement call Air does not have the standing to make.
+
+## 5b. Migration: `human` → `owner` (a repo that used `human` as its gate)
+
+Air's authority label is `owner` (2026-08-22, air-5hw). Two words, two meanings: `human` is
+about **presence** (a person is in the loop and can watch and type into every session);
+`owner` is about **authority** (a worker may not decide or finish this). `air claim` refuses a
+bead labelled `owner`, and `human` now gates nothing.
+
+**This is the dangerous one.** A repo that used `human` as its gate does not get an error when
+it upgrades. Its owner queue simply stops being fenced: beads that were held back become
+claimable, and workers start finishing decisions that were the owner's. the adopter is exactly
+that repo — its `make ready` is `bd ready --exclude-label owner,runtime,human`
+(`docs/research/adopter-as-built.md:91`, citing its `Makefile:395-411`), and its beads and
+CLAUDE.md read `human` as the gate.
+
+### The transition, in order
+
+**Exclude both labels for the whole migration.** Nothing unfences mid-flight, and the order
+below stops mattering:
+
+    bd ready --exclude-label owner,runtime,human      # keep `human` here until step 4
+
+1. **Makefile `ready` target** — already excludes both if it looks like adopter's. Leave it
+   alone until the end. A repo excluding only `human` adds `owner` *first*, before anything
+   else.
+2. **CLAUDE.md label list** — document both: `owner` is the gate, `human` is being retired.
+3. **Existing beads** — relabel. `bd list --label human --json` finds them; each one is either
+   a real owner gate or was never a gate at all, which is the common case and the reason the
+   word rotted. `bd label add` takes several ids at once
+   (`bd label add <id> <id> … owner`) — one bd process instead of one per bead, which on a
+   27-bead queue is the difference between a second and most of a minute (air-869). adopter's own triage note has a category C
+   for beads that "carry `human` but need no owner ruling — ordinary agent work"
+   (`human-queue-triage.md`), and 27 of 152 beads in one 11-hour round carried
+   `human`/`owner` (`adopter-as-built.md:204`).
+4. **Only when `bd list --label human` is empty**: drop `human` from the exclude list and from
+   CLAUDE.md.
+
+### Do not skip step 3 by relabelling in bulk
+
+`human` was applied to two different things. Copying every `human` onto `owner` moves the rot
+across rather than clearing it, and makes the owner queue longer than it ever needed to be.
+Read each one.
+
 ## 6. Day one, in order
 
 `air coordinator` in the main terminal. `air worker <name>` per worktree terminal (re-enters an
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
 `air record verify -- <cmd>` → `air handover` → `bd update -s awaiting_review`. Coordinator:
 reads `air status`, acts on channel events, triages `air inbox`, walks `air inbox --owner`
-with the owner, lands with the repo's own `make land` this round.
+with the owner, and lands with `air land <bead>` / `air land --all` (air-3pz; it was the repo's
+own `make land` before that). Upgrading a repo that already has Air: §5a.

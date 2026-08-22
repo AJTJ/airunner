@@ -48,6 +48,7 @@ pub fn run(json: bool) -> i32 {
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
+        probe_surface_diff(),
         probe_land_refusals(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
@@ -66,6 +67,27 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-6g1: a repo installed before a surface change is told about it, and one already
+/// current is told nothing. The diff is keyed to recorded ids, not a version string, so it
+/// cannot silently report nothing because a number was not bumped.
+fn probe_surface_diff() -> Probe {
+    use crate::cmd::install::{SURFACE, surface_diff};
+
+    // Red: a repo that knows about nothing sees every change, `air land` among them.
+    let stale = surface_diff(&[]);
+    let red = !stale.is_empty()
+        && stale.iter().any(|c| c.id == "land")
+        && stale.iter().any(|c| c.silent_break);
+    // Green: a repo recorded at the current surface sees nothing.
+    let current: Vec<String> = SURFACE.iter().map(|c| c.id.to_string()).collect();
+    let green = surface_diff(&current).is_empty();
+    Probe {
+        name: "install: an older recorded surface diffs (names `air land`); the current one is empty",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// air-76z: a capture must not point at a bead bd does not have. bd omits an unknown id from
