@@ -64,7 +64,25 @@ pub fn facts(
                 _ => c,
             }
         });
-        digest_newer_than(&repo.join(d), worker, since.as_deref())
+        // The bead named on the command line, else every bead this worker still holds: the
+        // check is "did you write the digest for the work you are handing on".
+        let beads: Vec<String> = match bead {
+            Some(b) => vec![b.to_string()],
+            None => ledger
+                .open_claims()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|c| c.worker == worker)
+                .map(|c| c.bead)
+                .collect(),
+        };
+        digest_for_bead(
+            &repo.join(d),
+            worker,
+            &beads,
+            since.as_deref(),
+            frontmatter_cutoff(),
+        )
     });
     let runs_at_head = ledger
         .runs_at(worker, &head, Kind::Verify)
@@ -99,7 +117,102 @@ pub fn digest_dir(repo: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Digests written at or after this instant must declare their bead in front matter; older
+/// ones may still be matched by filename and mtime.
+///
+/// **Delete the fallback once no digest in play predates this** (air-agq). Dated so it goes on
+/// evidence rather than argument, the same shape as the `Bead:` trailer's fallback (air-4re).
+/// `AIR_DIGEST_FRONTMATTER_SINCE` overrides it for tests.
+pub const FRONTMATTER_SINCE: &str = "2026-08-23T00:00:00Z";
+
+pub fn frontmatter_cutoff() -> jiff::Timestamp {
+    std::env::var("AIR_DIGEST_FRONTMATTER_SINCE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| FRONTMATTER_SINCE.parse().ok())
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+}
+
+/// The bead a digest declares, from `bead:` in its front matter.
+///
+/// Front matter is a `---` line, then `key: value` lines, then `---`. This reads a **declared
+/// field**, not prose: it does not look at the title, the filename, or anything the author
+/// phrased freely. That is the whole difference from what it replaces.
+pub fn declared_bead(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for line in lines {
+        let t = line.trim();
+        if t == "---" {
+            return None;
+        }
+        if let Some((k, v)) = t.split_once(':')
+            && k.trim().eq_ignore_ascii_case("bead")
+        {
+            let id = v.trim();
+            return (!id.is_empty() && !id.contains(char::is_whitespace)).then(|| id.to_string());
+        }
+    }
+    None
+}
+
+/// Is there a digest in `dir` for one of `beads`?
+///
+/// A digest counts when it **declares** the bead in front matter — nothing about its filename,
+/// its title or its mtime is consulted, because a digest that says which bead it is about is
+/// the answer rather than evidence for a guess.
+///
+/// The old rule (a `*<worker>*.md` newer than the claim) survives only for files written
+/// before [`FRONTMATTER_SINCE`]. It let a digest for a DIFFERENT bead satisfy the gate, and
+/// let `touch` on any old one do the same; it guards, so it failed toward permitting, and
+/// nothing proved it had fired (air-agq, and `docs/research/prose-parsing-survey.md` §3).
+pub fn digest_for_bead(
+    dir: &Path,
+    worker: &str,
+    beads: &[String],
+    since: Option<&str>,
+    cutoff: jiff::Timestamp,
+) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
+    rd.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".md") {
+            return false;
+        }
+        let modified = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| jiff::Timestamp::try_from(m).ok());
+        let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+        match declared_bead(&text) {
+            // Declared: it names the bead or it is not this bead's digest. mtime is not
+            // consulted — the file says what it is about.
+            Some(b) => beads.contains(&b),
+            // Undeclared: the old guess, and only for a file that predates the cutoff.
+            None => {
+                modified.is_some_and(|m| m < cutoff)
+                    && name.contains(worker)
+                    && match (since_ts, modified) {
+                        (Some(s), Some(m)) => m > s,
+                        (None, _) => true,
+                        _ => false,
+                    }
+            }
+        }
+    })
+}
+
 /// Is there a `*<worker>*.md` in `dir` modified after `since` (RFC 3339)? Pure over the fs.
+///
+/// **Superseded by [`digest_for_bead`]** (air-agq) and kept only for its tests; it is the
+/// guess that could not tell one bead's digest from another's.
+#[cfg(test)]
 pub fn digest_newer_than(dir: &Path, worker: &str, since: Option<&str>) -> bool {
     let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
     let Ok(rd) = std::fs::read_dir(dir) else {
