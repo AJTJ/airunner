@@ -329,7 +329,9 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
     assert_eq!(healthy["ready_depth"], 0, "{o}");
 
     let slow = repo.join("slow-bd");
-    std::fs::write(&slow, "#!/bin/sh\nsleep 25\n").unwrap();
+    // `sleep` runs as a grandchild holding bd's stdout open: killing bd alone must not make
+    // status wait for the pipe to close (wait_drained joined its drain threads; air-19u).
+    std::fs::write(&slow, "#!/bin/sh\nsleep 25 &\nwait\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
