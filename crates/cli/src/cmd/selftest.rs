@@ -42,6 +42,9 @@ pub fn run(json: bool) -> i32 {
         probe_gate_digest(),
         probe_lease_take(),
         probe_launch_no_tty(),
+        probe_worker_task_prompt(),
+        probe_stop_nudge(),
+        probe_standstill(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -236,6 +239,57 @@ fn probe_attention() -> Probe {
     }
 }
 
+/// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
+/// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
+/// was silent on them). Green: the same fleet with the review landed, the worker fresh, and
+/// nothing ready is quiet.
+fn probe_standstill() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let mk = |changed: &str, waits: Vec<(String, String, i64)>, ready: usize| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            head: Some("abc".into()),
+            green_at_head: Some(true),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                detail: None,
+                changed_at: changed.into(),
+                pid: None,
+                pid_alive: None,
+            }),
+            ..Default::default()
+        }],
+        review_waits: waits,
+        ready_depth: Some(ready),
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let red = attention(
+        &mk(
+            "2026-08-20T11:40:00Z",
+            vec![("fd-1".into(), "w".into(), 20)],
+            5,
+        ),
+        now,
+        Thresholds::default(),
+    );
+    let green = attention(
+        &mk("2026-08-20T11:59:00Z", vec![], 0),
+        now,
+        Thresholds::default(),
+    );
+    Probe {
+        name: "attention: review-waiting and idle-without-claim fire; landed and fresh is quiet",
+        red_fires: red
+            .iter()
+            .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
+            && red.iter().any(|a| a.kind == "idle-without-claim"),
+        green_passes: green.is_empty(),
+    }
+}
+
 /// The channel pushes a new condition once and not again until it escalates.
 fn probe_channel_dedupe() -> Probe {
     use crate::cmd::mcp::{Pushed, select_new};
@@ -396,5 +450,83 @@ fn probe_git_ancestor() -> Probe {
         name: "git: is-ancestor exit codes",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-2ct: the `--task` text must reach claude as the prompt, not as a trailing value of
+/// the variadic `--disallowed-tools` list. Red: the old ordering (task appended after the
+/// deny list) is reported as eaten. Green: `air worker --task` launched against a stub
+/// `claude` (`AIR_CLAUDE_BIN`) hands the stub the task as its first argument.
+fn probe_worker_task_prompt() -> Probe {
+    use crate::cmd::launch::{task_is_prompt, worker_argv};
+    let task = "say hello, it's $HOME";
+    let mut old = worker_argv("w", std::path::Path::new("/r/roles.md"), &[]);
+    old.push(task.to_string());
+    let red = !task_is_prompt(&old, task);
+
+    let green = (|| -> Result<bool, String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let git = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !git.status.success() {
+            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        }
+        let stub = dir.join("claude-stub");
+        std::fs::write(&stub, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let out = Command::new(exe)
+            .current_dir(&dir)
+            .env("AIR_CLAUDE_BIN", &stub)
+            .env_remove("AIR_TMUX_MODE")
+            .args(["worker", "w", "--task", task])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&dir);
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).to_string());
+        }
+        let argv: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(argv.first().is_some_and(|a| a == task) && task_is_prompt(&argv, task))
+    })()
+    .unwrap_or(false);
+    Probe {
+        name: "launch: --task reaches claude as the prompt",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-09i: a worker stopping with no claim while beads are ready is nudged once. Red: the
+/// gate fires on those facts (ready beads, no claim, fresh stop). Green: the block names the
+/// beads, then passes once `stop_hook_active` is set (the loop guard) and never for the
+/// coordinator.
+fn probe_stop_nudge() -> Probe {
+    use air_hooks::stop_nudge;
+    let ready = vec!["fd-1".to_string()];
+    let red = stop_nudge("worker", false, &ready, false, false).is_some();
+    let once = stop_nudge("worker", false, &ready, false, false)
+        .is_some_and(|r| r.contains("air claim fd-1"));
+    let then_pass = stop_nudge("worker", false, &ready, true, false).is_none()
+        && stop_nudge("coordinator", false, &ready, false, false).is_none()
+        && stop_nudge("worker", true, &ready, false, false).is_none();
+    Probe {
+        name: "stop: nudge once when ready beads and no claim",
+        red_fires: red,
+        green_passes: once && then_pass,
     }
 }

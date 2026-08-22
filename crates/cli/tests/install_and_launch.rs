@@ -364,6 +364,12 @@ fn init_gates_then_builds_a_project_from_nothing() {
     );
     assert!(proj.join("CLAUDE.md").exists());
     assert!(proj.join(".mcp.json").exists() && proj.join(".air/roles.md").exists());
+    // air-arq: the roles prose a fresh init writes carries the run-to-completion sentence.
+    assert!(
+        std::fs::read_to_string(proj.join(".air/roles.md"))
+            .unwrap()
+            .contains("A hand-over is not a stop.")
+    );
     assert!(
         proj.join(".claude/skills/air-decomposition/SKILL.md")
             .exists()
@@ -452,9 +458,10 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     assert!(stdout.contains("attach -t w"), "{stdout}");
     assert!(!stderr.contains("tcgetattr"), "{stderr}");
     let lines: Vec<&str> = argv.lines().collect();
-    assert_eq!(lines.last(), Some(&"hello there"), "{argv}");
+    // The task goes first (air-2ct: after the deny list it reads as one more deny rule).
+    assert_eq!(lines.first(), Some(&"hello there"), "{argv}");
     assert!(lines.iter().all(|l| !l.starts_with("--tmux")), "{argv}");
-    assert_eq!(&lines[..2], ["--worktree", "w"]);
+    assert_eq!(&lines[1..3], ["--worktree", "w"]);
 }
 
 #[test]

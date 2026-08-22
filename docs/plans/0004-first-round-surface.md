@@ -9,6 +9,7 @@ under that date). Extends [`0001-first-slice.md`](0001-first-slice.md); supersed
 | Piece | Named pain it removes | Probe |
 |---|---|---|
 | One event line per hook invocation, session transitions included | First round is for information; in-place rows lose the sequence | `hook.rs` test: seven hooks, seven lines |
+| Stop hook nudge (worker, no claim, ready beads, `stop_hook_active` false → `decision=block` with the ids, once) | Workers ended their turn after hand-over with beads ready and sat idle ~20 min until messaged (ai_runner 2026-08-22, air-09i; adopter needs the same prompt by hand). Ready list is the cache `status`/`handover` write (`.air/ready.json`): `bd ready` is 1.1 s, the hook budget 100 ms; older than 5 min says "may be stale". Removal: a round where nudges followed by a claim ≤ nudges ignored, or >90% of hand-overs claim unprompted (event field `claim_followed_last_nudge`) | `stop_nudge` unit tests; `hook.rs` Stop test; selftest `stop` |
 | `air claim` / `air release` (wrap `bd update --claim`) | Claim history bd does not keep (attempts, release reason); no watchers ("a missed event must not be possible") | fake-bd test: order and nothing-on-refusal; selftest `claim` |
 | `air capture` / `inbox` / `triage` | Workers must not file beads; the inbox is not `ready` | CLI round-trip test |
 | `air status [--attention]` | The coordinator re-derives fleet state from chat; needs one screen and a deterministic "needs a human" list | pure `attention()` tests; selftest `attention` |
@@ -26,7 +27,13 @@ under that date). Extends [`0001-first-slice.md`](0001-first-slice.md); supersed
 - **Informed, not woken.** `air mcp` evaluates the attention conditions from the ledger every
   `AIR_CHANNEL_POLL_SECS` (30) and pushes new or escalated ones through
   `notifications/claude/channel`. No sockets, no timers in the coordinator, no daemon beyond the
-  server Claude Code already keeps alive for the session.
+  server Claude Code already keeps alive for the session. Conditions (2026-08-22): `stuck`,
+  `idle-with-claim`, `silent-with-claim`, `gone-with-claim`, `handover-not-green`,
+  `lease-held-by-dead-session`, `lease-stale`, `owner-decision-waiting`, and from air-e7q
+  `review-waiting` (once per bead in `awaiting_review`; subject is the bead; names worker, head,
+  the landing command) and `idle-without-claim` (worker idle with no claim while beads are
+  ready for `AIR_ATTENTION_IDLE_NOCLAIM_MIN`, default 5; removal: zero firings in a full round
+  once the Stop nudge is in). Inbox depth stays a measurement.
 - **One implementation.** MCP tools and resources invoke the `air` CLI with `--json`; they cannot
   disagree with the command line.
 - **Human in the loop.** Launchers `exec` an interactive `claude`; nothing headless.

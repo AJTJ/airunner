@@ -8,7 +8,9 @@
 //! - PreToolUse(Bash `bd close`/`bd update … -s awaiting_review|closed`): run the hand-over gate,
 //!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason).
 //! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
-//!   missing; quiet on the ok path and for the coordinator. Never blocks in this slice.
+//!   missing; quiet on the ok path and for the coordinator. One block: a worker with no claim
+//!   while beads are ready is nudged once with the ids (air-09i; `stop_hook_active` is the
+//!   loop guard; the ready list is the cache `status`/`handover` wrote, never a bd call).
 //! - SessionStart / PostToolUse / PermissionRequest / SessionEnd: session state rows.
 //!
 //! Every invocation appends exactly one event line to `.air/events/` (`hook.<event>`), including
@@ -19,11 +21,11 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use air_hooks::{HookEvent, HookInput, HookOutcome, handover_verdict, journal};
+use air_hooks::{HookEvent, HookInput, HookOutcome, handover_verdict, journal, stop_nudge};
 use air_ledger::Ledger;
 use rusqlite::params;
 
-use crate::cmd::{handover, log_event, now, open};
+use crate::cmd::{handover, log_event, now, open, ready_cache};
 use crate::git;
 
 pub fn run(repo: &Path) -> i32 {
@@ -280,22 +282,51 @@ fn dispatch(
             } else {
                 Some(format!("air: {}", v.message))
             };
+            // Nudge (air-09i): no claim, beads ready, first stop: block once with the list.
+            // The ready list is the cache `status`/`handover` wrote; no bd call here.
+            let now = now();
+            let cache = ready_cache::read(cwd);
+            let (ready, stale) = match &cache {
+                Some(c) => (c.ids.clone(), !ready_cache::is_fresh(&c.at, &now)),
+                None => (Vec::new(), true),
+            };
+            let stop_hook_active = input.stop_hook_active.unwrap_or(false);
+            let nudge = stop_nudge("worker", holds_claim, &ready, stop_hook_active, stale);
+            // Measurement: did a claim follow the previous nudge within 10 min?
+            let followed = ledger
+                .last_emission(&input.session_id, "nudge")
+                .ok()
+                .flatten()
+                .map(|(_, at)| claim_followed(ledger, worker, &at));
+            if nudge.is_some() {
+                let _ = ledger.emit_if_changed(&input.session_id, "nudge", &now, &now);
+            }
+            let decision = if nudge.is_some() {
+                "nudge"
+            } else if v.pass {
+                "pass"
+            } else if !holds_claim {
+                "no-claim"
+            } else if speak {
+                "would-refuse"
+            } else {
+                "would-refuse-repeat"
+            };
+            let outcome = match nudge {
+                Some(reason) => HookOutcome::Block { reason },
+                None => HookOutcome::Allow { context },
+            };
             Dispatched::new(
-                HookOutcome::Allow { context },
-                if v.pass {
-                    "pass"
-                } else if !holds_claim {
-                    "no-claim"
-                } else if speak {
-                    "would-refuse"
-                } else {
-                    "would-refuse-repeat"
-                },
+                outcome,
+                decision,
                 format!("{}; {}", transition(&prev, "idle"), v.message),
             )
             .inputs(serde_json::json!({
                 "head": f.head,
                 "stop_hook_active": input.stop_hook_active,
+                "ready": ready,
+                "ready_stale": stale,
+                "claim_followed_last_nudge": followed,
             }))
             .denominator("4 checks")
         }
@@ -305,6 +336,27 @@ fn dispatch(
             "no handler",
         ),
     })
+}
+
+/// Did `worker` claim anything in the 10 minutes after `nudged_at`? The nudge measurement
+/// (air-09i removal condition). Claims are keyed by RFC 3339 text, which sorts as time.
+fn claim_followed(ledger: &Ledger, worker: &str, nudged_at: &str) -> bool {
+    let Ok(t) = nudged_at.parse::<jiff::Timestamp>() else {
+        return false;
+    };
+    let Ok(until) = t.checked_add(jiff::SignedDuration::from_mins(10)) else {
+        return false;
+    };
+    let until = until.to_string();
+    ledger
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM claims WHERE worker=?1 AND claimed_at > ?2 AND claimed_at <= ?3",
+            params![worker, nudged_at, until],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
 }
 
 /// The bead id in a hand-over command: first token after `close`/`update` that is not a flag.
@@ -699,22 +751,48 @@ mod tests {
         assert!(out.status.success());
         let (ledger, worker) = crate::cmd::open(&wt).unwrap();
         assert_eq!(worker, "wt");
-        let stop = |ledger: &air_ledger::Ledger| {
+        let stop_with = |ledger: &air_ledger::Ledger, active: bool| {
             let input = air_hooks::HookInput::parse(
-                &serde_json::json!({"session_id": "s", "hook_event_name": "Stop", "cwd": wt.to_string_lossy()}).to_string(),
+                &serde_json::json!({"session_id": "s", "hook_event_name": "Stop", "cwd": wt.to_string_lossy(), "stop_hook_active": active}).to_string(),
             )
             .unwrap();
             dispatch(ledger, "wt", &wt, &input).unwrap()
         };
-        // No claim: nothing to hand over, silent.
+        let stop = |ledger: &air_ledger::Ledger| stop_with(ledger, false);
+        // No claim, no ready cache: nothing to hand over, silent.
         let d = stop(&ledger);
         assert_eq!(d.decision, "no-claim");
         assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
-        ledger.record_claim("fd-1", "wt", &[], "t0").unwrap();
+        // No claim, beads ready (air-09i): block once with the ids; pass when Claude Code is
+        // already continuing because of the hook; a stale cache says so.
+        crate::cmd::ready_cache::write(&wt, &["fd-1".into(), "fd-2".into()], &crate::cmd::now());
+        let d = stop(&ledger);
+        assert_eq!(d.decision, "nudge");
+        let reason = match &d.outcome {
+            HookOutcome::Block { reason } => reason.clone(),
+            o => format!("not a block: {o:?}"),
+        };
+        assert!(reason.contains("ready: fd-1, fd-2"), "{reason}");
+        assert!(reason.contains("air claim fd-1"));
+        assert!(!reason.contains("stale"));
+        let d = stop_with(&ledger, true);
+        assert_eq!(d.decision, "no-claim");
+        assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
+        crate::cmd::ready_cache::write(&wt, &["fd-1".into()], "2020-01-01T00:00:00Z");
+        let d = stop(&ledger);
+        assert!(
+            matches!(&d.outcome, HookOutcome::Block { reason } if reason.contains("may be stale"))
+        );
+        assert_eq!(d.inputs["claim_followed_last_nudge"], false);
+        // A claim ends the nudging, and the measurement records that one followed.
+        ledger
+            .record_claim("fd-1", "wt", &[], &crate::cmd::now())
+            .unwrap();
         // Claim held, no green recorded: speaks once, then the identical gap is silent.
         let d = stop(&ledger);
         assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
         assert_eq!(d.decision, "would-refuse");
+        assert_eq!(d.inputs["claim_followed_last_nudge"], true);
         let d = stop(&ledger);
         assert!(
             matches!(d.outcome, HookOutcome::Allow { context: None }),
