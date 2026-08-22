@@ -290,107 +290,180 @@ pub fn waiting_on_owner(s: &Snapshot) -> String {
 /// that names who handed each over, and that worker's green at HEAD. Derived every time, so
 /// the owner's feed and `air status` cannot disagree (air-6p5). bd absent or slow means no
 /// landings, not an error: `air inbox --owner` still shows the decisions.
-/// Which candidate ids are real beads, from Air's OWN ledger — no bd call.
+/// Which candidate ids this worker is responsible for, from Air's OWN ledger — no bd call.
 ///
-/// **`bd show` does not batch.** Measured 2026-08-22: one id ~1.4 s, two ~2.4 s, seventeen
-/// **19-21 s** — roughly per-id, unlike `bd close`, which really is one process for the whole
-/// set (air-869). A first version confirmed candidates with `bd show <ids…>` and silently
-/// returned nothing every time, because 17 ids blew the 2 s budget and the error was swallowed
-/// into "no landings". That is the failure this repo keeps finding: a cost assumed rather than
-/// measured, failing quiet.
+/// **Claimed by this worker, and not already landed.** Both halves come from tables Air
+/// writes, so neither moves when git does. There used to be a third: claimed since the branch
+/// point. It was the bug that made `air land` unusable in adopter (air-6u5) — **merging main
+/// moves the branch point forward past the claim that started the work, and landing requires
+/// merging main**, so preparing to land was what destroyed the attribution. air-4re had
+/// already taken that narrowing off declared ids for the same reason; this takes it off the
+/// guessed ones, which is what a repo with no trailers has.
 ///
-/// So the frequent path pays nothing. Every bead a worker worked here has a claim row, which
-/// is the same fact `air claim` writes, and it filters the loose commit-message extraction
-/// down to real ids. `air land` fetches acceptance for the one branch it is landing, where
-/// seconds are affordable beside a full verify.
+/// "Not already landed" is the bound that replaces it, and it is exact rather than a
+/// heuristic: Air records the beads of every landing itself.
+///
+/// `bd show` does not batch — 1 id ~1.4 s, 17 ids 19-21 s, measured 2026-08-22 — so no bd call
+/// happens here at all. `air land` fetches acceptance for the one branch it is landing.
 fn known_beads(
     ledger: &air_ledger::Ledger,
     ids: &[String],
     worker: &str,
-    since: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     if ids.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    // Claimed BY THIS WORKER, not merely known to the ledger. A branch's commit bodies cite
-    // other people's beads constantly ("the flow changed (air-7o3)"), and without this the
-    // report named eight beads for a branch that carried three.
-    // ...and claimed SINCE THE BRANCH POINT. A worktree name is permanent, so without a time
-    // bound the set only ever grows: a commit citing one of this worker's own older beads
-    // ("AIR_ENFORCE=1 since air-i59") re-reported a bead landed rounds ago. The bound is the
-    // branch point, which is the same instant the merge range starts from, so the two cannot
-    // drift apart. **[adopter, measured]** they hit the unbounded version first.
-    let mut st = match ledger
-        .conn()
-        .prepare("SELECT DISTINCT bead FROM claims WHERE worker=?1 AND claimed_at >= ?2")
-    {
-        Ok(st) => st,
-        Err(_) => return Vec::new(),
+    let claimed: Vec<String> = {
+        let mut st = ledger
+            .conn()
+            .prepare("SELECT DISTINCT bead FROM claims WHERE worker=?1")
+            .map_err(|e| format!("claims: {e}"))?;
+        let rows = st
+            .query_map([worker], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("claims: {e}"))?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| format!("claims: {e}"))?
     };
-    let known: Vec<String> = st
-        .query_map([worker, since], |r| r.get::<_, String>(0))
-        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
-        .unwrap_or_default();
-    ids.iter()
-        .filter(|i| known.iter().any(|k| k == *i))
+    let landed: Vec<String> = ledger
+        .landings()
+        .map_err(|e| format!("landings: {e}"))?
+        .into_iter()
+        .filter(|l| l.result == "landed")
+        .flat_map(|l| l.beads)
+        .collect();
+    Ok(ids
+        .iter()
+        .filter(|i| claimed.iter().any(|c| c == *i) && !landed.iter().any(|l| l == *i))
         .cloned()
-        .collect()
+        .collect())
 }
 
-/// What `air land` may land, and what it will report when it does.
+/// The narrowing, exposed for `air selftest`: it is the half of air-6u5 that a probe can
+/// reach without a git repo, and the half that was wrong.
+pub fn attributable_for_test(
+    ledger: &air_ledger::Ledger,
+    ids: &[String],
+    worker: &str,
+) -> Result<Vec<String>, String> {
+    known_beads(ledger, ids, worker)
+}
+
+/// A branch that is not landable, and why. Never silent (air-6u5).
+#[derive(Debug, Clone, Serialize)]
+pub struct Skipped {
+    pub worker: String,
+    /// The precondition that failed, as a name a person can grep for.
+    pub check: &'static str,
+    pub detail: String,
+    /// The command that would make it landable.
+    pub fix: String,
+}
+
+/// Everything selection found: what can land, what cannot and why, and what broke.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Selection {
+    pub landings: Vec<Landing>,
+    pub skipped: Vec<Skipped>,
+    /// Real failures — git or the ledger — as distinct from "does not qualify". An error here
+    /// must never read as an empty queue.
+    pub errors: Vec<String>,
+}
+
+/// What `air land` may land, why each other branch may not, and what failed.
 ///
 /// **Selection is: a worktree branch carrying a recorded green at its head, and the beads its
-/// merge range names** (air-7kp). It used to be `bd list --status awaiting_review`, which the
-/// owner's 2026-08-22 ruling emptied: a worker closes its own bead with proof and never sets
-/// that status, so `air land --all` found nothing and the pre-merge acceptance report printed
-/// nothing, on every branch. Both came from this one filter.
+/// merge range names** (air-7kp) — declared by a `Bead:` trailer, or guessed from prose on
+/// commits predating the trailer and narrowed to this worker's unlanded claims.
 ///
-/// Two properties worth stating, because the obvious alternatives lack them:
-///
-/// - **The range bounds itself.** Candidates come from `main..<head>`, so a bead leaves the
-///   set the moment its work lands. A rule keyed on the worker instead — an assignee or a
-///   worktree name — has nothing to bound it once beads are closed rather than transient, and
-///   would report everything that worker ever closed, growing silently and invisibly to any
-///   probe written against a fresh repo (adopter, measured).
-/// - **Containment selects, it never closes.** `air land` closes nothing (air-ayp), so a wrong
-///   id here prints a bead that did not belong rather than closing one; the cost is a person
-///   reading a wrong line, which is why the cheap rule is the right one.
-pub fn landings_for(repo: &Path) -> Vec<Landing> {
-    let Ok((ledger, _)) = open(repo) else {
-        return Vec::new();
+/// **Nothing here is silent** (air-6u5). Every branch that does not qualify says which
+/// precondition it failed and the command that fixes it, and every git or ledger failure is an
+/// error rather than an absence. `air land --all` returning `{"landed": [], "ok": true}` was
+/// the worst answer available: there was no output to disbelieve, so a caller concluded the
+/// queue was empty. adopter hit it with every precondition verified by hand and fell back to
+/// their own `make land`; this repo hit it twice the same day.
+pub fn select(repo: &Path) -> Selection {
+    let mut out = Selection::default();
+    let (ledger, _) = match open(repo) {
+        Ok(x) => x,
+        Err(e) => {
+            out.errors.push(format!("ledger: {e}"));
+            return out;
+        }
     };
     let at = now();
-    let mut v: Vec<Landing> = Vec::new();
-    for (path, _) in git::worktrees(repo).unwrap_or_default() {
+    let worktrees = match git::worktrees(repo) {
+        Ok(w) => w,
+        Err(e) => {
+            out.errors.push(format!("git worktree list: {e}"));
+            return out;
+        }
+    };
+    for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         if super::hook::role_for(&worker) != "worker" {
+            continue; // the coordinator's own checkout is not a candidate, and never was
+        }
+        let head = match git::head(&path) {
+            Ok(h) => h,
+            Err(e) => {
+                out.errors
+                    .push(format!("{worker}: git rev-parse HEAD: {e}"));
+                continue;
+            }
+        };
+        match ledger.is_green_at(&worker, &head, Kind::Verify) {
+            Ok(true) => {}
+            Ok(false) => {
+                out.skipped.push(Skipped {
+                    check: "green-at-head",
+                    detail: format!(
+                        "{worker} has no recorded green at its head {}",
+                        head.get(..8).unwrap_or(&head)
+                    ),
+                    fix: "in that worktree: air record verify -- <the repo's verify>".to_string(),
+                    worker: worker.clone(),
+                });
+                continue;
+            }
+            Err(e) => {
+                out.errors.push(format!("{worker}: green lookup: {e}"));
+                continue;
+            }
+        }
+        let range = format!("main..{head}");
+        let found = super::attribution::attributed_in_range(repo, &range);
+        // A declared bead stands as it is; only a guessed one is narrowed (air-4re).
+        let mut ids = found.declared;
+        match known_beads(&ledger, &found.guessed, &worker) {
+            Ok(g) => ids.extend(g),
+            Err(e) => {
+                out.errors.push(format!("{worker}: {e}"));
+                continue;
+            }
+        }
+        if ids.is_empty() {
+            out.skipped.push(Skipped {
+                check: "no-bead-named",
+                detail: format!(
+                    "{worker} is green at {} but no commit in main..{} declares a bead",
+                    head.get(..8).unwrap_or(&head),
+                    head.get(..8).unwrap_or(&head)
+                ),
+                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend), or land it by name: air land <bead>"
+                    .to_string(),
+                worker: worker.clone(),
+            });
             continue;
         }
-        let Ok(head) = git::head(&path) else { continue };
-        if ledger.is_green_at(&worker, &head, Kind::Verify).ok() != Some(true) {
-            continue;
-        }
-        // How long this branch has been waiting: its oldest commit since main. Under
-        // close-with-proof there is no hand-over moment to measure from, and the branch point
-        // is the honest substitute — it is also what keeps the set from growing.
-        // Normalised through jiff: git's `%cI` carries an offset (`+00:00`) and the ledger's
-        // times are `Z`-suffixed, so comparing the two as strings is wrong for any non-UTC
-        // machine and wrong at the character level even on a UTC one.
+        // Oldest commit since main: how long this branch has waited. Used for ORDERING only —
+        // never to decide whether a bead belongs, which is what air-6u5 was.
         let since = git::branch_point_time(&path, "main")
             .ok()
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
             .unwrap_or_else(|| at.clone());
-
-        let range = format!("main..{head}");
-        // A declared bead is taken as it stands; only a guessed one is narrowed by who
-        // claimed it and when (air-4re).
-        let found = super::attribution::attributed_in_range(repo, &range);
-        let mut ids = found.declared;
-        ids.extend(known_beads(&ledger, &found.guessed, &worker, &since));
-
         for bead in ids {
-            v.push(Landing {
+            out.landings.push(Landing {
                 command: land_command(&bead),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
                 // here: this runs on every `air status` and bd is far too slow per id.
@@ -402,8 +475,14 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
             });
         }
     }
-    sort_by_wait(&mut v);
-    v
+    sort_by_wait(&mut out.landings);
+    out
+}
+
+/// Just the landable list, for the read-only callers (`air status`, `air inbox --owner`).
+/// `air land` uses [`select`], because it is the caller that must not read an error as empty.
+pub fn landings_for(repo: &Path) -> Vec<Landing> {
+    select(repo).landings
 }
 
 /// Acceptance clauses for the beads of ONE branch, fetched at land time.
@@ -413,19 +492,25 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
 /// read: bd's `acceptance_criteria` field when the bead set it — bd omits the key entirely
 /// when unset — and the `## Acceptance Criteria` section of the description otherwise
 /// (air-ayp).
-pub fn acceptance_for(repo: &Path, beads: &[String]) -> Vec<Vec<String>> {
+///
+/// A bd failure is an ERROR, never an empty clause list (air-6u5, capture
+/// 01M0NGZQX9DW6NAABS5ES30SPQ). Swallowing it would print "states no acceptance criteria" for
+/// every bead in the merge, which reads as a bead nobody wrote criteria for rather than as bd
+/// not answering — the same mistake as `{"landed": [], "ok": true}` one layer down.
+pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>, String> {
     if beads.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let bd = super::claim::bd_for(repo);
-    let issues = air_bd::WorkLedger::show_all(&bd, beads).unwrap_or_default();
-    beads
+    let issues = air_bd::WorkLedger::show_all(&bd, beads)
+        .map_err(|e| format!("bd show for {}: {e}", beads.join(" ")))?;
+    Ok(beads
         .iter()
         .map(|b| match issues.iter().find(|i| &i.id == b) {
             Some(i) => super::acceptance::clauses_of(&i.acceptance_criteria, &i.description),
             None => Vec::new(),
         })
-        .collect()
+        .collect())
 }
 
 /// Minutes between two RFC 3339 timestamps; None when either does not parse.
