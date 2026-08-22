@@ -27,6 +27,9 @@ pub struct Session {
     pub pid: Option<i64>,
     /// Filled by `gather` when a pid is known: is that process still running?
     pub pid_alive: Option<bool>,
+    /// Which fleet this session belongs to (air-0lk). The hook writes it from `AIR_PROJECT`,
+    /// so a cross-project refusal is derived from the ledger, not from a name's spelling.
+    pub project: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -530,8 +533,8 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         let mut st = ledger
             .conn()
             .prepare(
-                "SELECT worker, role, session_id, state, detail, changed_at, pid FROM sessions \
-                 ORDER BY changed_at DESC",
+                "SELECT worker, role, session_id, state, detail, changed_at, pid, project \
+                 FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let rows = st
@@ -546,6 +549,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
                         changed_at: r.get(5)?,
                         pid: r.get(6)?,
                         pid_alive: None,
+                        project: r.get(7)?,
                     },
                 ))
             })
@@ -1047,6 +1051,7 @@ mod tests {
                 changed_at: changed.into(),
                 pid: None,
                 pid_alive: None,
+                project: String::new(),
             }),
             head: Some("abc".into()),
             green_at_head: green,

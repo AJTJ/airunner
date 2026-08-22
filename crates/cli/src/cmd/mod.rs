@@ -14,6 +14,7 @@ pub mod land;
 pub mod launch;
 pub mod lease;
 pub mod mcp;
+pub mod project;
 pub mod ready_cache;
 pub mod record;
 pub mod selftest;
