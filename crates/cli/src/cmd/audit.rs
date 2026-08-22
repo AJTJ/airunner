@@ -68,7 +68,36 @@ pub struct Audit {
     /// Reported as defects: a registry that silently omits a firing mechanism reads as
     /// complete when it is not, which is worse than no registry (air-0y9).
     pub unregistered: Vec<(String, usize)>,
+    /// What the hand-over gate costs per bead, from the event log (air-2zq). None when the
+    /// window recorded no verify runs.
+    pub cost: Option<Cost>,
     pub duration_ms: u64,
+}
+
+/// What enforcing a green costs, in the units the decision needs (air-2zq).
+///
+/// air-i59 made the gate blocking on evidence measured against the hand-over flow: one gate
+/// per bead. air-7o3 replaced hand-over with close-with-proof, and the concern raised was that
+/// the cost per bead had risen without anyone pricing it. **A mechanism justified by
+/// measurement against one flow does not stay justified when the flow changes, and nothing
+/// prompts the re-measurement.** So the audit reports it, and the next flow change re-reads it
+/// here rather than re-deriving it.
+///
+/// `repeat_shas` is the number that decides whether the gate wastes work: a green recorded at
+/// a HEAD that has not moved is still green, so a second close on an unchanged HEAD demands no
+/// fresh verify. A high repeat count would mean it does.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Cost {
+    /// `air record verify` runs in the window.
+    pub verify_runs: usize,
+    /// Distinct commits verified. Runs minus this is re-verification of an unchanged tree.
+    pub distinct_shas: usize,
+    /// Runs that re-verified a sha already verified by the same worker.
+    pub repeat_runs: usize,
+    /// `bd close` / `-s closed` / `-s awaiting_review` writes the gate saw pass.
+    pub closes: usize,
+    /// Verify runs per close. The per-bead price of enforcing a green.
+    pub runs_per_close: Option<f64>,
 }
 
 /// What one mechanism accumulated over the scan.
@@ -263,6 +292,8 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
     let registered = registered_traces();
     let mut events_scanned = 0usize;
     let mut days_scanned = 0usize;
+    // Closes the gate let through: one `pass` per bd status write it inspected (air-2zq).
+    let mut closes = 0usize;
 
     for (day, text) in days {
         let in_window = day.as_str() >= since;
@@ -273,6 +304,9 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             let Some(e) = parse(line) else { continue };
             if in_window {
                 events_scanned = events_scanned.saturating_add(1);
+            }
+            if in_window && e.decision == "pass" && e.command == "hook.PreToolUse" {
+                closes = closes.saturating_add(1);
             }
             let mut attributed = false;
             for (m, a) in MECHANISMS.iter().zip(acc.iter_mut()) {
@@ -345,7 +379,34 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         events_scanned,
         rows,
         unregistered: seen_traces.into_iter().collect(),
+        // Filled in by `run` from the ledger's verify_runs; `gather_from` supplies the close
+        // count, which is the only half the event log knows.
+        cost: Some(Cost {
+            closes,
+            ..Cost::default()
+        }),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
+    }
+}
+
+/// What the gate cost, from the verify runs and the closes it let through (air-2zq). Pure over
+/// the `(worker, sha)` pairs, so `air selftest` can assert the repeat arithmetic without a
+/// ledger.
+pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
+    let distinct: std::collections::BTreeSet<&(String, String)> = runs.iter().collect();
+    // A ratio of two counts. `u32::try_from` keeps the conversion lossless for any count that
+    // could plausibly appear, and a window with more than 4 billion runs reports None rather
+    // than a silently rounded number.
+    let per = match (u32::try_from(runs.len()), u32::try_from(closes)) {
+        (Ok(r), Ok(c)) if c > 0 => Some(f64::from(r) / f64::from(c)),
+        _ => None,
+    };
+    Cost {
+        verify_runs: runs.len(),
+        distinct_shas: distinct.len(),
+        repeat_runs: runs.len().saturating_sub(distinct.len()),
+        closes,
+        runs_per_close: per,
     }
 }
 
@@ -402,6 +463,24 @@ pub fn render(a: &Audit) -> String {
             s.push_str(&format!("  {n:5}  {k}\n"));
         }
     }
+    if let Some(c) = &a.cost {
+        s.push_str(&format!(
+            "\nhand-over gate cost: {} verify run(s) over {} distinct commit(s), {} repeat(s); \
+             {} close(s) passed{}\n",
+            c.verify_runs,
+            c.distinct_shas,
+            c.repeat_runs,
+            c.closes,
+            match c.runs_per_close {
+                Some(r) => format!(" = {r:.2} verify run(s) per close"),
+                None => String::new(),
+            }
+        ));
+        s.push_str(
+            "  repeats are the waste to watch: a green at a HEAD that has not moved still \
+             counts, so a second close on an unchanged commit demands no fresh verify.\n",
+        );
+    }
     s
 }
 
@@ -414,7 +493,21 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
         }
     };
     let since = since.map(str::to_string).unwrap_or_else(super::today);
-    let audit = gather(ledger.dir(), &since);
+    let mut audit = gather(ledger.dir(), &since);
+    // The other half of the cost: what the gate made workers run. The event log knows the
+    // closes; the verify runs are the ledger's (air-2zq).
+    let runs: Vec<(String, String)> = ledger
+        .conn()
+        .prepare(
+            "SELECT worker, sha FROM verify_runs WHERE kind='verify' AND started_at >= ?1 \
+             ORDER BY started_at",
+        )
+        .and_then(|mut st| {
+            st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect()
+        })
+        .unwrap_or_default();
+    audit.cost = Some(cost_of(&runs, audit.cost.as_ref().map_or(0, |c| c.closes)));
     let defects = audit
         .rows
         .iter()
