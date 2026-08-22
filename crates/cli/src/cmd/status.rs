@@ -192,9 +192,9 @@ pub struct Landing {
     pub minutes: i64,
     /// The exact command, the repo's own until `air land` exists.
     pub command: String,
-    /// The bullets under `## Acceptance Criteria` in the bead, from the same `bd list --json`
-    /// this already makes. `air land` will not close a bead whose acceptance it cannot point
-    /// at evidence for (air-ayp); this is what the owner's queue shows is outstanding. Empty
+    /// The bead's acceptance clauses, from bd's `acceptance_criteria` field and the
+    /// `## Acceptance Criteria` section, out of the same `bd list --json` this already makes.
+    /// `air land` prints them beside its verdict on each; it closes nothing (air-ayp). Empty
     /// when the snapshot did not come from bd.
     #[serde(default)]
     pub acceptance: Vec<String>,
@@ -324,9 +324,11 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
             }
             Some(Landing {
                 command: land_command(&i.id),
-                // bd 1.2.2 has no `acceptance_criteria` field: the criteria are a section in
-                // the description, which this same `bd list --json` already returned (air-ayp).
-                acceptance: super::acceptance::clauses(&i.description),
+                // Both shapes, from the same `bd list --json` this already made: bd's
+                // `acceptance_criteria` field when the bead set it, and the
+                // `## Acceptance Criteria` section otherwise. Which one a repo uses is a
+                // property of how it files beads (air-ayp).
+                acceptance: super::acceptance::clauses_of(&i.acceptance_criteria, &i.description),
                 bead: i.id,
                 head: head.clone()?,
                 minutes: minutes_between(&since, &at).unwrap_or(0),
@@ -498,17 +500,18 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             fingerprint: format!("{bead}/{worker}"),
         });
     }
-    // air-ayp: a bead the merge carried but could not close. Subject is the bead, so the
-    // channel says it once and says it again only when the reason changes.
+    // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
+    // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
+    // and says it again only when the reason changes.
     for o in &s.landed_open {
         let (bead, why) = (&o.bead, &o.why);
         out.push(Attention {
             worker: bead.clone(),
             kind: "landed-not-closed",
             detail: format!(
-                "{bead} is merged ({}) but not closed: {why}. Look, then `air close {bead} \
-                 --reason \"<what you checked>\"`; or file what is left as a new bead. \
-                 Handed over by {}.",
+                "{bead} landed in {} with an acceptance clause this merge CONTRADICTS: {why}. \
+                 The worker closes its own bead with proof, so read the bead: either reopen it \
+                 or file what is left. Landed from {}.",
                 o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
                 o.worker
             ),

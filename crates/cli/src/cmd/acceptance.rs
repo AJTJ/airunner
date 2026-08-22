@@ -13,22 +13,39 @@
 //! project's coordinator on 2026-08-22 and recorded in air-ayp. Not read from here: a session
 //! may only touch its own project (air-0lk), so these numbers are cited, not verified.
 //!
+//! ## Where the criteria live, and how that was got wrong three times
+//!
+//! bd keeps acceptance in two places and OMITS the `acceptance_criteria` key entirely when it
+//! is unset. So a key listing taken over beads that never set it reads as "bd has no such
+//! field" — which is what this repo's beads show (0 of 33 carry it) and what two coordinators
+//! and this module concluded, each having checked. adopter's implementing agent surveyed all
+//! 711 of its beads and inverted it: 647 field, 57 section, 0 both, 7 neither. The shape is a
+//! property of how a repo files beads, and `air land` runs in every repo, so `clauses_of`
+//! reads the UNION. A fixture with one shape proves nothing about the other.
+//!
+//! Their formulation, which is the lesson: a verification that does not have the shape of the
+//! use is not a verification. Three parties, two real checks, still wrong, because all three
+//! sampled where the use required a survey.
+//!
 //! Air shipped `air land` with the same shape on 2026-08-22 (air-3pz), before the `landings`
 //! table had a writer, so the constraint is built in rather than retrofitted.
 //!
-//! ## Two layers, and which one is load-bearing
+//! ## The worker closes its own bead with proof
 //!
-//! adopter's owner ruled that the author closes its own bead with proof, so by the time a
-//! branch lands there is nothing left to close, and the merge's job is to PRINT each bead
-//! beside its acceptance so a wrong close is visible at the moment it lands. This repo's owner
-//! has not ruled. So `air land` is built in two layers:
+//! Owner ruling, 2026-08-22: there is no hand-over-for-review. The worker that did the work
+//! closes its own bead, and the close reason is PROOF — a command and its output, a
+//! `file:line`, a passing test — not a description of what was built. So by the time a branch
+//! lands there is nothing left to close.
 //!
-//! 1. **The report**, which is true under both models: every bead in the range is printed with
-//!    its acceptance clauses and Air's verdict on each. Nothing closes on branch containment.
-//! 2. **The close**, layered on top: beads whose every clause is discharged are closed.
+//! `air land` therefore closes nothing. Its whole acceptance behaviour is to PRINT every bead
+//! in the merge range beside its criteria and Air's verdict on each clause, so a wrong close is
+//! visible at the moment it lands. That print is the only external check on the honour system.
+//! (This was built as a report layer plus a deletable closing layer; the ruling deleted the
+//! closing layer, which is what the split was for.)
 //!
-//! If this repo adopts close-with-proof, layer 2 is deleted and layer 1 is untouched. That is
-//! the point of the split (coordinator, 2026-08-22).
+//! The green-at-HEAD gate matters more under this model, not less, since an agent is proving
+//! its own work: `is_handover_command` already matches `bd close` and `-s closed`, so the one
+//! refusal covers close-with-proof exactly as it covered hand-over.
 //!
 //! **Air is not the judge of prose.** It discharges exactly two clause shapes, and both are
 //! lookups rather than readings:
@@ -42,42 +59,74 @@
 //! not a criticism of the bead. 29 of adopter's 99 were of that kind, and the bead requires
 //! that case be explicit — never silently closed, never blocked from landing.
 //!
-//! A bead closes only when it has at least one clause and every clause is discharged. Anything
-//! else lands merged-but-not-closed, and a person closes it with `air close` when they have
-//! looked. That is deliberately conservative: the cost of not closing is one command, and the
-//! cost of closing wrongly is a decision that stops existing.
+//! `Discharged` on every clause is what lets a reader trust a close at a glance. A clause Air
+//! can actively REFUTE — a bead naming a file the merge did not touch — is the signal worth
+//! carrying past scrollback, because that is a wrong close rather than an unreadable one.
 //!
 //! Removal condition: remove when acceptance criteria are machine-checkable by construction,
 //! at which point the merge either satisfies them or does not and no judgement is involved.
 
 use serde::Serialize;
 
-/// The bullets under `## Acceptance Criteria` in a bead's description. bd 1.2.2 has no
-/// `acceptance_criteria` field; the section is what `bd create --validate` requires (roles.md,
-/// bd `internal/types/types.go` `RequiredSections`). A bullet may wrap over several lines.
-pub fn clauses(description: &str) -> Vec<String> {
+/// Every acceptance clause a bead states, from BOTH places bd keeps them (air-ayp).
+///
+/// bd has a first-class `acceptance_criteria` field (`bd create/update --acceptance`) AND
+/// repos that file with `-d` put a `## Acceptance Criteria` section in the description. Which
+/// one a bead uses depends on how its repo files beads, and `air land` runs in every repo, so
+/// this reads the union rather than either half. Measured: this repo is 33 section / 0 field;
+/// adopter is 647 field / 57 section / 0 both / 7 neither, across all 711 of its beads.
+///
+/// Both empty is a real case (adopter's 7): no clauses, which never closes.
+pub fn clauses_of(field: &str, description: &str) -> Vec<String> {
+    let mut out = bullets(field);
+    out.extend(section(description));
+    out
+}
+
+/// Bullets in a block of text. A block with no bullets at all is one clause: `--acceptance
+/// "criterion A"` is the single-criterion form, and dropping it would read as "states none".
+fn bullets(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        push_line(line.trim(), &mut out);
+    }
+    if out.is_empty() && !text.trim().is_empty() {
+        return vec![text.split_whitespace().collect::<Vec<_>>().join(" ")];
+    }
+    out
+}
+
+/// One line of a criteria block: a new bullet, or a continuation of the previous one.
+fn push_line(t: &str, out: &mut Vec<String>) {
+    match t.strip_prefix("- ").or_else(|| t.strip_prefix("• ")) {
+        Some(rest) => out.push(rest.trim().to_string()),
+        // A continuation of the previous bullet; a blank line is just spacing.
+        None if !t.is_empty() => {
+            if let Some(last) = out.last_mut() {
+                last.push(' ');
+                last.push_str(t);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The bullets under a heading that is EXACTLY `Acceptance Criteria`. Anchored on the whole
+/// heading, not a substring: the adopter has three descriptions with headings merely including
+/// the word ("## Ownership, and the acceptance"), and any following heading ends the section
+/// so a later one is never swallowed.
+pub fn section(description: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut inside = false;
     for line in description.lines() {
         let t = line.trim();
-        if let Some(h) = t.strip_prefix("## ") {
-            // Any following heading ends the section.
-            inside = h.trim().eq_ignore_ascii_case("acceptance criteria");
+        if t.starts_with('#') {
+            let heading = t.trim_start_matches('#').trim();
+            inside = heading.eq_ignore_ascii_case("acceptance criteria");
             continue;
         }
-        if !inside {
-            continue;
-        }
-        match t.strip_prefix("- ").or_else(|| t.strip_prefix("• ")) {
-            Some(rest) => out.push(rest.trim().to_string()),
-            // A continuation of the previous bullet; a blank line is just spacing.
-            None if !t.is_empty() => {
-                if let Some(last) = out.last_mut() {
-                    last.push(' ');
-                    last.push_str(t);
-                }
-            }
-            _ => {}
+        if inside {
+            push_line(t, &mut out);
         }
     }
     out
@@ -197,16 +246,26 @@ pub struct Judged {
 }
 
 impl Judged {
-    /// A bead closes only when it states acceptance and every clause is discharged. No
-    /// clauses at all is not a pass: it means Air read nothing.
-    pub fn may_close(&self) -> bool {
+    /// Every clause looked up and held. What lets a reader trust a close at a glance. No
+    /// clauses at all is not a pass: it means Air read nothing (adopter had 7 such beads).
+    pub fn all_discharged(&self) -> bool {
         !self.clauses.is_empty() && self.clauses.iter().all(|(_, v)| v.discharged())
     }
 
-    /// One line naming what stopped the close, for the landings row and the condition.
+    /// At least one clause Air could actively REFUTE. Not "could not read" — refuted. This is
+    /// the wrong-close signal, and the only one carried past the print (air-ayp).
+    pub fn refuted(&self) -> bool {
+        self.clauses
+            .iter()
+            .any(|(_, v)| matches!(v, Verdict::Unevidenced { .. }))
+    }
+
+    /// One line naming every clause Air could not discharge, for the landings row and the
+    /// condition.
     pub fn why_open(&self) -> String {
         if self.clauses.is_empty() {
-            return "the bead states no acceptance criteria, so Air read nothing to check"
+            return "the bead states no acceptance criteria, in the field or the description, \
+                    so Air read nothing to check"
                 .to_string();
         }
         let mut parts: Vec<String> = Vec::new();
@@ -233,19 +292,28 @@ pub fn report(judged: &[Judged]) -> String {
     if judged.is_empty() {
         return String::new();
     }
-    let mut s = format!("\nacceptance for {} bead(s) in this merge:\n", judged.len());
+    let mut s = format!(
+        "\nacceptance for {} bead(s) in this merge (air land closes nothing; the worker closes \
+         its own bead with proof, so this is the check on that):\n",
+        judged.len()
+    );
     for j in judged {
         s.push_str(&format!(
             "\n  {} — {}\n",
             j.bead,
-            if j.may_close() {
+            if j.refuted() {
+                "REFUTED: a clause is contradicted by what this merge contains"
+            } else if j.all_discharged() {
                 "every clause discharged"
             } else {
-                "NOT closing"
+                "not fully checkable by Air; read it"
             }
         ));
         if j.clauses.is_empty() {
-            s.push_str("    (no acceptance criteria stated; Air read nothing)\n");
+            s.push_str(
+                "    (no acceptance criteria in the field or the description; Air read \
+                 nothing)\n",
+            );
         }
         for (text, v) in &j.clauses {
             let (mark, how) = match v {
@@ -283,7 +351,7 @@ mod tests {
 
     /// Test convenience: parse then judge, the way `air land` does across two call sites.
     fn judge_desc(bead: &str, description: &str, ev: &Evidence<'_>) -> Judged {
-        judge_clauses(bead, clauses(description), ev)
+        judge_clauses(bead, clauses_of("", description), ev)
     }
 
     const BEAD: &str = "\
@@ -305,13 +373,13 @@ Something happened. See docs/rules/roles.md for the rule.
 
     #[test]
     fn clauses_come_from_the_section_only_and_wrapped_bullets_join() {
-        let c = clauses(BEAD);
+        let c = clauses_of("", BEAD);
         assert_eq!(c.len(), 3, "{c:?}");
         assert!(c[0].ends_with("and allows with one."), "{:?}", c[0]);
         assert_eq!(c[1], "docs/rules/roles.md names the rule.");
         assert!(!c.iter().any(|x| x.contains("not a criterion")));
         // A bead with no section reads as no clauses, which never closes.
-        assert!(clauses("## Incident\n\n- a thing\n").is_empty());
+        assert!(clauses_of("", "## Incident\n\n- a thing\n").is_empty());
     }
 
     #[test]
@@ -367,7 +435,7 @@ Something happened. See docs/rules/roles.md for the rule.
         };
         // The probe clause is prose to Air, so this one lands and stays open.
         let j = judge_desc("air-1", BEAD, &ev);
-        assert!(!j.may_close());
+        assert!(!j.all_discharged());
         assert!(
             j.why_open().contains("nothing Air can look up"),
             "{}",
@@ -375,11 +443,11 @@ Something happened. See docs/rules/roles.md for the rule.
         );
 
         let all_evidenced = "## Acceptance Criteria\n\n- docs/rules/roles.md names the rule.\n- Verify recorded green at HEAD.\n";
-        assert!(judge_desc("air-2", all_evidenced, &ev).may_close());
+        assert!(judge_desc("air-2", all_evidenced, &ev).all_discharged());
 
         // No section at all: Air read nothing, so it does not close.
         let j = judge_desc("air-3", "## Incident\n\nnothing\n", &ev);
-        assert!(!j.may_close());
+        assert!(!j.all_discharged());
         assert!(j.why_open().contains("states no acceptance criteria"));
     }
 
@@ -401,9 +469,13 @@ Something happened. See docs/rules/roles.md for the rule.
             ),
             judge_desc("air-3", "## Incident\n\nnothing\n", &ev),
         ]);
-        assert!(r.contains("air-1 — NOT closing"), "{r}");
+        assert!(r.contains("air land closes nothing"), "{r}");
+        assert!(r.contains("air-1 — not fully checkable by Air"), "{r}");
         assert!(r.contains("air-2 — every clause discharged"), "{r}");
-        assert!(r.contains("no acceptance criteria stated"), "{r}");
+        assert!(
+            r.contains("no acceptance criteria in the field or the"),
+            "{r}"
+        );
         // Every clause is shown, discharged or not, so a wrong close is visible.
         assert!(
             r.contains("ok   docs/rules/roles.md names the rule."),
@@ -411,6 +483,75 @@ Something happened. See docs/rules/roles.md for the rule.
         );
         assert!(r.contains("?    Red/green probe"), "{r}");
         assert_eq!(report(&[]), "");
+    }
+
+    /// air-ayp: the two storage shapes are BOTH real and which one a bead uses depends on how
+    /// its repo files beads — 33 of 33 section-only here, 647 field / 57 section / 0 both /
+    /// 7 neither in adopter. `air land` runs in both, so a fixture with one shape proves
+    /// nothing. Every shape, including neither.
+    #[test]
+    fn both_storage_shapes_are_read_and_neither_is_reported() {
+        // Shape 1: bd's own field, set by `bd create --acceptance`. Single criterion, no
+        // bullets — dropping it would read as "states none", which is the dangerous direction.
+        assert_eq!(clauses_of("criterion A", ""), vec!["criterion A"]);
+        // The field can hold bullets too.
+        assert_eq!(
+            clauses_of("- one\n- two\n", ""),
+            vec!["one".to_string(), "two".to_string()]
+        );
+        // Shape 2: the section, for a repo that files with -d.
+        assert_eq!(
+            clauses_of("", "## Acceptance Criteria\n\n- from the section\n"),
+            vec!["from the section"]
+        );
+        // Both, which adopter has none of today but nothing forbids: the union, not either.
+        assert_eq!(
+            clauses_of("field one", "## Acceptance Criteria\n\n- section one\n"),
+            vec!["field one".to_string(), "section one".to_string()]
+        );
+        // Neither: the adopter measured 7. No clauses, so it is reported, never assumed met.
+        let j = judge_clauses(
+            "fd-7",
+            clauses_of("", "## Incident\n\nno criteria anywhere\n"),
+            &Evidence {
+                green_at_landed: true,
+                changed: &[],
+            },
+        );
+        assert!(!j.all_discharged() && !j.refuted());
+        assert!(
+            j.why_open().contains("no acceptance criteria"),
+            "{}",
+            j.why_open()
+        );
+    }
+
+    /// The heading is exactly `Acceptance Criteria`. the adopter has three descriptions with
+    /// headings merely including the word, and a following heading must not be swallowed.
+    #[test]
+    fn only_the_exact_heading_opens_the_section() {
+        let d = "## Ownership, and the acceptance\n\n\
+                 - not a criterion\n\n\
+                 ## Acceptance Criteria\n\n\
+                 - a real one\n\n\
+                 ### A sub-heading\n\n\
+                 - also not\n";
+        assert_eq!(section(d), vec!["a real one"]);
+    }
+
+    /// A refuted clause is a wrong close; an unreadable one is not. Only the first is carried
+    /// past the print.
+    #[test]
+    fn refuted_and_unreadable_are_different_signals() {
+        let changed = vec!["docs/rules/roles.md".to_string()];
+        let ev = Evidence {
+            green_at_landed: true,
+            changed: &changed,
+        };
+        let refuted = judge_clauses("a", vec!["docs/absent.md says it.".into()], &ev);
+        let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
+        assert!(refuted.refuted() && !refuted.all_discharged());
+        assert!(!unreadable.refuted() && !unreadable.all_discharged());
     }
 
     #[test]

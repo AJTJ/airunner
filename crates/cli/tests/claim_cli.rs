@@ -1094,13 +1094,11 @@ fn land_merges_verifies_closes_and_records() {
         std::fs::read_to_string(main.join("work.txt")).unwrap(),
         "the work\n"
     );
-    // One bd process closed it; the claim is released as landed.
+    // Every clause discharged, and still nothing is closed: the worker closes its own bead
+    // with proof before the branch lands (air-ayp).
+    assert!(out.contains("fd-1 — every clause discharged"), "{out}{err}");
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
-    assert!(
-        log.lines().any(|l| l.starts_with("close fd-1 --reason")),
-        "{log}"
-    );
-    assert_eq!(claims(&main)[0].2.as_deref(), Some("landed"));
+    assert!(!log.contains("close fd-1"), "{log}");
     // And the landing is a row, with the verify run that decided it.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let (worker, result, merge, verify): (String, String, String, String) = conn
@@ -1126,12 +1124,12 @@ fn land_merges_verifies_closes_and_records() {
     );
 }
 
-/// air-ayp: the failure adopter measured — a bead closing because its branch merged, with
-/// nobody reading its acceptance. A clause Air cannot point at evidence for leaves the bead
-/// MERGED BUT NOT CLOSED: no bd status is written for it, the reason is a `landings` row, and
-/// `air status` names it until somebody closes it.
+/// air-ayp: `air land` closes nothing — the worker closes its own bead with proof (owner
+/// ruling, 2026-08-22). The landing PRINTS every bead beside its acceptance and Air's verdict
+/// per clause, which is the only external check on that honour system. A clause the merge
+/// CONTRADICTS is a wrong close: kept on the `landings` row and named by `air status`.
 #[test]
-fn land_does_not_close_a_bead_whose_acceptance_it_cannot_evidence() {
+fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
     hand_over(&main, &alpha, &bd, "fd-1");
@@ -1152,39 +1150,39 @@ fn land_does_not_close_a_bead_whose_acceptance_it_cannot_evidence() {
         std::fs::read_to_string(main.join("work.txt")).unwrap(),
         "the work\n"
     );
-    // Layer 1, true under either closure model: every clause is printed with its verdict.
-    assert!(out.contains("acceptance for 1 bead(s)"), "{out}");
+    // The print: every clause with its verdict, so a wrong close is visible as it lands.
+    assert!(out.contains("air land closes nothing"), "{out}");
     assert!(out.contains("ok   Verify recorded green at HEAD."), "{out}");
     assert!(out.contains("MISS docs/absent.md says the rule."), "{out}");
     assert!(
         out.contains("?    The owner rules on the counter-argument."),
         "{out}"
     );
-    assert!(out.contains("fd-1 — NOT closing"), "{out}");
-    // Layer 2 did NOT run for it: no bd close, and no status write of any kind for fd-1.
+    assert!(out.contains("fd-1 — REFUTED"), "{out}");
+    // It closes NOTHING, and writes no bd status of any kind.
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
     assert!(!log.contains("close fd-1"), "{log}");
     assert!(
         !log.lines().any(|l| l.starts_with("update fd-1 -s")),
         "no bd status is written, so the bead blocks exactly what it blocked before: {log}"
     );
-    // The reason is a landings row, not a bd status.
+    // What the print said outlives the scrollback, on the landings row.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let (result, open): (String, String) = conn
         .query_row("SELECT result, open_beads FROM landings", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .unwrap();
-    assert_eq!(result, "landed-open");
+    assert_eq!(result, "landed-refuted");
     assert!(
         open.contains("fd-1") && open.contains("docs/absent.md"),
         "{open}"
     );
 
-    // And `air status` says so until somebody closes it.
+    // And `air status` names it until somebody deals with the bead.
     let (_, s, _) = air(&main, &bd, &["status"]);
     assert!(
-        s.contains("fd-1 is merged") && s.contains("air close fd-1"),
+        s.contains("fd-1 landed in") && s.contains("CONTRADICTS"),
         "{s}"
     );
     let (code, _, _) = air(
@@ -1194,7 +1192,10 @@ fn land_does_not_close_a_bead_whose_acceptance_it_cannot_evidence() {
     );
     assert_eq!(code, 0);
     let (_, s, _) = air(&main, &bd, &["status"]);
-    assert!(!s.contains("fd-1 is merged"), "cleared once closed: {s}");
+    assert!(
+        !s.contains("fd-1 landed in"),
+        "cleared once dealt with: {s}"
+    );
 }
 
 /// air-3pz: a red verify on the merged result puts main back exactly where it was and leaves

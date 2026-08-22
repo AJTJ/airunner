@@ -176,10 +176,9 @@ pub fn check(f: &Facts<'_>) -> Result<bool, String> {
 enum Outcome {
     Landed {
         merge: String,
-        /// Beads whose acceptance the merge can point at evidence for. Only these close.
-        closable: Vec<String>,
-        /// Beads merged but left open, with the clause Air could not discharge (air-ayp).
-        open: Vec<air_ledger::landings::OpenBead>,
+        /// Beads whose acceptance the merge could not fully discharge, with the clauses. A
+        /// record of what the print said; nothing here closes or blocks anything (air-ayp).
+        noted: Vec<air_ledger::landings::OpenBead>,
     },
     Nothing,
     Rewound(String),
@@ -262,22 +261,18 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     let mut code = 0;
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, json) {
-            Outcome::Landed {
-                merge,
-                closable,
-                open,
-            } => {
+            Outcome::Landed { merge, noted } => {
                 lines.push(format!(
                     "landed {} ({}) at {}",
                     batch.worker,
                     batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
-                for o in &open {
-                    lines.push(format!("  {} merged but NOT closed: {}", o.bead, o.why));
+                for o in noted.iter().filter(|o| o.refuted) {
+                    lines.push(format!("  {} REFUTED: {}", o.bead, o.why));
                 }
-                landed.extend(closable);
-                held_open.extend(open);
+                landed.extend(batch.beads.clone());
+                held_open.extend(noted);
             }
             Outcome::Nothing => lines.push(format!("{}: already in main", batch.worker)),
             Outcome::Rewound(why) => {
@@ -292,22 +287,13 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             }
         }
     }
-    // One bd process for everything that landed, at the end (air-869: bd costs per process).
-    if !landed.is_empty() {
-        let closed = super::close::run(repo, &landed, "landed by air land", false);
-        if closed != 0 {
-            lines.push(format!(
-                "merged, but the close failed; re-run `air close {} --reason \"landed by air land\"`",
-                landed.join(" ")
-            ));
-            code = 1;
-        }
-    }
-    if !held_open.is_empty() {
+    // Nothing is closed here. The worker closes its own bead with proof before the branch
+    // lands (owner ruling, 2026-08-22); this command merges, verifies, and reports.
+    let refuted = held_open.iter().filter(|o| o.refuted).count();
+    if refuted > 0 {
         lines.push(format!(
-            "{} bead(s) merged but left open; `air status` names them until somebody closes \
-             them with `air close <id> --reason \"<what you checked>\"`",
-            held_open.len()
+            "{refuted} bead(s) landed with a clause this merge CONTRADICTS. `air status` names \
+             them: read the bead, then either reopen it or file what is left."
         ));
     }
     let msg = lines.join("\n");
@@ -319,7 +305,7 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         if code == 0 { "landed" } else { "stopped" },
         &msg,
         &format!(
-            "{} closed, {} merged-but-open",
+            "{} bead(s) merged, {} with clauses Air could not discharge",
             landed.len(),
             held_open.len()
         ),
@@ -329,7 +315,7 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         &serde_json::json!({
             "ok": code == 0,
             "landed": landed,
-            "merged_not_closed": held_open,
+            "not_discharged": held_open,
             "log": lines,
         }),
         || msg.clone(),
@@ -494,31 +480,30 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     if !json {
         print!("{}", acceptance::report(&judged));
     }
-    // Layer 2, deletable: close only what layer 1 could point at evidence for.
-    let (closable, open): (Vec<_>, Vec<_>) = judged.iter().partition(|j| j.may_close());
-    let open: Vec<air_ledger::landings::OpenBead> = open
-        .into_iter()
+    // `air land` closes nothing (owner ruling, 2026-08-22: the worker closes its own bead with
+    // proof). What the print said is kept on the row so it outlives the scrollback, and a
+    // REFUTED clause is the wrong-close signal the coordinator is told about.
+    let noted: Vec<air_ledger::landings::OpenBead> = judged
+        .iter()
+        .filter(|j| !j.all_discharged())
         .map(|j| air_ledger::landings::OpenBead {
             bead: j.bead.clone(),
             why: j.why_open(),
+            refuted: j.refuted(),
         })
         .collect();
     record_full(
-        if open.is_empty() {
-            "landed"
+        if noted.iter().any(|o| o.refuted) {
+            "landed-refuted"
         } else {
-            "landed-open"
+            "landed"
         },
         Some(merge.clone()),
         Some(run.id),
         None,
-        &open,
+        &noted,
     );
-    Outcome::Landed {
-        merge,
-        closable: closable.iter().map(|j| j.bead.clone()).collect(),
-        open,
-    }
+    Outcome::Landed { merge, noted }
 }
 
 #[cfg(test)]

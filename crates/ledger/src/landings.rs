@@ -27,6 +27,11 @@ pub struct LandedOpen {
 pub struct OpenBead {
     pub bead: String,
     pub why: String,
+    /// True when at least one clause is not merely unreadable but CONTRADICTED by what the
+    /// merge contains — a bead naming a file the merge did not touch. That is a wrong close;
+    /// "Air could not read it" is not (air-ayp).
+    #[serde(default)]
+    pub refuted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -95,28 +100,34 @@ impl Ledger {
         )?)
     }
 
-    /// Beads a landing merged but did not close, and that nobody has closed since (air-ayp).
+    /// Beads that landed carrying an acceptance clause the merge CONTRADICTS, and that nobody
+    /// has dealt with since (air-ayp).
     ///
-    /// "Closed since" is the claim row, which `air close` releases with reason `landed`. That
-    /// keeps the whole answer inside the ledger: no bd call, so `air status` can ask on every
-    /// tick. Returns (bead, worker, merge_commit, why, landed_at), newest first.
+    /// The worker closes its own bead with proof before the branch lands, so `air land` closes
+    /// nothing and "merged but not closed" is not by itself a defect. What is worth carrying
+    /// past the print is a REFUTED clause: a bead claiming a file the merge did not touch.
+    ///
+    /// "Dealt with since" is the claim row being released for any reason — the status reconcile
+    /// releases it as `closed` once bd says so (air-3eu), `air close` as `landed`. That keeps
+    /// the whole answer inside the ledger: no bd call, so `air status` can ask on every tick.
+    /// Newest first.
     ///
     /// Nothing here writes a bd status. A bead named by one of these rows is exactly as open
     /// in bd as it was before the merge, so the merge did not change what it blocks.
     pub fn landed_open(&self) -> Result<Vec<LandedOpen>> {
         let mut out: Vec<LandedOpen> = Vec::new();
         for l in self.landings()? {
-            for ob in &l.open_beads {
-                let closed: bool = self
+            for ob in l.open_beads.iter().filter(|o| o.refuted) {
+                let dealt_with: bool = self
                     .conn
                     .query_row(
-                        "SELECT count(*) FROM claims WHERE bead=?1 AND release_reason='landed'",
+                        "SELECT count(*) FROM claims WHERE bead=?1 AND released_at IS NOT NULL",
                         params![ob.bead],
                         |r| r.get::<_, i64>(0),
                     )
                     .unwrap_or(0)
                     > 0;
-                if closed || out.iter().any(|o| o.bead == ob.bead) {
+                if dealt_with || out.iter().any(|o| o.bead == ob.bead) {
                     continue;
                 }
                 out.push(LandedOpen {
@@ -190,43 +201,52 @@ mod tests {
         }
     }
 
-    /// air-ayp: a bead the landing merged but could not close is carried here, and it stops
-    /// being reported the moment somebody closes it (`air close` releases the claim as
-    /// `landed`). No bd status is written, so the bead blocks exactly what it blocked before.
+    /// air-ayp: `air land` closes nothing, so "merged and still open" is not by itself a
+    /// defect. What is carried past the print is a REFUTED clause — a bead claiming a file the
+    /// merge did not touch — and it stops being reported once somebody deals with the bead. No
+    /// bd status is written either way, so the bead blocks exactly what it blocked before.
     #[test]
-    fn landed_but_open_is_reported_until_the_bead_is_actually_closed() {
+    fn only_a_refuted_clause_is_reported_and_only_until_the_bead_is_dealt_with() {
         let l = Ledger::open_in_memory().unwrap();
-        let mut r = row("1", "landed");
-        r.beads = vec!["fd-1".into(), "fd-2".into()];
-        r.open_beads = vec![OpenBead {
-            bead: "fd-2".into(),
-            why: "\"the owner rules on X\": nothing Air can look up".into(),
-        }];
+        let mut r = row("1", "landed-refuted");
+        r.beads = vec!["fd-1".into(), "fd-2".into(), "fd-3".into()];
+        r.open_beads = vec![
+            // Air could not read this one. Not a wrong close, so not reported.
+            OpenBead {
+                bead: "fd-2".into(),
+                why: "\"the owner rules on X\": nothing Air can look up".into(),
+                refuted: false,
+            },
+            // This one the merge contradicts.
+            OpenBead {
+                bead: "fd-3".into(),
+                why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+                refuted: true,
+            },
+        ];
         l.record_landing(&r).unwrap();
 
         let open = l.landed_open().unwrap();
-        assert_eq!(open.len(), 1);
         assert_eq!(
-            (
-                open[0].bead.as_str(),
-                open[0].worker.as_str(),
-                open[0].merge_commit.as_str()
-            ),
-            ("fd-2", "alpha", "ccc")
+            open.iter().map(|o| o.bead.as_str()).collect::<Vec<_>>(),
+            vec!["fd-3"],
+            "unreadable is not the same signal as contradicted"
         );
-        assert!(open[0].why.contains("nothing Air can look up"));
+        assert_eq!(
+            (open[0].worker.as_str(), open[0].merge_commit.as_str()),
+            ("alpha", "ccc")
+        );
+        assert!(open[0].why.contains("docs/absent.md"));
         // It round-trips through the row, so the reason survives a restart.
         assert_eq!(l.landings().unwrap()[0].open_beads, r.open_beads);
 
-        // A claim released for any other reason does not count as closed.
-        l.record_claim("fd-2", "alpha", &[], "t0").unwrap();
-        l.release_claim("fd-2", "alpha", "abandoned", "t2").unwrap();
+        // An open claim is not "dealt with".
+        l.record_claim("fd-3", "alpha", &[], "t0").unwrap();
         assert_eq!(l.landed_open().unwrap().len(), 1);
 
-        // `air close` releases it as `landed`; the condition clears.
-        l.record_claim("fd-2", "alpha", &[], "t3").unwrap();
-        l.release_claims_on(&["fd-2".to_string()], "landed", "t4")
-            .unwrap();
+        // Any release is: the status reconcile releases as `closed` once bd says so
+        // (air-3eu), `air close` as `landed`. Either way somebody looked.
+        l.release_claim("fd-3", "alpha", "closed", "t2").unwrap();
         assert!(l.landed_open().unwrap().is_empty());
     }
 
