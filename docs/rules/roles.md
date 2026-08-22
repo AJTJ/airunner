@@ -41,8 +41,10 @@ Two constraints, because Air checks them and they are about ordering rather than
 - **The recorded green has to be at the commit you hand on, and that commit has to contain
   `main`.** So merge `main` first and run `air record verify -- <cmd>` last; a green recorded
   before the merge is a green for a tree nobody will land.
-- **A digest, where the repo configures `digest_dir`, has to be newer than your claim.** Write
-  it with the work rather than after the fact.
+- **A digest, where the repo configures `digest_dir`, has to name its bead** in front matter
+  (`---` / `bead: <id>` / `---`) and be written with the work rather than after the fact. Air
+  reads the declared field, not the filename: a digest for another bead used to satisfy the
+  gate (air-agq).
 
 `air handover` names whatever is missing and the command that fixes it, so run it before you
 finish rather than guessing which of the two bit you. **[fact]**
