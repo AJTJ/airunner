@@ -7,6 +7,12 @@ use serde::Serialize;
 
 use crate::{Ledger, Result};
 
+/// One triage decision as the ledger takes it: `(capture id, status, bead, note)`.
+pub type TriageItem = (String, String, Option<String>, Option<String>);
+
+/// What a capture pointed at before a triage: `(status, bead)`.
+pub type Was = (String, Option<String>);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Capture {
     pub id: String,
@@ -104,11 +110,7 @@ impl Ledger {
     /// touch a closed capture left the record wrong with no way to fix it. Correcting a
     /// pointer is cheap and the old value comes back here, so the event line keeps the
     /// history. One transaction and one event line for the pass (air-869).
-    pub fn resolve_captures(
-        &self,
-        items: &[(String, String, Option<String>, Option<String>)],
-        at: &str,
-    ) -> Result<Vec<Option<(String, Option<String>)>>> {
+    pub fn resolve_captures(&self, items: &[TriageItem], at: &str) -> Result<Vec<Option<Was>>> {
         let tx = self.conn.unchecked_transaction()?;
         let mut was = Vec::with_capacity(items.len());
         {
@@ -117,7 +119,7 @@ impl Ledger {
                 "UPDATE captures SET status=?2, bead=?3, note=?4, resolved_at=?5 WHERE id=?1",
             )?;
             for (id, status, bead, note) in items {
-                let prev: Option<(String, Option<String>)> = before
+                let prev: Option<Was> = before
                     .query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 if prev.is_some() {
@@ -136,12 +138,7 @@ impl Ledger {
 mod tests {
     use super::*;
 
-    fn item(
-        id: &str,
-        status: &str,
-        bead: Option<&str>,
-        note: Option<&str>,
-    ) -> (String, String, Option<String>, Option<String>) {
+    fn item(id: &str, status: &str, bead: Option<&str>, note: Option<&str>) -> TriageItem {
         (
             id.to_string(),
             status.to_string(),

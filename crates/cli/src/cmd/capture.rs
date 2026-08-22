@@ -243,7 +243,7 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
         Err(msg) => return refuse("unknown", msg, "1 bd process"),
     }
     let at = now();
-    let items: Vec<(String, String, Option<String>, Option<String>)> = plan
+    let items: Vec<air_ledger::captures::TriageItem> = plan
         .iter()
         .map(|r| {
             (
