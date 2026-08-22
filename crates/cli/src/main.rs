@@ -119,6 +119,8 @@ enum Cmd {
     /// Resolve captures: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
     /// Several captures at once map positionally, in one ledger transaction:
     /// `air triage c1 c2 --bead air-1 --bead air-2`. One --drop covers every capture named.
+    /// Every bead is checked against bd first; an id bd does not have refuses the pass. A
+    /// capture that was already triaged is re-pointed, old target named in the event line.
     Triage {
         #[arg(required = true)]
         id: Vec<String>,

@@ -46,6 +46,7 @@ pub fn run(json: bool) -> i32 {
         probe_stop_nudge(),
         probe_standstill(),
         probe_batch_close(),
+        probe_triage_bead_exists(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -63,6 +64,28 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-76z: a capture must not point at a bead bd does not have. bd omits an unknown id from
+/// `bd show` and still exits 0, so the check is the comparison, not the exit code.
+fn probe_triage_bead_exists() -> Probe {
+    use crate::cmd::capture::missing_ids;
+
+    let want: Vec<String> = ["fd-1", "zz-nope", "fd-2"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let issue = |id: &str| air_bd::Issue {
+        id: id.to_string(),
+        ..Default::default()
+    };
+    let red = missing_ids(&want, &[issue("fd-1"), issue("fd-2")]) == ["zz-nope"];
+    let green = missing_ids(&want, &[issue("fd-1"), issue("zz-nope"), issue("fd-2")]).is_empty();
+    Probe {
+        name: "triage: a bead bd did not return is named; a full answer passes",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// air-869: `air close` is the coordinator's, and it issues ONE bd process however many
