@@ -99,7 +99,7 @@ pub fn plan(ids: &[String], beads: &[String], drops: &[String]) -> Result<Vec<Re
     if ids.is_empty() {
         return Err("name at least one capture".to_string());
     }
-    let given = beads.len() + drops.len();
+    let given = beads.len().saturating_add(drops.len());
     if given == 0 {
         return Err("give --bead <id> or --drop \"<why>\" for each capture".to_string());
     }
@@ -143,7 +143,7 @@ pub fn plan(ids: &[String], beads: &[String], drops: &[String]) -> Result<Vec<Re
                 id: id.clone(),
                 status: "dropped",
                 bead: None,
-                note: drops.get(i - beads.len()).cloned(),
+                note: drops.get(i.saturating_sub(beads.len())).cloned(),
             },
         };
         out.push(r);

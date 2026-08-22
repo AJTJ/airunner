@@ -34,16 +34,19 @@ pub fn from_events(text: &str) -> Option<BdLatency> {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        let (Some(ms), Some(calls)) = (v["bd_ms"].as_u64(), v["bd_calls"].as_u64()) else {
+        let (Some(ms), Some(calls)) = (
+            v.get("bd_ms").and_then(serde_json::Value::as_u64),
+            v.get("bd_calls").and_then(serde_json::Value::as_u64),
+        ) else {
             continue;
         };
-        if calls == 0 {
+        let Some(each) = ms.checked_div(calls) else {
             continue;
-        }
-        events += 1;
+        };
+        events = events.saturating_add(1);
         // One sample per bd process, so a command that ran four calls weighs four.
         for _ in 0..calls.min(64) {
-            per_call.push(ms / calls);
+            per_call.push(each);
         }
     }
     if per_call.is_empty() {
@@ -53,7 +56,7 @@ pub fn from_events(text: &str) -> Option<BdLatency> {
     let median = *per_call.get(per_call.len() / 2)?;
     Some(BdLatency {
         median_ms: median,
-        calls: per_call.len() as u64,
+        calls: u64::try_from(per_call.len()).unwrap_or(u64::MAX),
         events,
     })
 }
