@@ -36,6 +36,9 @@ pub struct WorkerView {
     pub head: Option<String>,
     pub green_at_head: Option<bool>,
     pub claims: Vec<Claim>,
+    /// Open claims bd shows in `awaiting_review`: still held (the files are still the
+    /// worker's) but no longer work in progress (air-3eu).
+    pub handed_over: Vec<Claim>,
     pub files_held: usize,
 }
 
@@ -431,26 +434,45 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     .map(|v| v.into_iter().map(|i| i.id).collect());
     let mut reconciled = 0usize;
     for c in ledger.open_claims().map_err(|e| e.to_string())? {
+        let mut handed_over = false;
         if let Some(ip) = &in_progress
             && !ip.contains(&c.bead)
         {
-            let reason = match bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
+            let status = bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
                 air_bd::WorkLedger::show(b, &c.bead)
-            }) {
-                Some(Some(i)) if i.status == "closed" => "closed",
-                Some(Some(i)) if i.status == "awaiting_review" => "handed-over",
-                _ => "reconciled",
-            };
-            let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
-            reconciled = reconciled.saturating_add(1);
-            continue;
+            });
+            // air-3eu: `awaiting_review` is not the end of a claim. A handed-over bead is
+            // still the worker's until it lands, and the row carries the declared files the
+            // coordinator needs for overlap. Releasing it left a worker "not claimed" while
+            // still editing, after a stray flip to awaiting_review and back (tty-fix
+            // 2026-08-22 06:02, capture 01M0M114Q9XQYR3Z66KFSCDXQA). Mark it instead; when bd
+            // says in_progress again the row is untouched, original time and all.
+            if matches!(&status, Some(Some(i)) if i.status == "awaiting_review") {
+                let _ = ledger.mark_handed_over(&c.bead, &c.worker, &at);
+                handed_over = true;
+            } else {
+                let reason = match &status {
+                    Some(Some(i)) if i.status == "closed" => "closed",
+                    _ => "reconciled",
+                };
+                let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
+                reconciled = reconciled.saturating_add(1);
+                continue;
+            }
         }
         let v = views.entry(c.worker.clone()).or_insert_with(|| WorkerView {
             worker: c.worker.clone(),
             role: super::hook::role_for(&c.worker).to_string(),
             ..Default::default()
         });
-        v.claims.push(c);
+        // Held either way, but kept apart so the attention conditions mean what they meant
+        // when the reconcile released these rows: a worker waiting on review is not idle with
+        // a claim, gone with a claim, or handing over red.
+        if handed_over {
+            v.handed_over.push(c);
+        } else {
+            v.claims.push(c);
+        }
     }
 
     // Files held and overlaps (derived; may be slow-ish, CLI only).
@@ -494,8 +516,9 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             None => None,
         };
     // One row per bead bd holds in awaiting_review: who handed it over and how long ago, from
-    // the claim row (released by the reconcile above with reason handed-over, so open claims
-    // cannot be the source: that was why this was always empty, air-e7q).
+    // the claim row, open or released. The claim row is the only source (an open-claims scan
+    // was why this was always empty, air-e7q); since air-3eu the row is usually still open,
+    // stamped by the reconcile above, so `first_handover_at` is what the coalesce finds.
     let review_waits: Vec<(String, String, i64)> = awaiting_review
         .iter()
         .flatten()
@@ -675,9 +698,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             .claims
             .iter()
             .map(|c| format!("{} (handovers {})", c.bead, c.handover_attempts))
+            .chain(
+                w.handed_over
+                    .iter()
+                    .map(|c| format!("{} (awaiting review)", c.bead)),
+            )
             .collect();
+        // A bead waiting on review is not work in progress: the worker is still idle and
+        // should be nudged, which is what `idle-without-claim` also decides (air-3eu).
         let idle_no_claim = w.role == "worker"
-            && claims.is_empty()
+            && w.claims.is_empty()
             && w.session.as_ref().is_some_and(|x| x.state == "idle");
         out.push_str(&format!(
             "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}\n",
@@ -833,6 +863,7 @@ mod tests {
             head: Some("abc".into()),
             green_at_head: green,
             claims,
+            handed_over: vec![],
             files_held: 0,
         }
     }
@@ -921,6 +952,36 @@ mod tests {
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+    }
+
+    /// air-3eu: the claim on a handed-over bead stays open so the coordinator still sees the
+    /// files, but it is not work in progress. None of the with-a-claim conditions may read it
+    /// as one, or every worker waiting on review would raise them for the whole round.
+    #[test]
+    fn a_bead_waiting_on_review_is_not_a_claim_in_progress() {
+        let mut w = worker("w", Some("idle"), T_30, vec![], Some(false));
+        w.handed_over = vec![claim("fd-1", "w", T_30, 1)];
+        let s = Snapshot {
+            workers: vec![w.clone()],
+            ready_depth: Some(0),
+            ..Default::default()
+        };
+        assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+        // Same worker, same bead, but bd still says in_progress: the conditions do fire.
+        let mut w2 = w;
+        w2.claims = std::mem::take(&mut w2.handed_over);
+        let s = Snapshot {
+            workers: vec![w2],
+            ready_depth: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect::<Vec<_>>(),
+            vec!["idle-with-claim", "handover-not-green"]
+        );
     }
 
     #[test]
