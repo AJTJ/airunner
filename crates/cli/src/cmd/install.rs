@@ -333,15 +333,19 @@ mod tests {
     use super::*;
 
     /// The embedded roles prose is `include_str!` of docs/rules/roles.md, so the two cannot
-    /// drift; this pins that, and that the intake line names bd's per-type sections (air-8zz).
+    /// drift; this pins that, plus the lines the round added: run-to-completion and the
+    /// coordinator reach/landing facts (air-arq), bd's per-type sections (air-8zz).
     #[test]
-    fn embedded_roles_is_the_docs_copy_and_names_validate_sections() {
+    fn embedded_roles_match_the_file_and_carry_the_round_lines() {
         let on_disk = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../docs/rules/roles.md"
         ))
         .unwrap();
         assert_eq!(ROLES_MD, on_disk);
+        assert!(ROLES_MD.contains("A hand-over is not a stop."));
+        assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
+        assert!(ROLES_MD.contains("Landings wait on the owner until `air land` exists"));
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
     }

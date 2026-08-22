@@ -43,13 +43,26 @@ pub fn facts(
     };
     let digest_dir = digest_dir(repo);
     let digest_present = digest_dir.as_deref().map(|d| {
-        // Newer than this worker's oldest open claim; with no claim, any digest by this
-        // worker counts (the check is about the hand-over, not a specific bead).
-        let since = ledger.open_claims().ok().and_then(|v| {
+        // Newer than this worker's oldest open claim, or than the branch point from main,
+        // whichever is earlier: a re-claim after a bd timeout must not postdate a digest
+        // that was written between the first claim and the re-claim (air-y8m). With no
+        // claim, any digest by this worker counts (the check is about the hand-over, not a
+        // specific bead).
+        let claim = ledger.open_claims().ok().and_then(|v| {
             v.into_iter()
                 .filter(|c| c.worker == worker)
                 .map(|c| c.claimed_at)
                 .min()
+        });
+        let since = claim.map(|c| {
+            let bp = git::branch_point_time(repo, "main").ok();
+            match (
+                c.parse::<jiff::Timestamp>().ok(),
+                bp.and_then(|b| b.parse::<jiff::Timestamp>().ok()),
+            ) {
+                (Some(ct), Some(bt)) => ct.min(bt).to_string(),
+                _ => c,
+            }
         });
         digest_newer_than(&repo.join(d), worker, since.as_deref())
     });
@@ -124,6 +137,13 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     if let Some(b) = bead {
         let _ = ledger.stamp_handover(b, &worker, &crate::cmd::now());
     }
+    // A stop usually follows a hand-over: refresh the ready list the Stop hook reads
+    // (air-09i). One bd call, outside any hook budget.
+    let _ = crate::cmd::ready_cache::refresh(
+        repo,
+        &crate::cmd::claim::bd_for(repo),
+        &crate::cmd::now(),
+    );
     log_event(
         &ledger,
         &worker,

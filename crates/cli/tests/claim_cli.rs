@@ -135,6 +135,95 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
 }
 
+/// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
+/// and recorded at the time it was issued (claimed-late); a re-claim keeps that time; a
+/// digest written between the two satisfies the hand-over check.
+#[test]
+fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // `update --claim` writes the issue as in_progress by the actor, then hangs past the
+    // timeout; `show` answers at once.
+    let slow = repo.join("bd-slow");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) printf '%s' '{{\"id\":\"fd-9\",\"status\":\"in_progress\",\"assignee\":\"tester\",\"labels\":[],\"updated_at\":\"2020-01-01T00:00:00Z\"}}' > {issue}; sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            issue = repo.join("bd.issue.json").display(),
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // First exec of a freshly written script pays a macOS security assessment (seen >1.5 s
+    // under load, 2026-08-22); warm it so the short timeout below measures bd, not the OS.
+    let _ = Command::new(&slow)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &slow)
+            .env("FAKE_BD_DIR", &repo)
+            .env("AIR_BD_TIMEOUT_MS", "1500")
+            .env("BEADS_ACTOR", "tester")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let (code, out, err) = run(&["--json", "claim", "fd-9"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(err.contains("confirms the claim landed"), "{err}");
+    assert!(!out.contains("nothing was written"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let first = v["claimed_at"].as_str().unwrap().to_string();
+    assert_eq!(claims(&repo), vec![("fd-9".into(), "main".into(), None)]);
+
+    // A digest written now, after the first claim.
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"digest_dir":"docs/d"}"#).unwrap();
+    std::fs::create_dir_all(repo.join("docs/d")).unwrap();
+    std::fs::write(repo.join("docs/d/2026-main-fd-9.md"), "digest").unwrap();
+
+    // Re-claim: bd already holds it by us; no bd write, the row keeps the first time.
+    let (code, out, _) = run(&["--json", "claim", "fd-9"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["reclaimed"], true);
+    assert_eq!(v["claimed_at"].as_str().unwrap(), first);
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.matches("--claim").count(),
+        0,
+        "re-claim must not write to bd: {log}"
+    );
+
+    let (_, o, _) = run(&["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        !v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
+}
+
 #[test]
 fn bd_refusal_writes_nothing() {
     let dir = scratch_repo();

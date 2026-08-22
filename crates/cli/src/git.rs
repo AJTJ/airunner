@@ -103,6 +103,12 @@ pub fn toplevel(cwd: &Path) -> Result<PathBuf> {
     )?))
 }
 
+/// Committer time (RFC 3339) of the branch point of HEAD from `base`.
+pub fn branch_point_time(cwd: &Path, base: &str) -> Result<String> {
+    let mb = run(cwd, &["merge-base", base, "HEAD"])?;
+    run(cwd, &["log", "-1", "--format=%cI", &mb])
+}
+
 /// `git merge-base --is-ancestor <anc> <desc>` — exit 0 yes, 1 no, other = error.
 pub fn is_ancestor(cwd: &Path, anc: &str, desc: &str) -> Result<bool> {
     match run(cwd, &["merge-base", "--is-ancestor", anc, desc]) {
