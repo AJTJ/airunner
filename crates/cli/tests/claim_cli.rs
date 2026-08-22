@@ -309,3 +309,69 @@ fn digest_gate_is_configured_per_repo() {
         "{o}"
     );
 }
+
+/// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
+/// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
+/// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
+#[test]
+fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // A claim and a seeded cache via one healthy status.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    let (code, _, _) = air(&repo, &bd, &["claim", "fd-1"]);
+    assert_eq!(code, 0);
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let healthy: serde_json::Value = serde_json::from_str(&o).unwrap();
+    let healthy = &healthy["snapshot"];
+    assert_eq!(healthy["ready_depth"], 0, "{o}");
+
+    let slow = repo.join("slow-bd");
+    std::fs::write(&slow, "#!/bin/sh\nsleep 25\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let t0 = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["--json", "status"])
+        .env("AIR_BD_BIN", &slow)
+        .env("AIR_BD_TIMEOUT_MS", "500")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let took = t0.elapsed();
+    let o = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(0), "{o}");
+    // 3 s is the acceptance bar with the default 2 s budget; 500 ms here keeps the test fast.
+    assert!(
+        took < std::time::Duration::from_secs(3),
+        "status took {took:?}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    let v = &v["snapshot"];
+    let errors = v["errors"].to_string();
+    assert!(
+        errors.contains("bd did not answer in 0.5 s") && errors.contains("stale (last seen "),
+        "{errors}"
+    );
+    assert_eq!(v["ready_depth"], 0, "cached count served: {o}");
+    assert_eq!(
+        v["awaiting_review"], healthy["awaiting_review"],
+        "cached list served: {o}"
+    );
+    let main = v["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["worker"] == "main")
+        .unwrap();
+    assert_eq!(main["claims"][0]["bead"], "fd-1", "claim kept: {o}");
+    assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
+}

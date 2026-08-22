@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 7;
+pub const CURRENT_VERSION: i64 = 8;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -157,6 +157,16 @@ CREATE TABLE IF NOT EXISTS conditions (
 CREATE INDEX IF NOT EXISTS conditions_open ON conditions(worker, kind, cleared_at);
 "#;
 
+/// v8: last successful bd answers `status` depends on, so a slow bd (20 s under load,
+/// adopter 2026-08-22, air-19u) degrades to stale counts instead of an empty status.
+const V8: &str = r#"
+CREATE TABLE IF NOT EXISTS bd_cache (
+    key      TEXT PRIMARY KEY,
+    value    TEXT NOT NULL,
+    seen_at  TEXT NOT NULL
+);
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -187,6 +197,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 7 {
         conn.execute_batch(V7)?;
         conn.pragma_update(None, "user_version", 7)?;
+    }
+    if version < 8 {
+        conn.execute_batch(V8)?;
+        conn.pragma_update(None, "user_version", 8)?;
     }
     Ok(())
 }

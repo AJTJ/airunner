@@ -63,6 +63,8 @@ pub struct Snapshot {
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
+    /// How long `gather` took; on the event line so a slow status is measured, not felt.
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -256,6 +258,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
 
 /// Build the snapshot: one row per worktree (plus any worker known only from the ledger).
 pub fn gather(repo: &Path) -> Result<Snapshot, String> {
+    let t0 = std::time::Instant::now();
     let (ledger, _me) = open(repo)?;
     let at = now();
     let mut errors = Vec::new();
@@ -356,23 +359,35 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     // in_progress (closed, awaiting_review, reopened) is not "held" by anyone, whatever the
     // ledger row says. The row is released with the bd status as reason so the history is
     // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
-    let bd = super::claim::bd_for(repo);
-    let in_progress: Option<std::collections::BTreeSet<String>> =
-        match air_bd::WorkLedger::in_progress(&bd) {
-            Ok(v) => Some(v.into_iter().map(|i| i.id).collect()),
-            Err(e) => {
-                errors.push(format!("bd in_progress (claims not reconciled): {e}"));
-                None
-            }
-        };
+    //
+    // bd is enrichment, not the spine. It gets a short budget (2 s default, `AIR_BD_TIMEOUT_MS`)
+    // and after one timeout no further bd call is made this tick; the counts fall back to the
+    // last answer cached in the ledger. Under load bd took 20 s, the same as the MCP tool
+    // budget, so the channel got nothing exactly when the fleet was busiest (adopter
+    // 2026-08-22, air-19u).
+    let mut bd = super::claim::bd_for(repo);
+    if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
+        bd.timeout = std::time::Duration::from_secs(2);
+    }
+    let mut bd_slow: Option<String> = None;
+    let in_progress: Option<std::collections::BTreeSet<String>> = bd_try(
+        &bd,
+        &mut bd_slow,
+        &mut errors,
+        "in_progress (claims not reconciled)",
+        air_bd::WorkLedger::in_progress,
+    )
+    .map(|v| v.into_iter().map(|i| i.id).collect());
     let mut reconciled = 0usize;
     for c in ledger.open_claims().map_err(|e| e.to_string())? {
         if let Some(ip) = &in_progress
             && !ip.contains(&c.bead)
         {
-            let reason = match air_bd::WorkLedger::show(&bd, &c.bead) {
-                Ok(Some(i)) if i.status == "closed" => "closed",
-                Ok(Some(i)) if i.status == "awaiting_review" => "handed-over",
+            let reason = match bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
+                air_bd::WorkLedger::show(b, &c.bead)
+            }) {
+                Some(Some(i)) if i.status == "closed" => "closed",
+                Some(Some(i)) if i.status == "awaiting_review" => "handed-over",
                 _ => "reconciled",
             };
             let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
@@ -406,14 +421,26 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         Err(e) => errors.push(format!("holdings: {e}")),
     }
 
-    // Review queue from bd (CLI path; ~1 s). Absent bd is reported, not fatal.
-    let awaiting_review =
-        match air_bd::WorkLedger::by_status(&super::claim::bd_for(repo), "awaiting_review") {
-            Ok(v) => Some(v.into_iter().map(|i| i.id).collect::<Vec<_>>()),
-            Err(e) => {
-                errors.push(format!("bd awaiting_review: {e}"));
-                None
+    // Review queue from bd. Absent bd is reported, not fatal; slow bd answers from the cache.
+    let awaiting_review: Option<Vec<String>> =
+        match bd_try(&bd, &mut bd_slow, &mut errors, "awaiting_review", |b| {
+            air_bd::WorkLedger::by_status(b, "awaiting_review")
+        }) {
+            Some(v) => {
+                let ids: Vec<String> = v.into_iter().map(|i| i.id).collect();
+                let _ = ledger.bd_cache_put(
+                    "awaiting_review",
+                    &serde_json::to_string(&ids).unwrap_or_default(),
+                    &at,
+                );
+                Some(ids)
             }
+            None if bd_slow.is_some() => ledger
+                .bd_cache_get("awaiting_review")
+                .ok()
+                .flatten()
+                .and_then(|(v, _)| serde_json::from_str(&v).ok()),
+            None => None,
         };
     let review_waits: Vec<(String, String, i64)> = views
         .values()
@@ -434,13 +461,31 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
         ));
     }
-    let ready_depth = match air_bd::WorkLedger::ready(&bd) {
-        Ok(v) => Some(v.len()),
-        Err(e) => {
-            errors.push(format!("bd ready: {e}"));
-            None
+    let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
+        air_bd::WorkLedger::ready(b)
+    }) {
+        Some(v) => {
+            let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
+            Some(v.len())
         }
+        None if bd_slow.is_some() => ledger
+            .bd_cache_get("ready_depth")
+            .ok()
+            .flatten()
+            .and_then(|(v, _)| v.parse().ok()),
+        None => None,
     };
+    if let Some(slow) = &bd_slow {
+        let seen = ledger
+            .bd_cache_get("ready_depth")
+            .ok()
+            .flatten()
+            .map(|(_, t)| t)
+            .unwrap_or_else(|| "never".into());
+        errors.push(format!(
+            "{slow}; ready/review counts stale (last seen {seen})"
+        ));
+    }
     let inbox = ledger.inbox().map_err(|e| e.to_string())?;
     let owner_q = ledger.inbox_for("owner").map_err(|e| e.to_string())?;
     let stale = std::env::var("AIR_LEASE_STALE_SECS")
@@ -470,7 +515,33 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         ready_depth,
         overlaps,
         errors,
+        duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
+}
+
+/// One bd call under the status budget. After a timeout every later call is skipped (`slow`
+/// set once, with the budget); other failures are recorded and the call answers None.
+fn bd_try<T>(
+    bd: &air_bd::BdCli,
+    slow: &mut Option<String>,
+    errors: &mut Vec<String>,
+    what: &str,
+    f: impl FnOnce(&air_bd::BdCli) -> air_bd::Result<T>,
+) -> Option<T> {
+    if slow.is_some() {
+        return None;
+    }
+    match f(bd) {
+        Ok(v) => Some(v),
+        Err(air_bd::BdError::Timeout(d)) => {
+            *slow = Some(format!("bd did not answer in {} s", d.as_secs_f64()));
+            None
+        }
+        Err(e) => {
+            errors.push(format!("bd {what}: {e}"));
+            None
+        }
+    }
 }
 
 /// Conditions as rows (first-seen/cleared) and one event line that names every kind and
@@ -501,7 +572,7 @@ pub fn record_and_log(
         } else {
             "status"
         },
-        &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "owner_queue": snap.owner_queue_depth}),
+        &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "owner_queue": snap.owner_queue_depth, "duration_ms": snap.duration_ms}),
         if att.is_empty() { "quiet" } else { "attention" },
         &if att.is_empty() {
             "no conditions".to_string()
