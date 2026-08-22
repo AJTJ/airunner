@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 9;
+pub const CURRENT_VERSION: i64 = 10;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -174,6 +174,15 @@ const V9: &str = r#"
 ALTER TABLE sessions ADD COLUMN project TEXT NOT NULL DEFAULT '';
 "#;
 
+/// v10 (2026-08-22, air-ayp): which beads a landing merged but did NOT close, and why. A
+/// landing may only close a bead whose acceptance it can point at evidence for; the rest land
+/// merged-but-open, carried here rather than in a bd status (bd's blocking predicate never
+/// consults the workflow class, so a bead parked in a custom status blocks its dependents
+/// indefinitely).
+const V10: &str = r#"
+ALTER TABLE landings ADD COLUMN open_beads TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -212,6 +221,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 9 {
         conn.execute_batch(V9)?;
         conn.pragma_update(None, "user_version", 9)?;
+    }
+    if version < 10 {
+        conn.execute_batch(V10)?;
+        conn.pragma_update(None, "user_version", 10)?;
     }
     Ok(())
 }

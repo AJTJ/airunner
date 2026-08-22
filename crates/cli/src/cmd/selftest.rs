@@ -55,6 +55,8 @@ pub fn run(json: bool) -> i32 {
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
         probe_project_fence(),
+        probe_audit_help_names_only_what_it_prints(),
+        probe_landed_but_open(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -183,6 +185,143 @@ fn probe_audit_registry() -> Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-ha8: `air audit --help` advertised "how often with nothing following" for a round after
+/// the owner cut that metric — a derived statement reading as an observed one, in the help of
+/// the command built to surface exactly that. The check is the containment: every field the
+/// help names in backticks must appear in what the command prints.
+///
+/// Red: a help text that names one more field than the command prints is caught. Green: the
+/// real help text passes.
+fn probe_audit_help_names_only_what_it_prints() -> Probe {
+    use crate::cmd::audit::{gather_from, render};
+    use clap::CommandFactory;
+
+    // Backticked names are the contract: prose around them is free, the names are checked.
+    fn named(help: &str) -> Vec<String> {
+        help.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    }
+    let help = crate::Cli::command()
+        .find_subcommand("audit")
+        .and_then(|c| c.get_long_about().or_else(|| c.get_about()).cloned())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    // One registered mechanism firing, so a row with a removal condition renders in full.
+    let events = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+        "\n",
+    );
+    let printed = render(&gather_from(
+        &[("2026-08-22".to_string(), events.to_string())],
+        "2026-08-22",
+    ));
+    let all_printed = |h: &str| {
+        let names = named(h);
+        !names.is_empty() && names.iter().all(|n| printed.contains(n.as_str()))
+    };
+    Probe {
+        name: "audit: every field the help names in backticks is one the command prints",
+        red_fires: !all_printed(&format!("{help} and `how often with nothing following`")),
+        green_passes: all_printed(&help),
+    }
+}
+
+/// air-ayp: `air land` closes nothing (the worker closes its own bead with proof), so what a
+/// landing carries past its print is the one signal meaning a wrong close: a clause the merge
+/// CONTRADICTS. As a `landings` row, never as a bd status.
+///
+/// Red: a bead naming a file the merge did not touch is refuted, not discharged, and the
+/// ledger reports it with the clause. Green: a bead whose every clause is discharged says so;
+/// one Air merely cannot read is neither refuted nor discharged and is not reported; and the
+/// report clears once somebody deals with the bead.
+///
+/// The no-blocking half is the second assertion: the whole representation is a ledger row, and
+/// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
+/// the merge. bd's blocking predicate never consults the workflow class, which is why parking
+/// it in a done-class status would have blocked dependents indefinitely.
+fn probe_landed_but_open() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let changed = vec!["docs/rules/roles.md".to_string()];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+    };
+    // A clause the merge CONTRADICTS: the bead names a file it did not touch.
+    let refutable = judge_clauses(
+        "fd-2",
+        vec!["docs/rules/writing.md names the rule.".into()],
+        &ev,
+    );
+    // A clause Air simply cannot read. Not a defect, and not the wrong-close signal.
+    let unreadable = judge_clauses(
+        "fd-3",
+        vec!["The owner rules on the counter-argument.".into()],
+        &ev,
+    );
+    let discharged = judge_clauses(
+        "fd-1",
+        vec![
+            "Verify recorded green at HEAD.".into(),
+            "docs/rules/roles.md names the rule.".into(),
+        ],
+        &ev,
+    );
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "aaa".into(),
+            tip_sha: Some("bbb".into()),
+            result: "landed-open".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 1,
+            beads: vec!["fd-1".into(), "fd-2".into()],
+            open_beads: vec![OpenBead {
+                bead: "fd-2".into(),
+                why: refutable.why_open(),
+                refuted: true,
+            }],
+            merge_commit: Some("ccc".into()),
+            started_at: "t0".into(),
+            finished_at: "t1".into(),
+        })
+        .map_err(|e| e.to_string())?;
+        let open = l.landed_open().map_err(|e| e.to_string())?;
+        // Reported, with the clause, and the closable bead is NOT in the held-open set.
+        let reported = open.len() == 1
+            && open
+                .first()
+                .is_some_and(|o| o.bead == "fd-2" && o.why.contains("docs/rules/writing.md"));
+        // Somebody dealing with the bead clears the report: any claim release counts, since
+        // the status reconcile releases as `closed` once bd says so (air-3eu).
+        l.record_claim("fd-2", "alpha", &[], "t2")
+            .map_err(|e| e.to_string())?;
+        l.release_claims_on(&["fd-2".to_string()], "landed", "t3")
+            .map_err(|e| e.to_string())?;
+        let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
+        Ok((reported, cleared))
+    })()
+    .unwrap_or((false, false));
+    let (reported, cleared) = res;
+
+    Probe {
+        name: "land: a clause the merge contradicts is reported from the ledger, never as a bd status; one Air cannot read is not",
+        red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
+        green_passes: discharged.all_discharged()
+            && !unreadable.refuted()
+            && !unreadable.all_discharged()
+            && cleared,
     }
 }
 

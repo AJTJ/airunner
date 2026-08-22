@@ -64,6 +64,9 @@ pub struct Snapshot {
     pub awaiting_review: Option<Vec<String>>,
     /// Review wait per open claim that has been handed over: (bead, worker, minutes).
     pub review_waits: Vec<(String, String, i64)>,
+    /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
+    /// fact, never a bd status (air-ayp).
+    pub landed_open: Vec<air_ledger::landings::LandedOpen>,
     /// Every session row (two sessions in one checkout are two entries; the per-worker view
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
@@ -189,6 +192,12 @@ pub struct Landing {
     pub minutes: i64,
     /// The exact command, the repo's own until `air land` exists.
     pub command: String,
+    /// The bead's acceptance clauses, from bd's `acceptance_criteria` field and the
+    /// `## Acceptance Criteria` section, out of the same `bd list --json` this already makes.
+    /// `air land` prints them beside its verdict on each; it closes nothing (air-ayp). Empty
+    /// when the snapshot did not come from bd.
+    #[serde(default)]
+    pub acceptance: Vec<String>,
 }
 
 /// Pure: the landings a snapshot shows. A review wait whose worker has a recorded green at
@@ -209,6 +218,8 @@ pub fn landings(s: &Snapshot) -> Vec<Landing> {
                 head: w.head.clone()?,
                 minutes: *minutes,
                 command: land_command(bead),
+                // The snapshot has no descriptions; `landings_for` is the path that reads bd.
+                acceptance: Vec::new(),
             })
         })
         .collect();
@@ -313,6 +324,11 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
             }
             Some(Landing {
                 command: land_command(&i.id),
+                // Both shapes, from the same `bd list --json` this already made: bd's
+                // `acceptance_criteria` field when the bead set it, and the
+                // `## Acceptance Criteria` section otherwise. Which one a repo uses is a
+                // property of how it files beads (air-ayp).
+                acceptance: super::acceptance::clauses_of(&i.acceptance_criteria, &i.description),
                 bead: i.id,
                 head: head.clone()?,
                 minutes: minutes_between(&since, &at).unwrap_or(0),
@@ -482,6 +498,25 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             // The bead being in the waiting set is the whole fact; who handed it over and
             // from which head can change without the fact changing, and the age never counts.
             fingerprint: format!("{bead}/{worker}"),
+        });
+    }
+    // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
+    // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
+    // and says it again only when the reason changes.
+    for o in &s.landed_open {
+        let (bead, why) = (&o.bead, &o.why);
+        out.push(Attention {
+            worker: bead.clone(),
+            kind: "landed-not-closed",
+            detail: format!(
+                "{bead} landed in {} with an acceptance clause this merge CONTRADICTS: {why}. \
+                 The worker closes its own bead with proof, so read the bead: either reopen it \
+                 or file what is left. Landed from {}.",
+                o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
+                o.worker
+            ),
+            for_minutes: 0,
+            fingerprint: format!("{bead}/{why}"),
         });
     }
     if let Some(oldest) = &s.oldest_owner_capture_at {
@@ -793,6 +828,8 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         leases,
         awaiting_review,
         review_waits,
+        // Purely a ledger read, so it costs nothing and survives an absent bd (air-ayp).
+        landed_open: ledger.landed_open().unwrap_or_default(),
         sessions: all_sessions,
         ready_depth,
         overlaps,

@@ -71,6 +71,19 @@ pub mod stats {
 pub struct Issue {
     pub id: String,
     pub title: String,
+    /// The whole body. When a bead was filed with `-d`, the criteria are a
+    /// `## Acceptance Criteria` section in here (air-ayp).
+    pub description: String,
+    /// bd's first-class acceptance field, set by `bd create/update --acceptance`. bd OMITS
+    /// THE KEY ENTIRELY when it is unset, which is why a key listing on beads that never set
+    /// it reads as "there is no such field" — twice, in two projects, before adopter's
+    /// survey of all 711 of its beads inverted the conclusion (air-ayp, 2026-08-22).
+    ///
+    /// Which shape a repo uses depends on how it files beads, so both are real: this repo is
+    /// section-only (0 of 33 carry the field), adopter is field-mostly (647 of 711 field,
+    /// 57 section, 0 both, 7 neither). `air land` runs in both, so it reads the union.
+    #[serde(default)]
+    pub acceptance_criteria: String,
     pub status: String,
     pub priority: i64,
     pub assignee: Option<String>,

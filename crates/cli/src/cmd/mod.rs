@@ -1,5 +1,6 @@
 //! Subcommands. Each returns a process exit code (0 ok, 1 error, 2 refused).
 
+pub mod acceptance;
 pub mod audit;
 pub mod bd_latency;
 pub mod capture;

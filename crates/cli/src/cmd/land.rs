@@ -23,7 +23,7 @@ use std::path::Path;
 use air_ledger::landings::Landing as LandingRow;
 use air_ledger::verify::{Kind, VerifyRun, new_id};
 
-use crate::cmd::{emit, log_event, now, open};
+use crate::cmd::{acceptance, emit, log_event, now, open};
 use crate::git;
 
 /// Who may run `air land`. The coordinator's deny list keeps `git commit` and `git push` on
@@ -68,6 +68,9 @@ fn branch_for(worker: &str) -> String {
 struct Batch {
     worker: String,
     beads: Vec<String>,
+    /// Each bead's acceptance clauses, from the same `bd list --json` the landing list came
+    /// from (air-ayp). Parallel to `beads`.
+    acceptance: Vec<Vec<String>>,
     /// Minutes the oldest of those beads has waited; `--all` lands oldest first.
     oldest_minutes: i64,
 }
@@ -80,9 +83,11 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
         let b = by_worker.entry(l.worker.clone()).or_insert_with(|| Batch {
             worker: l.worker.clone(),
             beads: Vec::new(),
+            acceptance: Vec::new(),
             oldest_minutes: 0,
         });
         b.beads.push(l.bead.clone());
+        b.acceptance.push(l.acceptance.clone());
         b.oldest_minutes = b.oldest_minutes.max(l.minutes);
     }
     let mut v: Vec<Batch> = by_worker.into_values().collect();
@@ -169,7 +174,12 @@ pub fn check(f: &Facts<'_>) -> Result<bool, String> {
 
 /// What one branch's landing did.
 enum Outcome {
-    Landed { merge: String, beads: Vec<String> },
+    Landed {
+        merge: String,
+        /// Beads whose acceptance the merge could not fully discharge, with the clauses. A
+        /// record of what the print said; nothing here closes or blocks anything (air-ayp).
+        noted: Vec<air_ledger::landings::OpenBead>,
+    },
     Nothing,
     Rewound(String),
     Refused(String),
@@ -246,18 +256,23 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     }
 
     let mut landed: Vec<String> = Vec::new();
+    let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, json) {
-            Outcome::Landed { merge, beads } => {
+            Outcome::Landed { merge, noted } => {
                 lines.push(format!(
                     "landed {} ({}) at {}",
                     batch.worker,
-                    beads.join(" "),
+                    batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
-                landed.extend(beads);
+                for o in noted.iter().filter(|o| o.refuted) {
+                    lines.push(format!("  {} REFUTED: {}", o.bead, o.why));
+                }
+                landed.extend(batch.beads.clone());
+                held_open.extend(noted);
             }
             Outcome::Nothing => lines.push(format!("{}: already in main", batch.worker)),
             Outcome::Rewound(why) => {
@@ -272,16 +287,14 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             }
         }
     }
-    // One bd process for everything that landed, at the end (air-869: bd costs per process).
-    if !landed.is_empty() {
-        let closed = super::close::run(repo, &landed, "landed by air land", false);
-        if closed != 0 {
-            lines.push(format!(
-                "merged, but the close failed; re-run `air close {} --reason \"landed by air land\"`",
-                landed.join(" ")
-            ));
-            code = 1;
-        }
+    // Nothing is closed here. The worker closes its own bead with proof before the branch
+    // lands (owner ruling, 2026-08-22); this command merges, verifies, and reports.
+    let refuted = held_open.iter().filter(|o| o.refuted).count();
+    if refuted > 0 {
+        lines.push(format!(
+            "{refuted} bead(s) landed with a clause this merge CONTRADICTS. `air status` names \
+             them: read the bead, then either reopen it or file what is left."
+        ));
     }
     let msg = lines.join("\n");
     log_event(
@@ -291,11 +304,20 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         &inputs,
         if code == 0 { "landed" } else { "stopped" },
         &msg,
-        &format!("{} bead(s)", landed.len()),
+        &format!(
+            "{} bead(s) merged, {} with clauses Air could not discharge",
+            landed.len(),
+            held_open.len()
+        ),
     );
     emit(
         json,
-        &serde_json::json!({"ok": code == 0, "landed": landed, "log": lines}),
+        &serde_json::json!({
+            "ok": code == 0,
+            "landed": landed,
+            "not_discharged": held_open,
+            "log": lines,
+        }),
         || msg.clone(),
     );
     code
@@ -342,25 +364,33 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    let record_full = |result: &str,
+                       merge: Option<String>,
+                       verify: Option<String>,
+                       step: Option<String>,
+                       open: &[air_ledger::landings::OpenBead]| {
+        let _ = ledger.record_landing(&LandingRow {
+            id: new_id(),
+            worker: batch.worker.clone(),
+            sha: facts.branch_head.to_string(),
+            tip_sha: Some(tip.clone()),
+            result: result.to_string(),
+            failing_step: step,
+            verify_run_id: verify,
+            attempt_no: ledger
+                .landing_attempts(&batch.worker)
+                .unwrap_or(0)
+                .saturating_add(1),
+            beads: batch.beads.clone(),
+            open_beads: open.to_vec(),
+            merge_commit: merge,
+            started_at: started_at.clone(),
+            finished_at: now(),
+        });
+    };
     let record =
         |result: &str, merge: Option<String>, verify: Option<String>, step: Option<String>| {
-            let _ = ledger.record_landing(&LandingRow {
-                id: new_id(),
-                worker: batch.worker.clone(),
-                sha: facts.branch_head.to_string(),
-                tip_sha: Some(tip.clone()),
-                result: result.to_string(),
-                failing_step: step,
-                verify_run_id: verify,
-                attempt_no: ledger
-                    .landing_attempts(&batch.worker)
-                    .unwrap_or(0)
-                    .saturating_add(1),
-                beads: batch.beads.clone(),
-                merge_commit: merge,
-                started_at: started_at.clone(),
-                finished_at: now(),
-            });
+            record_full(result, merge, verify, step, &[]);
         };
     match check(&facts) {
         Ok(false) => return Outcome::Nothing,
@@ -424,11 +454,56 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             batch.worker
         ));
     }
-    record("landed", Some(merge.clone()), Some(run.id), None);
-    Outcome::Landed {
-        merge,
-        beads: batch.beads.clone(),
+    // ── air-ayp ────────────────────────────────────────────────────────────────────────
+    // Layer 1, the part that is true under either closure model: read every bead's acceptance
+    // and print it beside Air's verdict, so a wrong close is visible at the moment it lands.
+    // Nothing closes on branch containment.
+    let changed = git::run(repo, &["diff", "--name-only", &format!("{tip}..{merge}")])
+        .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let ev = acceptance::Evidence {
+        green_at_landed: true, // the run above, recorded at `merge`
+        changed: &changed,
+    };
+    let judged: Vec<acceptance::Judged> = batch
+        .beads
+        .iter()
+        .enumerate()
+        .map(|(i, bead)| {
+            acceptance::judge_clauses(
+                bead,
+                batch.acceptance.get(i).cloned().unwrap_or_default(),
+                &ev,
+            )
+        })
+        .collect();
+    if !json {
+        print!("{}", acceptance::report(&judged));
     }
+    // `air land` closes nothing (owner ruling, 2026-08-22: the worker closes its own bead with
+    // proof). What the print said is kept on the row so it outlives the scrollback, and a
+    // REFUTED clause is the wrong-close signal the coordinator is told about.
+    let noted: Vec<air_ledger::landings::OpenBead> = judged
+        .iter()
+        .filter(|j| !j.all_discharged())
+        .map(|j| air_ledger::landings::OpenBead {
+            bead: j.bead.clone(),
+            why: j.why_open(),
+            refuted: j.refuted(),
+        })
+        .collect();
+    record_full(
+        if noted.iter().any(|o| o.refuted) {
+            "landed-refuted"
+        } else {
+            "landed"
+        },
+        Some(merge.clone()),
+        Some(run.id),
+        None,
+        &noted,
+    );
+    Outcome::Landed { merge, noted }
 }
 
 #[cfg(test)]
@@ -501,6 +576,7 @@ mod tests {
             head: "abc".into(),
             minutes,
             command: String::new(),
+            acceptance: Vec::new(),
         };
         let b = batches(&[
             l("air-1", "alpha", 5),

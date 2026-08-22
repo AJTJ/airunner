@@ -35,7 +35,9 @@ fn scratch_repo() -> tempfile::TempDir {
 /// it exists, otherwise one open, unassigned, unlabelled issue per id argument, omitting any
 /// id listed in `<dir>/bd.unknown` and still exiting 0 (real bd 1.2.2 does exactly that);
 /// `list --status in_progress` answers from `<dir>/bd.in_progress` and
-/// `list --status awaiting_review` from `<dir>/bd.awaiting_review` (ids, one per line);
+/// `list --status awaiting_review` from `<dir>/bd.awaiting_review` (ids, one per line), each
+/// carrying the description in `<dir>/bd.desc.json` when that file exists (a JSON string
+/// literal, quotes included, so acceptance criteria can be exercised — air-ayp);
 /// `update` exits 1 when `<dir>/bd.fail` exists.
 ///
 /// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
@@ -64,7 +66,18 @@ case "$1" in
        done
        echo "[$out]"; exit 0;;
   list) f="$d/bd.in_progress"; s=in_progress; case "$*" in *awaiting_review*) f="$d/bd.awaiting_review"; s=awaiting_review;; esac
-       if [ -f "$f" ]; then awk -v s="$s" '{printf "%s{\"id\":\"%s\",\"status\":\"%s\"}", (NR>1?",":""), $0, s} BEGIN{printf "["} END{print "]"}' "$f"; else echo "[]"; fi; exit 0;;
+       desc=""; [ -f "$d/bd.desc.json" ] && desc=$(cat "$d/bd.desc.json")
+       out=""
+       if [ -f "$f" ]; then
+         while IFS= read -r id; do
+           [ -n "$id" ] || continue
+           row="{\"id\":\"$id\",\"status\":\"$s\""
+           [ -n "$desc" ] && row="$row,\"description\":$desc"
+           out="$out${out:+,}$row}"
+         done < "$f"
+       fi
+       # printf, not echo: /bin/sh's echo expands the \n inside the JSON description.
+       printf '%s\n' "[$out]"; exit 0;;
   ready) echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
   *) exit 0;;
@@ -996,6 +1009,10 @@ fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         ],
     );
     std::fs::write(alpha.join("work.txt"), "the work\n").unwrap();
+    // A nested path too, so an acceptance clause naming `docs/note.md` can be discharged
+    // against the merge's changed files (air-ayp).
+    std::fs::create_dir_all(alpha.join("docs")).unwrap();
+    std::fs::write(alpha.join("docs/note.md"), "the note\n").unwrap();
     git(&alpha, &["add", "-A"]);
     git(&alpha, &["commit", "-q", "-m", "the work"]);
     (
@@ -1039,6 +1056,17 @@ fn hand_over(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
     .unwrap();
 }
 
+/// The `## Acceptance Criteria` bd returns for every listed bead, as a JSON string literal
+/// (air-ayp: bd has no `acceptance_criteria` field, only the description).
+fn acceptance(main: &Path, criteria: &str) {
+    let body = format!("## Incident\n\nx\n\n## Acceptance Criteria\n\n{criteria}");
+    std::fs::write(
+        main.join("bd.desc.json"),
+        serde_json::to_string(&body).unwrap(),
+    )
+    .unwrap();
+}
+
 /// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the
 /// bead in one bd process, releases the claim, and records the landing.
 #[test]
@@ -1046,6 +1074,12 @@ fn land_merges_verifies_closes_and_records() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
     hand_over(&main, &alpha, &bd, "fd-1");
+    // air-ayp: acceptance Air can point at evidence for — a green at the landed sha, and a
+    // file the merge changed. Anything else would land merged-but-not-closed.
+    acceptance(
+        &main,
+        "- Verify recorded green at HEAD.\n- docs/note.md carries the note.\n",
+    );
     let before = git(&main, &["rev-parse", "HEAD"]);
 
     let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
@@ -1060,13 +1094,11 @@ fn land_merges_verifies_closes_and_records() {
         std::fs::read_to_string(main.join("work.txt")).unwrap(),
         "the work\n"
     );
-    // One bd process closed it; the claim is released as landed.
+    // Every clause discharged, and still nothing is closed: the worker closes its own bead
+    // with proof before the branch lands (air-ayp).
+    assert!(out.contains("fd-1 — every clause discharged"), "{out}{err}");
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
-    assert!(
-        log.lines().any(|l| l.starts_with("close fd-1 --reason")),
-        "{log}"
-    );
-    assert_eq!(claims(&main)[0].2.as_deref(), Some("landed"));
+    assert!(!log.contains("close fd-1"), "{log}");
     // And the landing is a row, with the verify run that decided it.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let (worker, result, merge, verify): (String, String, String, String) = conn
@@ -1089,6 +1121,80 @@ fn land_merges_verifies_closes_and_records() {
         (sha.as_str(), exit),
         (head.as_str(), 0),
         "the green is at the MERGED result, not the branch"
+    );
+}
+
+/// air-ayp: `air land` closes nothing — the worker closes its own bead with proof (owner
+/// ruling, 2026-08-22). The landing PRINTS every bead beside its acceptance and Air's verdict
+/// per clause, which is the only external check on that honour system. A clause the merge
+/// CONTRADICTS is a wrong close: kept on the `landings` row and named by `air status`.
+#[test]
+fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+    // Three clauses: one Air can look up, one it can look up and refute, one it cannot read.
+    acceptance(
+        &main,
+        "- Verify recorded green at HEAD.\n\
+         - docs/absent.md says the rule.\n\
+         - The owner rules on the counter-argument.\n",
+    );
+    let before = git(&main, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    // It MERGED: the code is in main, so nothing is held hostage to the prose.
+    assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
+    assert_eq!(
+        std::fs::read_to_string(main.join("work.txt")).unwrap(),
+        "the work\n"
+    );
+    // The print: every clause with its verdict, so a wrong close is visible as it lands.
+    assert!(out.contains("air land closes nothing"), "{out}");
+    assert!(out.contains("ok   Verify recorded green at HEAD."), "{out}");
+    assert!(out.contains("MISS docs/absent.md says the rule."), "{out}");
+    assert!(
+        out.contains("?    The owner rules on the counter-argument."),
+        "{out}"
+    );
+    assert!(out.contains("fd-1 — REFUTED"), "{out}");
+    // It closes NOTHING, and writes no bd status of any kind.
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(!log.contains("close fd-1"), "{log}");
+    assert!(
+        !log.lines().any(|l| l.starts_with("update fd-1 -s")),
+        "no bd status is written, so the bead blocks exactly what it blocked before: {log}"
+    );
+    // What the print said outlives the scrollback, on the landings row.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (result, open): (String, String) = conn
+        .query_row("SELECT result, open_beads FROM landings", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(result, "landed-refuted");
+    assert!(
+        open.contains("fd-1") && open.contains("docs/absent.md"),
+        "{open}"
+    );
+
+    // And `air status` names it until somebody deals with the bead.
+    let (_, s, _) = air(&main, &bd, &["status"]);
+    assert!(
+        s.contains("fd-1 landed in") && s.contains("CONTRADICTS"),
+        "{s}"
+    );
+    let (code, _, _) = air(
+        &main,
+        &bd,
+        &["close", "fd-1", "--reason", "checked by hand"],
+    );
+    assert_eq!(code, 0);
+    let (_, s, _) = air(&main, &bd, &["status"]);
+    assert!(
+        !s.contains("fd-1 landed in"),
+        "cleared once dealt with: {s}"
     );
 }
 
