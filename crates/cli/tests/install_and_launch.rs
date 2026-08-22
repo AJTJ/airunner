@@ -339,7 +339,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
     assert!(
         std::fs::read_to_string(proj.join(".beads/init.args"))
             .unwrap()
-            .contains("--prefix np --non-interactive --init-if-missing")
+            .contains("--prefix np --non-interactive --init-if-missing --skip-agents --skip-hooks")
     );
     assert_eq!(
         std::fs::read_to_string(proj.join(".gitignore")).unwrap(),
