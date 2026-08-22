@@ -58,6 +58,7 @@ pub fn run(json: bool) -> i32 {
         probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_close_with_proof_sequence(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -186,6 +187,109 @@ fn probe_audit_registry() -> Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-2zq: close-with-proof, end to end. air-i59 made the gate blocking on evidence measured
+/// against the hand-over flow; air-7o3 replaced hand-over with closing, and the question raised
+/// was whether the gate now bills a fresh verify per bead and whether an agent can stall.
+///
+/// Red: once HEAD moves, the next close IS refused until a verify is recorded there — the gate
+/// still bites, which is the half worth keeping. Green: claim, close, take the next bead, close
+/// again on an UNCHANGED HEAD, all on one verify run. So the second close is free and the
+/// sequence in CLAUDE.md's work flow does not stall.
+fn probe_close_with_proof_sequence() -> Probe {
+    use crate::cmd::hook::handover_gate;
+    use air_hooks::HookOutcome;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let green_at = |sha: &str| -> Result<(), String> {
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "probe".into(),
+                sha: sha.to_string(),
+                kind: Kind::Verify,
+                exit_code: 0,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+            })
+            .map_err(|e| e.to_string())
+        };
+        let passes = |bead: &str| -> bool {
+            matches!(
+                handover_gate(&l, "probe", &dir, &format!("bd close {bead}"), true)
+                    .map(|d| d.outcome),
+                Ok(HookOutcome::Allow { .. })
+            )
+        };
+
+        // Bead one: claim, work already committed, verify recorded, close.
+        l.record_claim("fd-1", "probe", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        green_at(&head)?;
+        let first = passes("fd-1");
+
+        // Bead two, finished without moving HEAD (a docs bead already satisfied, a no-op fix).
+        // ONE verify run exists in total, and this close must still pass: a green at a commit
+        // that has not moved is still a green.
+        l.record_claim("fd-2", "probe", &[], "t1")
+            .map_err(|e| e.to_string())?;
+        let second_free = passes("fd-2");
+        let runs: i64 = l
+            .conn()
+            .query_row("SELECT count(*) FROM verify_runs", [], |r| r.get(0))
+            .unwrap_or(-1);
+
+        // Bead three, with a commit: HEAD moved, so the gate demands a verify there.
+        g(&["commit", "-q", "--allow-empty", "-m", "b"])?;
+        l.record_claim("fd-3", "probe", &[], "t2")
+            .map_err(|e| e.to_string())?;
+        let refused_after_commit = !passes("fd-3");
+        // ...and recording one at the new HEAD clears it. No stall.
+        let moved = g(&["rev-parse", "HEAD"])?;
+        green_at(&moved)?;
+        let cleared = passes("fd-3");
+
+        Ok((
+            refused_after_commit,
+            first && second_free && runs == 1 && cleared,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
