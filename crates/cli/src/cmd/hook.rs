@@ -638,15 +638,30 @@ pub fn project_fence(input: &HookInput, project: &str) -> Option<Dispatched> {
     None
 }
 
-/// This session's project (air-0lk): `AIR_PROJECT` from the launcher, else the beads prefix
-/// resolved from the checkout — the same resolver `air worker` uses for tmux session names
-/// (air-5lg), not a second one. Never empty in a launched session; empty only when Air cannot
-/// tell, and an empty project refuses every cross-project name, which is the safe direction.
-pub fn project_for(cwd: &Path) -> String {
-    match std::env::var("AIR_PROJECT") {
-        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
-        _ => super::tmux::project_prefix(cwd),
+/// The whole project decision, with the environment passed in rather than read (air-7ah).
+///
+/// `AIR_PROJECT` from the launcher wins, because that is the launcher stating which fleet the
+/// session belongs to; the beads prefix resolved from the checkout is the fallback — the same
+/// resolver `air worker` uses for tmux session names (air-5lg), not a second one.
+///
+/// The env is a parameter so a test can decide it. `project_for` read it directly, and the
+/// hook test asserting a scratch repo's prefix silently got the ambient `AIR_PROJECT` of
+/// whatever session ran it. That passed everywhere except inside a launched session — which is
+/// the only place `air land` runs — so landing was blocked for every branch, and the test that
+/// should have caught it was the thing hiding it. Mutating the process environment in the test
+/// instead would be worse: `cargo test` runs in parallel threads.
+pub fn project_from(env: Option<&str>, cwd: &Path) -> String {
+    match env.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => p.to_string(),
+        None => super::tmux::project_prefix(cwd),
     }
+}
+
+/// This session's project (air-0lk). Never empty in a launched session; empty only when Air
+/// cannot tell, and an empty project refuses every cross-project name, which is the safe
+/// direction.
+pub fn project_for(cwd: &Path) -> String {
+    project_from(std::env::var("AIR_PROJECT").ok().as_deref(), cwd)
 }
 
 /// Upsert the session row; returns the state it had before (None for a new session) so the
@@ -823,6 +838,27 @@ mod tests {
         let repo = dir.path().canonicalize().unwrap();
         std::fs::create_dir_all(repo.join(".beads")).unwrap();
         std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
+
+        // The decision, with the environment supplied rather than inherited (air-7ah). This
+        // read the ambient `AIR_PROJECT`, so it asserted "zz" everywhere except inside a
+        // launched session — where `air land` runs, and where it therefore failed.
+        assert_eq!(
+            super::project_from(None, &repo),
+            "zz",
+            "falls back to the prefix"
+        );
+        assert_eq!(
+            super::project_from(Some("air"), &repo),
+            "air",
+            "the launcher's value wins over the checkout's prefix"
+        );
+        assert_eq!(
+            super::project_from(Some("  "), &repo),
+            "zz",
+            "blank is not a value"
+        );
+
+        // And the hook writes that decision to the session row rather than something else.
         fire(
             &repo,
             serde_json::json!({"hook_event_name": "SessionStart"}),
@@ -831,7 +867,8 @@ mod tests {
         let project: String = conn
             .query_row("SELECT project FROM sessions", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(project, "zz");
+        assert_eq!(project, super::project_for(&repo));
+        assert!(!project.is_empty(), "a session row always names a project");
     }
 
     #[test]

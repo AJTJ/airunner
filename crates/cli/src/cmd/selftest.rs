@@ -56,6 +56,7 @@ pub fn run(json: bool) -> i32 {
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
+        probe_project_is_taken_from_what_it_is_told(),
         probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
@@ -385,10 +386,12 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
 /// landing carries past its print is the one signal meaning a wrong close: a clause the merge
 /// CONTRADICTS. As a `landings` row, never as a bd status.
 ///
-/// Red: a bead naming a file the merge did not touch is refuted, not discharged, and the
-/// ledger reports it with the clause. Green: a bead whose every clause is discharged says so;
-/// one Air merely cannot read is neither refuted nor discharged and is not reported; and the
-/// report clears once somebody deals with the bead.
+/// Red: a bead naming a file the merge did not touch is refuted, not discharged, the ledger
+/// reports it with the clause, and the report SURVIVES the claim being claimed and released —
+/// which is what air-dlw fixed, because close-with-proof reconciles the claim away at once and
+/// a report keyed on it could never fire. Green: a bead whose every clause is discharged says
+/// so; one Air merely cannot read is neither refuted nor discharged and is not reported; and a
+/// later landing that stops refuting the bead clears it.
 ///
 /// The no-blocking half is the second assertion: the whole representation is a ledger row, and
 /// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
@@ -452,20 +455,45 @@ fn probe_landed_but_open() -> Probe {
             && open
                 .first()
                 .is_some_and(|o| o.bead == "fd-2" && o.why.contains("docs/rules/writing.md"));
-        // Somebody dealing with the bead clears the report: any claim release counts, since
-        // the status reconcile releases as `closed` once bd says so (air-3eu).
+        // air-dlw: the claim's lifetime must NOT decide this. Under close-with-proof the
+        // worker closes at once and the reconcile releases the claim on the next tick, so a
+        // report keyed on the claim could never fire. Claim it, release it as the reconcile
+        // does, and the report has to survive both.
         l.record_claim("fd-2", "alpha", &[], "t2")
             .map_err(|e| e.to_string())?;
-        l.release_claims_on(&["fd-2".to_string()], "landed", "t3")
+        l.release_claims_on(&["fd-2".to_string()], "closed", "t3")
             .map_err(|e| e.to_string())?;
+        let survives_the_claim = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
+
+        // It clears when a LATER landing of the same bead stops refuting it.
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "ddd".into(),
+            tip_sha: Some("ccc".into()),
+            result: "landed".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 2,
+            beads: vec!["fd-2".into()],
+            open_beads: vec![OpenBead {
+                bead: "fd-2".into(),
+                why: "a clause Air cannot read".into(),
+                refuted: false,
+            }],
+            merge_commit: Some("eee".into()),
+            started_at: "t4".into(),
+            finished_at: "t5".into(),
+        })
+        .map_err(|e| e.to_string())?;
         let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-        Ok((reported, cleared))
+        Ok((reported && survives_the_claim, cleared))
     })()
     .unwrap_or((false, false));
     let (reported, cleared) = res;
 
     Probe {
-        name: "land: a clause the merge contradicts is reported from the ledger, never as a bd status; one Air cannot read is not",
+        name: "land: a contradicted clause is reported from the landing and survives the claim being reconciled away; one Air cannot read is not",
         red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
         green_passes: discharged.all_discharged()
             && !unreadable.refuted()
@@ -665,6 +693,39 @@ fn probe_land_refusals() -> Probe {
 /// call for `air-alpha` passes. `SendMessage` to another project's coordinator passes, which is
 /// the half air-0lk got wrong: denying it broke the cross-project channel silently, in the
 /// verification path.
+/// air-7ah: which project a session belongs to must come from what it is told, not from what
+/// happens to be in the ambient environment. `project_for` read `AIR_PROJECT` directly, so the
+/// hook test asserting a scratch repo's prefix quietly got the ambient value of whatever
+/// session ran it — green everywhere except inside a launched session, which is the only place
+/// `air land` runs. Landing was blocked for every branch and the test was hiding it.
+///
+/// Red: with a project supplied, the supplied value wins over the checkout's beads prefix —
+/// the case that was never exercised. Green: with none supplied, the prefix is used, and a
+/// blank is not a value. Neither arm reads the environment, so this cannot regress the way it
+/// did.
+fn probe_project_is_taken_from_what_it_is_told() -> Probe {
+    use crate::cmd::hook::project_from;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(dir.join(".beads")).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n")
+            .map_err(|e| e.to_string())?;
+        let red = project_from(Some("air"), &dir) == "air";
+        let green = project_from(None, &dir) == "zz"
+            && project_from(Some("   "), &dir) == "zz"
+            && project_from(Some(" air "), &dir) == "air";
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "project: the session's project comes from what it is told, not from ambient AIR_PROJECT",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
 fn probe_project_fence() -> Probe {
     use crate::cmd::hook::project_fence;
     use air_hooks::{HookInput, HookOutcome};

@@ -293,20 +293,36 @@ fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
 /// three workers idle at an empty prompt once `--tmux`, the only thing terminating the
 /// list, was stripped). The reference shows the prompt positional before flags
 /// (`claude -p "query" --output-format json`).
-pub fn worker_argv_tmux(base: Vec<String>, tmux: bool, task: Option<&str>) -> Vec<String> {
+pub fn worker_argv_tmux(
+    base: Vec<String>,
+    tmux: bool,
+    mode: Option<&str>,
+    task: Option<&str>,
+) -> Vec<String> {
     let mut v = Vec::new();
     if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
         v.push(t.to_string());
     }
     v.extend(base);
     if tmux {
-        let mode = std::env::var("AIR_TMUX_MODE").ok();
-        v.push(match mode.as_deref() {
-            Some(m) if !m.is_empty() => format!("--tmux={m}"),
-            _ => "--tmux".to_string(),
-        });
+        v.push(tmux_flag(mode));
     }
     v
+}
+
+/// `AIR_TMUX_MODE`, read once at the edge so everything below it is decided from arguments.
+fn tmux_mode() -> Option<String> {
+    std::env::var("AIR_TMUX_MODE").ok()
+}
+
+/// Pure: the `--tmux` flag, with the mode passed in rather than read (air-7ah). Its test
+/// asserted the flag was exactly `--tmux`, which is true only while the ambient
+/// `AIR_TMUX_MODE` happens to be unset.
+pub fn tmux_flag(mode: Option<&str>) -> String {
+    match mode.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => format!("--tmux={m}"),
+        None => "--tmux".to_string(),
+    }
 }
 
 /// Pure: does claude read `task` in `argv` as the prompt? False when it sits in the value
@@ -372,13 +388,13 @@ pub fn worker(
     }
     match launch_mode(std::io::stdin().is_terminal(), true) {
         Launch::Exec => {
-            argv = worker_argv_tmux(argv, true, task);
+            argv = worker_argv_tmux(argv, true, tmux_mode().as_deref(), task);
             exec_claude(repo, &argv, print)
         }
         Launch::Detached => {
             // tmux is ours here, so claude gets no `--tmux`; the task still goes first
             // (air-2ct: after the deny list it reads as one more deny rule).
-            argv = worker_argv_tmux(argv, false, task);
+            argv = worker_argv_tmux(argv, false, None, task);
             spawn_detached(repo, name, &argv, print)
         }
     }
@@ -439,19 +455,24 @@ mod tests {
     #[test]
     fn task_precedes_the_deny_list_and_tmux_is_last() {
         let base = worker_argv("w", "air", Path::new("/r/roles.md"), &[]);
-        let v = worker_argv_tmux(base.clone(), true, Some("fix fd-1 end to end"));
+        let v = worker_argv_tmux(base.clone(), true, None, Some("fix fd-1 end to end"));
         assert_eq!(v[0], "fix fd-1 end to end");
         assert_eq!(v.last().map(String::as_str), Some("--tmux"));
         let deny = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert!(deny > 0, "task must not follow the variadic deny list");
         // Without --tmux (a detached launch) the task is still the prompt, not a deny value.
-        let v = worker_argv_tmux(base.clone(), false, Some("say hello"));
+        let v = worker_argv_tmux(base.clone(), false, None, Some("say hello"));
         assert_eq!(v[0], "say hello");
         assert!(!v.contains(&"--tmux".to_string()));
         assert_eq!(&v[1..], &base[..]);
-        let v = worker_argv_tmux(base, true, None);
+        let v = worker_argv_tmux(base, true, None, None);
         assert_eq!(v.last().map(String::as_str), Some("--tmux"));
         assert_eq!(v[0], "--worktree");
+        // air-7ah: the mode is decided from what it is given, not from ambient AIR_TMUX_MODE,
+        // which is what made the assertions above true only by accident of the environment.
+        assert_eq!(tmux_flag(None), "--tmux");
+        assert_eq!(tmux_flag(Some("")), "--tmux");
+        assert_eq!(tmux_flag(Some("classic")), "--tmux=classic");
     }
 
     /// `--print` pasted into `sh -c` must reproduce the exec argv for a task with a space,
@@ -462,6 +483,7 @@ mod tests {
         let argv = worker_argv_tmux(
             worker_argv("w", "air", Path::new("/r/roles.md"), &[]),
             true,
+            None,
             Some(task),
         );
         let line = print_line("claude", &argv);

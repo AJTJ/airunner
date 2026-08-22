@@ -142,8 +142,15 @@ pub fn window_label(text: &str) -> String {
 /// worktree or a live tmux session already uses. A worker outlives its bead (tty-fix did six),
 /// so the bead never belongs in the name (owner ruling, 2026-08-22).
 pub fn next_free_worker_name(taken: &[String], project: &str) -> String {
+    free_worker_name(taken, &sessions(), project)
+}
+
+/// The decision, with the live sessions passed in rather than asked for (air-7ah). Its test
+/// used to call `sessions()`, which shells to tmux and reads the ambient `AIR_TMUX_SOCKET`, so
+/// it would start failing the moment anyone ran `air worker` with no name and left an `air-w1`
+/// pane behind. A test that reads its answer out of the machine is not a test of the rule.
+pub fn free_worker_name(taken: &[String], live: &[String], project: &str) -> String {
     let used: std::collections::BTreeSet<&str> = taken.iter().map(String::as_str).collect();
-    let live = sessions();
     (1..=999)
         .map(|n| format!("w{n}"))
         .find(|n| {
@@ -201,10 +208,19 @@ mod tests {
 
     #[test]
     fn next_free_worker_name_skips_taken_names() {
-        assert_eq!(next_free_worker_name(&[], "air"), "w1");
+        let none: Vec<String> = vec![];
+        assert_eq!(free_worker_name(&[], &none, "air"), "w1");
         assert_eq!(
-            next_free_worker_name(&["w1".into(), "w2".into(), "alpha".into()], "air"),
+            free_worker_name(&["w1".into(), "w2".into(), "alpha".into()], &none, "air"),
             "w3"
+        );
+        // A live pane counts as taken, and it is supplied rather than read off the machine
+        // (air-7ah): calling `sessions()` here made the answer depend on whatever tmux
+        // happened to be running.
+        assert_eq!(
+            free_worker_name(&[], &["air-w1".to_string(), "fd-w2".to_string()], "air"),
+            "w2",
+            "another project's pane does not reserve our name"
         );
     }
 }
