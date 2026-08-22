@@ -141,11 +141,14 @@ enum Cmd {
     /// Coordinator: merge a green hand-over into main, verify the merged result, and rewind
     /// main if it goes red. The one allowed path onto main; it pushes nothing.
     ///
-    /// A bead is landable when bd holds it in `awaiting_review` and its worker has a recorded
-    /// green at its branch head (`air inbox --owner` lists them). One merge per branch,
-    /// however many beads that branch carries; `--all` takes the longest wait first and stops
-    /// at the first red. The repo's verify comes from `.claude/air.json` `verify_command`,
-    /// default `make verify`.
+    /// A branch is landable when it carries a recorded green at its head; the beads reported
+    /// are the ones its merge range (`main..<head>`) names in its commit messages, confirmed
+    /// against bd (`air status` lists them). Nothing is read from `awaiting_review`: the
+    /// worker closes its own bead with proof and never sets it (air-7kp).
+    ///
+    /// One merge per branch, however many beads that branch carries; `--all` takes the oldest
+    /// branch first and stops at the first red. The repo's verify comes from
+    /// `.claude/air.json` `verify_command`, default `make verify`.
     ///
     /// It closes nothing. The worker closes its own bead with proof before the branch lands
     /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
@@ -156,7 +159,7 @@ enum Cmd {
     /// `air status` (air-ayp).
     Land {
         bead: Vec<String>,
-        /// Land every green hand-over, longest wait first, stopping at the first red.
+        /// Land every green branch, oldest first, stopping at the first red.
         #[arg(long)]
         all: bool,
     },

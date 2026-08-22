@@ -52,6 +52,7 @@ pub fn run(json: bool) -> i32 {
         probe_surface_diff(),
         probe_change_only_push(),
         probe_review_fact_survives(),
+        probe_land_selects_from_the_merge_range(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -151,6 +152,36 @@ fn probe_review_fact_survives() -> Probe {
     let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
     Probe {
         name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-7kp: `air land` used to select from `bd list --status awaiting_review`, which the
+/// owner's close-with-proof ruling emptied, so `--all` found nothing and the pre-merge
+/// acceptance report printed nothing — on every branch, silently. Selection is now the merge
+/// range.
+///
+/// Red: a commit message naming beads yields them, so a branch whose worker closed its own
+/// bead is still attributable. Green: the extraction does not invent ids out of ordinary prose
+/// or trailers, and an id shape with no digit (`air-zyo`, `air-ouw` are real) is still found —
+/// a narrower rule would drop real beads, and the reason the loose one is safe is that bd
+/// confirms every candidate and omits what it does not know (air-76z).
+fn probe_land_selects_from_the_merge_range() -> Probe {
+    use crate::cmd::status::bead_ids_in_text;
+
+    let msg = "feat(land): select from the merge range (air-7kp)\n\nAlso closes air-zyo and \
+               air-ouw. Co-Authored-By: Someone <x@y.z>\nSee docs/rules/roles.md for the rule.";
+    let found = bead_ids_in_text(msg);
+    let red = found.contains(&"air-7kp".to_string())
+        && found.contains(&"air-zyo".to_string())
+        && found.contains(&"air-ouw".to_string());
+    // Green: no ids conjured from an empty range, and the uppercase trailer is not one.
+    let green = bead_ids_in_text("").is_empty()
+        && !found.iter().any(|f| f.starts_with("Co-"))
+        && bead_ids_in_text("a plain sentence with no bead in it").is_empty();
+    Probe {
+        name: "land: beads come from the merge range, including ids with no digit; prose invents none",
         red_fires: red,
         green_passes: green,
     }
