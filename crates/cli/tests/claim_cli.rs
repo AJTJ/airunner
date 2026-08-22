@@ -119,7 +119,10 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["release", "fd-1", "--reason", "abandoned"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
-    assert!(log.lines().any(|l| l.trim() == "update fd-1 -s open"), "{log}");
+    assert!(
+        log.lines().any(|l| l.trim() == "update fd-1 -s open"),
+        "{log}"
+    );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
 }
 

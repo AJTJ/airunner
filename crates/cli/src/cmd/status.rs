@@ -57,6 +57,9 @@ pub struct Snapshot {
     /// Every session row (two sessions in one checkout are two entries; the per-worker view
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
+    /// `bd ready` count at this tick (None when bd did not answer): queue depth over time
+    /// (plan 0006 C6; the round ran dry at 4 with only epics left).
+    pub ready_depth: Option<usize>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -410,6 +413,13 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
         ));
     }
+    let ready_depth = match air_bd::WorkLedger::ready(&bd) {
+        Ok(v) => Some(v.len()),
+        Err(e) => {
+            errors.push(format!("bd ready: {e}"));
+            None
+        }
+    };
     let inbox = ledger.inbox().map_err(|e| e.to_string())?;
     let owner_q = ledger.inbox_for("owner").map_err(|e| e.to_string())?;
     let stale = std::env::var("AIR_LEASE_STALE_SECS")
@@ -436,9 +446,56 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         awaiting_review,
         review_waits,
         sessions: all_sessions,
+        ready_depth,
         overlaps,
         errors,
     })
+}
+
+/// Conditions as rows (first-seen/cleared) and one event line that names every kind and
+/// worker, plus the queue depth (plan 0006 C1, C6). Shared by the CLI and the channel poll.
+pub fn record_and_log(
+    ledger: &air_ledger::Ledger,
+    worker: &str,
+    snap: &Snapshot,
+    att: &[Attention],
+    attention_only: bool,
+) {
+    let current: Vec<(String, &str, String)> = att
+        .iter()
+        .map(|a| (a.worker.clone(), a.kind, a.detail.clone()))
+        .collect();
+    let (opened, cleared) = ledger
+        .record_conditions(&current, &snap.at)
+        .unwrap_or((0, 0));
+    let kinds: Vec<String> = att
+        .iter()
+        .map(|a| format!("{}:{}", a.kind, a.worker))
+        .collect();
+    log_event(
+        ledger,
+        worker,
+        if attention_only {
+            "status.attention"
+        } else {
+            "status"
+        },
+        &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "owner_queue": snap.owner_queue_depth}),
+        if att.is_empty() { "quiet" } else { "attention" },
+        &if att.is_empty() {
+            "no conditions".to_string()
+        } else {
+            kinds.join(", ")
+        },
+        &format!(
+            "{} workers, {} overlaps, ready {}",
+            snap.workers.len(),
+            snap.overlaps.len(),
+            snap.ready_depth
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into())
+        ),
+    );
 }
 
 fn render(s: &Snapshot, att: &[Attention]) -> String {

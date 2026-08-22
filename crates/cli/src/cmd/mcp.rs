@@ -529,6 +529,9 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
                 match status::gather(repo) {
                     Ok(snap) => {
                         let att = status::attention(&snap, &snap.at, thresholds);
+                        if let Ok((ledger, worker)) = crate::cmd::open(repo) {
+                            status::record_and_log(&ledger, &worker, &snap, &att, true);
+                        }
                         for a in select_new(&mut pushed, &att) {
                             out.send(&channel_event(&a));
                         }

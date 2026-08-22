@@ -14,8 +14,10 @@ coordinator; each worktree is a worker. Air records it on every session and even
 ## Worker (one per worktree, one bead at a time)
 
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
-implement, `git merge main`, `air record verify -- <cmd>`, `air handover`,
-`bd update <id> -s awaiting_review`, next bead. Stop only for a genuine blocker or an owner-only
+implement, write the digest (if the repo asks for one) and commit it with the work,
+`git merge main`, `air record verify -- <cmd>` last so the green is at the commit you hand
+over, `air handover`, `bd update <id> -s awaiting_review`, next bead. A closed bead stays
+closed; unfinished work is a new bead that references it (ask via `air capture`). Stop only for a genuine blocker or an owner-only
 decision; say so in one line with `air capture "<blocker>"` (or `--for owner`), then `air release
 <id> --reason <why>` or take unrelated work.
 
@@ -35,9 +37,11 @@ without a recorded green at HEAD that contains `main` is the one refusal (adviso
 
 ## Coordinator (the main checkout, holding no lane)
 
-Two modes (owner, 2026-08-21). **Active:** every online worker has work; keep the ready queue
-full and assign with `assignee`, priority, and `blocks` edges; a worker that joins or finishes
-gets its next bead without asking; there is no cap on work in flight. **Idle:** feed no one.
+Two modes (owner, 2026-08-21). **Active:** every online worker has work: keep the ready list
+full of claimable tasks (epics decomposed; the reading may be delegated, the filing and deciding
+are yours), set priority, add `blocks` edges for shared files. Never set `assignee` on an open
+bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
+flight. **Idle:** feed no one.
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
 acceptance, a resource conflict), through the owner queue.
 
@@ -47,8 +51,11 @@ claim, hand-over not green, lease held by a dead session, owner decision waiting
 joined or left). **[fact]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` (bd refuses without `## Acceptance
-Criteria`) → `air triage <id> --bead <new>` or `--drop "<why>"`. Owner queue: `air inbox
---owner`. Landing is the repo's own command until `air land` exists.
+Criteria`) → `air triage <id> --bead <new>` or `--drop "<why>"`. Workers request beads this way,
+including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
+labelled `human` is awaiting the owner and `air claim` refuses it to workers. Launch workers
+yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
+can open). Landing is the repo's own command until `air land` exists.
 
 Not available to the coordinator, by deny rule: `git commit` and `git push` on main.
 **[Air enforces]**

@@ -61,7 +61,7 @@ Filing-time signals:
   lines is set until the ledger's estimate-vs-actual metric (measurement spec §2.7) produces one.
 - Set `--estimate <minutes>`; it is a guess the ledger correlates with actuals, never a gate.
 
-## The procedure (coordinator runs this)
+## The procedure (the coordinator files and decides; the reading may be delegated)
 
 Inputs: the feature paragraph; `main`; `bd list --type=epic`; `bd ready -n 0`; the capture
 inbox; `air status` (lanes held, idle workers). Output: one epic, the skeleton plus one wave of
@@ -174,28 +174,29 @@ frontier thins.
 - Small and related discovery → a child under this epic. Significant → capture. Scope change →
   stop (Metis `feature-development.md:138-157`).
 
-## Cutting per-worker queues (owner 2026-08-20: beads fields only)
+## Keeping workers fed (owner 2026-08-21: pull, never assign)
 
-Queues are `assignee` + priority + `blocks` edges. No Air-side queue. Four reads:
+There are no per-worker queues. Workers pull from a legible ready list; the coordinator's job
+is that the list is never empty of claimable tasks and that priority says what goes first.
+**Do not set `assignee` on an open bead**: in bd 1.2.x a pencilled assignee blocks every other
+worker's `--claim` (three collisions in one round, 2026-08-21). Reads:
 
 ```bash
-air status                                        # lanes held; idle / stuck per session
-bd ready --parent <epic> --unassigned -n 0 --json # the frontier (never the capped default)
-bd list --status in_progress --json               # what each worker holds
+air status                                        # sessions, claims, green, leases
+bd ready --type task -n 0 --json                  # the claimable frontier (epics/spikes excluded)
 bd dep tree <epic> --json                         # what each landing unblocks
 ```
 
-1. **One live claim per lane.** For each idle worker, the highest-priority ready bead whose lane
-   no in-progress bead holds. `bd update <id> --assignee <worker>`; the worker's
-   `air claim` is the fact, the assignee is the suggestion.
-2. **No depth cap** (owner 2026-08-21: "there is no cap; we set our goals and finish them").
-   Queue as much as is ready; the next item is what becomes ready when the first lands.
-3. **Priority encodes the wave**: skeleton `-p 1`, its direct dependents `-p 2`, the rest
+1. **Legible list**: epics and spikes are not claimable until decomposed; a task is claimable
+   when it has acceptance, an estimate, and its files named in the description.
+2. **Priority encodes the wave**: skeleton `-p 1`, its direct dependents `-p 2`, the rest
    `-p 3`; `bd ready --sort priority` orders the frontier with no extra state.
-4. **Shared file → edge, not assignment.** An edge survives a worker swap; an assignment does not.
-5. **Starvation**: fewer ready beads than idle workers → run steps 2-5 of the procedure first.
-6. **Stuck worker** (`air status`): release the bead (`bd update <id> --status open`); never
-   reassign while claimed.
+3. **Shared file → edge, never assignment.** `bd dep add` survives a worker swap.
+4. **No depth cap** ("there is no cap; we set our goals and finish them").
+5. **Starvation** (fewer ready tasks than workers): decompose next; the reading may be
+   delegated to any agent with a file deliverable, the filing and deciding stay here.
+6. **Stuck or gone worker** (`air status`, the channel): `air release <id> --worker <name>
+   --reason reassigned`; never edit assignee.
 
 ## Quality checklist and smells (Metis, with Air's additions)
 
