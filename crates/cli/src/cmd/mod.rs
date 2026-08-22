@@ -17,6 +17,7 @@ pub mod ready_cache;
 pub mod record;
 pub mod selftest;
 pub mod status;
+pub mod tmux;
 
 use std::path::Path;
 
