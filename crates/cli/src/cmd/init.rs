@@ -6,7 +6,8 @@
 //! not. Then, in the target directory: `git init -b main` and a first commit if needed;
 //! `.air/` in `.gitignore`; `bd init --prefix <p> --non-interactive --init-if-missing
 //! --skip-agents --skip-hooks` (no AGENTS.md, no `bd prime`: its command reference conflicts
-//! with Air's roles; owner 2026-08-21);
+//! with Air's roles; owner 2026-08-21); `bd config set status.custom awaiting_review` (the
+//! hand-over state is not a bd default);
 //! `.claude/air.json` with deny patterns proposed from a scan of the repo's publish targets
 //! (adopter: a new publish target shipped outside an enumerated list; deny the verb, not the
 //! tool); then `air install --write` (hooks, `.mcp.json`, roles, skills); a minimal CLAUDE.md
@@ -307,6 +308,16 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                     "--skip-agents",
                     "--skip-hooks",
                 ],
+            )?;
+        }
+        // The hand-over state Air's gate watches is a custom bd status; a fresh workspace
+        // rejects it until declared (found dogfooding on 2026-08-22). Idempotent.
+        {
+            let bdbin = crate::cmd::claim::bd_for(&dir).bin;
+            run_in(
+                &dir,
+                &bdbin.to_string_lossy(),
+                &["config", "set", "status.custom", "awaiting_review"],
             )?;
         }
         if !air_json_exists {
