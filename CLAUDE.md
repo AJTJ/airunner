@@ -91,10 +91,13 @@ Index items are 1–3 lines; detail lives behind the link.
 
 ## Essentials
 
-- A session may only touch its own project. `AIR_PROJECT` on both launchers; the PreToolUse hook
-  denies a `tmux` command naming another project's session and a `SendMessage` to a peer this
-  project's ledger does not know, and `air --repo` outside this checkout is refused (air-0lk).
-  Other fleets run on this machine (`~/projects/adopter`); the check is the rule, not this line.
+- **A session may act only on its own project. Talking to another one is fine.** Another
+  project's worktrees, tmux sessions and workers are never ours to kill, restart, re-model or
+  tidy; reading them and messaging them is encouraged, and the cross-project channel is how
+  three wrong claims were caught on 2026-08-22. `AIR_PROJECT` on both launchers; the PreToolUse
+  hook denies a `tmux` command naming another project's session, and `air --repo` outside this
+  checkout is refused (air-0lk, corrected by air-3oq). Other fleets run on this machine
+  (`~/projects/adopter`); the check is the rule, not this line.
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).

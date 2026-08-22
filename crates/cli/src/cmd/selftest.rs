@@ -510,18 +510,19 @@ fn probe_land_refusals() -> Probe {
     }
 }
 
-/// air-0lk: a session may only touch its own project. With `AIR_PROJECT=air`, a PreToolUse
-/// hook call for `tmux kill-session -t fd-worker1` denies and names the fix; the same call for
-/// `air-alpha` is allowed. Same pair for a peer in another project's fleet. Driven through the
-/// real hook entry point, so a refusal that never reaches `PreToolUse` fails the probe.
+/// air-0lk, corrected by air-3oq: a session may ACT only on its own project, and may TALK to
+/// any of them. With `AIR_PROJECT=air`, a PreToolUse call for `tmux kill-session -t fd-worker1`
+/// denies with a refusal that names the fence, the project and what is still allowed; the same
+/// call for `air-alpha` passes. `SendMessage` to another project's coordinator passes, which is
+/// the half air-0lk got wrong: denying it broke the cross-project channel silently, in the
+/// verification path.
 fn probe_project_fence() -> Probe {
     use crate::cmd::hook::project_fence;
     use air_hooks::{HookInput, HookOutcome};
 
-    let peers = ["alpha".to_string(), "beta".to_string()];
     let call = |raw: String| -> Option<HookOutcome> {
         let input = HookInput::parse(&raw).ok()?;
-        project_fence(&input, "air", &peers).map(|d| d.outcome)
+        project_fence(&input, "air").map(|d| d.outcome)
     };
     let bash = |cmd: &str| {
         call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
@@ -534,11 +535,17 @@ fn probe_project_fence() -> Probe {
             if reason.contains(needle) && reason.contains("air-0lk"))
     };
     Probe {
-        name: "project: tmux and SendMessage into another project are denied with the rule; this project's are allowed",
+        name: "project: acting on another project's tmux session is denied and the refusal is readable; messaging any project is allowed",
         red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
-            && denied(send("adopter-51"), "adopter-51"),
-        green_passes: bash("tmux kill-session -t air-alpha").is_none()
+            // The refusal has to be interpretable, or a fenced peer reads it as "not you"
+            // and stops trying (air-3oq).
+            && denied(bash("tmux kill-session -t fd-worker1"), "MESSAGING")
+            && denied(bash("tmux send-keys -t fd-w1:0.1 hi"), "air-3oq"),
+        // Messaging ANY project is allowed, including one this ledger has never seen: the
+        // fence is about acting, not talking, and denying it broke the channel silently.
+        green_passes: send("adopter-51").is_none()
             && send("alpha-6d").is_none()
+            && bash("tmux kill-session -t air-alpha").is_none()
             && bash("tmux ls").is_none(),
     }
 }
