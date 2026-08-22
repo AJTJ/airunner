@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
     version,
     about = "Hub and referee for a few concurrent coding agents"
 )]
-struct Cli {
+pub(crate) struct Cli {
     /// Emit JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
@@ -146,6 +146,14 @@ enum Cmd {
     /// however many beads that branch carries; `--all` takes the longest wait first and stops
     /// at the first red. The repo's verify comes from `.claude/air.json` `verify_command`,
     /// default `make verify`.
+    ///
+    /// It closes nothing. The worker closes its own bead with proof before the branch lands
+    /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
+    /// acceptance criteria and Air's verdict on each clause — the only external check on that.
+    /// Air discharges a clause only by lookup: a green verify recorded at the landed sha, or a
+    /// path the merge changed. Everything else it reports as unreadable rather than judging.
+    /// A clause the merge CONTRADICTS is a wrong close, kept on the landings row and named by
+    /// `air status` (air-ayp).
     Land {
         bead: Vec<String>,
         /// Land every green hand-over, longest wait first, stopping at the first red.
@@ -206,15 +214,24 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
-    /// What the ledger says about every mechanism Air ships: how often each fired, how often
-    /// with nothing following, when it last fired, and the removal condition recorded next to
-    /// it. Facts only; the pass over them is the coordinator's. Read-only.
+    /// What the ledger says about every mechanism Air ships: how often each `fired` in the
+    /// window, over how many `subject(s)` and with how many `repeat(s)`, when it `last fired`,
+    /// and what it is `removed when`, with what the `ledger says` about that condition. Facts
+    /// only; the pass over them is the coordinator's. Read-only.
+    ///
+    /// A "fired with nothing following" count was cut from air-zyo before it shipped (Air
+    /// inferring intent it cannot see) but stayed in this help for a round: the same
+    /// derived-reads-like-observed failure the command exists to surface (air-ha8). Every
+    /// backticked name in this help is a field the command prints, and air selftest checks
+    /// the containment, so the drift cannot come back quietly.
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
         since: Option<String>,
     },
-    /// Ledger location, sizes, row counts, and the pragmas in effect.
+    /// Ledger location, sizes, row counts, the journal mode and schema version in effect, and
+    /// whether `bd` is the pinned version. (It printed one pragma while the help said
+    /// "pragmas"; air-ha8.)
     Doctor,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest,

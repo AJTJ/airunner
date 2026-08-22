@@ -480,6 +480,14 @@ fn init_gates_then_builds_a_project_from_nothing() {
         proj.join(".claude/skills/air-decomposition/SKILL.md")
             .exists()
     );
+    // air-ha8: the discipline for removing mechanisms ships with the mechanisms, renamed on
+    // install like the others so it cannot collide with a repo's own skill.
+    let do_less =
+        std::fs::read_to_string(proj.join(".claude/skills/air-do-less/SKILL.md")).unwrap();
+    assert!(do_less.starts_with("---\nname: air-do-less\n"), "{do_less}");
+    assert!(do_less.contains("removal condition"), "{do_less}");
+    // And `beads` is deliberately not installed: it documents bd 1.2.1, and Air pins 1.2.2.
+    assert!(!proj.join(".claude/skills/air-beads").exists());
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(proj.join(".claude/settings.json")).unwrap())
             .unwrap();
