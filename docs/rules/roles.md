@@ -9,7 +9,16 @@
 
 Role is the checkout: `[ -f .git ] && echo worker || echo coordinator`. The main checkout is the
 coordinator; each worktree is a worker. Air records it on every session and event. **[fact]**
-`AIR_ROLE` and `BEADS_ACTOR` are set by the launcher, never by files.
+`AIR_ROLE`, `BEADS_ACTOR` and `AIR_PROJECT` are set by the launcher, never by files.
+
+**Act only on your own project; talk to any of them.** Other fleets run on this machine.
+Another project's worktrees, tmux sessions and workers are never yours to kill, restart,
+re-model or tidy — `tmux ls` is machine-wide and `ListAgents` lists their sessions next to
+yours. Reading them and messaging them is fine and often the point: the cross-project channel
+caught three wrong claims on 2026-08-22, one of which both coordinators had backwards. A
+`tmux` command naming another project's session is denied, and `air --repo` outside this
+checkout is refused; messaging is not fenced and will not be (air-0lk, air-3oq).
+**[Air enforces: tmux targets and `--repo`, and every refusal says what is still allowed]**
 
 ## Worker (one per worktree, one bead at a time)
 
