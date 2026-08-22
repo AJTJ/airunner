@@ -54,9 +54,11 @@ Index items are 1–3 lines; detail lives behind the link.
 - **A claim that crosses between projects is checked by the receiver before it is acted on.**
   Not hedged harder by the sender: a derived statement and an observed one have identical
   grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
-  read the line cited. Applies in both directions and to commands most of all. Owner, via the
-  2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the receiver
-  opening the file, none by the sender flagging.
+  read the line cited. Applies in both directions and to commands most of all. **Check even
+  when you agree. Agreement is when checking feels least necessary and is most valuable.**
+  Owner, via the 2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the
+  receiver opening the file, none by the sender flagging; and a fourth that both sides held and
+  neither checked, plausibly *because* the other had said it.
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
