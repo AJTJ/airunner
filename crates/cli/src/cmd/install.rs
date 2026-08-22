@@ -248,6 +248,18 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "land-reads-acceptance",
+        since: "2026-08-22 (air-ayp)",
+        headline: "`air land` closes a bead only on evidence it can point at; the rest merge \
+                   and stay OPEN.",
+        silent_break: true,
+        action: "A repo whose landing pass assumed \"merged means closed\" will now find beads \
+                 merged and still open, named by `air status` as `landed-not-closed`. That is \
+                 the fix, not a fault: adopter closed 99 beads on branch containment alone, \
+                 14 of them partial and 1 not done. Close them with `air close <id> --reason \
+                 \"<what you checked>\"` once a person has looked.",
+    },
+    SurfaceChange {
         id: "skill-do-less",
         since: "2026-08-22 (air-ha8)",
         headline: "`air install` writes a third skill, `air-do-less`.",

@@ -56,6 +56,7 @@ pub fn run(json: bool) -> i32 {
         probe_land_refusals(),
         probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
+        probe_landed_but_open(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -228,6 +229,85 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
         name: "audit: every field the help names in backticks is one the command prints",
         red_fires: !all_printed(&format!("{help} and `how often with nothing following`")),
         green_passes: all_printed(&help),
+    }
+}
+
+/// air-ayp: a landing closes a bead only on evidence Air can point at, and what it cannot
+/// discharge lands merged-but-open — as a `landings` row, never as a bd status.
+///
+/// Red: a bead with a clause Air cannot look up is refused the close, and the ledger reports
+/// it with the clause. Green: a bead whose every clause is discharged closes, and once
+/// somebody actually closes a held-open one the report clears, so nothing lingers.
+///
+/// The no-blocking half is the second assertion: the whole representation is a ledger row, and
+/// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
+/// the merge. bd's blocking predicate never consults the workflow class, which is why parking
+/// it in a done-class status would have blocked dependents indefinitely.
+fn probe_landed_but_open() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let changed = vec!["docs/rules/roles.md".to_string()];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+    };
+    let undischargeable = judge_clauses(
+        "fd-2",
+        vec!["The owner rules on the counter-argument.".into()],
+        &ev,
+    );
+    let discharged = judge_clauses(
+        "fd-1",
+        vec![
+            "Verify recorded green at HEAD.".into(),
+            "docs/rules/roles.md names the rule.".into(),
+        ],
+        &ev,
+    );
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "aaa".into(),
+            tip_sha: Some("bbb".into()),
+            result: "landed-open".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 1,
+            beads: vec!["fd-1".into(), "fd-2".into()],
+            open_beads: vec![OpenBead {
+                bead: "fd-2".into(),
+                why: undischargeable.why_open(),
+            }],
+            merge_commit: Some("ccc".into()),
+            started_at: "t0".into(),
+            finished_at: "t1".into(),
+        })
+        .map_err(|e| e.to_string())?;
+        let open = l.landed_open().map_err(|e| e.to_string())?;
+        // Reported, with the clause, and the closable bead is NOT in the held-open set.
+        let reported = open.len() == 1
+            && open
+                .first()
+                .is_some_and(|o| o.bead == "fd-2" && o.why.contains("nothing Air can look up"));
+        // Closing it for real clears the report: `air close` releases the claim as `landed`.
+        l.record_claim("fd-2", "alpha", &[], "t2")
+            .map_err(|e| e.to_string())?;
+        l.release_claims_on(&["fd-2".to_string()], "landed", "t3")
+            .map_err(|e| e.to_string())?;
+        let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
+        Ok((reported, cleared))
+    })()
+    .unwrap_or((false, false));
+    let (reported, cleared) = res;
+
+    Probe {
+        name: "land: a clause Air cannot evidence leaves the bead merged-but-open in the ledger, never in a bd status",
+        red_fires: !undischargeable.may_close() && reported,
+        green_passes: discharged.may_close() && cleared,
     }
 }
 

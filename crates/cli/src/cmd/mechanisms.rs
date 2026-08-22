@@ -120,6 +120,23 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "landed-not-closed",
+        class: "attention",
+        what: "A bead a landing merged but could not close, with the acceptance clause Air \
+               could not point at evidence for.",
+        added: "2026-08-22 (air-ayp)",
+        source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
+        fires: Fires::Condition("landed-not-closed"),
+        // Not ZeroFirings: this one firing is the mechanism working. adopter's closer put
+        // 14 partial and 1 not-done bead into `closed` by never asking
+        // (docs/plans/0029-bead-closure.md D.6, cited via air-ayp). It goes when acceptance is
+        // machine-checkable by construction, at which point the merge either satisfies it or
+        // does not and there is no judgement left to hold open.
+        removal: Removal::Judgement(
+            "acceptance criteria are machine-checkable by construction, so a landing either satisfies them or does not and nothing is held open for a person to read",
+        ),
+    },
+    Mechanism {
         id: "idle-without-claim",
         class: "attention",
         what: "An idle worker holding no claim while beads are ready.",
