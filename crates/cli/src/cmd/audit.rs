@@ -63,8 +63,9 @@ pub struct Audit {
     pub days_scanned: usize,
     pub events_scanned: usize,
     pub rows: Vec<Row>,
-    /// Firings this window could not attribute to any mechanism in the registry, by
-    /// command/decision. A mechanism that leaves a trace but is not registered shows up here.
+    /// Firings this window could not attribute to any registry row, by command/decision.
+    /// Reported as defects: a registry that silently omits a firing mechanism reads as
+    /// complete when it is not, which is worse than no registry (air-0y9).
     pub unregistered: Vec<(String, usize)>,
     pub duration_ms: u64,
 }
@@ -114,9 +115,11 @@ fn parse(line: &str) -> Option<Ev> {
 /// Does this event count as `m` firing? Returns the subject it fired about, when it did.
 fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
     match m.fires {
-        Fires::Decision { command, decision } => {
-            (e.command == command && e.decision == decision).then_some(e.command.as_str())
-        }
+        // Any of the mechanism's traces: one mechanism, several entry points.
+        Fires::Decisions(traces) => traces
+            .iter()
+            .any(|(c, d)| e.command == *c && e.decision == *d)
+            .then_some(e.command.as_str()),
         Fires::Condition(kind) => e.conditions.iter().find_map(|c| {
             // Entries are `kind:subject`; the subject is what makes a firing distinct.
             let rest = c.strip_prefix(kind)?.strip_prefix(':')?;
@@ -125,11 +128,64 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
     }
 }
 
+/// Decisions that record what happened rather than a mechanism acting on someone: an event
+/// was observed, a check passed, a claim was written. Everything else is treated as a firing
+/// and must have a registry row. Seeded from every decision word in the record on 2026-08-22;
+/// add to it when a new one is genuinely bookkeeping, which is a deliberate act rather than
+/// the default (air-0y9).
+const BOOKKEEPING: &[&str] = &[
+    "attention",
+    "bd-refused",
+    "captured",
+    "claimed",
+    "claimed-late",
+    "clear",
+    "closed",
+    "dropped",
+    "ended",
+    "fail-open",
+    "failed",
+    "green",
+    "journaled",
+    "landed",
+    "no-claim",
+    "no-such-bead",
+    "observed",
+    "ok",
+    "partial",
+    "pass",
+    "promoted",
+    "quiet",
+    "reclaimed",
+    "red",
+    "registered",
+    "released",
+    "reported",
+    "stopped",
+    "timeout",
+    "triaged",
+];
+
+/// Every `command / decision` pair some mechanism claims. A firing outside this set has no
+/// registry row, which the audit reports as a defect (air-0y9).
+pub fn registered_traces() -> std::collections::BTreeSet<String> {
+    MECHANISMS
+        .iter()
+        .flat_map(|m| match m.fires {
+            Fires::Decisions(traces) => traces
+                .iter()
+                .map(|(c, d)| format!("{c} / {d}"))
+                .collect::<Vec<_>>(),
+            Fires::Condition(_) => Vec::new(),
+        })
+        .collect()
+}
+
 /// A condition firing names one subject per event, but one event can carry the same kind for
 /// several subjects. Count them all.
 fn subjects_in<'a>(m: &Mechanism, e: &'a Ev) -> Vec<&'a str> {
     match m.fires {
-        Fires::Decision { .. } => fired(m, e).into_iter().collect(),
+        Fires::Decisions(_) => fired(m, e).into_iter().collect(),
         Fires::Condition(kind) => e
             .conditions
             .iter()
@@ -177,6 +233,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
     // addressed by position are how a row ends up reporting another mechanism's counts.
     let mut acc: Vec<Acc> = MECHANISMS.iter().map(|_| Acc::default()).collect();
     let mut seen_traces: BTreeMap<String, usize> = BTreeMap::new();
+    let registered = registered_traces();
     let mut events_scanned = 0usize;
     let mut days_scanned = 0usize;
 
@@ -206,14 +263,15 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                     }
                 }
             }
-            // A decision that looks like a mechanism (a warning, a refusal, a nudge) but that
-            // no registry entry claims. Plain observations are not mechanisms.
+            // A firing no registry row claims. The test is inverted on purpose (air-0y9):
+            // rather than listing the decisions that ARE mechanisms, which makes a new one
+            // vanish silently, everything that is not bookkeeping counts, so a decision word
+            // nobody has classified yet shows up as a defect. Loud and wrong beats quiet and
+            // wrong for the failure this check exists to catch.
             if in_window
                 && !attributed
-                && matches!(
-                    e.decision.as_str(),
-                    "refuse" | "would-refuse" | "warn" | "warn-repeat" | "nudge" | "denied"
-                )
+                && !BOOKKEEPING.contains(&e.decision.as_str())
+                && !registered.contains(&format!("{} / {}", e.command, e.decision))
             {
                 let slot = seen_traces
                     .entry(format!("{} / {}", e.command, e.decision))
@@ -311,8 +369,10 @@ pub fn render(a: &Audit) -> String {
             }
         }
     }
-    if !a.unregistered.is_empty() {
-        s.push_str("\nfirings not attributed to any registered mechanism:\n");
+    if a.unregistered.is_empty() {
+        s.push_str("\nevery firing in this window has a registry row.\n");
+    } else {
+        s.push_str("\ndefect: firing mechanisms with no registry row, so this report does not cover them:\n");
         for (k, n) in &a.unregistered {
             s.push_str(&format!("  {n:5}  {k}\n"));
         }
@@ -330,7 +390,12 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
     };
     let since = since.map(str::to_string).unwrap_or_else(super::today);
     let audit = gather(ledger.dir(), &since);
-    let defects = audit.rows.iter().filter(|r| r.defect.is_some()).count();
+    let defects = audit
+        .rows
+        .iter()
+        .filter(|r| r.defect.is_some())
+        .count()
+        .saturating_add(audit.unregistered.len());
     let met = audit
         .rows
         .iter()
@@ -343,7 +408,7 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
         &serde_json::json!({"since": since}),
         "reported",
         &format!(
-            "{} mechanism(s); {met} with the recorded condition met; {defects} without one",
+            "{} mechanism(s); {met} with the recorded condition met; {defects} defect(s) (no condition recorded, or firing with no registry row)",
             audit.rows.len()
         ),
         &format!(

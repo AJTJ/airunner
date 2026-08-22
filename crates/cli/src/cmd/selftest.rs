@@ -50,6 +50,7 @@ pub fn run(json: bool) -> i32 {
         probe_triage_bead_exists(),
         probe_surface_diff(),
         probe_audit_registry(),
+        probe_audit_unregistered_firing(),
         probe_land_refusals(),
         probe_project_fence(),
     ];
@@ -100,6 +101,50 @@ fn probe_audit_registry() -> Probe {
             .any(|r| r.id == "review-waiting" && r.fires == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-0y9: a mechanism that fires with no registry row must be reported, not omitted. A
+/// registry that silently drops one reads as complete when it is not. Red: an unclaimed
+/// command/decision pair is a defect. Green: the same pair, once a row claims it, is counted
+/// as that mechanism instead.
+fn probe_audit_unregistered_firing() -> Probe {
+    use crate::cmd::audit::{gather_from, registered_traces};
+
+    let unclaimed = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"beta","command":"hook.Whatever","decision":"throttled"}"#,
+        "\n",
+    );
+    let red = {
+        let a = gather_from(
+            &[("2026-08-22".to_string(), unclaimed.to_string())],
+            "2026-08-22",
+        );
+        // Named, with its count, rather than dropped for being an unfamiliar decision word.
+        a.unregistered == vec![("hook.Whatever / throttled".to_string(), 1)]
+            && crate::cmd::audit::render(&a).contains("defect:")
+    };
+    // Green: a pair the registry does claim is attributed to its mechanism and is not a
+    // defect. `claim / refuse` is the row air-0y9 added.
+    let claimed = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"beta","command":"claim","decision":"refuse"}"#,
+        "\n",
+    );
+    let green = {
+        let a = gather_from(
+            &[("2026-08-22".to_string(), claimed.to_string())],
+            "2026-08-22",
+        );
+        registered_traces().contains("claim / refuse")
+            && a.unregistered.is_empty()
+            && a.rows
+                .iter()
+                .any(|r| r.id == "claim-refusal" && r.fires == 1)
+    };
+    Probe {
+        name: "audit: a firing with no registry row is a defect; a claimed pair counts as its mechanism",
         red_fires: red,
         green_passes: green,
     }
