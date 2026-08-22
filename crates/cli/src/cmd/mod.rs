@@ -11,6 +11,7 @@ pub mod install;
 pub mod launch;
 pub mod lease;
 pub mod mcp;
+pub mod ready_cache;
 pub mod record;
 pub mod selftest;
 pub mod status;

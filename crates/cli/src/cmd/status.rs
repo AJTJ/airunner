@@ -434,8 +434,17 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
         ));
     }
+    // Also refreshes `.air/ready.json` for the Stop hook (air-09i).
     let ready_depth = match air_bd::WorkLedger::ready(&bd) {
-        Ok(v) => Some(v.len()),
+        Ok(v) => {
+            let ids: Vec<String> = v
+                .iter()
+                .filter(|i| !i.labels.iter().any(|l| l == "human"))
+                .map(|i| i.id.clone())
+                .collect();
+            super::ready_cache::write(repo, &ids, &super::now());
+            Some(v.len())
+        }
         Err(e) => {
             errors.push(format!("bd ready: {e}"));
             None

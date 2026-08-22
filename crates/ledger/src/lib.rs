@@ -162,6 +162,18 @@ impl Ledger {
         )?;
         Ok(n > 0)
     }
+
+    /// What a session was last told for `key`: (fingerprint, emitted_at), if anything.
+    pub fn last_emission(&self, session_id: &str, key: &str) -> Result<Option<(String, String)>> {
+        let mut st = self.conn.prepare(
+            "SELECT fingerprint, emitted_at FROM hook_emissions WHERE session_id=?1 AND key=?2",
+        )?;
+        let mut rows = st.query(rusqlite::params![session_id, key])?;
+        Ok(match rows.next()? {
+            Some(r) => Some((r.get(0)?, r.get(1)?)),
+            None => None,
+        })
+    }
 }
 
 fn configure(conn: &Connection) -> Result<()> {

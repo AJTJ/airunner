@@ -41,6 +41,7 @@ pub fn run(json: bool) -> i32 {
         probe_gate_digest(),
         probe_lease_take(),
         probe_worker_task_prompt(),
+        probe_stop_nudge(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -408,5 +409,25 @@ fn probe_worker_task_prompt() -> Probe {
         name: "launch: --task reaches claude as the prompt",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-09i: a worker stopping with no claim while beads are ready is nudged once. Red: the
+/// gate fires on those facts (ready beads, no claim, fresh stop). Green: the block names the
+/// beads, then passes once `stop_hook_active` is set (the loop guard) and never for the
+/// coordinator.
+fn probe_stop_nudge() -> Probe {
+    use air_hooks::stop_nudge;
+    let ready = vec!["fd-1".to_string()];
+    let red = stop_nudge("worker", false, &ready, false, false).is_some();
+    let once = stop_nudge("worker", false, &ready, false, false)
+        .is_some_and(|r| r.contains("air claim fd-1"));
+    let then_pass = stop_nudge("worker", false, &ready, true, false).is_none()
+        && stop_nudge("coordinator", false, &ready, false, false).is_none()
+        && stop_nudge("worker", true, &ready, false, false).is_none();
+    Probe {
+        name: "stop: nudge once when ready beads and no claim",
+        red_fires: red,
+        green_passes: once && then_pass,
     }
 }
