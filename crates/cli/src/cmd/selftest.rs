@@ -45,9 +45,9 @@ pub fn run(json: bool) -> i32 {
         probe_worker_task_prompt(),
         probe_stop_nudge(),
         probe_standstill(),
+        probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
-        probe_enforced_gate(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {

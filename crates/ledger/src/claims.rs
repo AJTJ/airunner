@@ -112,6 +112,21 @@ impl Ledger {
         Ok(n > 0)
     }
 
+    /// Mark the worker's open claim handed over, without counting a hand-over attempt: the
+    /// status reconcile learned from bd that the bead reached `awaiting_review`, which is not
+    /// the worker running `air handover`. Idempotent — a later tick does not move the time,
+    /// and the claim stays open because a handed-over bead is still the worker's until it
+    /// lands (air-3eu).
+    pub fn mark_handed_over(&self, bead: &str, worker: &str, at: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE claims SET first_handover_at=?3, \
+             last_handover_at=COALESCE(last_handover_at, ?3) \
+             WHERE bead=?1 AND worker=?2 AND released_at IS NULL AND first_handover_at IS NULL",
+            params![bead, worker, at],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Close every open claim on these beads with one reason, in ONE transaction, whoever
     /// holds them. The coordinator's landing pass releases N claims here (air-869); doing it
     /// one `air release` at a time cost N ledger opens and N bd processes.
@@ -145,21 +160,6 @@ impl Ledger {
         }
         tx.commit()?;
         Ok(released)
-    }
-
-    /// Mark the worker's open claim handed over, without counting a hand-over attempt: the
-    /// status reconcile learned from bd that the bead reached `awaiting_review`, which is not
-    /// the worker running `air handover`. Idempotent — a later tick does not move the time,
-    /// and the claim stays open because a handed-over bead is still the worker's until it
-    /// lands (air-3eu).
-    pub fn mark_handed_over(&self, bead: &str, worker: &str, at: &str) -> Result<bool> {
-        let n = self.conn.execute(
-            "UPDATE claims SET first_handover_at=?3, \
-             last_handover_at=COALESCE(last_handover_at, ?3) \
-             WHERE bead=?1 AND worker=?2 AND released_at IS NULL AND first_handover_at IS NULL",
-            params![bead, worker, at],
-        )?;
-        Ok(n > 0)
     }
 
     /// Close the worker's open claim with a reason. Returns false when there was none.
@@ -204,6 +204,31 @@ mod tests {
         assert_eq!((c.handover_attempts, c.claimed_at.as_str()), (0, "t6"));
     }
 
+    /// air-3eu: the status reconcile marks, it does not release, and a second tick is a no-op.
+    #[test]
+    fn mark_handed_over_is_idempotent_and_leaves_the_claim_open() {
+        let l = Ledger::open_in_memory().unwrap();
+        l.record_claim("fd-2", "w1", &["a.rs".into()], "t0")
+            .unwrap();
+        assert!(l.mark_handed_over("fd-2", "w1", "t1").unwrap());
+        assert!(!l.mark_handed_over("fd-2", "w1", "t2").unwrap());
+        let c = l.open_claim("fd-2").unwrap().unwrap();
+        assert_eq!(c.first_handover_at.as_deref(), Some("t1"));
+        assert_eq!(c.last_handover_at.as_deref(), Some("t1"));
+        assert_eq!(
+            (c.handover_attempts, c.claimed_at.as_str(), c.released_at),
+            (0, "t0", None),
+            "no attempt counted, claim still open, original time kept"
+        );
+        // A worker's own hand-over still counts as an attempt on top of the mark.
+        assert!(l.stamp_handover("fd-2", "w1", "t3").unwrap());
+        let c = l.open_claim("fd-2").unwrap().unwrap();
+        assert_eq!(
+            (c.handover_attempts, c.first_handover_at.as_deref()),
+            (1, Some("t1"))
+        );
+    }
+
     /// air-869: the landing pass releases every claim in one transaction, and says which
     /// beads had no open claim (they are absent from the returned list, not an error).
     #[test]
@@ -231,31 +256,6 @@ mod tests {
             l.release_claims_on(&beads, "landed", "t2")
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    /// air-3eu: the status reconcile marks, it does not release, and a second tick is a no-op.
-    #[test]
-    fn mark_handed_over_is_idempotent_and_leaves_the_claim_open() {
-        let l = Ledger::open_in_memory().unwrap();
-        l.record_claim("fd-2", "w1", &["a.rs".into()], "t0")
-            .unwrap();
-        assert!(l.mark_handed_over("fd-2", "w1", "t1").unwrap());
-        assert!(!l.mark_handed_over("fd-2", "w1", "t2").unwrap());
-        let c = l.open_claim("fd-2").unwrap().unwrap();
-        assert_eq!(c.first_handover_at.as_deref(), Some("t1"));
-        assert_eq!(c.last_handover_at.as_deref(), Some("t1"));
-        assert_eq!(
-            (c.handover_attempts, c.claimed_at.as_str(), c.released_at),
-            (0, "t0", None),
-            "no attempt counted, claim still open, original time kept"
-        );
-        // A worker's own hand-over still counts as an attempt on top of the mark.
-        assert!(l.stamp_handover("fd-2", "w1", "t3").unwrap());
-        let c = l.open_claim("fd-2").unwrap().unwrap();
-        assert_eq!(
-            (c.handover_attempts, c.first_handover_at.as_deref()),
-            (1, Some("t1"))
         );
     }
 }

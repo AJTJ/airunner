@@ -136,7 +136,8 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let res = next_matching(&|v| v["id"] == 3);
     let inbox: serde_json::Value =
         serde_json::from_str(res["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(inbox[0]["text"], "from mcp");
+    // Captures and landings in one shape since air-6p5.
+    assert_eq!(inbox["captures"][0]["text"], "from mcp");
 
     // The poll thread must have pushed the seeded stuck session as a channel event.
     let ev = next_matching(&|v| v["method"] == "notifications/claude/channel");

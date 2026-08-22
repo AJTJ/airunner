@@ -71,19 +71,51 @@ pub fn inbox(repo: &Path, owner: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    emit(json, &items, || {
-        if items.is_empty() {
-            return format!("{audience} queue empty");
-        }
-        let mut s = format!("{} open capture(s) for {audience}\n", items.len());
-        for c in &items {
-            s.push_str(&format!(
-                "{}  {}  {}  {}\n",
-                c.id, c.captured_at, c.worker, c.text
-            ));
-        }
-        s
-    });
+    // The owner's queue is decisions *and* landings: only the owner may merge to main today,
+    // and two green hand-overs waited on 2026-08-22 with nothing saying so (air-6p5). Derived
+    // from bd plus the ledger every time, never stored twice.
+    let landings = if owner {
+        super::status::landings_for(repo)
+    } else {
+        Vec::new()
+    };
+    emit(
+        json,
+        &serde_json::json!({"captures": items, "landings": landings}),
+        || {
+            let mut s = String::new();
+            if !landings.is_empty() {
+                s.push_str(&format!(
+                    "{} landing(s) waiting on the owner\n",
+                    landings.len()
+                ));
+                for l in &landings {
+                    s.push_str(&format!(
+                        "{}  {}  from {}  ({} min)  {}\n",
+                        l.bead,
+                        l.head.get(..8).unwrap_or(&l.head),
+                        l.worker,
+                        l.minutes,
+                        l.command
+                    ));
+                }
+            }
+            if items.is_empty() {
+                if s.is_empty() {
+                    return format!("{audience} queue empty");
+                }
+                return s;
+            }
+            s.push_str(&format!("{} open capture(s) for {audience}\n", items.len()));
+            for c in &items {
+                s.push_str(&format!(
+                    "{}  {}  {}  {}\n",
+                    c.id, c.captured_at, c.worker, c.text
+                ));
+            }
+            s
+        },
+    );
     0
 }
 
