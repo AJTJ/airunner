@@ -1,7 +1,7 @@
 //! `air claim <bead> [--files a,b]` and `air release <bead> --reason <r> [--worker <w>]`.
 //!
 //! The only claim path (decisions 2026-08-20: "wrap beads, never watch it"). Order is fixed:
-//! the ledger refuses first if someone else holds the bead here; then `bd show` (a `human`
+//! the ledger refuses first if someone else holds the bead here; then `bd show` (an `owner`
 //! bead is not a worker's to claim; bd's own rule that a pencilled `assignee` blocks every
 //! other worker's `--claim` is printed with who is assigned; a closed bead is closed); then
 //! `bd update --claim` (bd's atomic CAS decides races); only after bd succeeds is the ledger
@@ -22,8 +22,17 @@ use air_ledger::claims::RELEASE_REASONS;
 use crate::cmd::{emit, log_event, now, open};
 
 /// The label that marks a bead as awaiting the owner; not a worker's to claim (owner,
-/// 2026-08-21: one label, `human`).
-pub const OWNER_LABEL: &str = "human";
+/// 2026-08-21: one label).
+///
+/// The word is `owner`, not `human` (owner, 2026-08-22). Two words, two meanings, kept
+/// apart: `human` is about PRESENCE, a person in the loop who can watch and type into every
+/// session, and `owner` is about AUTHORITY, whose decision is required. An owner-only
+/// decision stays owner-only when the owner hands it to an agent, so `human` was the wrong
+/// word for a gate. It rotted exactly that way in adopter, where a triage note records a
+/// whole category of beads that "carries human but needs no owner ruling" (its
+/// `docs/research/adopter-notes/notes/human-queue-triage.md`, category C). Every site that
+/// decides claimability reads this constant, never a literal (air-5hw).
+pub const OWNER_LABEL: &str = "owner";
 
 /// Actor string passed to bd: `BEADS_ACTOR` if set, else the worker name.
 fn actor_for(worker: &str) -> String {
@@ -50,11 +59,38 @@ pub fn bd_for(repo: &Path) -> BdCli {
     bd
 }
 
+/// Put the bead on the worker's tmux window so `tmux ls` and `air status` show the lane and
+/// what it is doing now; `bead` empty clears it back to the worker name (air-5lg). A no-op
+/// when the worker has no tmux session, which includes every `air claim` typed by a person in
+/// their own terminal.
+fn label_window(repo: &Path, worker: &str, bead: &str, title: &str) {
+    let label = match (bead, title.trim()) {
+        ("", _) => String::new(),
+        (b, "") => b.to_string(),
+        (b, t) => format!("{b} {t}"),
+    };
+    super::tmux::set_window_label(&super::tmux::project_prefix(repo), worker, &label);
+}
+
 /// The earlier of a bd timestamp (if it parses) and `now`; never later than `now`.
 fn earliest(bd_time: Option<&str>, now: &str) -> String {
     match bd_time.and_then(|t| t.parse::<jiff::Timestamp>().ok()) {
         Some(t) if now.parse::<jiff::Timestamp>().is_ok_and(|n| t < n) => t.to_string(),
         _ => now.to_string(),
+    }
+}
+
+/// A short-budget bd for a read that must not hold a command up: `AIR_BD_PROBE_TIMEOUT_MS`
+/// (default 5000), never longer than the main timeout.
+pub fn probe_bd(repo: &Path) -> BdCli {
+    let bd = bd_for(repo);
+    let ms = std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5000);
+    BdCli {
+        timeout: std::time::Duration::from_millis(ms).min(bd.timeout),
+        ..bd
     }
 }
 
@@ -151,8 +187,11 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     // 2. bd show: facts about the bead before any write.
     // Some(updated_at) when bd already holds the bead in_progress by this actor.
     let mut already_mine: Option<Option<String>> = None;
+    // For the tmux window label (air-5lg); empty when bd could not answer.
+    let mut title = String::new();
     match bd.show(bead) {
         Ok(Some(issue)) => {
+            title.clone_from(&issue.title);
             if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
                 already_mine = Some(issue.updated_at.clone());
             }
@@ -262,6 +301,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 at
             }
         };
+        label_window(repo, &worker, bead, &title);
         let msg = format!(
             "reclaimed {bead} as {worker} (actor {actor}); bd already held it, claim time kept at {at}"
         );
@@ -332,6 +372,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         );
         return 1;
     }
+    label_window(repo, &worker, bead, &title);
     let msg = if decision == "claimed-late" {
         format!(
             "claimed {bead} as {worker} (actor {actor}) at {at} (bd was slow; reconciled by `bd show`)"
@@ -463,6 +504,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
     let at = now();
     match ledger.release_claim(bead, &worker, reason, &at) {
         Ok(true) => {
+            label_window(repo, &worker, "", "");
             let msg = format!(
                 "released {bead} held by {worker} ({reason}) at {at}; bd status was {status}"
             );

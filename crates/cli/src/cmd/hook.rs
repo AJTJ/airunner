@@ -123,8 +123,8 @@ fn inner(repo: &Path, raw: &str) -> Result<(HookEvent, HookOutcome), String> {
 }
 
 /// What one hook invocation decided, in the shape the event line needs.
-struct Dispatched {
-    outcome: HookOutcome,
+pub struct Dispatched {
+    pub outcome: HookOutcome,
     inputs: serde_json::Value,
     decision: String,
     reason: String,
@@ -454,45 +454,70 @@ fn pre_tool_use(
             format!("{moved}; path outside repo"),
         ));
     }
+    // A session may only touch its own project (air-0lk). The peer list costs a `git worktree
+    // list`, so it is built only for the tool that needs it: the hook budget is 100 ms and
+    // every Edit and Bash call comes through here.
+    let peer_list = if input.send_message_to().is_some() {
+        peers(ledger, cwd)
+    } else {
+        Vec::new()
+    };
+    if let Some(d) = project_fence(input, &project_for(cwd), &peer_list) {
+        return Ok(d);
+    }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
         && is_handover_command(cmd)
     {
         let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
-        let bead = handover_bead(cmd);
-        let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
-        let v = handover_verdict(&f);
-        let stamped = match &bead {
-            Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
-            None => false,
-        };
-        let decision = if v.pass {
-            "pass"
-        } else if v.block {
-            "refuse"
-        } else {
-            "would-refuse"
-        };
-        let outcome = if v.block {
-            HookOutcome::Block {
-                reason: format!("air: {}", v.message),
-            }
-        } else if !v.pass {
-            HookOutcome::Allow {
-                context: Some(format!("air: {}", v.message)),
-            }
-        } else {
-            HookOutcome::Allow { context: None }
-        };
-        return Ok(Dispatched::new(outcome, decision, v.message.clone())
-            .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
-            .denominator("4 checks"));
+        return handover_gate(ledger, worker, cwd, cmd, enforce);
     }
     Ok(Dispatched::new(
         HookOutcome::Allow { context: None },
         "observed",
         moved,
     ))
+}
+
+/// The hand-over gate for one `bd` status write (air-i59). `enforce` (worker launches set
+/// `AIR_ENFORCE=1`) turns a failed check into a deny whose reason names the fixing command;
+/// otherwise the same message is returned as context and the write is allowed. Pure over the
+/// ledger and the repo, so `air selftest` can run it red and green.
+pub fn handover_gate(
+    ledger: &Ledger,
+    worker: &str,
+    cwd: &Path,
+    cmd: &str,
+    enforce: bool,
+) -> Result<Dispatched, String> {
+    let bead = handover_bead(cmd);
+    let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
+    let v = handover_verdict(&f);
+    let stamped = match &bead {
+        Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
+        None => false,
+    };
+    let decision = if v.pass {
+        "pass"
+    } else if v.block {
+        "refuse"
+    } else {
+        "would-refuse"
+    };
+    let outcome = if v.block {
+        HookOutcome::Block {
+            reason: format!("air: {}", v.message),
+        }
+    } else if !v.pass {
+        HookOutcome::Allow {
+            context: Some(format!("air: {}", v.message)),
+        }
+    } else {
+        HookOutcome::Allow { context: None }
+    };
+    Ok(Dispatched::new(outcome, decision, v.message.clone())
+        .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
+        .denominator("4 checks"))
 }
 
 /// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
@@ -565,6 +590,83 @@ fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, St
         })
 }
 
+/// The two cross-project refusals on the PreToolUse path (air-0lk): a `tmux` command naming
+/// another project's session, and a `SendMessage` to a peer this project's ledger does not
+/// know. `None` when there is nothing to refuse. Both are closed by default and neither
+/// depends on `AIR_ENFORCE`: the failure being prevented is reaching a stranger's fleet, not a
+/// sloppy hand-over. Pure over (input, project, peers) so `air selftest` fires both without a
+/// tmux server or a second repo.
+pub fn project_fence(input: &HookInput, project: &str, peers: &[String]) -> Option<Dispatched> {
+    let refuse = |why: String, inputs: serde_json::Value| {
+        Dispatched::new(
+            HookOutcome::Block {
+                reason: format!("air: {why}"),
+            },
+            "refuse",
+            why,
+        )
+        .inputs(inputs)
+        .denominator("1 project")
+    };
+    if let Some(cmd) = input.bash_command()
+        && let Some(why) = super::project::tmux_refusal(cmd, project)
+    {
+        return Some(refuse(
+            why,
+            serde_json::json!({"command": cmd, "project": project}),
+        ));
+    }
+    if let Some(to) = input.send_message_to()
+        && let Some(why) = super::project::peer_refusal(to, project, peers)
+    {
+        return Some(refuse(
+            why,
+            serde_json::json!({"to": to, "project": project}),
+        ));
+    }
+    None
+}
+
+/// The peer names this project can address, from the ledger and from git: every worker that
+/// has had a session here, plus every worktree, plus the main checkout's directory (the
+/// coordinator's own agent name is built from it). `ListAgents` addresses are `<base>-<id>`,
+/// so these are the bases (air-0lk). Kebab-cased, because an agent name cannot carry `_`.
+fn peers(ledger: &Ledger, cwd: &Path) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        let k = s.replace('_', "-");
+        if !k.is_empty() && !v.contains(&k) {
+            v.push(k);
+        }
+    };
+    if let Ok(mut st) = ledger
+        .conn()
+        .prepare("SELECT DISTINCT worker FROM sessions ORDER BY worker")
+        && let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0))
+    {
+        for w in rows.flatten() {
+            push(w);
+        }
+    }
+    for (path, _) in crate::git::worktrees(cwd).unwrap_or_default() {
+        if let Some(n) = path.file_name() {
+            push(n.to_string_lossy().to_string());
+        }
+    }
+    v
+}
+
+/// This session's project (air-0lk): `AIR_PROJECT` from the launcher, else the beads prefix
+/// resolved from the checkout — the same resolver `air worker` uses for tmux session names
+/// (air-5lg), not a second one. Never empty in a launched session; empty only when Air cannot
+/// tell, and an empty project refuses every cross-project name, which is the safe direction.
+pub fn project_for(cwd: &Path) -> String {
+    match std::env::var("AIR_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => super::tmux::project_prefix(cwd),
+    }
+}
+
 /// Upsert the session row; returns the state it had before (None for a new session) so the
 /// caller can put the transition on the event line. `worker`/`role` are updated on every
 /// hook: `claude --worktree` can fire SessionStart with `cwd` still at the main checkout, and
@@ -578,6 +680,9 @@ fn set_session(
 ) -> Result<Option<String>, String> {
     let prev = session_state(ledger, &input.session_id)?;
     let t = now();
+    // Which fleet this session belongs to, so "is that peer one of ours?" is a ledger question
+    // (air-0lk). `AIR_PROJECT` when the launcher set it; the beads prefix otherwise.
+    let project = project_for(Path::new(input.cwd.as_deref().unwrap_or(".")));
     // The pid is the `claude` process when Claude Code exports it; hooks run in its env.
     let pid: Option<i64> = std::env::var("CLAUDE_PID")
         .ok()
@@ -585,12 +690,13 @@ fn set_session(
     ledger
         .conn()
         .execute(
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
-             worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid)",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid],
+             worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid), \
+             project=excluded.project",
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
@@ -725,6 +831,25 @@ mod tests {
             ("ended", "idle -> gone")
         );
         assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));
+    }
+
+    /// air-0lk: the session row carries its project, so `air status --json` answers "is that
+    /// peer one of ours?" from the ledger rather than from a name's spelling.
+    #[test]
+    fn a_session_row_records_its_project() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(repo.join(".beads")).unwrap();
+        std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
+        fire(
+            &repo,
+            serde_json::json!({"hook_event_name": "SessionStart"}),
+        );
+        let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+        let project: String = conn
+            .query_row("SELECT project FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(project, "zz");
     }
 
     #[test]

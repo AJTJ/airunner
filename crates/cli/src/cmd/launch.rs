@@ -22,6 +22,7 @@ use crate::cmd::install::ROLES_MD;
 /// Deny rules for a worker (roles.md "Never"; agent-roles-and-confinement §5 L1).
 pub const WORKER_DENY: &[&str] = &[
     "Bash(air land *)",
+    "Bash(air close *)",
     "Bash(git push *)",
     "Bash(bd create *)",
     "Bash(bd sync *)",
@@ -70,9 +71,17 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
 }
 
 /// Pure: the argv for a worker session.
-pub fn worker_argv(name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+    // AIR_ENFORCE=1: the hand-over gate denies instead of advising (air-i59; first bypass of
+    // the advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
+    // AIR_PROJECT: which fleet this session may touch (air-0lk); both roles set it.
     let settings = serde_json::json!({
-        "env": {"AIR_ROLE": "worker", "BEADS_ACTOR": name}
+        "env": {
+            "AIR_ROLE": "worker",
+            "BEADS_ACTOR": name,
+            "AIR_ENFORCE": "1",
+            "AIR_PROJECT": project,
+        }
     });
     let mut v: Vec<String> = vec![
         "--worktree".into(),
@@ -90,15 +99,22 @@ pub fn worker_argv(name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
 
 /// Worker argv including the repo's own deny rules (inserted before any pass-through args).
 fn worker_argv_for(repo: &Path, name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
-    let mut base = worker_argv(name, roles, &[]);
+    let mut base = worker_argv(name, &super::tmux::project_prefix(repo), roles, &[]);
     base.extend(repo_deny(repo, "worker_deny"));
     base.extend(extra.iter().cloned());
     base
 }
 
 /// Pure: the argv for the coordinator session.
-pub fn coordinator_argv(roles: &Path, channels_flag: &str, extra: &[String]) -> Vec<String> {
-    let settings = serde_json::json!({"env": {"AIR_ROLE": "coordinator"}});
+pub fn coordinator_argv(
+    project: &str,
+    roles: &Path,
+    channels_flag: &str,
+    extra: &[String],
+) -> Vec<String> {
+    // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
+    // the coordinator is the one that can see every fleet on the machine.
+    let settings = serde_json::json!({"env": {"AIR_ROLE": "coordinator", "AIR_PROJECT": project}});
     let mut v: Vec<String> = vec![
         channels_flag.into(),
         "server:air".into(),
@@ -114,7 +130,7 @@ pub fn coordinator_argv(roles: &Path, channels_flag: &str, extra: &[String]) -> 
 }
 
 fn coordinator_argv_for(repo: &Path, roles: &Path, flag: &str, extra: &[String]) -> Vec<String> {
-    let mut base = coordinator_argv(roles, flag, &[]);
+    let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, &[]);
     base.extend(repo_deny(repo, "coordinator_deny"));
     base.extend(extra.iter().cloned());
     base
@@ -204,10 +220,14 @@ fn tmux_socket() -> Option<String> {
 
 /// Start `claude` in a detached tmux session and return without touching the caller's
 /// terminal. Prints the session name and the attach command.
+///
+/// The session is `<project>-<worker>`, not `<worker>`: `tmux ls` is machine-wide, so with two
+/// fleets running the list said nothing about which project a pane belonged to (air-5lg).
 fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 {
     let bin = claude_bin();
     let socket = tmux_socket();
-    let targv = tmux_detached_argv(name, repo, socket.as_deref(), &bin, argv);
+    let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
+    let targv = tmux_detached_argv(&session, repo, socket.as_deref(), &bin, argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return 0;
@@ -218,8 +238,8 @@ fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 
                 .as_deref()
                 .map(|s| format!("-L {s} "))
                 .unwrap_or_default();
-            println!("started tmux session {name} (stdin is not a tty; detached)");
-            println!("attach: tmux {l}attach -t {name}");
+            println!("started tmux session {session} (stdin is not a tty; detached)");
+            println!("attach: tmux {l}attach -t {session}");
             0
         }
         Ok(s) => {
@@ -305,15 +325,37 @@ pub fn task_is_prompt(argv: &[String], task: &str) -> bool {
     }
 }
 
+/// Worker names a coordinator did not choose: `w1`, `w2`, … skipping every existing worktree
+/// and live tmux session. A worker outlives its bead (tty-fix worked six), so the bead never
+/// belongs in the name, and a coordinator that has a semantically useful name should still
+/// pass one (owner ruling, 2026-08-22, air-5lg).
+fn auto_worker_name(repo: &Path) -> String {
+    let taken: Vec<String> = crate::git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(p, _)| p.file_name().map(|s| s.to_string_lossy().to_string()))
+        .collect();
+    super::tmux::next_free_worker_name(&taken, &super::tmux::project_prefix(repo))
+}
+
 pub fn worker(
     repo: &Path,
-    name: &str,
+    name: Option<&str>,
     extra: &[String],
     tmux: bool,
     task: Option<&str>,
     print: bool,
 ) -> i32 {
-    if name.is_empty() || name == "main" || name.contains('/') {
+    let owned;
+    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n,
+        None => {
+            owned = auto_worker_name(repo);
+            eprintln!("air worker: no name given; using {owned}");
+            &owned
+        }
+    };
+    if name == "main" || name.contains('/') {
         eprintln!("air worker: name must be a worktree name (not `main`, no slashes)");
         return 1;
     }
@@ -371,6 +413,7 @@ mod tests {
     fn worker_argv_carries_isolation_prose_env_and_denies() {
         let v = worker_argv(
             "frontend",
+            "air",
             Path::new("/r/.air/roles.md"),
             &["--model".into(), "x".into()],
         );
@@ -383,6 +426,9 @@ mod tests {
             serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])
                 .unwrap();
         assert_eq!(settings["env"]["BEADS_ACTOR"], "frontend");
+        assert_eq!(settings["env"]["AIR_ENFORCE"], "1");
+        // air-0lk: which fleet this session may touch.
+        assert_eq!(settings["env"]["AIR_PROJECT"], "air");
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
@@ -392,7 +438,7 @@ mod tests {
     /// (cli-reference, accessed 2026-08-22); after it, claude reads the task as a deny rule.
     #[test]
     fn task_precedes_the_deny_list_and_tmux_is_last() {
-        let base = worker_argv("w", Path::new("/r/roles.md"), &[]);
+        let base = worker_argv("w", "air", Path::new("/r/roles.md"), &[]);
         let v = worker_argv_tmux(base.clone(), true, Some("fix fd-1 end to end"));
         assert_eq!(v[0], "fix fd-1 end to end");
         assert_eq!(v.last().map(String::as_str), Some("--tmux"));
@@ -414,7 +460,7 @@ mod tests {
     fn print_line_round_trips_through_sh() {
         let task = "fix it's $HOME \"now\"";
         let argv = worker_argv_tmux(
-            worker_argv("w", Path::new("/r/roles.md"), &[]),
+            worker_argv("w", "air", Path::new("/r/roles.md"), &[]),
             true,
             Some(task),
         );
@@ -473,9 +519,15 @@ mod tests {
 
     #[test]
     fn coordinator_argv_attaches_the_channel() {
-        let v = coordinator_argv(Path::new("/r/.air/roles.md"), "--channels", &[]);
+        let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
         assert_eq!(&v[..2], ["--channels", "server:air"]);
         assert!(v.contains(&"Bash(git commit *)".to_string()));
         assert!(!v.contains(&"--worktree".to_string()));
+        let settings: serde_json::Value =
+            serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])
+                .unwrap();
+        assert!(settings["env"].get("AIR_ENFORCE").is_none());
+        // But the project fence is both roles' (air-0lk).
+        assert_eq!(settings["env"]["AIR_PROJECT"], "air");
     }
 }

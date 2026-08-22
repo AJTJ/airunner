@@ -147,7 +147,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
 const SUSPICIOUS_MS: i64 = 2_000;
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).
-fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64)> {
+pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64)> {
     let mut child = Command::new(prog)
         .args(args)
         .current_dir(repo)

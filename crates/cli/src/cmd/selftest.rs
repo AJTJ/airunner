@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cmd::emit;
-use crate::cmd::hook::is_handover_command;
+use crate::cmd::hook::{handover_gate, is_handover_command};
 
 #[derive(Debug, Serialize)]
 pub struct Probe {
@@ -45,6 +45,16 @@ pub fn run(json: bool) -> i32 {
         probe_worker_task_prompt(),
         probe_stop_nudge(),
         probe_standstill(),
+        probe_enforced_gate(),
+        probe_batch_close(),
+        probe_triage_bead_exists(),
+        probe_surface_diff(),
+        probe_change_only_push(),
+        probe_review_fact_survives(),
+        probe_audit_registry(),
+        probe_audit_unregistered_firing(),
+        probe_land_refusals(),
+        probe_project_fence(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -62,6 +72,336 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-s7c: `review-waiting` and `owner-decision-waiting` became change-only pushes. Red: the
+/// same set evaluated twice pushes once — the repeat is suppressed, and a merely older
+/// condition is still a repeat. Green: a real change (a bead joins the waiting set, the owner
+/// queue depth moves) pushes again. peer-warning-repeat was deleted for allegedly failing to
+/// suppress, so this proves the suppression suppresses.
+fn probe_change_only_push() -> Probe {
+    use crate::cmd::mcp::{Pushed, select_new};
+    use crate::cmd::status::Attention;
+
+    let review = |bead: &str, mins: i64| Attention {
+        worker: bead.to_string(),
+        kind: "review-waiting",
+        detail: format!("{bead} handed over {mins} min ago"),
+        for_minutes: mins,
+        fingerprint: format!("{bead}/alpha"),
+    };
+    let queue = |depth: usize, mins: i64| Attention {
+        worker: "owner".to_string(),
+        kind: "owner-decision-waiting",
+        detail: format!("{depth} waiting, oldest {mins} min"),
+        for_minutes: mins,
+        fingerprint: format!("depth:{depth}"),
+    };
+
+    let mut pushed = Pushed::new();
+    // First evaluation: both are new, both push.
+    let first = select_new(&mut pushed, &[review("air-1", 5), queue(2, 5)]);
+    // Same facts, much later: age is not a change, so nothing is pushed. Under the old
+    // doubling rule 5 -> 40 min would have re-pushed both.
+    let same_again = select_new(&mut pushed, &[review("air-1", 40), queue(2, 40)]);
+    let red = first.len() == 2 && same_again.is_empty();
+
+    // A bead joins the set, and the queue depth moves: both are real changes.
+    let changed = select_new(
+        &mut pushed,
+        &[review("air-1", 45), review("air-2", 1), queue(3, 45)],
+    );
+    let green = changed.len() == 2
+        && changed.iter().any(|a| a.worker == "air-2")
+        && changed.iter().any(|a| a.worker == "owner")
+        // ...and the unchanged bead did NOT ride along with them.
+        && !changed.iter().any(|a| a.worker == "air-1");
+    Probe {
+        name: "channel: an unchanged set pushes once however old it gets; a changed set pushes again",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-s7c: deleting the review-waiting PUSH must not delete the FACT. `air status` renders
+/// review waits and the owner queue on demand, which is a pull and costs nobody a
+/// notification. Red: a snapshot with waits and a queue says so. Green: an empty one says
+/// zero rather than going silent, so "no waits" and "not reported" stay distinguishable.
+fn probe_review_fact_survives() -> Probe {
+    use crate::cmd::status::{Snapshot, render_for_probe};
+
+    let mut s = Snapshot {
+        at: "2026-08-22T10:00:00Z".to_string(),
+        ..Default::default()
+    };
+    s.review_waits = vec![("air-1".to_string(), "alpha".to_string(), 40)];
+    s.owner_queue_depth = 3;
+    let with = render_for_probe(&s);
+    let red = with.contains("review: 1 waiting")
+        && with.contains("air-1")
+        && with.contains("owner queue: 3");
+
+    let empty = render_for_probe(&Snapshot {
+        at: "2026-08-22T10:00:00Z".to_string(),
+        ..Default::default()
+    });
+    let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
+    Probe {
+        name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-zyo: the registry's job is that a mechanism nobody wrote a removal condition for is
+/// visible. Red: an entry with nothing recorded is reported as a defect. Green: an entry
+/// with a condition is not, and its counter reads back.
+fn probe_audit_registry() -> Probe {
+    use crate::cmd::audit::gather_from;
+
+    let events = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+        "\n",
+    );
+    let a = gather_from(
+        &[("2026-08-22".to_string(), events.to_string())],
+        "2026-08-22",
+    );
+    // Red: nothing is recorded for `stuck`, so it is a defect and says so. (This probe
+    // pointed at `review-waiting` until air-s7c gave that one a condition, at which point it
+    // went silent and said so, which is the probe doing its job.)
+    let red = a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some());
+    // Green: a mechanism that does carry one is not a defect, and the counter works.
+    let green = a
+        .rows
+        .iter()
+        .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
+        && a.rows
+            .iter()
+            .any(|r| r.id == "review-waiting" && r.fires == 1 && r.last_fired.is_some());
+    Probe {
+        name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-0y9: a mechanism that fires with no registry row must be reported, not omitted. A
+/// registry that silently drops one reads as complete when it is not. Red: an unclaimed
+/// command/decision pair is a defect. Green: the same pair, once a row claims it, is counted
+/// as that mechanism instead.
+fn probe_audit_unregistered_firing() -> Probe {
+    use crate::cmd::audit::{gather_from, registered_traces};
+
+    let unclaimed = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"beta","command":"hook.Whatever","decision":"throttled"}"#,
+        "\n",
+    );
+    let red = {
+        let a = gather_from(
+            &[("2026-08-22".to_string(), unclaimed.to_string())],
+            "2026-08-22",
+        );
+        // Named, with its count, rather than dropped for being an unfamiliar decision word.
+        a.unregistered == vec![("hook.Whatever / throttled".to_string(), 1)]
+            && crate::cmd::audit::render(&a).contains("defect:")
+    };
+    // Green: a pair the registry does claim is attributed to its mechanism and is not a
+    // defect. `claim / refuse` is the row air-0y9 added.
+    let claimed = concat!(
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"beta","command":"claim","decision":"refuse"}"#,
+        "\n",
+    );
+    let green = {
+        let a = gather_from(
+            &[("2026-08-22".to_string(), claimed.to_string())],
+            "2026-08-22",
+        );
+        registered_traces().contains("claim / refuse")
+            && a.unregistered.is_empty()
+            && a.rows
+                .iter()
+                .any(|r| r.id == "claim-refusal" && r.fires == 1)
+    };
+    Probe {
+        name: "audit: a firing with no registry row is a defect; a claimed pair counts as its mechanism",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-6g1: a repo installed before a surface change is told about it, and one already
+/// current is told nothing. The diff is keyed to recorded ids, not a version string, so it
+/// cannot silently report nothing because a number was not bumped.
+fn probe_surface_diff() -> Probe {
+    use crate::cmd::install::{SURFACE, surface_diff};
+
+    // Red: a repo that knows about nothing sees every change, `air land` among them.
+    let stale = surface_diff(&[]);
+    let red = !stale.is_empty()
+        && stale.iter().any(|c| c.id == "land")
+        && stale.iter().any(|c| c.silent_break);
+    // Green: a repo recorded at the current surface sees nothing.
+    let current: Vec<String> = SURFACE.iter().map(|c| c.id.to_string()).collect();
+    let green = surface_diff(&current).is_empty();
+    Probe {
+        name: "install: an older recorded surface diffs (names `air land`); the current one is empty",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-76z: a capture must not point at a bead bd does not have. bd omits an unknown id from
+/// `bd show` and still exits 0, so the check is the comparison, not the exit code.
+fn probe_triage_bead_exists() -> Probe {
+    use crate::cmd::capture::missing_ids;
+
+    let want: Vec<String> = ["fd-1", "zz-nope", "fd-2"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let issue = |id: &str| air_bd::Issue {
+        id: id.to_string(),
+        ..Default::default()
+    };
+    let red = missing_ids(&want, &[issue("fd-1"), issue("fd-2")]) == ["zz-nope"];
+    let green = missing_ids(&want, &[issue("fd-1"), issue("zz-nope"), issue("fd-2")]).is_empty();
+    Probe {
+        name: "triage: a bead bd did not return is named; a full answer passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-869: `air close` is the coordinator's, and it issues ONE bd process however many
+/// beads it is given. Red: a worker is refused. Green: the coordinator's ten ids build a
+/// single `bd close` argv and release ten claims in one transaction.
+fn probe_batch_close() -> Probe {
+    use crate::cmd::close::may_close;
+
+    let red = may_close("beta").is_err();
+    let green = (|| -> Result<bool, String> {
+        let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
+        let argv = air_bd::close_argv(&ids, "landed", "main");
+        let one_process = argv.first().map(String::as_str) == Some("close")
+            && ids.iter().all(|i| argv.contains(i));
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        for id in &ids {
+            l.record_claim(id, "beta", &[], "t0")
+                .map_err(|e| e.to_string())?;
+        }
+        let released = l
+            .release_claims_on(&ids, "landed", "t1")
+            .map_err(|e| e.to_string())?;
+        Ok(may_close("main").is_ok() && one_process && released.len() == ids.len())
+    })()
+    .unwrap_or(false);
+    Probe {
+        name: "close: a worker is refused; ten coordinator closes are one bd argv, one transaction",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-3pz: `air land` refuses a worker, a dirty main, a branch that has not merged main, and
+/// a recorded green that is not at the branch head; a clean green hand-over passes. Pure over
+/// the facts, so the whole refusal set fires without a repo.
+fn probe_land_refusals() -> Probe {
+    use crate::cmd::land::{Facts, check, may_land};
+
+    let none: Vec<String> = vec![];
+    fn ok(dirty: &[String]) -> Facts<'_> {
+        Facts {
+            worker: "alpha",
+            on_main: true,
+            main_checkout: true,
+            dirty,
+            branch_exists: true,
+            already_in_main: false,
+            contains_main: true,
+            branch_head: "abcdef99",
+            green_at: Some("abcdef99"),
+        }
+    }
+    let refusals = [
+        Facts {
+            on_main: false,
+            ..ok(&none)
+        },
+        Facts {
+            main_checkout: false,
+            ..ok(&none)
+        },
+        Facts {
+            branch_exists: false,
+            ..ok(&none)
+        },
+        Facts {
+            contains_main: false,
+            ..ok(&none)
+        },
+        Facts {
+            green_at: Some("00000000"),
+            ..ok(&none)
+        },
+        Facts {
+            green_at: None,
+            ..ok(&none)
+        },
+    ];
+    let dirty = vec!["src/a.rs".to_string()];
+    // Every refusal fires, and every one names a command to run.
+    let red = may_land("alpha").is_err()
+        && check(&ok(&dirty)).is_err()
+        && refusals.iter().all(|f| {
+            check(f)
+                .err()
+                .is_some_and(|m| m.contains('`') && m.starts_with("refused: "))
+        });
+    let green = may_land("main").is_ok()
+        && check(&ok(&none)) == Ok(true)
+        && check(&Facts {
+            already_in_main: true,
+            ..ok(&none)
+        }) == Ok(false);
+    Probe {
+        name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-0lk: a session may only touch its own project. With `AIR_PROJECT=air`, a PreToolUse
+/// hook call for `tmux kill-session -t fd-worker1` denies and names the fix; the same call for
+/// `air-alpha` is allowed. Same pair for a peer in another project's fleet. Driven through the
+/// real hook entry point, so a refusal that never reaches `PreToolUse` fails the probe.
+fn probe_project_fence() -> Probe {
+    use crate::cmd::hook::project_fence;
+    use air_hooks::{HookInput, HookOutcome};
+
+    let peers = ["alpha".to_string(), "beta".to_string()];
+    let call = |raw: String| -> Option<HookOutcome> {
+        let input = HookInput::parse(&raw).ok()?;
+        project_fence(&input, "air", &peers).map(|d| d.outcome)
+    };
+    let bash = |cmd: &str| {
+        call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
+    };
+    let send = |to: &str| {
+        call(serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": to}}).to_string())
+    };
+    let denied = |o: Option<HookOutcome>, needle: &str| {
+        matches!(o, Some(HookOutcome::Block { reason })
+            if reason.contains(needle) && reason.contains("air-0lk"))
+    };
+    Probe {
+        name: "project: tmux and SendMessage into another project are denied with the rule; this project's are allowed",
+        red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
+            && denied(send("adopter-51"), "adopter-51"),
+        green_passes: bash("tmux kill-session -t air-alpha").is_none()
+            && send("alpha-6d").is_none()
+            && bash("tmux ls").is_none(),
+    }
 }
 
 /// Check 5 (ruling D): digest configured but absent → missing `digest-present`; not
@@ -168,6 +508,70 @@ fn probe_lease_take() -> Probe {
     }
 }
 
+/// air-i59: with `AIR_ENFORCE=1` the PreToolUse gate denies `bd update x -s awaiting_review`
+/// when no green is recorded at HEAD, and the reason names the fixing command; once a green
+/// verify run is recorded at HEAD (main merged) the same command is allowed.
+fn probe_enforced_gate() -> Probe {
+    use air_hooks::HookOutcome;
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "probe", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        let cmd = "bd update fd-1 -s awaiting_review";
+        let red = handover_gate(&l, "probe", &dir, cmd, true)?;
+        let red_fires = matches!(&red.outcome, HookOutcome::Block { reason }
+            if reason.contains("air record verify -- make verify"));
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: head,
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t1".into(),
+            finished_at: "t1".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+        })
+        .map_err(|e| e.to_string())?;
+        let green = handover_gate(&l, "probe", &dir, cmd, true)?;
+        let green_passes = matches!(green.outcome, HookOutcome::Allow { context: None });
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red_fires, green_passes))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// Check 4: a hand-over names a bead the worker does not hold → missing `claim`.
 fn probe_gate_claim() -> Probe {
     let mut red = base_facts();
@@ -224,6 +628,7 @@ fn probe_attention() -> Probe {
                 changed_at: changed.into(),
                 pid: None,
                 pid_alive: None,
+                project: String::new(),
             }),
             ..Default::default()
         }],
@@ -258,6 +663,7 @@ fn probe_standstill() -> Probe {
                 changed_at: changed.into(),
                 pid: None,
                 pid_alive: None,
+                project: String::new(),
             }),
             ..Default::default()
         }],
@@ -299,6 +705,7 @@ fn probe_channel_dedupe() -> Probe {
         kind: "stuck",
         detail: String::new(),
         for_minutes: m,
+        fingerprint: String::new(),
     };
     let mut p = Pushed::new();
     let first = select_new(&mut p, &[a(5)]).len() == 1;
@@ -460,7 +867,7 @@ fn probe_git_ancestor() -> Probe {
 fn probe_worker_task_prompt() -> Probe {
     use crate::cmd::launch::{task_is_prompt, worker_argv};
     let task = "say hello, it's $HOME";
-    let mut old = worker_argv("w", std::path::Path::new("/r/roles.md"), &[]);
+    let mut old = worker_argv("w", "air", std::path::Path::new("/r/roles.md"), &[]);
     old.push(task.to_string());
     let red = !task_is_prompt(&old, task);
 
