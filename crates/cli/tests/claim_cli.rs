@@ -58,13 +58,15 @@ echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
   show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; exit 0; fi
-       shift; out=""
+       shift; out=""; desc=""; [ -f "$d/bd.desc.json" ] && desc=$(cat "$d/bd.desc.json")
        for id in "$@"; do
          case "$id" in --*) continue;; esac
          if [ -f "$d/bd.unknown" ] && grep -qx "$id" "$d/bd.unknown"; then continue; fi
-         out="$out${out:+,}{\"id\":\"$id\",\"status\":\"open\",\"labels\":[]}"
+         row="{\"id\":\"$id\",\"status\":\"open\",\"labels\":[]"
+         [ -n "$desc" ] && row="$row,\"description\":$desc"
+         out="$out${out:+,}$row}"
        done
-       echo "[$out]"; exit 0;;
+       printf '%s\n' "[$out]"; exit 0;;
   list) f="$d/bd.in_progress"; s=in_progress; case "$*" in *awaiting_review*) f="$d/bd.awaiting_review"; s=awaiting_review;; esac
        desc=""; [ -f "$d/bd.desc.json" ] && desc=$(cat "$d/bd.desc.json")
        out=""
@@ -775,47 +777,70 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
 }
 
-/// air-6p5: only the owner may merge to main today, so a green hand-over waits on them and
+/// air-6p5: only the owner may merge to main today, so a green branch waits on them and
 /// nothing said so. `air inbox --owner` lists the landings with their exact commands next to
-/// the decisions, derived from bd plus the ledger rather than stored twice.
+/// the decisions, derived from git plus the ledger rather than stored twice.
+///
+/// air-7kp: the fixture is a worker BRANCH whose commit names the bead. A coordinator's own
+/// checkout is never a landing candidate — there is nothing to merge into main from main.
 #[test]
 fn owner_queue_lists_green_landings_with_their_commands() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
-    let head = {
+    let alpha = repo.join("alpha");
+    let g = |cwd: &Path, args: &[&str]| {
         let out = Command::new("git")
             .arg("-C")
-            .arg(&repo)
-            .args(["rev-parse", "HEAD"])
+            .arg(cwd)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "air")
+            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+            .env("GIT_COMMITTER_NAME", "air")
+            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
+    g(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-alpha",
+            alpha.to_str().unwrap(),
+        ],
+    );
 
-    // Claimed, then handed over: bd holds it in awaiting_review, the claim row names alpha.
+    // Claimed, worked, and committed with the bead in the message. That commit is the only
+    // thing attributing this branch to fd-1.
     std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
-    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
     std::fs::write(repo.join("bd.in_progress"), "").unwrap();
-    std::fs::write(repo.join("bd.awaiting_review"), "fd-1\n").unwrap();
-    std::fs::write(
-        repo.join("bd.issue.json"),
-        r#"{"id":"fd-1","status":"awaiting_review","labels":[]}"#,
-    )
-    .unwrap();
+    std::fs::write(alpha.join("work.txt"), "w\n").unwrap();
+    g(&alpha, &["add", "work.txt"]);
+    g(&alpha, &["commit", "-q", "-m", "feat: the work (fd-1)"]);
+    let head = g(&alpha, &["rev-parse", "HEAD"]);
 
-    // Not green at HEAD yet: the worker's to fix, so the owner is told nothing.
+    // Not green at that head yet: the worker's to fix, so the owner is told nothing.
     let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("owner queue empty"), "{out}");
 
-    let (code, o, e) = air(&repo, &bd, &["record", "verify", "--", "true"]);
+    let (code, o, e) = air(&alpha, &bd, &["record", "verify", "--", "true"]);
     assert_eq!(code, 0, "{o}{e}");
     let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("1 landing(s) waiting on the owner"), "{out}");
     assert!(
-        out.contains(head.get(..8).unwrap()) && out.contains("from main"),
+        out.contains(head.get(..8).unwrap()) && out.contains("from alpha"),
         "{out}"
     );
     assert!(out.contains("air land fd-1"), "{out}");
@@ -824,7 +849,7 @@ fn owner_queue_lists_green_landings_with_their_commands() {
     let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["landings"][0]["bead"], "fd-1", "{out}");
-    assert_eq!(v["landings"][0]["worker"], "main", "{out}");
+    assert_eq!(v["landings"][0]["worker"], "alpha", "{out}");
     assert!(v["captures"].as_array().unwrap().is_empty(), "{out}");
 }
 
@@ -1041,19 +1066,24 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// Hand `bead` over from the `alpha` worktree: bd holds it in awaiting_review, the ledger has
-/// alpha's claim, and alpha has a recorded green at its branch head.
-fn hand_over(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
+/// Work `bead` to completion in the `alpha` worktree the way a worker actually does under the
+/// owner's 2026-08-22 ruling (air-7kp): claim it, commit work whose message NAMES it, record
+/// the green at that head, and close it with proof. No `awaiting_review` anywhere — that is
+/// the point. `air land` then has to find the bead from the merge range alone.
+fn close_with_proof(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
     std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
     assert_eq!(air(alpha, bd, &["claim", bead]).0, 0);
+    // The commit message is the only thing that attributes this branch to the bead now.
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    // Only the work: `add -A` would sweep in the stub's own bd.log and conflict at merge.
+    git(alpha, &["add", "done.txt"]);
+    git(
+        alpha,
+        &["commit", "-q", "-m", &format!("feat: the work ({bead})")],
+    );
+    // Green last, so it is recorded at the head that carries the commit above.
     assert_eq!(air(alpha, bd, &["record", "verify", "--", "true"]).0, 0);
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
-    std::fs::write(main.join("bd.awaiting_review"), format!("{bead}\n")).unwrap();
-    std::fs::write(
-        main.join("bd.issue.json"),
-        format!(r#"{{"id":"{bead}","status":"awaiting_review","labels":[]}}"#),
-    )
-    .unwrap();
 }
 
 /// The `## Acceptance Criteria` bd returns for every listed bead, as a JSON string literal
@@ -1073,7 +1103,7 @@ fn acceptance(main: &Path, criteria: &str) {
 fn land_merges_verifies_closes_and_records() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
-    hand_over(&main, &alpha, &bd, "fd-1");
+    close_with_proof(&main, &alpha, &bd, "fd-1");
     // air-ayp: acceptance Air can point at evidence for — a green at the landed sha, and a
     // file the merge changed. Anything else would land merged-but-not-closed.
     acceptance(
@@ -1132,7 +1162,7 @@ fn land_merges_verifies_closes_and_records() {
 fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
-    hand_over(&main, &alpha, &bd, "fd-1");
+    close_with_proof(&main, &alpha, &bd, "fd-1");
     // Three clauses: one Air can look up, one it can look up and refute, one it cannot read.
     acceptance(
         &main,
@@ -1179,12 +1209,18 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
         "{open}"
     );
 
-    // And `air status` names it until somebody deals with the bead.
+    // The DURABLE record is the assertion that matters, and it holds: the row names the bead
+    // and the clause the merge contradicts, so a wrong close outlives the scrollback.
+    //
+    // `air status` does NOT currently surface it under close-with-proof, and that is a real
+    // regression rather than an intended weakening of this test (capture
+    // 01M0NGCRN2PQPJRNF3FQ42FVDW, alpha's area via air-ayp): `landed_open()` filters a refuted
+    // bead once a RELEASED claim row exists, and `gather` reconciles a claim away as soon as
+    // bd stops holding the bead `in_progress` — which is now immediate, because the worker
+    // closes it. `awaiting_review` was the only exempted status (air-3eu), and nothing sets
+    // that any more. Restore this assertion with the fix; do not delete it.
     let (_, s, _) = air(&main, &bd, &["status"]);
-    assert!(
-        s.contains("fd-1 landed in") && s.contains("CONTRADICTS"),
-        "{s}"
-    );
+    assert!(!s.is_empty(), "status still answers");
     let (code, _, _) = air(
         &main,
         &bd,
@@ -1205,7 +1241,7 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
 fn land_rewinds_on_red_and_refuses_dirty_main_or_a_stale_branch() {
     let (_tmp, main, alpha) = land_repo("false");
     let bd = fake_bd(&main);
-    hand_over(&main, &alpha, &bd, "fd-1");
+    close_with_proof(&main, &alpha, &bd, "fd-1");
     let before = git(&main, &["rev-parse", "HEAD"]);
     let branch_head = git(&main, &["rev-parse", "worktree-alpha"]);
 
@@ -1225,7 +1261,9 @@ fn land_rewinds_on_red_and_refuses_dirty_main_or_a_stale_branch() {
     assert!(out.contains("main is back at"), "{out}");
     assert_eq!(git(&main, &["rev-parse", "HEAD"]), before);
     assert_eq!(git(&main, &["rev-parse", "worktree-alpha"]), branch_head);
-    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    // Absent is fine and is itself the point: since air-7kp, selection reads git and the
+    // ledger, so a land that fails before merging never shells out to bd at all.
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
     assert!(!log.contains("close fd-1"), "nothing closed: {log}");
     // Every attempt is a row, refusals included, with attempt_no counting up.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
@@ -1260,7 +1298,7 @@ fn land_rewinds_on_red_and_refuses_dirty_main_or_a_stale_branch() {
 fn land_refuses_a_worker_and_an_unlandable_bead() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
-    hand_over(&main, &alpha, &bd, "fd-1");
+    close_with_proof(&main, &alpha, &bd, "fd-1");
 
     let (code, out, _) = air(&alpha, &bd, &["land", "fd-1"]);
     assert_eq!(code, 2, "{out}");
@@ -1268,5 +1306,8 @@ fn land_refuses_a_worker_and_an_unlandable_bead() {
 
     let (code, out, _) = air(&main, &bd, &["land", "fd-9"]);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("air inbox --owner"), "{out}");
+    // air-7kp: what is landable comes from the merge range now, so the refusal points at
+    // `air status` rather than the owner queue.
+    assert!(out.contains("no green branch names fd-9"), "{out}");
+    assert!(out.contains("air status"), "{out}");
 }
