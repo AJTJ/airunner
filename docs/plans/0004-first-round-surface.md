@@ -27,7 +27,13 @@ under that date). Extends [`0001-first-slice.md`](0001-first-slice.md); supersed
 - **Informed, not woken.** `air mcp` evaluates the attention conditions from the ledger every
   `AIR_CHANNEL_POLL_SECS` (30) and pushes new or escalated ones through
   `notifications/claude/channel`. No sockets, no timers in the coordinator, no daemon beyond the
-  server Claude Code already keeps alive for the session.
+  server Claude Code already keeps alive for the session. Conditions (2026-08-22): `stuck`,
+  `idle-with-claim`, `silent-with-claim`, `gone-with-claim`, `handover-not-green`,
+  `lease-held-by-dead-session`, `lease-stale`, `owner-decision-waiting`, and from air-e7q
+  `review-waiting` (once per bead in `awaiting_review`; subject is the bead; names worker, head,
+  the landing command) and `idle-without-claim` (worker idle with no claim while beads are
+  ready for `AIR_ATTENTION_IDLE_NOCLAIM_MIN`, default 5; removal: zero firings in a full round
+  once the Stop nudge is in). Inbox depth stays a measurement.
 - **One implementation.** MCP tools and resources invoke the `air` CLI with `--json`; they cannot
   disagree with the command line.
 - **Human in the loop.** Launchers `exec` an interactive `claude`; nothing headless.

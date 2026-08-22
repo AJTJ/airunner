@@ -72,6 +72,9 @@ pub struct Thresholds {
     pub silent_with_claim_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
     pub launch_grace_min: i64,
+    /// Idle worker, no claim, beads ready (air-e7q; removal: zero firings in a round once
+    /// the Stop nudge, air-09i, is in).
+    pub idle_noclaim_min: i64,
 }
 
 impl Default for Thresholds {
@@ -81,6 +84,7 @@ impl Default for Thresholds {
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             launch_grace_min: 3,
+            idle_noclaim_min: 5,
         }
     }
 }
@@ -99,19 +103,31 @@ impl Thresholds {
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
+        t.idle_noclaim_min = get("AIR_ATTENTION_IDLE_NOCLAIM_MIN", t.idle_noclaim_min);
         t
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Attention {
+    /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
+    /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
     /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green |
-    /// owner-decision-waiting | lease-held-by-dead-session | lease-stale
-    /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21)
+    /// owner-decision-waiting | lease-held-by-dead-session | lease-stale | review-waiting |
+    /// idle-without-claim
+    /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
+    /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
+    /// on a fact nobody was told)
     pub kind: &'static str,
     pub detail: String,
     pub for_minutes: i64,
+}
+
+/// The landing command for a worker's branch. The repo's own until `air land` exists
+/// (CLAUDE.md); the worktree branch is named after the worker.
+pub fn land_hint(worker: &str) -> String {
+    format!("land it: on main, `git merge --no-ff {worker}` then verify")
 }
 
 /// Minutes between two RFC 3339 timestamps; None when either does not parse.
@@ -169,6 +185,22 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         ),
                         for_minutes: age,
                     }),
+                    "idle"
+                        if !has_claim
+                            && w.role == "worker"
+                            && s.ready_depth.is_some_and(|n| n > 0)
+                            && age >= t.idle_noclaim_min =>
+                    {
+                        out.push(Attention {
+                            worker: w.worker.clone(),
+                            kind: "idle-without-claim",
+                            detail: format!(
+                                "idle {age} min, {} beads ready; prompt them",
+                                s.ready_depth.unwrap_or(0)
+                            ),
+                            for_minutes: age,
+                        });
+                    }
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
                         out.push(Attention {
                             worker: w.worker.clone(),
@@ -237,6 +269,25 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 l.resource, l.worker, l.reason, l.resource
             ),
             for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
+        });
+    }
+    // A hand-over nobody was told about (air-e7q). Subject is the bead: once per bead.
+    for (bead, worker, mins) in &s.review_waits {
+        let head = s
+            .workers
+            .iter()
+            .find(|w| &w.worker == worker)
+            .and_then(|w| w.head.as_deref())
+            .map(|h| h.get(..8).unwrap_or(h))
+            .unwrap_or("?");
+        out.push(Attention {
+            worker: bead.clone(),
+            kind: "review-waiting",
+            detail: format!(
+                "{bead} handed over by {worker} {mins} min ago (head {head}); {}",
+                land_hint(worker)
+            ),
+            for_minutes: *mins,
         });
     }
     if let Some(oldest) = &s.oldest_owner_capture_at {
@@ -415,18 +466,27 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
                 None
             }
         };
-    let review_waits: Vec<(String, String, i64)> = views
-        .values()
-        .flat_map(|w| {
-            w.claims.iter().filter_map(|c| {
-                c.first_handover_at.as_deref().map(|t| {
-                    (
-                        c.bead.clone(),
-                        w.worker.clone(),
-                        minutes_between(t, &at).unwrap_or(0),
-                    )
-                })
-            })
+    // One row per bead bd holds in awaiting_review: who handed it over and how long ago, from
+    // the claim row (released by the reconcile above with reason handed-over, so open claims
+    // cannot be the source: that was why this was always empty, air-e7q).
+    let review_waits: Vec<(String, String, i64)> = awaiting_review
+        .iter()
+        .flatten()
+        .map(|bead| {
+            let (worker, since) = ledger
+                .conn()
+                .query_row(
+                    "SELECT worker, coalesce(first_handover_at, released_at, claimed_at) FROM claims \
+                     WHERE bead=?1 ORDER BY claimed_at DESC LIMIT 1",
+                    rusqlite::params![bead],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .unwrap_or_else(|_| ("?".to_string(), at.clone()));
+            (
+                bead.clone(),
+                worker,
+                minutes_between(&since, &at).unwrap_or(0),
+            )
         })
         .collect();
     if reconciled > 0 {
@@ -546,8 +606,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             .iter()
             .map(|c| format!("{} (handovers {})", c.bead, c.handover_attempts))
             .collect();
+        let idle_no_claim = w.role == "worker"
+            && claims.is_empty()
+            && w.session.as_ref().is_some_and(|x| x.state == "idle");
         out.push_str(&format!(
-            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}\n",
+            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}\n",
             w.worker,
             w.role,
             sess,
@@ -561,9 +624,28 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 "-".to_string()
             } else {
                 claims.join(", ")
+            },
+            if idle_no_claim {
+                "  idle, no claim"
+            } else {
+                ""
             }
         ));
     }
+    // Always rendered (air-e7q): what waits on whom.
+    out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));
+    for (bead, worker, mins) in &s.review_waits {
+        out.push_str(&format!(
+            "  {bead} by {worker}, {mins} min; {}\n",
+            land_hint(worker)
+        ));
+    }
+    out.push_str(&format!(
+        "ready: {}\n",
+        s.ready_depth
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "? (bd did not answer)".into())
+    ));
     out.push_str(&format!(
         "inbox: {} open; owner queue: {} open\n",
         s.inbox_depth, s.owner_queue_depth
@@ -764,6 +846,7 @@ mod tests {
             idle_with_claim_min: 60,
             silent_with_claim_min: 60,
             launch_grace_min: 3,
+            idle_noclaim_min: 60,
         };
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
@@ -812,13 +895,70 @@ mod tests {
         );
     }
 
+    /// Reversed on 2026-08-22 (air-e7q): a hand-over nobody is told about is a condition,
+    /// once per bead; the depth of the queue is still only a measurement (no cap).
     #[test]
-    fn awaiting_review_is_measured_never_a_condition() {
+    fn review_wait_is_a_condition_once_per_bead_and_depth_is_not() {
         let s = Snapshot {
+            workers: vec![worker("w", Some("idle"), T_2, vec![], Some(true))],
             awaiting_review: Some(vec!["a".into(); 22]),
-            review_waits: vec![("a".into(), "w".into(), 45)],
+            review_waits: vec![("a".into(), "w".into(), 45), ("b".into(), "w".into(), 1)],
             ..Default::default()
         };
+        let att = attention(&s, NOW, Thresholds::default());
+        let kinds: Vec<(&str, &str)> = att.iter().map(|a| (a.worker.as_str(), a.kind)).collect();
+        assert_eq!(kinds, [("a", "review-waiting"), ("b", "review-waiting")]);
+        assert!(
+            att[0]
+                .detail
+                .contains("handed over by w 45 min ago (head abc)")
+        );
+        assert!(att[0].detail.contains("land it:"));
+        assert_eq!(att[0].for_minutes, 45);
+        // Rendered, always: the count, one line per bead, ready depth, idle-no-claim.
+        let text = render(&s, &att);
+        assert!(
+            text.contains("review: 2 waiting\n  a by w, 45 min; land it:"),
+            "{text}"
+        );
+        assert!(text.contains("ready: ? (bd did not answer)"));
+        assert!(text.contains("claims: -  idle, no claim"));
+        let none = Snapshot {
+            ready_depth: Some(3),
+            ..Default::default()
+        };
+        assert!(render(&none, &[]).contains("review: 0 waiting\nready: 3\n"));
+    }
+
+    #[test]
+    fn idle_without_claim_fires_only_with_ready_beads_past_the_threshold() {
+        let mut s = Snapshot {
+            workers: vec![
+                worker("w", Some("idle"), T_30, vec![], Some(true)),
+                worker("fresh", Some("idle"), T_2, vec![], Some(true)),
+                WorkerView {
+                    role: "coordinator".into(),
+                    ..worker("main", Some("idle"), T_30, vec![], None)
+                },
+            ],
+            ready_depth: Some(5),
+            ..Default::default()
+        };
+        let att = attention(&s, NOW, Thresholds::default());
+        assert_eq!(att.len(), 1, "{att:?}");
+        assert_eq!(
+            (att[0].worker.as_str(), att[0].kind),
+            ("w", "idle-without-claim")
+        );
+        assert_eq!(att[0].detail, "idle 30 min, 5 beads ready; prompt them");
+        let t = Thresholds {
+            idle_noclaim_min: 1,
+            ..Thresholds::default()
+        };
+        assert_eq!(attention(&s, NOW, t).len(), 2);
+        s.ready_depth = Some(0);
+        assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+        s.ready_depth = None;
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
     }
 
