@@ -13,6 +13,7 @@
 //! `--dangerously-load-development-channels server:air` (a local server is not on the
 //! allowlist; `--channels` rejects it, seen live 2026-08-21); `AIR_CHANNELS_FLAG` overrides.
 
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
@@ -119,20 +120,115 @@ fn coordinator_argv_for(repo: &Path, roles: &Path, flag: &str, extra: &[String])
     base
 }
 
-fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
-    let bin = std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
+fn claude_bin() -> String {
+    std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
+}
+
+fn shell_quote(bin: &str, argv: &[String]) -> String {
+    std::iter::once(bin.to_string())
+        .chain(argv.iter().cloned())
+        .map(|a| {
+            if a.contains(' ') || a.contains('"') {
+                format!("'{a}'")
+            } else {
+                a
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// How a worker session is started. Pure decision so the selftest probe can exercise it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// Replace this process: the caller's terminal talks to claude directly.
+    Exec,
+    /// No controlling tty (stdin is a socket: the coordinator's Bash tool, `</dev/null`), so
+    /// `claude --tmux` cannot run here (`tcgetattr failed: Operation not supported on
+    /// socket`, adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
+    Detached,
+}
+
+pub fn launch_mode(stdin_is_tty: bool, tmux_requested: bool) -> Launch {
+    if tmux_requested && !stdin_is_tty {
+        Launch::Detached
+    } else {
+        Launch::Exec
+    }
+}
+
+/// Pure: `tmux new-session -d -s <name> -c <repo> -- <bin> <argv...>`. `socket` (from
+/// `AIR_TMUX_SOCKET`) becomes `-L <socket>` so tests never touch the user's tmux server.
+pub fn tmux_detached_argv(
+    name: &str,
+    repo: &Path,
+    socket: Option<&str>,
+    bin: &str,
+    argv: &[String],
+) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if let Some(s) = socket.filter(|s| !s.is_empty()) {
+        v.push("-L".into());
+        v.push(s.into());
+    }
+    v.extend(
+        [
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            &repo.display().to_string(),
+            "--",
+            bin,
+        ]
+        .map(String::from),
+    );
+    v.extend(argv.iter().cloned());
+    v
+}
+
+fn tmux_socket() -> Option<String> {
+    std::env::var("AIR_TMUX_SOCKET")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Start `claude` in a detached tmux session and return without touching the caller's
+/// terminal. Prints the session name and the attach command.
+fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 {
+    let bin = claude_bin();
+    let socket = tmux_socket();
+    let targv = tmux_detached_argv(name, repo, socket.as_deref(), &bin, argv);
     if print {
-        let shown: Vec<String> = std::iter::once(bin.clone())
-            .chain(argv.iter().cloned())
-            .map(|a| {
-                if a.contains(' ') || a.contains('"') {
-                    format!("'{a}'")
-                } else {
-                    a
-                }
-            })
-            .collect();
-        println!("{}", shown.join(" "));
+        println!("{}", shell_quote("tmux", &targv));
+        return 0;
+    }
+    match Command::new("tmux").args(&targv).current_dir(repo).status() {
+        Ok(s) if s.success() => {
+            let l = socket
+                .as_deref()
+                .map(|s| format!("-L {s} "))
+                .unwrap_or_default();
+            println!("started tmux session {name} (stdin is not a tty; detached)");
+            println!("attach: tmux {l}attach -t {name}");
+            0
+        }
+        Ok(s) => {
+            eprintln!("air worker: tmux exited with {s}");
+            1
+        }
+        Err(e) => {
+            eprintln!("air worker: could not run tmux: {e}");
+            1
+        }
+    }
+}
+
+fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
+    let bin = claude_bin();
+    if print {
+        println!("{}", shell_quote(&bin, argv));
         return 0;
     }
     let mut cmd = Command::new(&bin);
@@ -194,10 +290,22 @@ pub fn worker(
         }
     };
     let mut argv = worker_argv_for(repo, name, &roles, extra);
-    if tmux || task.is_some() {
-        argv = worker_argv_tmux(argv, task);
+    if !(tmux || task.is_some()) {
+        return exec_claude(repo, &argv, print);
     }
-    exec_claude(repo, &argv, print)
+    match launch_mode(std::io::stdin().is_terminal(), true) {
+        Launch::Exec => {
+            argv = worker_argv_tmux(argv, task);
+            exec_claude(repo, &argv, print)
+        }
+        Launch::Detached => {
+            // tmux is ours here, so claude gets no `--tmux`; the task stays the first prompt.
+            if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
+                argv.push(t.to_string());
+            }
+            spawn_detached(repo, name, &argv, print)
+        }
+    }
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
@@ -253,6 +361,40 @@ mod tests {
         assert_eq!(&v[v.len() - 2..], ["--tmux", "fix fd-1 end to end"]);
         let v = worker_argv_tmux(base, None);
         assert_eq!(v.last().map(String::as_str), Some("--tmux"));
+    }
+
+    #[test]
+    fn socket_stdin_with_tmux_is_detached_tty_execs() {
+        assert_eq!(launch_mode(false, true), Launch::Detached);
+        assert_eq!(launch_mode(true, true), Launch::Exec);
+        assert_eq!(launch_mode(false, false), Launch::Exec);
+    }
+
+    #[test]
+    fn detached_argv_never_passes_tmux_to_claude() {
+        let argv = vec!["--worktree".to_string(), "w".into(), "do x".into()];
+        let v = tmux_detached_argv("w", Path::new("/r"), Some("air-test"), "claude", &argv);
+        assert_eq!(
+            v,
+            [
+                "-L",
+                "air-test",
+                "new-session",
+                "-d",
+                "-s",
+                "w",
+                "-c",
+                "/r",
+                "--",
+                "claude",
+                "--worktree",
+                "w",
+                "do x"
+            ]
+        );
+        assert!(!v.iter().any(|a| a.starts_with("--tmux")));
+        let v = tmux_detached_argv("w", Path::new("/r"), None, "claude", &argv);
+        assert_eq!(v[0], "new-session");
     }
 
     #[test]

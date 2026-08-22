@@ -2,6 +2,7 @@
 //! scratch git repo. A check that matches nothing prints RED (corpus: guards that pass on
 //! nothing are the anti-pattern). Exit 1 if any probe fails.
 
+use std::path::Path;
 use std::process::Command;
 
 use air_hooks::{GateFacts, handover_verdict};
@@ -40,6 +41,7 @@ pub fn run(json: bool) -> i32 {
         probe_install_merge(),
         probe_gate_digest(),
         probe_lease_take(),
+        probe_launch_no_tty(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -74,6 +76,51 @@ fn probe_gate_digest() -> Probe {
             .iter()
             .any(|m| m.check == "digest-present"),
         green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// air-tdc: `air worker --task` from a socket stdin (the coordinator's Bash tool) must not
+/// exec `claude --tmux` (tcgetattr fails there). Red: the socket case is routed away from
+/// exec. Green: a detached tmux session is actually created (pure check only when tmux is
+/// absent; the probe name says so).
+fn probe_launch_no_tty() -> Probe {
+    use crate::cmd::launch::{Launch, launch_mode, tmux_detached_argv};
+    let red =
+        launch_mode(false, true) == Launch::Detached && launch_mode(true, true) == Launch::Exec;
+    if Command::new("tmux").arg("-V").output().is_err() {
+        return Probe {
+            name: "launch: socket stdin never execs claude --tmux (tmux absent: pure check only)",
+            red_fires: red,
+            green_passes: launch_mode(false, false) == Launch::Exec,
+        };
+    }
+    let socket = format!("air-selftest-{}", std::process::id());
+    let name = "air-selftest";
+    let argv = tmux_detached_argv(
+        name,
+        Path::new("/"),
+        Some(&socket),
+        "sh",
+        &["-c".to_string(), "sleep 30".to_string()],
+    );
+    let started = Command::new("tmux")
+        .args(&argv)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let exists = started
+        && Command::new("tmux")
+            .args(["-L", &socket, "has-session", "-t", name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let _ = Command::new("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .output();
+    Probe {
+        name: "launch: socket stdin starts a detached tmux session instead of exec",
+        red_fires: red,
+        green_passes: exists,
     }
 }
 
