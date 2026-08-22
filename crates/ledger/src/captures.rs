@@ -7,6 +7,12 @@ use serde::Serialize;
 
 use crate::{Ledger, Result};
 
+/// One triage decision as the ledger takes it: `(capture id, status, bead, note)`.
+pub type TriageItem = (String, String, Option<String>, Option<String>);
+
+/// What a capture pointed at before a triage: `(status, bead)`.
+pub type Was = (String, Option<String>);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Capture {
     pub id: String,
@@ -95,22 +101,35 @@ impl Ledger {
         Ok(v)
     }
 
-    /// Triage outcome. `status` is `promoted` (with `bead`) or `dropped` (with `note`).
-    /// Returns false when the capture is not open.
-    pub fn resolve_capture(
-        &self,
-        id: &str,
-        status: &str,
-        bead: Option<&str>,
-        note: Option<&str>,
-        at: &str,
-    ) -> Result<bool> {
-        let n = self.conn.execute(
-            "UPDATE captures SET status=?2, bead=?3, note=?4, resolved_at=?5 \
-             WHERE id=?1 AND status='open'",
-            params![id, status, bead, note, at],
-        )?;
-        Ok(n > 0)
+    /// Triage a whole pass in ONE transaction: each item is `(capture id, status, bead,
+    /// note)`. Returns, per item and in order, what the capture pointed at *before* as
+    /// `(status, bead)`, or `None` when there is no capture with that id.
+    ///
+    /// An already-triaged capture is re-pointed rather than refused (air-76z): a coordinator
+    /// promoted two captures to placeholder ids that were never created, and refusing to
+    /// touch a closed capture left the record wrong with no way to fix it. Correcting a
+    /// pointer is cheap and the old value comes back here, so the event line keeps the
+    /// history. One transaction and one event line for the pass (air-869).
+    pub fn resolve_captures(&self, items: &[TriageItem], at: &str) -> Result<Vec<Option<Was>>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut was = Vec::with_capacity(items.len());
+        {
+            let mut before = tx.prepare("SELECT status, bead FROM captures WHERE id=?1")?;
+            let mut set = tx.prepare(
+                "UPDATE captures SET status=?2, bead=?3, note=?4, resolved_at=?5 WHERE id=?1",
+            )?;
+            for (id, status, bead, note) in items {
+                let prev: Option<Was> = before
+                    .query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()?;
+                if prev.is_some() {
+                    set.execute(params![id, status, bead, note, at])?;
+                }
+                was.push(prev);
+            }
+        }
+        tx.commit()?;
+        Ok(was)
     }
 }
 
@@ -119,8 +138,17 @@ impl Ledger {
 mod tests {
     use super::*;
 
+    fn item(id: &str, status: &str, bead: Option<&str>, note: Option<&str>) -> TriageItem {
+        (
+            id.to_string(),
+            status.to_string(),
+            bead.map(str::to_string),
+            note.map(str::to_string),
+        )
+    }
+
     #[test]
-    fn inbox_orders_and_resolves_once() {
+    fn inbox_orders_oldest_first_and_triage_closes_it() {
         let l = Ledger::open_in_memory().unwrap();
         l.capture("b", "w1", Some("s"), "second", "t2").unwrap();
         l.capture("a", "w2", None, "first", "t1").unwrap();
@@ -129,19 +157,62 @@ mod tests {
             inbox.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             ["a", "b"]
         );
-        assert!(
-            l.resolve_capture("a", "promoted", Some("fd-9"), None, "t3")
-                .unwrap()
-        );
-        assert!(
-            !l.resolve_capture("a", "dropped", None, Some("dup"), "t4")
-                .unwrap()
-        );
+        let was = l
+            .resolve_captures(&[item("a", "promoted", Some("fd-9"), None)], "t3")
+            .unwrap();
+        assert_eq!(was[0], Some(("open".to_string(), None)));
         assert_eq!(l.inbox().unwrap().len(), 1);
         let a = l.capture_by_id("a").unwrap().unwrap();
         assert_eq!(
             (a.status.as_str(), a.bead.as_deref()),
             ("promoted", Some("fd-9"))
         );
+    }
+
+    /// air-869: one triage pass, one transaction. air-76z: an id no capture has is reported
+    /// (None) rather than failing the pass, and an already-triaged capture is re-pointed
+    /// with its old value returned.
+    #[test]
+    fn resolve_captures_triages_a_pass_and_repoints() {
+        let l = Ledger::open_in_memory().unwrap();
+        for (id, text) in [("a", "one"), ("b", "two"), ("c", "three")] {
+            l.capture(id, "w1", None, text, "t0").unwrap();
+        }
+        let items = vec![
+            item("a", "promoted", Some("fd-1"), None),
+            item("b", "dropped", None, Some("dup")),
+            item("nope", "promoted", Some("fd-3"), None),
+        ];
+        let was = l.resolve_captures(&items, "t1").unwrap();
+        assert_eq!(was[0], Some(("open".to_string(), None)));
+        assert_eq!(was[1], Some(("open".to_string(), None)));
+        assert_eq!(was[2], None, "no capture with that id");
+        assert_eq!(
+            l.capture_by_id("b").unwrap().unwrap().note.as_deref(),
+            Some("dup")
+        );
+
+        // Re-point `a` from a bead that was never created to the real one, and promote the
+        // dropped `b`. Both say what they used to point at.
+        let fix = vec![
+            item("a", "promoted", Some("ad-real"), None),
+            item("b", "promoted", Some("fd-2"), None),
+        ];
+        let was = l.resolve_captures(&fix, "t2").unwrap();
+        assert_eq!(
+            was[0],
+            Some(("promoted".to_string(), Some("fd-1".to_string())))
+        );
+        assert_eq!(was[1], Some(("dropped".to_string(), None)));
+        assert_eq!(
+            l.capture_by_id("a").unwrap().unwrap().bead.as_deref(),
+            Some("ad-real")
+        );
+        assert_eq!(
+            l.capture_by_id("b").unwrap().unwrap().status.as_str(),
+            "promoted"
+        );
+        // Re-pointing never puts a capture back in the inbox.
+        assert!(l.inbox().unwrap().iter().all(|c| c.id == "c"));
     }
 }

@@ -1,7 +1,9 @@
 //! Subcommands. Each returns a process exit code (0 ok, 1 error, 2 refused).
 
+pub mod bd_latency;
 pub mod capture;
 pub mod claim;
+pub mod close;
 pub mod doctor;
 pub mod handover;
 pub mod holdings;
@@ -49,7 +51,9 @@ pub fn emit<T: serde::Serialize>(json: bool, value: &T, text: impl FnOnce() -> S
     }
 }
 
-/// Append an event line; errors are reported to stderr, never fatal.
+/// Append an event line; errors are reported to stderr, never fatal. Commands that shelled
+/// out to `bd` carry `bd_ms`/`bd_calls` (air-869): bd costs ~1.4 s per process on this
+/// machine and the cost was invisible in the record.
 pub fn log_event<T: serde::Serialize>(
     ledger: &Ledger,
     worker: &str,
@@ -60,6 +64,7 @@ pub fn log_event<T: serde::Serialize>(
     denominator: &str,
 ) {
     let at = now();
+    let (bd_ms, bd_calls) = air_bd::stats::snapshot();
     let ev = air_ledger::events::Event {
         at: &at,
         worker,
@@ -68,6 +73,8 @@ pub fn log_event<T: serde::Serialize>(
         decision,
         reason,
         denominator,
+        bd_ms: (bd_calls > 0).then_some(bd_ms),
+        bd_calls: (bd_calls > 0).then_some(bd_calls),
     };
     if let Err(e) = air_ledger::events::append(ledger.dir(), &today(), &ev) {
         eprintln!("air: could not append event: {e}");
