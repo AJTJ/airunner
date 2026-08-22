@@ -760,10 +760,7 @@ fn owner_queue_lists_green_landings_with_their_commands() {
         out.contains(head.get(..8).unwrap()) && out.contains("from main"),
         "{out}"
     );
-    assert!(
-        out.contains("on main, `git merge --no-ff main` then verify"),
-        "{out}"
-    );
+    assert!(out.contains("air land fd-1"), "{out}");
 
     // And in JSON, next to the captures, so the channel reads one shape.
     let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
@@ -922,4 +919,203 @@ fn awaiting_review_keeps_the_claim_and_close_releases_it() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// A main checkout plus one linked worktree `alpha` on `worktree-alpha`, with a bead handed
+/// over on it: the shape `air land` lands (air-3pz). `verify` is what the repo's verify
+/// command should be (`true` or `false`), committed so main starts clean.
+fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    let alpha = tmp.path().join("alpha");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(main.join(".claude")).unwrap();
+    std::fs::write(
+        main.join(".claude/air.json"),
+        format!("{{\"verify_command\": \"{verify}\"}}"),
+    )
+    .unwrap();
+    std::fs::write(main.join("README"), "a\n").unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "a"]);
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-alpha",
+            alpha.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(alpha.join("work.txt"), "the work\n").unwrap();
+    git(&alpha, &["add", "-A"]);
+    git(&alpha, &["commit", "-q", "-m", "the work"]);
+    (
+        tmp,
+        main.canonicalize().unwrap(),
+        alpha.canonicalize().unwrap(),
+    )
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "air")
+        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+        .env("GIT_COMMITTER_NAME", "air")
+        .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Hand `bead` over from the `alpha` worktree: bd holds it in awaiting_review, the ledger has
+/// alpha's claim, and alpha has a recorded green at its branch head.
+fn hand_over(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
+    std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+    assert_eq!(air(alpha, bd, &["claim", bead]).0, 0);
+    assert_eq!(air(alpha, bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(main.join("bd.awaiting_review"), format!("{bead}\n")).unwrap();
+    std::fs::write(
+        main.join("bd.issue.json"),
+        format!(r#"{{"id":"{bead}","status":"awaiting_review","labels":[]}}"#),
+    )
+    .unwrap();
+}
+
+/// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the
+/// bead in one bd process, releases the claim, and records the landing.
+#[test]
+fn land_merges_verifies_closes_and_records() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+    let before = git(&main, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed alpha (fd-1)"), "{out}{err}");
+
+    // main moved to a merge commit that contains the branch.
+    let head = git(&main, &["rev-parse", "HEAD"]);
+    assert_ne!(head, before);
+    assert_eq!(git(&main, &["rev-list", "--count", "HEAD^2..HEAD^2"]), "0");
+    assert_eq!(
+        std::fs::read_to_string(main.join("work.txt")).unwrap(),
+        "the work\n"
+    );
+    // One bd process closed it; the claim is released as landed.
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(
+        log.lines().any(|l| l.starts_with("close fd-1 --reason")),
+        "{log}"
+    );
+    assert_eq!(claims(&main)[0].2.as_deref(), Some("landed"));
+    // And the landing is a row, with the verify run that decided it.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (worker, result, merge, verify): (String, String, String, String) = conn
+        .query_row(
+            "SELECT worker, result, merge_commit, verify_run_id FROM landings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((worker.as_str(), result.as_str()), ("alpha", "landed"));
+    assert_eq!(merge, head);
+    let (sha, exit): (String, i64) = conn
+        .query_row(
+            "SELECT sha, exit_code FROM verify_runs WHERE id=?1",
+            rusqlite::params![verify],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (sha.as_str(), exit),
+        (head.as_str(), 0),
+        "the green is at the MERGED result, not the branch"
+    );
+}
+
+/// air-3pz: a red verify on the merged result puts main back exactly where it was and leaves
+/// the branch alone; a dirty main is refused before anything is merged; a branch that does not
+/// contain main is refused with the command that fixes it.
+#[test]
+fn land_rewinds_on_red_and_refuses_dirty_main_or_a_stale_branch() {
+    let (_tmp, main, alpha) = land_repo("false");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+    let before = git(&main, &["rev-parse", "HEAD"]);
+    let branch_head = git(&main, &["rev-parse", "worktree-alpha"]);
+
+    // Dirty main: refused before any merge, because the rewind would discard it. Tracked, on
+    // purpose: `git reset --hard` leaves untracked files alone, so they are not at risk.
+    std::fs::write(main.join("README"), "edited by the owner\n").unwrap();
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("git reset --hard"), "{out}");
+    assert!(out.contains("README"), "{out}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "nothing merged");
+    std::fs::write(main.join("README"), "a\n").unwrap();
+
+    // Red on the merged result: main goes back to where it was, the branch is untouched.
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("main is back at"), "{out}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before);
+    assert_eq!(git(&main, &["rev-parse", "worktree-alpha"]), branch_head);
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(!log.contains("close fd-1"), "nothing closed: {log}");
+    // Every attempt is a row, refusals included, with attempt_no counting up.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let mut st = conn
+        .prepare("SELECT result, attempt_no FROM landings ORDER BY attempt_no")
+        .unwrap();
+    let rows: Vec<(String, i64)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![("refused".to_string(), 1), ("rewound".to_string(), 2)]
+    );
+
+    // main moves on: the branch no longer contains it, and the recorded green is not a green
+    // of what would land.
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "b"]);
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(
+        out.contains("does not contain main")
+            && out.contains("git merge main && air record verify"),
+        "{out}"
+    );
+}
+
+/// air-3pz: a worker may not land. The coordinator's deny list keeps `git commit` off main,
+/// so this is the one allowed path onto it and it must not be a worker's.
+#[test]
+fn land_refuses_a_worker_and_an_unlandable_bead() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+
+    let (code, out, _) = air(&alpha, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("air handover"), "{out}");
+
+    let (code, out, _) = air(&main, &bd, &["land", "fd-9"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("air inbox --owner"), "{out}");
 }

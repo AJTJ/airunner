@@ -136,15 +136,15 @@ pub struct Attention {
     pub for_minutes: i64,
 }
 
-/// The landing command for a worker's branch. The repo's own until `air land` exists
-/// (CLAUDE.md); the worktree branch is named after the worker.
-pub fn land_hint(worker: &str) -> String {
-    format!("land it: {}", land_command(worker))
+/// The landing command for one bead, with the lead-in a bare condition line needs.
+pub fn land_hint(bead: &str) -> String {
+    format!("land it: {}", land_command(bead))
 }
 
-/// The command alone, for a line that already says what it is (air-6p5).
-pub fn land_command(worker: &str) -> String {
-    format!("on main, `git merge --no-ff {worker}` then verify")
+/// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
+/// is `air land`: the coordinator's one allowed path onto main.
+pub fn land_command(bead: &str) -> String {
+    format!("air land {bead}")
 }
 
 /// Who handed `bead` over and when, from the claim row, open or released. The claim row is the
@@ -183,7 +183,8 @@ pub struct Landing {
 /// HEAD is the owner's to merge; one that is not green is the worker's to fix, and shows as
 /// `review-waiting` instead.
 pub fn landings(s: &Snapshot) -> Vec<Landing> {
-    s.review_waits
+    let mut v: Vec<Landing> = s
+        .review_waits
         .iter()
         .filter_map(|(bead, worker, minutes)| {
             let w = s.workers.iter().find(|w| &w.worker == worker)?;
@@ -195,14 +196,26 @@ pub fn landings(s: &Snapshot) -> Vec<Landing> {
                 worker: worker.clone(),
                 head: w.head.clone()?,
                 minutes: *minutes,
-                command: land_command(worker),
+                command: land_command(bead),
             })
         })
-        .collect()
+        .collect();
+    sort_by_wait(&mut v);
+    v
 }
 
-/// Pure: the `waiting on owner` block for the top of `air status`. Empty when nothing waits,
-/// so a quiet fleet prints nothing.
+/// Longest wait first, the order `air land --all` uses, so what `air status` lists is the
+/// order it will land in (air-3pz).
+fn sort_by_wait(v: &mut [Landing]) {
+    v.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.bead.cmp(&b.bead)));
+}
+
+/// Pure: the block at the top of `air status`. Empty when nothing waits, so a quiet fleet
+/// prints nothing.
+///
+/// Landings are the coordinator's since air-3pz (`air land --all`), so they are no longer
+/// "waiting on owner"; only decisions are. The bead list stays because it is what the
+/// coordinator relays when the owner asks what is outstanding (air-6p5).
 pub fn waiting_on_owner(s: &Snapshot) -> String {
     let l = landings(s);
     let decisions = s.owner_queue_depth;
@@ -216,7 +229,7 @@ pub fn waiting_on_owner(s: &Snapshot) -> String {
             format!("{n} {word}s")
         }
     };
-    let mut parts = Vec::new();
+    let mut out = String::new();
     if !l.is_empty() {
         let named = l
             .iter()
@@ -230,20 +243,22 @@ pub fn waiting_on_owner(s: &Snapshot) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        parts.push(format!("{} ({named})", plural(l.len(), "landing")));
-    }
-    if decisions > 0 {
-        parts.push(plural(decisions, "decision"));
-    }
-    let mut out = format!("waiting on owner: {}\n", parts.join(", "));
-    for x in &l {
         out.push_str(&format!(
-            "  {} ({} min): {}\n",
-            x.bead, x.minutes, x.command
+            "{} ready: `air land --all` ({named})\n",
+            plural(l.len(), "landing")
         ));
+        for x in &l {
+            out.push_str(&format!(
+                "  {} ({} min): `{}`\n",
+                x.bead, x.minutes, x.command
+            ));
+        }
     }
     if decisions > 0 {
-        out.push_str("  decisions: `air inbox --owner`\n");
+        out.push_str(&format!(
+            "waiting on owner: {}; `air inbox --owner`\n",
+            plural(decisions, "decision")
+        ));
     }
     out
 }
@@ -276,7 +291,7 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
         })
         .collect();
     let at = now();
-    beads
+    let mut v: Vec<Landing> = beads
         .into_iter()
         .filter_map(|i| {
             let (worker, since) = handover_of(&ledger, &i.id, &at);
@@ -285,14 +300,16 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
                 return None;
             }
             Some(Landing {
+                command: land_command(&i.id),
                 bead: i.id,
-                command: land_command(&worker),
                 head: head.clone()?,
                 minutes: minutes_between(&since, &at).unwrap_or(0),
                 worker,
             })
         })
-        .collect()
+        .collect();
+    sort_by_wait(&mut v);
+    v
 }
 
 /// Minutes between two RFC 3339 timestamps; None when either does not parse.
@@ -450,7 +467,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             kind: "review-waiting",
             detail: format!(
                 "{bead} handed over by {worker} {mins} min ago (head {head}); {}",
-                land_hint(worker)
+                land_hint(bead)
             ),
             for_minutes: *mins,
         });
@@ -1150,20 +1167,21 @@ mod tests {
         };
         let out = waiting_on_owner(&s);
         assert!(
-            out.starts_with(
-                "waiting on owner: 1 landing (air-i59 8c190753 from alpha), 1 decision\n"
-            ),
+            out.starts_with("1 landing ready: `air land --all` (air-i59 8c190753 from alpha)\n"),
             "{out}"
         );
         assert!(
-            out.contains("air-i59 (18 min): on main, `git merge --no-ff alpha` then verify"),
+            out.contains("air-i59 (18 min): `air land air-i59`"),
             "{out}"
         );
         assert!(
             !out.contains("air-869"),
             "not green is not a landing: {out}"
         );
-        assert!(out.contains("decisions: `air inbox --owner`"), "{out}");
+        assert!(
+            out.contains("waiting on owner: 1 decision; `air inbox --owner`"),
+            "{out}"
+        );
 
         // Nothing waiting: nothing printed, so a quiet fleet stays quiet.
         let quiet = Snapshot {

@@ -65,9 +65,10 @@ denied 30 min later by the permission classifier, 2026-08-22; removed never). **
 When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
 reports conditions, status reports everything (standstill 2026-08-22; removed when the
 `review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
-**[fact]** Landings wait on the owner until `air land` exists; the coordinator says which
-branches are green and the landing command every time it reports (2026-08-22, the owner was
-not told; removed by `air land`). **[fact]**
+**[fact]** Landing is the coordinator's: `air land --all` merges every green hand-over into
+main, longest wait first, verifies the merged result, and puts main back where it was on red
+(air-3pz). `air status` names what is ready. **[Air enforces: main checkout, on main, clean
+tracked tree, branch contains main, recorded green at the branch head]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
 `--drop "<why>"`. `--validate` refuses without these sections, per type: task/feature `##
@@ -77,9 +78,10 @@ Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/ty
 including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
 labelled `human` is awaiting the owner and `air claim` refuses it to workers. Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
-can open). Landing is the repo's own command until `air land` exists.
+can open).
 
-Not available to the coordinator, by deny rule: `git commit` and `git push` on main.
+Not available to the coordinator, by deny rule: `git commit` and `git push` on main. `air land`
+is the one allowed path onto main, and it pushes nothing.
 **[Air enforces]**
 
 ## When refused

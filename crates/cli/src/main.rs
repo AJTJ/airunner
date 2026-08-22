@@ -138,6 +138,20 @@ enum Cmd {
         #[arg(long)]
         reason: String,
     },
+    /// Coordinator: merge a green hand-over into main, verify the merged result, and rewind
+    /// main if it goes red. The one allowed path onto main; it pushes nothing.
+    ///
+    /// A bead is landable when bd holds it in `awaiting_review` and its worker has a recorded
+    /// green at its branch head (`air inbox --owner` lists them). One merge per branch,
+    /// however many beads that branch carries; `--all` takes the longest wait first and stops
+    /// at the first red. The repo's verify comes from `.claude/air.json` `verify_command`,
+    /// default `make verify`.
+    Land {
+        bead: Vec<String>,
+        /// Land every green hand-over, longest wait first, stopping at the first red.
+        #[arg(long)]
+        all: bool,
+    },
     /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
     Status {
         /// Only the conditions that need a human or the coordinator (empty when quiet).
@@ -232,6 +246,7 @@ fn main() -> ExitCode {
         },
         Cmd::Triage { id, bead, drop } => cmd::capture::triage(&repo, &id, &bead, &drop, cli.json),
         Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
+        Cmd::Land { bead, all } => cmd::land::run(&repo, &bead, all, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),

@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(ROLES_MD, on_disk);
         assert!(ROLES_MD.contains("A hand-over is not a stop."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
-        assert!(ROLES_MD.contains("Landings wait on the owner until `air land` exists"));
+        assert!(ROLES_MD.contains("Landing is the coordinator's: `air land --all`"));
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
     }
