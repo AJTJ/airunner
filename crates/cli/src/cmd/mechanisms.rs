@@ -46,15 +46,13 @@ pub enum Removal {
     /// Recorded as: remove when this stops firing. The audit can check that directly
     /// against the counter.
     ZeroFirings(&'static str),
-    /// Recorded as permanent, with the incident that settled it.
-    Never(&'static str),
 }
 
 impl Removal {
     pub fn text(&self) -> &'static str {
         match self {
             Removal::Unstated => "",
-            Removal::Judgement(t) | Removal::ZeroFirings(t) | Removal::Never(t) => t,
+            Removal::Judgement(t) | Removal::ZeroFirings(t) => t,
         }
     }
 }
@@ -113,7 +111,13 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-e7q)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("review-waiting"),
-        removal: Removal::Unstated,
+        // Recorded by the pass that kept it as a change-only push (air-s7c, owner
+        // 2026-08-22). It is a Judgement rather than a counter: whether a push led to an
+        // action is not something the ledger can see, which is why the "no downstream
+        // action" metric was cut from the audit.
+        removal: Removal::Judgement(
+            "a round shows change-only pushes that led to no owner or coordinator action",
+        ),
     },
     Mechanism {
         id: "idle-without-claim",
@@ -144,7 +148,13 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-21 (plan 0006)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("owner-decision-waiting"),
-        removal: Removal::Unstated,
+        // Recorded by the pass that kept it as a change-only push (air-s7c, owner
+        // 2026-08-22). It is a Judgement rather than a counter: whether a push led to an
+        // action is not something the ledger can see, which is why the "no downstream
+        // action" metric was cut from the audit.
+        removal: Removal::Judgement(
+            "a round shows change-only pushes that led to no owner or coordinator action",
+        ),
     },
     Mechanism {
         id: "stuck",
@@ -156,31 +166,19 @@ pub const MECHANISMS: &[Mechanism] = &[
         removal: Removal::Unstated,
     },
     Mechanism {
-        id: "gone-with-claim",
-        class: "attention",
-        what: "A claim held by a session whose pid is gone.",
-        added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs",
-        fires: Fires::Condition("gone-with-claim"),
-        removal: Removal::Unstated,
-    },
-    Mechanism {
         id: "peer-warning",
         class: "warning",
         what: "Opening a file a peer is also editing warns once per session, naming them.",
         added: "2026-08-18 (plan 0001)",
         source: "crates/cli/src/cmd/hook.rs",
         fires: Fires::Decisions(&[("hook.PreToolUse", "warn")]),
-        removal: Removal::Unstated,
-    },
-    Mechanism {
-        id: "peer-warning-repeat",
-        class: "warning",
-        what: "The same peer warning, re-armed because the set of peers on that path changed.",
-        added: "2026-08-21 (plan 0006)",
-        source: "crates/cli/src/cmd/hook.rs",
-        fires: Fires::Decisions(&[("hook.PreToolUse", "warn-repeat")]),
-        removal: Removal::Unstated,
+        // Recorded by the pass that kept it (air-s7c). The "warns once per session" claim was
+        // checked against the log before this was written, not assumed: 29 firings on
+        // 2026-08-22 over 29 distinct (worker, path, peers), zero repeats, with 102 further
+        // edits suppressed and recorded as `warn-repeat`. The dedupe works.
+        removal: Removal::ZeroFirings(
+            "a round passes with zero peer warnings, meaning file lanes alone keep two workers out of one file",
+        ),
     },
     Mechanism {
         id: "stop-nudge",
@@ -200,10 +198,11 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-20 (decisions: wrap beads, never watch it)",
         source: "crates/cli/src/cmd/claim.rs",
         fires: Fires::Decisions(&[("claim", "refuse")]),
-        // Nothing is recorded anywhere. Every firing on 2026-08-22 was a real collision,
-        // which is an argument for keeping it, but an argument is not a recorded condition
-        // and this table does not write one on anyone's behalf.
-        removal: Removal::Unstated,
+        // Recorded by the do-less pass that kept it (air-s7c, docs/decisions.md 2026-08-22).
+        // Both firings on 2026-08-22 were real collisions between two workers on one bead.
+        removal: Removal::ZeroFirings(
+            "a full round passes with zero claim refusals, meaning lane assignment alone keeps workers off each other's beads",
+        ),
     },
     // The audit is not exempt from its own instrument: it carries a removal condition and
     // shows up as a row like everything else (air-zyo).
@@ -225,8 +224,12 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22",
         source: "docs/rules/roles.md, Coordinator section",
         fires: Fires::Decisions(&[("hook.PermissionDenied", "denied")]),
-        removal: Removal::Never(
-            "send-keys was allowed once and denied 30 min later by the permission classifier, 2026-08-22",
+        // The incident (send-keys allowed once, then denied 30 min later by the permission
+        // classifier, 2026-08-22) used to sit in this field, and the audit read it as
+        // permanent. Nothing here is permanent: a rule never re-examined is the throttle the
+        // do-less rule exists to prevent. Recorded properly by air-s7c.
+        removal: Removal::ZeroFirings(
+            "a round passes with zero denied send-keys attempts, meaning no coordinator reaches for it and SendMessage covers the need",
         ),
     },
 ];

@@ -128,7 +128,7 @@ pub struct Attention {
     /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
-    /// stuck | idle-with-claim | silent-with-claim | gone-with-claim | handover-not-green |
+    /// stuck | idle-with-claim | silent-with-claim | handover-not-green |
     /// owner-decision-waiting | lease-held-by-dead-session | lease-stale | review-waiting |
     /// idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
@@ -137,6 +137,15 @@ pub struct Attention {
     pub kind: &'static str,
     pub detail: String,
     pub for_minutes: i64,
+    /// For a change-only kind: the VALUE this condition is reporting, with age deliberately
+    /// left out. The channel pushes again only when this differs from what it last pushed
+    /// (air-s7c). Empty means the kind escalates on age instead, the older behaviour.
+    ///
+    /// Age is not a change. Keying on "oldest 40 min" then "oldest 50 min" rebuilds the
+    /// repeat under a new name, which is the thing the owner cut: 3 971 review-waiting
+    /// pushes on 2026-08-22 were 13 distinct facts.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 /// The landing command for one bead, with the lead-in a bare condition line needs.
@@ -334,21 +343,11 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        // `gone-with-claim` was deleted on 2026-08-22 (air-s7c): it fired zero times in the
+        // audited window and never in any recorded day since it was added on 2026-08-20. A
+        // mechanism that has never fired has never prevented anything. A dead session holding
+        // a claim now falls through to the ordinary session states below, which do fire.
         match &w.session {
-            Some(sess) if sess.pid_alive == Some(false) && has_claim => {
-                let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
-                out.push(Attention {
-                    worker: w.worker.clone(),
-                    kind: "gone-with-claim",
-                    detail: format!(
-                        "claude pid {} is gone but {} is still claimed; restart `air worker {}` or release",
-                        sess.pid.unwrap_or(0),
-                        beads(),
-                        w.worker
-                    ),
-                    for_minutes: age,
-                });
-            }
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
                 match sess.state.as_str() {
@@ -360,6 +359,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
                         ),
                         for_minutes: age,
+                        fingerprint: String::new(),
                     }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
@@ -369,6 +369,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             beads()
                         ),
                         for_minutes: age,
+                        fingerprint: String::new(),
                     }),
                     "idle"
                         if !has_claim
@@ -384,6 +385,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                                 s.ready_depth.unwrap_or(0)
                             ),
                             for_minutes: age,
+                            fingerprint: String::new(),
                         });
                     }
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
@@ -395,6 +397,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                                 beads()
                             ),
                             for_minutes: age,
+                            fingerprint: String::new(),
                         });
                     }
                     _ => {}
@@ -420,6 +423,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         w.worker
                     ),
                     for_minutes: age,
+                    fingerprint: String::new(),
                 });
             }
             None => {}
@@ -435,6 +439,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         c.bead, c.handover_attempts, since
                     ),
                     for_minutes: minutes_between(since, now).unwrap_or(0),
+                    fingerprint: String::new(),
                 });
             }
         }
@@ -454,6 +459,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 l.resource, l.worker, l.reason, l.resource
             ),
             for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
+            fingerprint: String::new(),
         });
     }
     // A hand-over nobody was told about (air-e7q). Subject is the bead: once per bead.
@@ -473,6 +479,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 land_hint(bead)
             ),
             for_minutes: *mins,
+            // The bead being in the waiting set is the whole fact; who handed it over and
+            // from which head can change without the fact changing, and the age never counts.
+            fingerprint: format!("{bead}/{worker}"),
         });
     }
     if let Some(oldest) = &s.oldest_owner_capture_at {
@@ -485,6 +494,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 minutes_between(oldest, now).unwrap_or(0)
             ),
             for_minutes: minutes_between(oldest, now).unwrap_or(0),
+            // How many are waiting, not how long the oldest has waited.
+            fingerprint: format!("depth:{}", s.owner_queue_depth),
         });
     }
     out
@@ -864,6 +875,12 @@ pub fn record_and_log(
     );
 }
 
+/// The text form of a snapshot with no attention conditions, so `air selftest` can prove the
+/// facts survive their pushes being deleted (air-s7c).
+pub fn render_for_probe(s: &Snapshot) -> String {
+    render(s, &[])
+}
+
 fn render(s: &Snapshot, att: &[Attention]) -> String {
     // First, because it is the only thing here nobody else can clear (air-6p5).
     let mut out = waiting_on_owner(s);
@@ -1225,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_idle_worker_is_not_gone_and_dead_pid_is() {
+    fn fresh_idle_worker_is_quiet_and_a_stale_claim_is_reported() {
         // Claim 1 minute old, no session row yet: launching, not gone.
         let fresh = Snapshot {
             workers: vec![worker(
@@ -1253,16 +1270,29 @@ mod tests {
             ..Default::default()
         };
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
-        // Same row but the pid is gone: gone-with-claim, regardless of age.
+        // Same row with the pid gone: `gone-with-claim` was deleted on 2026-08-22 (air-s7c)
+        // for never having fired in any recorded day, so a dead pid raises nothing on its
+        // own. The row now falls through to the ordinary idle states, which are age-gated,
+        // so a 2-minute-old one is still quiet.
         idle.session.as_mut().unwrap().pid_alive = Some(false);
+        let s = Snapshot {
+            workers: vec![idle.clone()],
+            ..Default::default()
+        };
+        assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+        // ...and once it is old enough, it is reported as an idle worker holding a claim,
+        // which is the condition that does fire.
+        idle.session.as_mut().unwrap().changed_at = T_30.to_string();
         let s = Snapshot {
             workers: vec![idle],
             ..Default::default()
         };
-        let a = attention(&s, NOW, Thresholds::default());
         assert_eq!(
-            a.iter().map(|a| a.kind).collect::<Vec<_>>(),
-            vec!["gone-with-claim"]
+            attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect::<Vec<_>>(),
+            vec!["idle-with-claim"]
         );
     }
 

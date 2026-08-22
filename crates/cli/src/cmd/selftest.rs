@@ -49,6 +49,8 @@ pub fn run(json: bool) -> i32 {
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
+        probe_change_only_push(),
+        probe_review_fact_survives(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -70,6 +72,85 @@ pub fn run(json: bool) -> i32 {
         s
     });
     if all_ok { 0 } else { 1 }
+}
+
+/// air-s7c: `review-waiting` and `owner-decision-waiting` became change-only pushes. Red: the
+/// same set evaluated twice pushes once — the repeat is suppressed, and a merely older
+/// condition is still a repeat. Green: a real change (a bead joins the waiting set, the owner
+/// queue depth moves) pushes again. peer-warning-repeat was deleted for allegedly failing to
+/// suppress, so this proves the suppression suppresses.
+fn probe_change_only_push() -> Probe {
+    use crate::cmd::mcp::{Pushed, select_new};
+    use crate::cmd::status::Attention;
+
+    let review = |bead: &str, mins: i64| Attention {
+        worker: bead.to_string(),
+        kind: "review-waiting",
+        detail: format!("{bead} handed over {mins} min ago"),
+        for_minutes: mins,
+        fingerprint: format!("{bead}/alpha"),
+    };
+    let queue = |depth: usize, mins: i64| Attention {
+        worker: "owner".to_string(),
+        kind: "owner-decision-waiting",
+        detail: format!("{depth} waiting, oldest {mins} min"),
+        for_minutes: mins,
+        fingerprint: format!("depth:{depth}"),
+    };
+
+    let mut pushed = Pushed::new();
+    // First evaluation: both are new, both push.
+    let first = select_new(&mut pushed, &[review("air-1", 5), queue(2, 5)]);
+    // Same facts, much later: age is not a change, so nothing is pushed. Under the old
+    // doubling rule 5 -> 40 min would have re-pushed both.
+    let same_again = select_new(&mut pushed, &[review("air-1", 40), queue(2, 40)]);
+    let red = first.len() == 2 && same_again.is_empty();
+
+    // A bead joins the set, and the queue depth moves: both are real changes.
+    let changed = select_new(
+        &mut pushed,
+        &[review("air-1", 45), review("air-2", 1), queue(3, 45)],
+    );
+    let green = changed.len() == 2
+        && changed.iter().any(|a| a.worker == "air-2")
+        && changed.iter().any(|a| a.worker == "owner")
+        // ...and the unchanged bead did NOT ride along with them.
+        && !changed.iter().any(|a| a.worker == "air-1");
+    Probe {
+        name: "channel: an unchanged set pushes once however old it gets; a changed set pushes again",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-s7c: deleting the review-waiting PUSH must not delete the FACT. `air status` renders
+/// review waits and the owner queue on demand, which is a pull and costs nobody a
+/// notification. Red: a snapshot with waits and a queue says so. Green: an empty one says
+/// zero rather than going silent, so "no waits" and "not reported" stay distinguishable.
+fn probe_review_fact_survives() -> Probe {
+    use crate::cmd::status::{Snapshot, render_for_probe};
+
+    let mut s = Snapshot {
+        at: "2026-08-22T10:00:00Z".to_string(),
+        ..Default::default()
+    };
+    s.review_waits = vec![("air-1".to_string(), "alpha".to_string(), 40)];
+    s.owner_queue_depth = 3;
+    let with = render_for_probe(&s);
+    let red = with.contains("review: 1 waiting")
+        && with.contains("air-1")
+        && with.contains("owner queue: 3");
+
+    let empty = render_for_probe(&Snapshot {
+        at: "2026-08-22T10:00:00Z".to_string(),
+        ..Default::default()
+    });
+    let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
+    Probe {
+        name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// air-zyo: the registry's job is that a mechanism nobody wrote a removal condition for is
@@ -625,6 +706,7 @@ fn probe_channel_dedupe() -> Probe {
         kind: "stuck",
         detail: String::new(),
         for_minutes: m,
+        fingerprint: String::new(),
     };
     let mut p = Pushed::new();
     let first = select_new(&mut p, &[a(5)]).len() == 1;
