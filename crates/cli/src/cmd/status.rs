@@ -290,39 +290,6 @@ pub fn waiting_on_owner(s: &Snapshot) -> String {
 /// that names who handed each over, and that worker's green at HEAD. Derived every time, so
 /// the owner's feed and `air status` cannot disagree (air-6p5). bd absent or slow means no
 /// landings, not an error: `air inbox --owner` still shows the decisions.
-/// Bead ids named in the commit messages of `range`, in first-mentioned order.
-///
-/// Deliberately loose: any `<prefix>-<suffix>` token. bd's own prefix is not read from config,
-/// because a false positive costs nothing — `confirm_beads` drops any id bd does not know, and
-/// bd omits an unknown id from `show` while still exiting 0 (verified air-76z). A missed bead,
-/// by contrast, is a bead nobody reads the acceptance of.
-pub fn bead_ids_in(repo: &Path, range: &str) -> Vec<String> {
-    bead_ids_in_text(&git::run(repo, &["log", "--format=%s%n%b", range]).unwrap_or_default())
-}
-
-/// The pure half, so the rule is probe-able without a git repo.
-pub fn bead_ids_in_text(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for raw in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-        let Some((pre, suf)) = raw.split_once('-') else {
-            continue;
-        };
-        // No length or digit rule beyond this: real ids here include `air-zyo` and `air-ouw`
-        // with no digit at all, and test ids are as short as `fd-1`. Anything narrower drops
-        // real beads, and a false positive costs one more argument to a single `bd show`.
-        let looks_like_id = !pre.is_empty()
-            && pre.len() <= 12
-            && pre.chars().all(|c| c.is_ascii_lowercase())
-            && !suf.is_empty()
-            && suf.len() <= 12
-            && suf.chars().all(|c| c.is_ascii_alphanumeric());
-        if looks_like_id && out.len() < 64 && !out.iter().any(|x| x == raw) {
-            out.push(raw.to_string());
-        }
-    }
-    out
-}
-
 /// Which candidate ids are real beads, from Air's OWN ledger — no bd call.
 ///
 /// **`bd show` does not batch.** Measured 2026-08-22: one id ~1.4 s, two ~2.4 s, seventeen
@@ -403,9 +370,6 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
         if ledger.is_green_at(&worker, &head, Kind::Verify).ok() != Some(true) {
             continue;
         }
-        let range = format!("main..{head}");
-        let ids = bead_ids_in(repo, &range);
-
         // How long this branch has been waiting: its oldest commit since main. Under
         // close-with-proof there is no hand-over moment to measure from, and the branch point
         // is the honest substitute — it is also what keeps the set from growing.
@@ -417,7 +381,15 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
             .unwrap_or_else(|| at.clone());
-        for bead in known_beads(&ledger, &ids, &worker, &since) {
+
+        let range = format!("main..{head}");
+        // A declared bead is taken as it stands; only a guessed one is narrowed by who
+        // claimed it and when (air-4re).
+        let found = super::attribution::attributed_in_range(repo, &range);
+        let mut ids = found.declared;
+        ids.extend(known_beads(&ledger, &found.guessed, &worker, &since));
+
+        for bead in ids {
             v.push(Landing {
                 command: land_command(&bead),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
