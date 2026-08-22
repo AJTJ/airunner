@@ -291,6 +291,9 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             std::fs::write(&path, s).map_err(|e| format!(".gitignore: {e}"))?;
         }
         if !has_beads {
+            // --skip-agents: no AGENTS.md and no `bd prime`; its command reference tells agents
+            // to `bd update --claim` and `bd create`, which Air denies. --skip-hooks: no bd git
+            // hooks; Air's hooks are the ones installed here.
             let bdbin = crate::cmd::claim::bd_for(&dir).bin;
             run_in(
                 &dir,
@@ -301,6 +304,8 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                     &prefix,
                     "--non-interactive",
                     "--init-if-missing",
+                    "--skip-agents",
+                    "--skip-hooks",
                 ],
             )?;
         }
