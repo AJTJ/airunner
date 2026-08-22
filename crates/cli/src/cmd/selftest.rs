@@ -476,27 +476,56 @@ fn probe_worker_task_prompt() -> Probe {
         if !git.status.success() {
             return Err(String::from_utf8_lossy(&git.stderr).to_string());
         }
+        // The stub records its argv in a file rather than on stdout: without a tty (this
+        // probe under `air record verify`, a Bash tool) the launcher starts the stub inside a
+        // detached tmux session (air-tdc), where stdout is the pane. With a tty it execs
+        // the stub directly. Either way the file appears; the socket keeps tmux private.
         let stub = dir.join("claude-stub");
-        std::fs::write(&stub, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").map_err(|e| e.to_string())?;
+        let argv_file = dir.join("argv");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\0' \"$@\" > {}.tmp && mv {}.tmp {}\n",
+                argv_file.display(),
+                argv_file.display(),
+                argv_file.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
         }
+        let socket = format!("air-selftest-{}", new_id());
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let out = Command::new(exe)
             .current_dir(&dir)
             .env("AIR_CLAUDE_BIN", &stub)
+            .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
             .args(["worker", "w", "--task", task])
             .output()
             .map_err(|e| e.to_string())?;
+        let mut raw = None;
+        // Up to 10 s: a fresh executable's first exec can take seconds on macOS.
+        for _ in 0..1000 {
+            if let Ok(b) = std::fs::read(&argv_file) {
+                raw = Some(b);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = Command::new("tmux")
+            .args(["-L", &socket, "kill-server"])
+            .output();
         let _ = std::fs::remove_dir_all(&dir);
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
         }
-        let argv: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        let raw = raw.ok_or_else(|| "stub never ran".to_string())?;
+        let argv: Vec<String> = String::from_utf8_lossy(&raw)
             .split('\0')
             .filter(|s| !s.is_empty())
             .map(str::to_string)
