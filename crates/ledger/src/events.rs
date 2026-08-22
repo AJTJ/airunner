@@ -21,6 +21,13 @@ pub struct Event<'a, T: Serialize> {
     pub reason: &'a str,
     /// e.g. "compared 4 worktrees, 6 pairs" — what the check actually looked at.
     pub denominator: &'a str,
+    /// Milliseconds this command spent inside `bd` processes, and how many it ran. Absent
+    /// when the command never shelled out to bd, so "no bd" and "fast bd" stay distinct
+    /// (air-869: bd costs ~1.4 s per process here, and the cost was invisible).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bd_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bd_calls: Option<u64>,
 }
 
 /// Where today's events file lives: `<air_dir>/events/YYYY-MM-DD.ndjson`.
@@ -70,6 +77,8 @@ mod tests {
             decision: "refuse",
             reason: "no verify at HEAD",
             denominator: "1 run checked",
+            bd_ms: Some(1350),
+            bd_calls: Some(1),
         };
         append(dir.path(), "2026-08-18", &ev).unwrap();
         append(dir.path(), "2026-08-18", &ev).unwrap();
@@ -79,5 +88,15 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(v["decision"], "refuse");
         assert_eq!(v["inputs"]["bead"], "fd-1");
+        assert_eq!(v["bd_ms"], 1350);
+        // A command that never touched bd leaves the fields off entirely.
+        let quiet = Event {
+            bd_ms: None,
+            bd_calls: None,
+            ..ev
+        };
+        append(dir.path(), "2026-08-19", &quiet).unwrap();
+        let text = std::fs::read_to_string(events_path(dir.path(), "2026-08-19")).unwrap();
+        assert!(!text.contains("bd_ms"), "{text}");
     }
 }

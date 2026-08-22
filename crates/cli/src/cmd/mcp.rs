@@ -269,8 +269,18 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_triage",
-            description: "Resolve a capture: promote it to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop).",
-            schema: json!({"type":"object","required":["id"],"properties":{"id":{"type":"string"},"bead":{"type":"string"},"drop":{"type":"string"}}}),
+            description: "Resolve captures: promote each to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop). Give arrays to triage a whole pass in one ledger transaction; bead/drop map positionally to id, and a single drop covers every id.",
+            schema: json!({"type":"object","required":["id"],"properties":{
+                "id":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "drop":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}}}),
+        },
+        Tool {
+            name: "air_close",
+            description: "Coordinator: close landed beads and release their claims. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
+            schema: json!({"type":"object","required":["bead","reason"],"properties":{
+                "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "reason":{"type":"string"}}}),
         },
     ]
 }
@@ -294,6 +304,21 @@ fn resources() -> Vec<Value> {
     .iter()
     .map(|(uri, d)| json!({"uri": uri, "name": uri.trim_start_matches("air://"), "description": d, "mimeType": "application/json"}))
     .collect()
+}
+
+/// One string or an array of them, empty entries dropped: the batch tools take either
+/// (air-869, so a whole landing or triage pass is one call).
+fn list_arg(args: &Value, k: &str) -> Vec<String> {
+    match args.get(k) {
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn str_arg<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
@@ -372,13 +397,33 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
         }
         "air_lease_status" => argv.extend(["lease".into(), "status".into()]),
         "air_triage" => {
-            let id = str_arg(args, "id").ok_or("id is required")?;
-            argv.extend(["triage".into(), id.into()]);
-            match (str_arg(args, "bead"), str_arg(args, "drop")) {
-                (Some(b), None) => argv.extend(["--bead".into(), b.into()]),
-                (None, Some(d)) => argv.extend(["--drop".into(), d.into()]),
-                _ => return Err("give exactly one of bead or drop".into()),
+            let ids = list_arg(args, "id");
+            if ids.is_empty() {
+                return Err("id is required".into());
             }
+            argv.push("triage".into());
+            argv.extend(ids);
+            let beads = list_arg(args, "bead");
+            let drops = list_arg(args, "drop");
+            if beads.is_empty() && drops.is_empty() {
+                return Err("give bead or drop".into());
+            }
+            for b in beads {
+                argv.extend(["--bead".into(), b]);
+            }
+            for d in drops {
+                argv.extend(["--drop".into(), d]);
+            }
+        }
+        "air_close" => {
+            let beads = list_arg(args, "bead");
+            if beads.is_empty() {
+                return Err("bead is required".into());
+            }
+            let reason = str_arg(args, "reason").ok_or("reason is required")?;
+            argv.push("close".into());
+            argv.extend(beads);
+            argv.extend(["--reason".into(), reason.into()]);
         }
         _ => return Err(format!("unknown tool: {name}")),
     }

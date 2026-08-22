@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,36 @@ pub enum BdError {
 }
 
 pub type Result<T> = std::result::Result<T, BdError>;
+
+/// What every `bd` process cost this `air` process (air-869).
+///
+/// Measured 2026-08-22 on this machine, quiet: `bd version` (no database) 205 ms;
+/// `bd ping` (opens the embedded Dolt store) ~660 ms; `bd show <id> --json` ~1350 ms;
+/// `bd list --status closed --json` (10 issues) ~1110 ms, the same as `--status open`
+/// (5 issues). The cost is per *process*, not per issue, and it spikes to 2-4 s when a
+/// peer's `bd` holds `.beads/embeddeddolt/.lock`. So N single-id writes cost N x 1.4 s
+/// and one batched write costs 1.4 s. Air records the number so the claim stays checkable.
+///
+/// `air` is one short-lived process per command, so a process-global accumulator *is* this
+/// invocation's whole bd cost; `log_event` stamps it on the event line without every call
+/// site having to carry it.
+pub mod stats {
+    use super::{AtomicU64, Ordering};
+
+    static MS: AtomicU64 = AtomicU64::new(0);
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+
+    /// Add one finished `bd` process. Timeouts and failures count: the wait was real.
+    pub fn record(ms: u64) {
+        MS.fetch_add(ms, Ordering::Relaxed);
+        CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// (total ms, processes) so far. `(0, 0)` means this process never shelled out to bd.
+    pub fn snapshot() -> (u64, u64) {
+        (MS.load(Ordering::Relaxed), CALLS.load(Ordering::Relaxed))
+    }
+}
 
 /// The subset of a bead Air reads. Unknown fields are ignored so minor bd changes do not
 /// break us; missing fields default.
@@ -62,6 +93,25 @@ pub trait WorkLedger {
     fn claim(&self, id: &str, actor: &str) -> Result<()>;
     fn set_status(&self, id: &str, status: &str) -> Result<()>;
     fn comment(&self, id: &str, text: &str) -> Result<()>;
+    /// `bd close <id> <id> … --reason <r>`: every id in ONE bd process. bd 1.2.2 documents
+    /// `bd close [id...]` with "one --reason for all IDs" (`bd close --help`, read
+    /// 2026-08-22). The per-process cost is the whole cost (see [`stats`]), so closing ten
+    /// beads one at a time cost ten times what this costs (air-869).
+    fn close_all(&self, ids: &[String], reason: &str, actor: &str) -> Result<()>;
+}
+
+/// The argv for a batched close: one process, every id, one reason. Pure so the count of
+/// processes is checkable without running bd (`air selftest`).
+pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
+    let mut v: Vec<String> = vec!["close".to_string()];
+    v.extend(ids.iter().cloned());
+    v.push("--reason".to_string());
+    v.push(reason.to_string());
+    if !actor.is_empty() {
+        v.push("--actor".to_string());
+        v.push(actor.to_string());
+    }
+    v
 }
 
 /// Shell-out implementation.
@@ -82,6 +132,13 @@ impl BdCli {
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
+        let t0 = std::time::Instant::now();
+        let out = self.run_inner(args);
+        stats::record(u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX));
+        out
+    }
+
+    fn run_inner(&self, args: &[&str]) -> Result<String> {
         let child = Command::new(&self.bin)
             .args(args)
             .current_dir(&self.cwd)
@@ -211,6 +268,12 @@ impl WorkLedger for BdCli {
 
     fn comment(&self, id: &str, text: &str) -> Result<()> {
         self.run(&["comment", id, text]).map(|_| ())
+    }
+
+    fn close_all(&self, ids: &[String], reason: &str, actor: &str) -> Result<()> {
+        let argv = close_argv(ids, reason, actor);
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        self.run(&args).map(|_| ())
     }
 }
 
