@@ -64,7 +64,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
 | Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (the single procedure; what Air enforces vs judgement) | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) |
 | Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
-| Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
+| Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `plain-language` (length budgets; shorter wins), `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
 | Rust conventions (errors, lints, MSRV — open decisions) | [`docs/plans/0003-rust-conventions.md`](docs/plans/0003-rust-conventions.md) |
 | Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) · [`docs/rules/writing.md`](docs/rules/writing.md) |
 | Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
