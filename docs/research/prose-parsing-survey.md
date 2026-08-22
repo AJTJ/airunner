@@ -53,6 +53,14 @@ whoever makes the commit — `air claim` already knows the id. **Done in air-4re
 read first, and the prose scan survives only for commits before `FALLBACK_BEFORE`
 (2026-08-23), dated so it can be deleted rather than argued about.
 
+**And the narrowing had to be unwound with it.** The first cut kept air-7kp's authorship filter
+and branch-point bound over *everything*, declared ids included. That is the same mistake one
+level up — a heuristic confirming a fact a machine already wrote — and it bit within the hour:
+merging `main` moves the branch point forward, so a bead claimed before the merge fell outside
+its own bound and this bead's branch reported nothing. Declared and guessed are now kept apart,
+and only the guessed half is narrowed. **Scaffolding for a guess must come down when the guess
+does**, or it silently starts filtering facts.
+
 ## 2. `## Acceptance Criteria` section — `air land`'s report
 
 **Parses** a bead description: a heading line whose text case-insensitively equals "acceptance

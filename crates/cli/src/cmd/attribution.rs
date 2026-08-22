@@ -119,10 +119,39 @@ pub fn parse_log(text: &str) -> Vec<Commit> {
         .collect()
 }
 
-/// The beads named by the commits in `range`, trailers first.
-pub fn beads_in_range(repo: &Path, range: &str) -> Vec<String> {
+/// What a range attributes, split by how much Air trusts it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Attributed {
+    /// Declared by a `Bead:` trailer. Authoritative: a machine wrote it, so nothing further
+    /// is inferred about it.
+    pub declared: Vec<String>,
+    /// Guessed from prose, on commits older than the cutoff only. The caller narrows these.
+    pub guessed: Vec<String>,
+}
+
+/// The beads the commits in `range` attribute, declared and guessed kept apart.
+///
+/// **The split is the point** (air-4re). The narrowing air-7kp put on the prose scan — claimed
+/// by this worker, claimed since the branch point — was scaffolding for a guess. Applying it
+/// to a declared id is the same mistake one level up: a fact a machine wrote does not need a
+/// heuristic to confirm it, and the heuristic is wrong often enough to matter. It dropped this
+/// bead's own attribution the moment the branch merged `main`, because merging moves the
+/// branch point forward past the claim that started the work.
+pub fn attributed_in_range(repo: &Path, range: &str) -> Attributed {
     let text = git::run(repo, &["log", "--format=%cI%x1f%B%x1e", range]).unwrap_or_default();
-    ids_of(&parse_log(&text), prose_ids, cutoff())
+    let commits = parse_log(&text);
+    let cut = cutoff();
+    Attributed {
+        declared: ids_of(&commits, |_| Vec::new(), cut),
+        guessed: ids_of(&commits, prose_ids, cut)
+            .into_iter()
+            .filter(|id| {
+                !ids_of(&commits, |_| Vec::new(), cut)
+                    .iter()
+                    .any(|d| d == id)
+            })
+            .collect(),
+    }
 }
 
 /// The old prose scan, kept only for commits older than [`FALLBACK_BEFORE`].
@@ -198,6 +227,21 @@ mod tests {
             ids_of(&[new], prose_ids, at(CUT)).is_empty(),
             "after the cutoff a commit without a trailer is not attributed at all"
         );
+    }
+
+    /// air-4re: a declared id is not put through the prose scan's narrowing. This bead's own
+    /// branch lost its attribution to exactly that: merging `main` moved the branch point
+    /// past the claim, and the time bound then excluded a bead the commit had declared.
+    #[test]
+    fn a_declared_id_is_kept_apart_from_a_guessed_one() {
+        let declared = c("2026-08-22T10:00:00Z", "feat: x\n\nBead: air-4re\n");
+        let guessed = c("2026-08-22T10:00:00Z", "feat: the work (air-old)\n");
+        assert_eq!(ids_of(&[declared], |_| Vec::new(), at(CUT)), ["air-4re"]);
+        // With no prose reader the guessed commit contributes nothing...
+        assert!(ids_of(&[guessed], |_| Vec::new(), at(CUT)).is_empty());
+        // ...and with one, it contributes its id.
+        let guessed = c("2026-08-22T10:00:00Z", "feat: the work (air-old)\n");
+        assert_eq!(ids_of(&[guessed], prose_ids, at(CUT)), ["air-old"]);
     }
 
     #[test]
