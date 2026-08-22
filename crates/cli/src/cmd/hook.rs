@@ -474,15 +474,9 @@ fn pre_tool_use(
             format!("{moved}; path outside repo"),
         ));
     }
-    // A session may only touch its own project (air-0lk). The peer list costs a `git worktree
-    // list`, so it is built only for the tool that needs it: the hook budget is 100 ms and
-    // every Edit and Bash call comes through here.
-    let peer_list = if input.send_message_to().is_some() {
-        peers(ledger, cwd)
-    } else {
-        Vec::new()
-    };
-    if let Some(d) = project_fence(input, &project_for(cwd), &peer_list) {
+    // A session may act only on its own project (air-0lk); talking to another is fine
+    // (air-3oq).
+    if let Some(d) = project_fence(input, &project_for(cwd)) {
         return Ok(d);
     }
     // Hand-over gate on bd status writes.
@@ -610,19 +604,24 @@ fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, St
         })
 }
 
-/// The two cross-project refusals on the PreToolUse path (air-0lk): a `tmux` command naming
-/// another project's session, and a `SendMessage` to a peer this project's ledger does not
-/// know. `None` when there is nothing to refuse. Both are closed by default and neither
-/// depends on `AIR_ENFORCE`: the failure being prevented is reaching a stranger's fleet, not a
-/// sloppy hand-over. Pure over (input, project, peers) so `air selftest` fires both without a
-/// tmux server or a second repo.
-pub fn project_fence(input: &HookInput, project: &str, peers: &[String]) -> Option<Dispatched> {
+/// The cross-project refusal on the PreToolUse path (air-0lk): a `tmux` command naming another
+/// project's session. `None` when there is nothing to refuse. It does not depend on
+/// `AIR_ENFORCE`: the failure being prevented is acting on a stranger's fleet, not a sloppy
+/// hand-over. Pure over (input, project) so `air selftest` fires it without a tmux server.
+///
+/// `SendMessage` was fenced here too until air-3oq. It is not any more, permanently: the rule
+/// is about acting on another project, not talking to it, and the denial broke the
+/// cross-project channel silently and uninterpretably.
+pub fn project_fence(input: &HookInput, project: &str) -> Option<Dispatched> {
+    // Its own decision string, not the bare "refuse" the hand-over gate uses: `air audit`
+    // counts firings by (command, decision), so sharing one would file every fence refusal
+    // under the gate's row and under the gate's removal condition (air-3oq).
     let refuse = |why: String, inputs: serde_json::Value| {
         Dispatched::new(
             HookOutcome::Block {
                 reason: format!("air: {why}"),
             },
-            "refuse",
+            "refuse-cross-project",
             why,
         )
         .inputs(inputs)
@@ -636,44 +635,7 @@ pub fn project_fence(input: &HookInput, project: &str, peers: &[String]) -> Opti
             serde_json::json!({"command": cmd, "project": project}),
         ));
     }
-    if let Some(to) = input.send_message_to()
-        && let Some(why) = super::project::peer_refusal(to, project, peers)
-    {
-        return Some(refuse(
-            why,
-            serde_json::json!({"to": to, "project": project}),
-        ));
-    }
     None
-}
-
-/// The peer names this project can address, from the ledger and from git: every worker that
-/// has had a session here, plus every worktree, plus the main checkout's directory (the
-/// coordinator's own agent name is built from it). `ListAgents` addresses are `<base>-<id>`,
-/// so these are the bases (air-0lk). Kebab-cased, because an agent name cannot carry `_`.
-fn peers(ledger: &Ledger, cwd: &Path) -> Vec<String> {
-    let mut v: Vec<String> = Vec::new();
-    let mut push = |s: String| {
-        let k = s.replace('_', "-");
-        if !k.is_empty() && !v.contains(&k) {
-            v.push(k);
-        }
-    };
-    if let Ok(mut st) = ledger
-        .conn()
-        .prepare("SELECT DISTINCT worker FROM sessions ORDER BY worker")
-        && let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0))
-    {
-        for w in rows.flatten() {
-            push(w);
-        }
-    }
-    for (path, _) in crate::git::worktrees(cwd).unwrap_or_default() {
-        if let Some(n) = path.file_name() {
-            push(n.to_string_lossy().to_string());
-        }
-    }
-    v
 }
 
 /// This session's project (air-0lk): `AIR_PROJECT` from the launcher, else the beads prefix
