@@ -3,7 +3,11 @@
 Status: decided 2026-08-21 (owner). Ordered. Each item is built against a named pain; the
 first two are named here, the rest wait for round-one data.
 
-## 1. Greenfield setup: `air init` (next)
+## 1. Greenfield setup: `air init` (next; owner 2026-08-21: "a recipe that gives us everything")
+
+The binary cannot bundle `bd` (Go, Homebrew) or `claude`; it gates on them first (present,
+pinned version, `bd list --json` answers) and prints the exact install command when not, then
+does everything else itself. First target after it exists: this repository (§2).
 
 The adopter adoption is a *migration*: existing rules, scripts, worktrees, and a cron to
 retire, and it is the harder case. A new project with nothing in it should be one command.
