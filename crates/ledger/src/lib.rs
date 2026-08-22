@@ -94,6 +94,29 @@ impl Ledger {
 }
 
 impl Ledger {
+    /// Last successful bd answer for `key`: (value, seen_at). `status` falls back to this
+    /// when bd does not answer in time (air-19u).
+    pub fn bd_cache_get(&self, key: &str) -> Result<Option<(String, String)>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value, seen_at FROM bd_cache WHERE key=?1",
+                rusqlite::params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn bd_cache_put(&self, key: &str, value: &str, now: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO bd_cache (key, value, seen_at) VALUES (?1,?2,?3) \
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value, seen_at=excluded.seen_at",
+            rusqlite::params![key, value, now],
+        )?;
+        Ok(())
+    }
+
     /// Record the set of conditions holding now: opens rows for new (worker, kind), touches
     /// `last_seen` on existing ones, and clears rows whose condition is gone. Pure bookkeeping;
     /// the caller evaluated the conditions. Returns (opened, cleared).
