@@ -25,6 +25,25 @@ it is the first proof below.
 condition on them and roles.md carries no two-units-then-stop rule. A cap condition was built
 and removed the same day; do not reintroduce it.
 
+## 0c. Lessons from the first round (adopter, 2026-08-21), one line each
+
+- Cheap checks first: doc rules moved ahead of cargo in `make verify` cut a red from ~10 min to
+  4 s. A gate that reports ten minutes after the edit is a throttle; at the edit it is a fact.
+- Write the digest and commit it with the work; run `air record verify` last. Otherwise the
+  digest commit moves HEAD past the green and every hand-over costs two verifies.
+- Deny the verb, not the tool (`Bash(eas build *)`, not `Bash(eas *)`), and match command
+  tokens, never substrings: a prose guard denied an edit because a note contained the word.
+- Do not set `assignee` on an open bead: in bd 1.2.x it blocks every other worker's claim.
+- One label for "awaiting the owner": `human`. `air claim` refuses it to workers. Drop `owner`.
+- Workers request beads (including friction beads) with `air capture`; they never `bd create`.
+  The round's captures deduplicated 11 → 5 beads.
+- Cut beads so no shared doc is touched by two at once; that was the only real overlap shape.
+- Three workers plus a coordinator plus verify on one machine saturates it (load 22-25); bd
+  writes time out. Size the fleet to the machine.
+- Read before decomposing: three epics were already done on main.
+- A label can be a schema when a fitness check parses it; check the documented set first.
+- Closed is closed: never reopen a bead; unfinished work is a new bead referencing the old.
+
 ## 0a. Flakiness becomes load-bearing
 
 **[adopter, 2026-08-21, ad-jklh]** Once a machine gates on "green at HEAD", a flaky test is no
