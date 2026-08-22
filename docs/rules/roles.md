@@ -95,9 +95,11 @@ zero denied send-keys attempts). **[fact]**
 When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
 reports conditions, status reports everything (standstill 2026-08-22; removed when the
 `review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
-**[fact]** Landing is the coordinator's: `air land --all` merges every green hand-over into
-main, longest wait first, verifies the merged result, and puts main back where it was on red
-(air-3pz). `air status` names what is ready. **[Air enforces: main checkout, on main, clean
+**[fact]** Landing is the coordinator's: `air land --all` merges every green branch into main,
+oldest first, verifies the merged result, and puts main back where it was on red (air-3pz). A
+branch is landable when it carries a recorded green at its head; the beads reported are the
+ones its merge range names in its commit messages, confirmed against bd — no bead status is
+consulted (air-7kp). `air status` names what is ready. **[Air enforces: main checkout, on main, clean
 tracked tree, branch contains main, recorded green at the branch head]**
 Merging is not closing, and `air land` closes nothing: the worker closes its own bead with
 proof (owner, 2026-08-22). The landing prints every bead beside its acceptance criteria and
