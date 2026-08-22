@@ -40,6 +40,7 @@ pub fn run(json: bool) -> i32 {
         probe_install_merge(),
         probe_gate_digest(),
         probe_lease_take(),
+        probe_worker_task_prompt(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -347,6 +348,64 @@ fn probe_git_ancestor() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "git: is-ancestor exit codes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-2ct: the `--task` text must reach claude as the prompt, not as a trailing value of
+/// the variadic `--disallowed-tools` list. Red: the old ordering (task appended after the
+/// deny list) is reported as eaten. Green: `air worker --task` launched against a stub
+/// `claude` (`AIR_CLAUDE_BIN`) hands the stub the task as its first argument.
+fn probe_worker_task_prompt() -> Probe {
+    use crate::cmd::launch::{task_is_prompt, worker_argv};
+    let task = "say hello, it's $HOME";
+    let mut old = worker_argv("w", std::path::Path::new("/r/roles.md"), &[]);
+    old.push(task.to_string());
+    let red = !task_is_prompt(&old, task);
+
+    let green = (|| -> Result<bool, String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let git = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !git.status.success() {
+            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        }
+        let stub = dir.join("claude-stub");
+        std::fs::write(&stub, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let out = Command::new(exe)
+            .current_dir(&dir)
+            .env("AIR_CLAUDE_BIN", &stub)
+            .env_remove("AIR_TMUX_MODE")
+            .args(["worker", "w", "--task", task])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&dir);
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).to_string());
+        }
+        let argv: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(argv.first().is_some_and(|a| a == task) && task_is_prompt(&argv, task))
+    })()
+    .unwrap_or(false);
+    Probe {
+        name: "launch: --task reaches claude as the prompt",
         red_fires: red,
         green_passes: green,
     }
