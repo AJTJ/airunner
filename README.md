@@ -1,160 +1,98 @@
 # Air
 
-A hub and referee for a few Claude Code agents working in git worktrees on one repository,
-coordinated by [beads](https://github.com/steveyegge/beads). One Rust binary, `air`. It keeps
-the loop you already run (claim, worktree, work, verify, review, land) and removes the parts that
-cost turns: facts relayed through chat, "green" that drifts from the commit it was measured on,
-and not knowing who is in which file.
+Air is a small tool for running a few AI coding agents on one repository at the same time
+without them tripping over each other or over you. One Rust binary, `air`. It sits beside
+[beads](https://github.com/steveyegge/beads) (the issue tracker) and Claude Code (the agents),
+and it keeps the *facts* that a fleet otherwise carries in chat and in people's heads.
 
-Air does not run agents, does not replace beads, and does not take the human out of the loop.
-Every agent session is a terminal you can watch and type into.
+## The ethos, in five lines
 
-## What Air offers
+1. **Do less.** The point is to let capable models work, not to tell them how. Every rule Air
+   holds must name a real failure it prevents and the condition under which it is removed.
+   Guardrails that nobody re-examines become the throttles a better model does not need.
+2. **Facts, not procedures.** Air supplies what an agent cannot know on its own (who is in
+   this file, whether this commit verified green, who holds the port). It does not supply
+   judgement (what to work on, how to split it, when to ask).
+3. **One refusal.** Air refuses exactly one thing: handing work over without evidence that it
+   verified green at the commit being handed over. Everything else is a fact or a count.
+4. **A human is always in the loop.** Every agent is a terminal you can watch and type into.
+   Air launches interactive sessions; it never runs anything headless.
+5. **Your project comes first.** Air exists so your projects get built. Building Air is
+   secondary, and rounds of real work are where its features are earned or removed.
 
-**Records** (in `<repo>/.air/`, shared by every worktree, gitignored)
+## What Air does
 
-- `air record verify -- <cmd>`: "commit X passed check Y at time T". The fact the hand-over gate
-  checks; never model text.
-- An edit journal filled by hooks at zero token cost: who is touching which file.
-- `air claim <bead>` / `air release <bead> --reason <r>`: the claim history beads does not keep
-  (when, declared files, hand-over attempts, why it was given back). Wraps `bd update --claim`;
-  beads stays the atomic source of truth.
-- `air capture "<text>"`: one line into an inbox that is not `ready`. Workers capture; they
-  never file beads.
-- An append-only event log (`.air/events/YYYY-MM-DD.ndjson`): every question Air was asked,
-  its answer, its reason, and what it looked at. Nothing is overwritten.
-
-**Answers**
-
-- `air status`: every worker's session state, HEAD, green-at-HEAD, open claims with hand-over
-  attempts, files held, file overlaps between workers, inbox depth.
-- `air status --attention`: only what needs a human or the coordinator right now: a worker
-  stuck on a permission prompt, idle or silent while holding a claim, gone with a claim, handing
-  over without green, captures waiting. Thresholds via `AIR_ATTENTION_*_MIN`.
-- `air holdings [--file X]`: who has edits in which files across worktrees.
-- `air handover`: is this worktree ready to hand over, and if not, exactly which command fixes it.
-
-**Refuses one thing**
-
-- Setting a bead to `awaiting_review` or closing it without a recorded green verify at HEAD
-  that contains current `main`. Advisory for the first round (prints what it would refuse);
-  `AIR_ENFORCE=1` makes it real. It never blocks a prompt, a WIP commit, or a merge.
-
-**Informs the coordinator instead of waking it**
-
-- `air mcp` is one MCP server that is both a Claude Code *channel* and a tool surface. It
-  re-evaluates the attention conditions from the ledger every 30 s and pushes new or escalated
-  ones into the coordinator's session. No cron, no polling by the agent. The same surface is
-  available as tools (`air_status`, `air_claim`, `air_capture`, …) and resources
-  (`@air://status`, `@air://inbox`).
-
-**Launches sessions with their role applied**
-
-- `air worker <name> [--tmux --task "<task>"]`: `claude --worktree <name>` with the roles document appended to the
-  system prompt, optionally in a tmux pane you can attach to (so the coordinator can launch
-  workers itself and hand each a complete task), a deny list that holds in every permission mode (`air land`, `git push`,
-  `bd create`, `bd sync`, raw `bd update --claim`, nested `claude`, leaving the worktree), and
-  `AIR_ROLE` / `BEADS_ACTOR` set by flag instead of by files that drift.
-- `air coordinator`: `claude` in the main checkout with the Air channel attached and commits
-  and pushes denied (the coordinator steers; it does not do worker work on main).
-
-## What a target repository needs
-
-Verified 2026-08-20 against adopter (the first target) and Claude Code 2.1.238.
-
-| Needs | Why |
+| | |
 |---|---|
-| A git repository using linked worktrees (`git worktree add`, or `claude --worktree`) | Role is the checkout: main is the coordinator, each worktree a worker. The ledger lives at the main checkout and is found via `git rev-parse --git-common-dir`. |
-| [beads](https://github.com/steveyegge/beads) initialised (`.beads/`), bd 1.2.x on PATH | Air wraps `bd update --claim`, `bd update -s open`, and reads `bd --json`. Pin 1.2.2. |
-| A verify command that exits non-zero on red (`make verify`, `cargo test`, …) | `air record verify -- <cmd>` records its exit against HEAD. The gate needs this fact. |
-| Claude Code ≥ 2.1.211 | Per-worktree `settings.local.json` moved to the main checkout in 2.1.211, which is why Air sets role and env by launch flag. `--append-system-prompt-file`, `--disallowed-tools`, `--settings`, `--worktree`, and the channel flags parse on 2.1.238. |
-| `.air/` in `.gitignore` | The ledger and event log are local state. `air install` advises if missing. |
+| **Records** | verify results against the exact commit (`air record verify -- <cmd>`), who is editing which file (hooks, zero tokens), claims and their history (`air claim`, `air release`), leases on things two agents cannot share (`air lease`), captures from workers (`air capture`), every decision it made with its reason (`.air/events/*.ndjson`). |
+| **Answers** | `air status` (every worker: session, claim, green at HEAD, files, leases, review waits, queue depth), `air holdings` (who is in which file), `air handover` (what is missing and the command that fixes it). |
+| **Refuses** | moving a bead to review or closing it without a recorded green at HEAD that contains `main` (advisory for a first round; `AIR_ENFORCE=1` makes it real). Also: workers claiming a `human` bead, reopening a closed bead. |
+| **Informs** | the coordinator session, through a Claude Code channel, only when a condition holds: a worker stuck on a prompt, idle or gone with a claim, a hand-over not green, a lease held by a dead session, a decision waiting for the owner, a session joining or leaving. Silence means all is well. |
+| **Launches** | `air coordinator` (main checkout, channel attached) and `air worker <name> [--tmux --task "..."]` (a worktree, the roles text, a deny list that holds in every permission mode, actor and role set by flag instead of files that drift). |
+| **Sets up** | `air init` on a new or existing repo: checks `bd` and `claude` are present, then git, beads, `.gitignore`, `.claude/air.json` with deny patterns scanned from your publish targets, hooks, the MCP server, roles, and the coordinator's skills. |
 
-Nothing in the target repo's build or tooling depends on this repository. Install the binary;
-the repo only ever sees `air` on PATH.
+## What is Air's, and what is your project's
 
-## New project: one command
+This is the line that matters. Air owns the **loop**; your project owns the **craft**.
+
+| Your project decides | Air provides |
+|---|---|
+| What "verify" runs (`make verify`, `cargo test`, …) and whether it is complete | That the result is recorded against the commit, how long it took, whether it was suspicious, flaky, or run on a dirty tree |
+| Domain rules, code conventions, architecture, what to build next | Nothing. Those live in your `CLAUDE.md`; Air's roles text never mentions your domain |
+| Which commands publish, deploy, or destroy | The deny list is applied at launch, in every permission mode, from patterns you put in `.claude/air.json` (`air init` proposes them) |
+| What a bead must contain (acceptance, estimate, files named) and who triages captures | `air capture` → `air inbox` → `air triage`; beads' own `--validate` refuses a bead without acceptance |
+| Which beads need the owner | The `human` label; Air refuses it to workers and pushes `owner-decision-waiting` |
+| How to cut work so two agents do not touch one file | `air holdings` and a once-per-session warning when a peer is in the file you open |
+| Whether a digest is required at hand-over, and what it says | The check that one exists newer than the claim, if you configure `digest_dir` |
+| Fleet size, who works on what, when a round starts and stops | `air status`, the channel, and the launchers; no scheduler, no queues, no caps |
+| Which resources are exclusive (a port, the simulator, the browser) and what they are called | `air lease take <name>`; a dead holder is detected from the process, not a timer |
+| Landing to `main`, with your own gates | Your `make land` (or equivalent) until `air land` exists; Air records the green it needs |
+
+**What Air is not useful for:** choosing work, planning features, reviewing code, writing
+acceptance criteria, enforcing code style, or replacing beads. It will not make one agent
+smarter. It makes three agents and one person cost fewer messages and fewer false greens.
+
+## Quick start
 
 ```bash
-cargo install --path crates/cli        # once
-cd ~/projects/<new-or-existing-repo>
-air init --prefix <p>                  # dry run: gate (bd, claude), then what it will create
-air init --prefix <p> --write          # git init, bd init, .gitignore, .claude/air.json (deny
-                                       # patterns scanned from the repo), hooks, .mcp.json,
-                                       # roles, skills, CLAUDE.md stub, next steps
+cargo install --path crates/cli            # `air` on PATH must be this binary
+cd ~/projects/<repo>
+air init --prefix <p>                      # dry run: the gate and what it will create
+air init --prefix <p> --write              # everything; never overwrites a file you own
+air record verify -- <your verify command> # the first proof
+air coordinator                            # your terminal, channel attached
+air worker <name> --tmux --task "<a complete task>"   # or plain `air worker <name>`
 ```
 
 `air init` cannot install `bd` or `claude`; it checks both first and prints the install command
-when one is missing. It never overwrites a file you own (`CLAUDE.md`, `.claude/air.json`).
+if one is missing. Existing repos: it skips what is already there. For the migration path
+(retiring an existing hand-rolled process) see `docs/rules/adopting-air.md`.
 
-## Onboarding an existing repository (the migration path)
+## Day to day
 
-```bash
-# 1. Install the binary so the `air` on PATH is this build.
-cargo install --path crates/cli
-air selftest                      # 10 red/green probes; every check proves it fires
+**Worker:** `bd ready --type task` → `air claim <id> --files a,b` → work, small commits →
+write the digest and commit it → `git merge main` → `air record verify -- <cmd>` →
+`air handover` → `bd update <id> -s awaiting_review` → next. Found something outside the bead?
+`air capture "<one line>"`. Blocked? `air capture --for owner "<question>"` or
+`air release <id> --reason <why>`.
 
-# 2. In the target repo's main checkout: see what install would change, then apply it.
-cd ~/projects/<repo>
-air install                       # dry run: prints the merged .claude/settings.json and .mcp.json
-air install --write               # refuses if `air` on PATH is not this binary
+**Coordinator:** `air status`; act on channel events; `air inbox` → `bd create --validate
+--estimate <min>` → `air triage <id> --bead <new>`; keep the ready list full of claimable
+tasks; launch workers; land with your own command.
 
-# 3. Record verify runs. Either change the habit or the Makefile target:
-air record verify -- make verify
+**You:** `air status --attention` in any terminal; `jq` over `.air/events/*.ndjson` after a
+round; `air inbox --owner` for the decisions waiting on you.
 
-# 4. Start the sessions, one per terminal.
-air coordinator                   # main checkout; channel attached
-air worker frontend               # creates or reuses the worktree; interactive
-air worker backend
-```
+## Status and scope
 
-What `air install --write` touches, and only that:
-
-- `.claude/settings.json`: adds `air hook` entries for `SessionStart`, `PreToolUse`,
-  `PostToolUse`, `PermissionRequest`, `Stop`, `SubagentStop`, `SessionEnd` (5 s timeout).
-  Existing entries are preserved; re-running changes nothing.
-- `.mcp.json`: adds the `air` server (`air mcp`). Existing servers are preserved.
-- `.air/roles.md`: the roles document the launchers append to the system prompt.
-- `.claude/skills/air-decomposition/`, `.claude/skills/air-phase-transitions/`: the
-  coordinator's procedures, loaded on demand.
-
-Beads side: always create beads with `bd create --validate --estimate <minutes>`. bd refuses a
-task, feature, or bug whose description lacks an `## Acceptance Criteria` heading (compiled
-in; `bd lint --help`). The coordinator then links the capture: `air triage <id> --bead <new>`.
-
-For the full integration package (rules to change in the repo, what Air replaces, how the
-integration stays current) see `docs/rules/adopting-air.md`.
-
-## Day to day, by role
-
-**Worker** (in a worktree): `bd ready` → `air claim <bead> --files a,b` → work, commit small →
-`git merge main` → `air record verify -- <cmd>` → `air handover` → `bd update <bead> -s
-awaiting_review`. Anything discovered outside the bead: `air capture "<one line>"`. Giving up:
-`air release <bead> --reason abandoned|false-premise|…`.
-
-**Coordinator** (main checkout): reads `air status`; gets attention conditions pushed by the
-channel; triages with `air inbox` then `bd create --validate --estimate N` and `air triage <id>
---bead <new>` (or `--drop "<why>"`); builds each worker's queue with beads fields only
-(`assignee`, priority, `blocks` edges); lands (landing command is the repo's own until `air
-land` is built).
-
-**You**: any terminal, `air status --attention`, `air holdings`, `jq` over
-`.air/events/*.ndjson`.
-
-## What Air never does
-
-Sends messages between agents (that stays `SendMessage`), writes to beads except through the
-`bd` commands above, runs anything headless, pushes, decides what to work on, or expires a
-record on a timer. Everything it refuses names the rule and the fixing command.
+Built and running on two repositories (the author's fleet project and Air itself). First
+external use is planned; open-sourcing after that. The record of every decision, with the
+incident behind it, is `docs/decisions.md`; what was learned from the first real round is
+`docs/notes/rounds/`. Roadmap: `docs/plans/0005-roadmap.md`.
 
 ## Repository map
 
-`crates/ledger` (SQLite + events), `crates/hooks` (hook I/O, the pure gate, journal),
-`crates/bd` (the beads boundary), `crates/cli` (`air`). `docs/decisions.md` holds every owner
-decision, dated; `docs/plans/0001` and `0004` say what was built and why; `docs/rules/roles.md`
-is what agents read; `docs/research/` is the evidence, every claim with a source.
-
-## Uninstall
-
-Remove the `air hook` entries from `.claude/settings.json` and the `air` server from
-`.mcp.json`; delete `.air/`. Beads state is untouched.
+`crates/ledger` (SQLite + events), `crates/hooks` (hook I/O, the gate), `crates/bd` (the
+beads boundary), `crates/cli` (`air`). `docs/rules/roles.md` is what agents read;
+`docs/rules/adopting-air.md` is the integration guide; `docs/research/` is the evidence, every
+claim with a source.
