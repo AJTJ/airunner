@@ -1,5 +1,6 @@
 //! Subcommands. Each returns a process exit code (0 ok, 1 error, 2 refused).
 
+pub mod audit;
 pub mod bd_latency;
 pub mod capture;
 pub mod claim;
@@ -14,6 +15,7 @@ pub mod land;
 pub mod launch;
 pub mod lease;
 pub mod mcp;
+pub mod mechanisms;
 pub mod ready_cache;
 pub mod record;
 pub mod selftest;

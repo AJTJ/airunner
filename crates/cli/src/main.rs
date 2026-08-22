@@ -206,6 +206,14 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
+    /// What the ledger says about every mechanism Air ships: how often each fired, how often
+    /// with nothing following, when it last fired, and the removal condition recorded next to
+    /// it. Facts only; the pass over them is the coordinator's. Read-only.
+    Audit {
+        /// Inclusive YYYY-MM-DD to count from (default: today).
+        #[arg(long)]
+        since: Option<String>,
+    },
     /// Ledger location, sizes, row counts, and the pragmas in effect.
     Doctor,
     /// Red/green probes for every check (a check that matches nothing prints red).
@@ -260,6 +268,7 @@ fn main() -> ExitCode {
         } => cmd::launch::worker(&repo, name.as_deref(), &extra, tmux, task.as_deref(), print),
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
+        Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),
     };
