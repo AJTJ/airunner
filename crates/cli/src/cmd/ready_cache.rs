@@ -1,13 +1,21 @@
 //! The `bd ready` list, cached at `<main>/.air/ready.json` by the commands that already call
-//! bd (`air status`, `air handover`), so the Stop hook can name ready beads without a bd call:
-//! `bd ready --json` measured 1.1 s here (2026-08-22), the hook budget is 100 ms (air-09i).
+//! bd (`air status`, `air handover`). `bd ready --json` is ~0.7 s here and the hook budget is
+//! 100 ms (air-09i), so the Stop hook uses this to decide whether there is anything worth
+//! speaking about at all.
+//!
+//! It is the GATE, never the answer (air-ouw). Anything derived from it goes stale the moment
+//! the claimable set moves, and the set moves constantly: a peer claims a bead, a bead is
+//! labelled `owner`, a bead lands. Twice on 2026-08-22 the nudge named beads from this file
+//! that `air claim` then refused — once an `owner`-labelled bead, once a bead another worker
+//! already held. Both were the same defect. `confirm` below is what the nudge actually names.
+//!
+//! There is deliberately no freshness window any more: it existed only to caveat a list that
+//! might be wrong, and a caveat is not a decision. A window would not have caught either case,
+//! since a cache written seconds ago is already wrong once a peer claims.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-
-/// Older than this and the hook says "ready list may be stale".
-pub const FRESH_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadyCache {
@@ -38,17 +46,6 @@ pub fn read(repo: &Path) -> Option<ReadyCache> {
     serde_json::from_str(&s).ok()
 }
 
-/// Pure: is a cache written at `at` still fresh at `now` (RFC 3339 both)?
-pub fn is_fresh(at: &str, now: &str) -> bool {
-    let (Ok(a), Ok(n)) = (
-        at.parse::<jiff::Timestamp>(),
-        now.parse::<jiff::Timestamp>(),
-    ) else {
-        return false;
-    };
-    n.duration_since(a).as_secs() <= FRESH_SECS
-}
-
 /// Which of bd's ready beads a worker may actually claim: everything except the ones
 /// awaiting the owner's authority. The ONE place that rule is written (air-5hw) — `air
 /// status` and this module both call it, so the label cannot mean one thing to the ready
@@ -62,6 +59,29 @@ pub fn claimable(ready: &[air_bd::Issue]) -> Vec<String> {
         .collect()
 }
 
+/// The claimable list as bd has it *now*, for the one caller that must not be wrong: the Stop
+/// nudge (air-ouw). Returns `None` when bd does not answer inside the budget, and the nudge
+/// then says nothing rather than naming a list it cannot vouch for.
+///
+/// This is the only bd call on a hook path, and it is deliberate. The general rule stands —
+/// `bd ready --json` is ~0.7 s against a 100 ms hook budget — but this runs only at the moment
+/// the nudge would otherwise speak from cache: 4 of 172 Stop hooks on 2026-08-22. The cache
+/// above still absorbs the other 168.
+///
+/// `AIR_NUDGE_BD_TIMEOUT_MS` (default 3000) bounds it; the hook's own timeout is 5 s and it
+/// fails open, so a slow bd costs a missed nudge, never a blocked worker.
+pub fn confirm(repo: &Path) -> Option<Vec<String>> {
+    let mut bd = crate::cmd::claim::bd_for(repo);
+    let ms = std::env::var("AIR_NUDGE_BD_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3000);
+    bd.timeout = std::time::Duration::from_millis(ms);
+    let ids = claimable(&air_bd::WorkLedger::ready(&bd).ok()?);
+    write(repo, &ids, &crate::cmd::now());
+    Some(ids)
+}
+
 /// Refresh the cache from bd; swallow errors (callers report bd failures themselves).
 pub fn refresh(repo: &Path, bd: &air_bd::BdCli, now: &str) -> Option<Vec<String>> {
     let ids = claimable(&air_bd::WorkLedger::ready(bd).ok()?);
@@ -72,13 +92,6 @@ pub fn refresh(repo: &Path, bd: &air_bd::BdCli, now: &str) -> Option<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn freshness_window() {
-        assert!(is_fresh("2026-08-22T05:00:00Z", "2026-08-22T05:04:59Z"));
-        assert!(!is_fresh("2026-08-22T05:00:00Z", "2026-08-22T05:05:01Z"));
-        assert!(!is_fresh("garbage", "2026-08-22T05:05:01Z"));
-    }
 
     /// air-5hw: `owner` is the gate, `human` is presence and gates nothing.
     #[test]
