@@ -6,6 +6,7 @@ pub mod doctor;
 pub mod handover;
 pub mod holdings;
 pub mod hook;
+pub mod init;
 pub mod install;
 pub mod launch;
 pub mod lease;

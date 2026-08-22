@@ -73,7 +73,21 @@ Verified 2026-08-20 against adopter (the first target) and Claude Code 2.1.238.
 Nothing in the target repo's build or tooling depends on this repository. Install the binary;
 the repo only ever sees `air` on PATH.
 
-## Onboarding a repository
+## New project: one command
+
+```bash
+cargo install --path crates/cli        # once
+cd ~/projects/<new-or-existing-repo>
+air init --prefix <p>                  # dry run: gate (bd, claude), then what it will create
+air init --prefix <p> --write          # git init, bd init, .gitignore, .claude/air.json (deny
+                                       # patterns scanned from the repo), hooks, .mcp.json,
+                                       # roles, skills, CLAUDE.md stub, next steps
+```
+
+`air init` cannot install `bd` or `claude`; it checks both first and prints the install command
+when one is missing. It never overwrites a file you own (`CLAUDE.md`, `.claude/air.json`).
+
+## Onboarding an existing repository (the migration path)
 
 ```bash
 # 1. Install the binary so the `air` on PATH is this build.

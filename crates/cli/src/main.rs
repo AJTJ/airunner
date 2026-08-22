@@ -132,6 +132,15 @@ enum Cmd {
     },
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
+    /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
+    /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills. Dry run by default.
+    Init {
+        /// Beads issue prefix (default: from the directory name).
+        #[arg(long)]
+        prefix: Option<String>,
+        #[arg(long)]
+        write: bool,
+    },
     /// Wire Air into this repo's Claude Code config (hooks, MCP server, .air/). Dry run by default.
     Install {
         /// Apply the changes (refuses if `air` on PATH is not this binary).
@@ -206,6 +215,7 @@ fn main() -> ExitCode {
         }
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
+        Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
         Cmd::Install { write } => cmd::install::run(&repo, write, cli.json),
         Cmd::Worker {
             name,
