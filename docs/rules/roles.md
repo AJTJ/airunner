@@ -35,8 +35,9 @@ Things that need a shared resource (a port, the simulator, Docker, the browser):
 `air lease take <resource> --reason "<why>"`; release when done. A held lease names its holder;
 do not route around it. **[Air enforces: a healthy holder is not broken by `take`]**
 
-Not available to a worker, by deny rule in every permission mode: `air land`, `git push`,
-`bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the worktree. Editing
+Not available to a worker, by deny rule in every permission mode: `air land`, `air close`,
+`git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
+worktree. Editing
 the main checkout is blocked natively. **[Air enforces]** Setting `awaiting_review` or closing
 without a recorded green at HEAD that contains `main` is the one refusal: worker launches set
 `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fix (`air record verify -- make
@@ -75,7 +76,8 @@ Acceptance Criteria`; bug `## Steps to Reproduce` + `## Acceptance Criteria`; ep
 Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/types.go`
 `RequiredSections`, main, read 2026-08-22; air-8zz). **[fact]** Workers request beads this way,
 including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
-labelled `human` is awaiting the owner and `air claim` refuses it to workers. Launch workers
+labelled `owner` is awaiting the owner and `air claim` refuses it to workers (the gate is
+`owner`, not `human`: `human` is presence, `owner` is authority; owner, 2026-08-22). Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open). Landing is the repo's own command until `air land` exists.
 
