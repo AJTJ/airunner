@@ -190,8 +190,9 @@ also forbids Claude memory; `CLAUDE.md` Rules).
 
 ## Known traps (bd 1.2.1)
 
-Ported from adopter's field notes (`~/projects/adopter/CLAUDE.md:785-949`,
-"Beads Issue Tracker" rules; each item cites the line range it came from). Every one was
+Ported from adopter's field notes (its `CLAUDE.md:785-949` at `f2ca891`, "Beads Issue
+Tracker" rules; each item cites the line range it came from). That file is **not** copied into
+this repo, so those line numbers do not resolve here. Every one was
 measured on a live fleet.
 
 - **`--notes` and `--description` OVERWRITE; they do not append.** Use `bd comment <id> "..."`
@@ -274,8 +275,8 @@ measured on a live fleet.
   another-project) with the env-clearing recipe from
   `~/projects/another-project/justfile:14` and
   `~/projects/another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
-  `~/projects/adopter/CLAUDE.md:785-949` "Beads Issue Tracker" rules (adopter
-  `f2ca891`) for the Known traps section; version-trap facts from
+  adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (adopter `f2ca891`, not copied
+  into this repo) for the Known traps section; version-trap facts from
   `docs/research/beads-and-gastown.md §0, §1.7, §1.8`. Read for context, not copied:
   `~/projects/beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
   `~/projects/beads/docs/integrations/claude-code.md`.

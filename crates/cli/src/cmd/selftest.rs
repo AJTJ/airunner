@@ -44,6 +44,7 @@ pub fn run(json: bool) -> i32 {
         probe_launch_no_tty(),
         probe_worker_task_prompt(),
         probe_stop_nudge(),
+        probe_nudge_names_only_claimable(),
         probe_standstill(),
         probe_enforced_gate(),
         probe_batch_close(),
@@ -1097,15 +1098,64 @@ fn probe_worker_task_prompt() -> Probe {
 /// gate fires on those facts (ready beads, no claim, fresh stop). Green: the block names the
 /// beads, then passes once `stop_hook_active` is set (the loop guard) and never for the
 /// coordinator.
+/// air-ouw: the nudge must never name a bead `air claim` would refuse. Both recorded triggers
+/// invalidate a cached list, and neither is a label problem in general:
+/// an `owner`-labelled bead (2026-08-22, the migration) and a bead a PEER already claimed
+/// (2026-08-22 19:07, the nudge offered alpha the bead beta was holding). `claimable` applied
+/// to a LIVE `bd ready` answers both, because bd's ready set is open-and-unblocked, so a
+/// claimed bead is already absent and only the label needs filtering. Validating a cached list
+/// against labels would have caught the first and missed the second.
+///
+/// Red: the cache still holds both, which is the behaviour this bead reports. Green: what the
+/// nudge actually names, `claimable(live)`, holds neither.
+fn probe_nudge_names_only_claimable() -> Probe {
+    use crate::cmd::ready_cache::claimable;
+    use air_hooks::stop_nudge;
+
+    let issue = |id: &str, status: &str, labels: &[&str]| air_bd::Issue {
+        id: id.to_string(),
+        status: status.to_string(),
+        labels: labels.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    // What the cache was written from, before anything moved.
+    let cached: Vec<String> = ["ad-free", "ad-owner", "ad-taken"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    // Red: nudging from the cache offers all three, including the two that moved.
+    let red = stop_nudge("worker", false, &cached, false)
+        .is_some_and(|m| m.contains("ad-owner") && m.contains("ad-taken"));
+
+    // Live bd: the peer's claim left `bd ready` entirely; the owner label did not.
+    let live = [
+        issue("ad-free", "open", &[]),
+        issue("ad-owner", "open", &["owner"]),
+    ];
+    let confirmed = claimable(&live);
+    let green = confirmed == ["ad-free"]
+        && stop_nudge("worker", false, &confirmed, false).is_some_and(|m| {
+            m.contains("air claim ad-free") && !m.contains("ad-owner") && !m.contains("ad-taken")
+        })
+        // ...and nothing anywhere admits it might be wrong.
+        && !stop_nudge("worker", false, &confirmed, false)
+            .is_some_and(|m| m.contains("stale"));
+    Probe {
+        name: "stop: the nudge names only what air claim would accept (no owner label, no peer's claim)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 fn probe_stop_nudge() -> Probe {
     use air_hooks::stop_nudge;
     let ready = vec!["fd-1".to_string()];
-    let red = stop_nudge("worker", false, &ready, false, false).is_some();
-    let once = stop_nudge("worker", false, &ready, false, false)
-        .is_some_and(|r| r.contains("air claim fd-1"));
-    let then_pass = stop_nudge("worker", false, &ready, true, false).is_none()
-        && stop_nudge("coordinator", false, &ready, false, false).is_none()
-        && stop_nudge("worker", true, &ready, false, false).is_none();
+    let red = stop_nudge("worker", false, &ready, false).is_some();
+    let once =
+        stop_nudge("worker", false, &ready, false).is_some_and(|r| r.contains("air claim fd-1"));
+    let then_pass = stop_nudge("worker", false, &ready, true).is_none()
+        && stop_nudge("coordinator", false, &ready, false).is_none()
+        && stop_nudge("worker", true, &ready, false).is_none();
     Probe {
         name: "stop: nudge once when ready beads and no claim",
         red_fires: red,
