@@ -154,7 +154,7 @@ enum Cmd {
     },
     /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
     Status {
-        /// Only the conditions that need a human or the coordinator (empty when quiet).
+        /// Only the conditions that need the owner or the coordinator (empty when quiet).
         #[arg(long)]
         attention: bool,
     },

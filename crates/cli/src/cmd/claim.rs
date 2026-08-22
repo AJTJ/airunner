@@ -1,7 +1,7 @@
 //! `air claim <bead> [--files a,b]` and `air release <bead> --reason <r> [--worker <w>]`.
 //!
 //! The only claim path (decisions 2026-08-20: "wrap beads, never watch it"). Order is fixed:
-//! the ledger refuses first if someone else holds the bead here; then `bd show` (a `human`
+//! the ledger refuses first if someone else holds the bead here; then `bd show` (an `owner`
 //! bead is not a worker's to claim; bd's own rule that a pencilled `assignee` blocks every
 //! other worker's `--claim` is printed with who is assigned; a closed bead is closed); then
 //! `bd update --claim` (bd's atomic CAS decides races); only after bd succeeds is the ledger
@@ -22,8 +22,17 @@ use air_ledger::claims::RELEASE_REASONS;
 use crate::cmd::{emit, log_event, now, open};
 
 /// The label that marks a bead as awaiting the owner; not a worker's to claim (owner,
-/// 2026-08-21: one label, `human`).
-pub const OWNER_LABEL: &str = "human";
+/// 2026-08-21: one label).
+///
+/// The word is `owner`, not `human` (owner, 2026-08-22). Two words, two meanings, kept
+/// apart: `human` is about PRESENCE, a person in the loop who can watch and type into every
+/// session, and `owner` is about AUTHORITY, whose decision is required. An owner-only
+/// decision stays owner-only when the owner hands it to an agent, so `human` was the wrong
+/// word for a gate. It rotted exactly that way in adopter, where a triage note records a
+/// whole category of beads that "carries human but needs no owner ruling" (its
+/// `docs/research/adopter-notes/notes/human-queue-triage.md`, category C). Every site that
+/// decides claimability reads this constant, never a literal (air-5hw).
+pub const OWNER_LABEL: &str = "owner";
 
 /// Actor string passed to bd: `BEADS_ACTOR` if set, else the worker name.
 fn actor_for(worker: &str) -> String {

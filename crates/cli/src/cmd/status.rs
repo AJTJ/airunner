@@ -1,5 +1,5 @@
 //! `air status [--attention]`: the coordinator's one screen, and the deterministic
-//! conditions that mean "a human or the coordinator is needed" (decisions 2026-08-20: the
+//! conditions that mean "the owner or the coordinator is needed" (decisions 2026-08-20: the
 //! coordinator is informed, not woken; the channel delivers exactly these).
 //!
 //! Split in two so the conditions are testable without git or a clock: `gather` builds a
@@ -730,11 +730,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
-            let ids: Vec<String> = v
-                .iter()
-                .filter(|i| !i.labels.iter().any(|l| l == "human"))
-                .map(|i| i.id.clone())
-                .collect();
+            let ids = super::ready_cache::claimable(&v);
             super::ready_cache::write(repo, &ids, &super::now());
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
             Some(v.len())

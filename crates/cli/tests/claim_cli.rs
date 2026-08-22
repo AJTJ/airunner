@@ -516,6 +516,51 @@ fn triage_refuses_when_bd_does_not_answer() {
     assert!(inbox.contains("waiting on bd"), "{inbox}");
 }
 
+/// air-5hw: the gate is the `owner` label, and `human` is not a gate at all. `human` says a
+/// person is present and watching; `owner` says whose authority is required. A worker is
+/// refused the first and may claim the second.
+#[test]
+fn owner_label_is_the_gate_and_human_is_not() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // A worker, not the coordinator: the label only gates workers.
+    let wt = repo.join("wt-w");
+    let g = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+
+    // The stub answers from FAKE_BD_DIR, which `air()` sets to the directory it is given.
+    let says = |dir: &Path, json: &str| std::fs::write(dir.join("bd.issue.json"), json).unwrap();
+
+    says(&wt, r#"{"id":"fd-1","status":"open","labels":["owner"]}"#);
+    let (code, out, _) = air(&wt, &bd, &["claim", "fd-1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("is labelled `owner`"), "{out}");
+    assert!(out.contains("air capture --for owner"), "{out}");
+
+    // `human` is presence, not authority: it does not stop a worker.
+    says(&wt, r#"{"id":"fd-2","status":"open","labels":["human"]}"#);
+    let (code, out, _) = air(&wt, &bd, &["claim", "fd-2"]);
+    assert_eq!(code, 0, "{out}");
+
+    // The coordinator is not gated by it either way.
+    says(&repo, r#"{"id":"fd-3","status":"open","labels":["owner"]}"#);
+    let (code, out, _) = air(&repo, &bd, &["claim", "fd-3"]);
+    assert_eq!(code, 0, "{out}");
+}
+
 /// Two worktrees contend for one resource; the dead-holder path is exercised by pointing
 /// the holder's pid at a process that has already exited.
 #[test]
