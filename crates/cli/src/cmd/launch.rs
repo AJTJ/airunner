@@ -206,10 +206,14 @@ fn tmux_socket() -> Option<String> {
 
 /// Start `claude` in a detached tmux session and return without touching the caller's
 /// terminal. Prints the session name and the attach command.
+///
+/// The session is `<project>-<worker>`, not `<worker>`: `tmux ls` is machine-wide, so with two
+/// fleets running the list said nothing about which project a pane belonged to (air-5lg).
 fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 {
     let bin = claude_bin();
     let socket = tmux_socket();
-    let targv = tmux_detached_argv(name, repo, socket.as_deref(), &bin, argv);
+    let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
+    let targv = tmux_detached_argv(&session, repo, socket.as_deref(), &bin, argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return 0;
@@ -220,8 +224,8 @@ fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 
                 .as_deref()
                 .map(|s| format!("-L {s} "))
                 .unwrap_or_default();
-            println!("started tmux session {name} (stdin is not a tty; detached)");
-            println!("attach: tmux {l}attach -t {name}");
+            println!("started tmux session {session} (stdin is not a tty; detached)");
+            println!("attach: tmux {l}attach -t {session}");
             0
         }
         Ok(s) => {
@@ -307,15 +311,37 @@ pub fn task_is_prompt(argv: &[String], task: &str) -> bool {
     }
 }
 
+/// Worker names a coordinator did not choose: `w1`, `w2`, … skipping every existing worktree
+/// and live tmux session. A worker outlives its bead (tty-fix worked six), so the bead never
+/// belongs in the name, and a coordinator that has a semantically useful name should still
+/// pass one (owner ruling, 2026-08-22, air-5lg).
+fn auto_worker_name(repo: &Path) -> String {
+    let taken: Vec<String> = crate::git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(p, _)| p.file_name().map(|s| s.to_string_lossy().to_string()))
+        .collect();
+    super::tmux::next_free_worker_name(&taken, &super::tmux::project_prefix(repo))
+}
+
 pub fn worker(
     repo: &Path,
-    name: &str,
+    name: Option<&str>,
     extra: &[String],
     tmux: bool,
     task: Option<&str>,
     print: bool,
 ) -> i32 {
-    if name.is_empty() || name == "main" || name.contains('/') {
+    let owned;
+    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n,
+        None => {
+            owned = auto_worker_name(repo);
+            eprintln!("air worker: no name given; using {owned}");
+            &owned
+        }
+    };
+    if name == "main" || name.contains('/') {
         eprintln!("air worker: name must be a worktree name (not `main`, no slashes)");
         return 1;
     }

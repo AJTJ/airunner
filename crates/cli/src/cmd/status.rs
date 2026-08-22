@@ -40,6 +40,9 @@ pub struct WorkerView {
     /// worker's) but no longer work in progress (air-3eu).
     pub handed_over: Vec<Claim>,
     pub files_held: usize,
+    /// The worker's live tmux session (`<project>-<worker>`), when one exists: `tmux ls` is
+    /// machine-wide, so status is where the owner goes from a lane to its pane (air-5lg).
+    pub tmux_session: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -475,6 +478,17 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         }
     }
 
+    // Which lanes have a pane the owner can attach to (air-5lg). One `tmux ls`; absent tmux
+    // and no running server both read as "none", which is what an empty list means anyway.
+    {
+        let live = super::tmux::sessions();
+        let project = super::tmux::project_prefix(repo);
+        for (name, v) in &mut views {
+            let want = super::tmux::session_name(&project, name);
+            v.tmux_session = live.iter().find(|s| **s == want).cloned();
+        }
+    }
+
     // Files held and overlaps (derived; may be slow-ish, CLI only).
     let mut overlaps = BTreeMap::new();
     match holdings::compute(repo, None) {
@@ -710,7 +724,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             && w.claims.is_empty()
             && w.session.as_ref().is_some_and(|x| x.state == "idle");
         out.push_str(&format!(
-            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}\n",
+            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}{}\n",
             w.worker,
             w.role,
             sess,
@@ -724,6 +738,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 "-".to_string()
             } else {
                 claims.join(", ")
+            },
+            if let Some(t) = &w.tmux_session {
+                format!("  tmux {t}")
+            } else {
+                String::new()
             },
             if idle_no_claim {
                 "  idle, no claim"
@@ -865,6 +884,7 @@ mod tests {
             claims,
             handed_over: vec![],
             files_held: 0,
+            tmux_session: None,
         }
     }
 
