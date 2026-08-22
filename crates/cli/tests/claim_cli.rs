@@ -31,9 +31,12 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
-/// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
-/// (default: open, unassigned, no labels); `list --status in_progress` answers from
-/// `<dir>/bd.in_progress` (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
+/// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json` when
+/// it exists, otherwise one open, unassigned, unlabelled issue per id argument, omitting any
+/// id listed in `<dir>/bd.unknown` and still exiting 0 (real bd 1.2.2 does exactly that);
+/// `list --status in_progress` answers from `<dir>/bd.in_progress` and
+/// `list --status awaiting_review` from `<dir>/bd.awaiting_review` (ids, one per line);
+/// `update` exits 1 when `<dir>/bd.fail` exists.
 ///
 /// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
 /// passes its environment through to bd): macOS charges ~0.5 s on the first exec of every
@@ -52,8 +55,16 @@ d="$FAKE_BD_DIR"
 echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
-  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; else echo '{"id":"'"$2"'","status":"open","labels":[]}'; fi; exit 0;;
-  list) if [ -f "$d/bd.in_progress" ]; then awk '{printf "%s{\"id\":\"%s\",\"status\":\"in_progress\"}", (NR>1?",":""), $0} BEGIN{printf "["} END{print "]"}' "$d/bd.in_progress"; else echo "[]"; fi; exit 0;;
+  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; exit 0; fi
+       shift; out=""
+       for id in "$@"; do
+         case "$id" in --*) continue;; esac
+         if [ -f "$d/bd.unknown" ] && grep -qx "$id" "$d/bd.unknown"; then continue; fi
+         out="$out${out:+,}{\"id\":\"$id\",\"status\":\"open\",\"labels\":[]}"
+       done
+       echo "[$out]"; exit 0;;
+  list) f="$d/bd.in_progress"; s=in_progress; case "$*" in *awaiting_review*) f="$d/bd.awaiting_review"; s=awaiting_review;; esac
+       if [ -f "$f" ]; then awk -v s="$s" '{printf "%s{\"id\":\"%s\",\"status\":\"%s\"}", (NR>1?",":""), $0, s} BEGIN{printf "["} END{print "]"}' "$f"; else echo "[]"; fi; exit 0;;
   ready) echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
   *) exit 0;;
@@ -260,10 +271,294 @@ fn capture_inbox_triage_round_trip() {
 
     let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "fd-7"]);
     assert_eq!(code, 0, "{out}");
-    let (code, _, _) = air(&repo, &bd, &["triage", &id, "--drop", "dup"]);
-    assert_eq!(code, 2);
+    // A resolved capture is re-pointed, not refused (air-76z), and says what it left.
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--drop", "dup"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("re-pointed from bead fd-7"), "{out}");
     let (_, out, _) = air(&repo, &bd, &["inbox"]);
     assert_eq!(out.trim(), "coordinator queue empty");
+}
+
+/// air-869: the incident was ten closes as ten `bd` processes at ~1.4 s each. Ten closes
+/// through Air are ONE bd process and one ledger transaction; the event line carries what
+/// bd cost, and `air status` reads it back. A worker is refused: the one refusal
+/// (hand-over needs green) lives on the worker's path and closing would walk around it.
+#[test]
+fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
+    for id in &ids {
+        let (code, out, _) = air(&repo, &bd, &["claim", id]);
+        assert_eq!(code, 0, "{out}");
+    }
+    // Count only what `air close` runs.
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+
+    let mut argv: Vec<&str> = vec!["--json", "close"];
+    argv.extend(ids.iter().map(String::as_str));
+    argv.extend(["--reason", "landed in 63cc0a5"]);
+    let (code, out, err) = air(&repo, &bd, &argv);
+    assert_eq!(code, 0, "{out}{err}");
+
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| !l.trim().is_empty()).count(),
+        1,
+        "ten closes must be one bd process: {log}"
+    );
+    assert!(log.contains("close fd-1 "), "{log}");
+    assert!(log.contains("fd-10"), "{log}");
+    assert!(log.contains("--reason landed in 63cc0a5"), "{log}");
+
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["bd_processes"], 1);
+    assert_eq!(v["released"].as_array().unwrap().len(), 10);
+    assert!(
+        claims(&repo)
+            .iter()
+            .all(|c| c.2.as_deref() == Some("landed"))
+    );
+
+    // Every event line that shelled out to bd names what it cost.
+    let day = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .next()
+        .unwrap();
+    let events = std::fs::read_to_string(&day).unwrap();
+    let close_line = events
+        .lines()
+        .find(|l| l.contains(r#""command":"close""#))
+        .unwrap_or_default();
+    assert!(!close_line.is_empty(), "no close event in {events}");
+    let e: serde_json::Value = serde_json::from_str(close_line).unwrap();
+    assert_eq!(e["bd_calls"], 1, "{close_line}");
+    assert!(e["bd_ms"].is_u64(), "{close_line}");
+
+    // ...and `air status` reads the median back out of the log.
+    let (code, out, err) = air(&repo, &bd, &["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bd: median"), "{out}");
+
+    // A worker may not close.
+    let wt = repo.join("wt-w");
+    let g = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+    let (code, out, _) = air(&wt, &bd, &["close", "fd-1", "--reason", "x"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("coordinator's landing pass"), "{out}");
+    assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
+}
+
+/// air-869: a triage pass resolves every capture in one ledger transaction, mapping
+/// --bead/--drop positionally the way bd maps `bd close --reason`.
+#[test]
+fn triage_resolves_a_whole_pass_at_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let mut ids = Vec::new();
+    for text in ["one", "two", "three"] {
+        let (_, out, _) = air(&repo, &bd, &["--json", "capture", text]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+    // One --bead for three captures is a mistake, not a fan-out.
+    let (code, _, err) = air(
+        &repo,
+        &bd,
+        &["triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1"],
+    );
+    assert_eq!(code, 1, "{err}");
+
+    let (code, out, err) = air(
+        &repo,
+        &bd,
+        &[
+            "--json", "triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1", "--bead", "fd-2",
+            "--drop", "dup",
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["resolved"], 3);
+    assert_eq!(v["inbox_depth"], 0);
+    // A second pass re-points rather than refusing (air-76z).
+    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["repointed"][0]["from"], "bead fd-1");
+    assert_eq!(v["repointed"][0]["to"], "bead fd-9");
+}
+
+/// air-76z: a capture must never end up pointing at a bead that does not exist. The
+/// coordinator chained `air triage C --bead <placeholder>` before `bd create` had made the
+/// id, twice, and `air triage` then refused to touch a resolved capture, so the record was
+/// wrong and stayed wrong.
+#[test]
+fn triage_refuses_an_unknown_bead_and_can_repoint_afterwards() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (_, out, _) = air(&repo, &bd, &["--json", "capture", "needs a bead"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+
+    // bd does not have this one.
+    std::fs::write(repo.join("bd.unknown"), "zz-nope\n").unwrap();
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "zz-nope"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("bd knows no bead zz-nope"), "{out}");
+    assert!(out.contains("Nothing was triaged"), "{out}");
+    // Still open: the refusal wrote nothing.
+    let (_, inbox, _) = air(&repo, &bd, &["inbox"]);
+    assert!(inbox.contains("needs a bead"), "{inbox}");
+
+    // One bd process checks every bead in the pass, however many.
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "ad-real"]);
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("show ")).count(),
+        1,
+        "{log}"
+    );
+
+    // And the wrong pointer can be corrected after the fact; the event names both ids.
+    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &id, "--bead", "ad-fixed"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["repointed"][0]["from"], "bead ad-real");
+    assert_eq!(v["repointed"][0]["to"], "bead ad-fixed");
+    let day = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .next()
+        .unwrap();
+    let events = std::fs::read_to_string(&day).unwrap();
+    assert!(
+        events.contains("re-pointed from bead ad-real to bead ad-fixed"),
+        "{events}"
+    );
+
+    // A capture id nothing matches is reported, not silently accepted.
+    let (code, out, _) = air(
+        &repo,
+        &bd,
+        &["triage", "01NOSUCHCAPTURE", "--bead", "ad-real"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("no such capture"), "{out}");
+}
+
+/// air-76z: if bd cannot answer, nothing is triaged. An unverified id in the record is the
+/// bug this bead exists for, so silence from bd is a refusal, not a pass.
+#[test]
+fn triage_refuses_when_bd_does_not_answer() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (_, out, _) = air(&repo, &bd, &["--json", "capture", "waiting on bd"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+
+    let slow = repo.join("bd-slow");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in show) sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // First exec of a freshly written script pays a macOS security assessment; warm it so
+    // the short budget below measures the stub, not the OS (air-y8m).
+    let _ = Command::new(&slow).arg("ready").output().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["triage", &id, "--bead", "fd-1"])
+        .env("AIR_BD_BIN", &slow)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_PROBE_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("bd did not answer"), "{text}");
+    assert!(text.contains("nothing was triaged"), "{text}");
+    // The capture is untouched, so the coordinator can simply re-run.
+    let (_, inbox, _) = air(&repo, &bd, &["inbox"]);
+    assert!(inbox.contains("waiting on bd"), "{inbox}");
+}
+
+/// air-5hw: the gate is the `owner` label, and `human` is not a gate at all. `human` says a
+/// person is present and watching; `owner` says whose authority is required. A worker is
+/// refused the first and may claim the second.
+#[test]
+fn owner_label_is_the_gate_and_human_is_not() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // A worker, not the coordinator: the label only gates workers.
+    let wt = repo.join("wt-w");
+    let g = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+
+    // The stub answers from FAKE_BD_DIR, which `air()` sets to the directory it is given.
+    let says = |dir: &Path, json: &str| std::fs::write(dir.join("bd.issue.json"), json).unwrap();
+
+    says(&wt, r#"{"id":"fd-1","status":"open","labels":["owner"]}"#);
+    let (code, out, _) = air(&wt, &bd, &["claim", "fd-1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("is labelled `owner`"), "{out}");
+    assert!(out.contains("air capture --for owner"), "{out}");
+
+    // `human` is presence, not authority: it does not stop a worker.
+    says(&wt, r#"{"id":"fd-2","status":"open","labels":["human"]}"#);
+    let (code, out, _) = air(&wt, &bd, &["claim", "fd-2"]);
+    assert_eq!(code, 0, "{out}");
+
+    // The coordinator is not gated by it either way.
+    says(&repo, r#"{"id":"fd-3","status":"open","labels":["owner"]}"#);
+    let (code, out, _) = air(&repo, &bd, &["claim", "fd-3"]);
+    assert_eq!(code, 0, "{out}");
 }
 
 /// Two worktrees contend for one resource; the dead-holder path is exercised by pointing
@@ -465,4 +760,407 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         .unwrap();
     assert_eq!(main["claims"][0]["bead"], "fd-1", "claim kept: {o}");
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
+}
+
+/// air-6p5: only the owner may merge to main today, so a green hand-over waits on them and
+/// nothing said so. `air inbox --owner` lists the landings with their exact commands next to
+/// the decisions, derived from bd plus the ledger rather than stored twice.
+#[test]
+fn owner_queue_lists_green_landings_with_their_commands() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let head = {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // Claimed, then handed over: bd holds it in awaiting_review, the claim row names alpha.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(repo.join("bd.awaiting_review"), "fd-1\n").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"awaiting_review","labels":[]}"#,
+    )
+    .unwrap();
+
+    // Not green at HEAD yet: the worker's to fix, so the owner is told nothing.
+    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("owner queue empty"), "{out}");
+
+    let (code, o, e) = air(&repo, &bd, &["record", "verify", "--", "true"]);
+    assert_eq!(code, 0, "{o}{e}");
+    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("1 landing(s) waiting on the owner"), "{out}");
+    assert!(
+        out.contains(head.get(..8).unwrap()) && out.contains("from main"),
+        "{out}"
+    );
+    assert!(out.contains("air land fd-1"), "{out}");
+
+    // And in JSON, next to the captures, so the channel reads one shape.
+    let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["landings"][0]["bead"], "fd-1", "{out}");
+    assert_eq!(v["landings"][0]["worker"], "main", "{out}");
+    assert!(v["captures"].as_array().unwrap().is_empty(), "{out}");
+}
+
+/// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
+/// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
+#[test]
+fn claim_labels_the_tmux_window_and_release_clears_it() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::create_dir_all(repo.join(".beads")).unwrap();
+    std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
+    let socket = format!("air-test-label-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .args(["-L", &socket])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let window = || {
+        let o = tmux(&["list-windows", "-t", "zz-main", "-F", "#{window_name}"]);
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let air_tmux = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
+            .env("BEADS_ACTOR", "tester")
+            .env("AIR_TMUX_SOCKET", &socket)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+
+    tmux(&["new-session", "-d", "-s", "zz-main", "sleep", "30"]);
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","title":"the window says what the lane is doing","status":"open","labels":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(air_tmux(&["claim", "fd-1"]).status.code(), Some(0));
+    let labelled = window();
+
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","title":"t","status":"in_progress","assignee":"tester","labels":[]}"#,
+    )
+    .unwrap();
+    let out = air_tmux(&["release", "fd-1", "--reason", "abandoned"]);
+    let cleared = window();
+    tmux(&["kill-server"]);
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(labelled.starts_with("fd-1 the window says"), "{labelled}");
+    assert_eq!(cleared, "main", "release clears the label");
+}
+
+/// air-3eu: a bead that briefly visits `awaiting_review` (a stray `bd update`, reverted a
+/// minute later) was seen by the next status tick and the reconcile released the ledger claim,
+/// leaving the worker "not claimed" while still editing. `awaiting_review` now marks the claim
+/// handed over and keeps it; only `closed` releases it.
+#[test]
+fn awaiting_review_keeps_the_claim_and_close_releases_it() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let row = |bead: &str| -> (String, Option<String>, Option<String>, Option<String>) {
+        let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+        conn.query_row(
+            "SELECT claimed_at, first_handover_at, released_at, release_reason \
+             FROM claims WHERE bead=?1",
+            rusqlite::params![bead],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    let worker_view = |o: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["snapshot"]["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["worker"] == "main")
+            .unwrap()
+            .clone()
+    };
+
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+    let claimed_at = row("fd-1").0;
+
+    // The stray flip: bd holds nothing in_progress and shows the bead in awaiting_review.
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"awaiting_review","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let main = worker_view(&o);
+    assert_eq!(main["handed_over"][0]["bead"], "fd-1", "still held: {o}");
+    assert!(main["claims"].as_array().unwrap().is_empty(), "{o}");
+    let (at, handover, released, _) = row("fd-1");
+    assert_eq!(at, claimed_at, "original claim time kept");
+    assert!(released.is_none(), "the claim must stay open");
+    assert!(handover.is_some(), "marked handed over");
+
+    // Reverted: bd holds it in_progress again, and the row is as it was.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"in_progress","assignee":"tester","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let main = worker_view(&o);
+    assert_eq!(main["claims"][0]["bead"], "fd-1", "claimed again: {o}");
+    assert_eq!(
+        row("fd-1"),
+        (claimed_at.clone(), handover, None, None),
+        "row untouched by the revert"
+    );
+
+    // Closed: the claim is released, with `closed` as the reason.
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"closed","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let (at, _, released, reason) = row("fd-1");
+    assert_eq!(at, claimed_at);
+    assert!(released.is_some(), "closed releases the claim");
+    assert_eq!(reason.as_deref(), Some("closed"));
+    assert!(
+        worker_view(&o)["handed_over"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A main checkout plus one linked worktree `alpha` on `worktree-alpha`, with a bead handed
+/// over on it: the shape `air land` lands (air-3pz). `verify` is what the repo's verify
+/// command should be (`true` or `false`), committed so main starts clean.
+fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    let alpha = tmp.path().join("alpha");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(main.join(".claude")).unwrap();
+    std::fs::write(
+        main.join(".claude/air.json"),
+        format!("{{\"verify_command\": \"{verify}\"}}"),
+    )
+    .unwrap();
+    std::fs::write(main.join("README"), "a\n").unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "a"]);
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-alpha",
+            alpha.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(alpha.join("work.txt"), "the work\n").unwrap();
+    git(&alpha, &["add", "-A"]);
+    git(&alpha, &["commit", "-q", "-m", "the work"]);
+    (
+        tmp,
+        main.canonicalize().unwrap(),
+        alpha.canonicalize().unwrap(),
+    )
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "air")
+        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+        .env("GIT_COMMITTER_NAME", "air")
+        .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Hand `bead` over from the `alpha` worktree: bd holds it in awaiting_review, the ledger has
+/// alpha's claim, and alpha has a recorded green at its branch head.
+fn hand_over(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
+    std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+    assert_eq!(air(alpha, bd, &["claim", bead]).0, 0);
+    assert_eq!(air(alpha, bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(main.join("bd.awaiting_review"), format!("{bead}\n")).unwrap();
+    std::fs::write(
+        main.join("bd.issue.json"),
+        format!(r#"{{"id":"{bead}","status":"awaiting_review","labels":[]}}"#),
+    )
+    .unwrap();
+}
+
+/// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the
+/// bead in one bd process, releases the claim, and records the landing.
+#[test]
+fn land_merges_verifies_closes_and_records() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+    let before = git(&main, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed alpha (fd-1)"), "{out}{err}");
+
+    // main moved to a merge commit that contains the branch.
+    let head = git(&main, &["rev-parse", "HEAD"]);
+    assert_ne!(head, before);
+    assert_eq!(git(&main, &["rev-list", "--count", "HEAD^2..HEAD^2"]), "0");
+    assert_eq!(
+        std::fs::read_to_string(main.join("work.txt")).unwrap(),
+        "the work\n"
+    );
+    // One bd process closed it; the claim is released as landed.
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(
+        log.lines().any(|l| l.starts_with("close fd-1 --reason")),
+        "{log}"
+    );
+    assert_eq!(claims(&main)[0].2.as_deref(), Some("landed"));
+    // And the landing is a row, with the verify run that decided it.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (worker, result, merge, verify): (String, String, String, String) = conn
+        .query_row(
+            "SELECT worker, result, merge_commit, verify_run_id FROM landings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((worker.as_str(), result.as_str()), ("alpha", "landed"));
+    assert_eq!(merge, head);
+    let (sha, exit): (String, i64) = conn
+        .query_row(
+            "SELECT sha, exit_code FROM verify_runs WHERE id=?1",
+            rusqlite::params![verify],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (sha.as_str(), exit),
+        (head.as_str(), 0),
+        "the green is at the MERGED result, not the branch"
+    );
+}
+
+/// air-3pz: a red verify on the merged result puts main back exactly where it was and leaves
+/// the branch alone; a dirty main is refused before anything is merged; a branch that does not
+/// contain main is refused with the command that fixes it.
+#[test]
+fn land_rewinds_on_red_and_refuses_dirty_main_or_a_stale_branch() {
+    let (_tmp, main, alpha) = land_repo("false");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+    let before = git(&main, &["rev-parse", "HEAD"]);
+    let branch_head = git(&main, &["rev-parse", "worktree-alpha"]);
+
+    // Dirty main: refused before any merge, because the rewind would discard it. Tracked, on
+    // purpose: `git reset --hard` leaves untracked files alone, so they are not at risk.
+    std::fs::write(main.join("README"), "edited by the owner\n").unwrap();
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("git reset --hard"), "{out}");
+    assert!(out.contains("README"), "{out}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "nothing merged");
+    std::fs::write(main.join("README"), "a\n").unwrap();
+
+    // Red on the merged result: main goes back to where it was, the branch is untouched.
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("main is back at"), "{out}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before);
+    assert_eq!(git(&main, &["rev-parse", "worktree-alpha"]), branch_head);
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(!log.contains("close fd-1"), "nothing closed: {log}");
+    // Every attempt is a row, refusals included, with attempt_no counting up.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let mut st = conn
+        .prepare("SELECT result, attempt_no FROM landings ORDER BY attempt_no")
+        .unwrap();
+    let rows: Vec<(String, i64)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![("refused".to_string(), 1), ("rewound".to_string(), 2)]
+    );
+
+    // main moves on: the branch no longer contains it, and the recorded green is not a green
+    // of what would land.
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "b"]);
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(
+        out.contains("does not contain main")
+            && out.contains("git merge main && air record verify"),
+        "{out}"
+    );
+}
+
+/// air-3pz: a worker may not land. The coordinator's deny list keeps `git commit` off main,
+/// so this is the one allowed path onto it and it must not be a worker's.
+#[test]
+fn land_refuses_a_worker_and_an_unlandable_bead() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    hand_over(&main, &alpha, &bd, "fd-1");
+
+    let (code, out, _) = air(&alpha, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("air handover"), "{out}");
+
+    let (code, out, _) = air(&main, &bd, &["land", "fd-9"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("air inbox --owner"), "{out}");
 }

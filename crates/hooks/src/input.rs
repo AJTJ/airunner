@@ -91,6 +91,14 @@ impl HookInput {
             .map(str::to_string)
     }
 
+    /// For `SendMessage` tool calls: the peer being addressed (air-0lk).
+    pub fn send_message_to(&self) -> Option<&str> {
+        if self.tool_name.as_deref() != Some("SendMessage") {
+            return None;
+        }
+        self.tool_input.as_ref()?.get("to")?.as_str()
+    }
+
     /// For Bash tool calls: the command string.
     pub fn bash_command(&self) -> Option<&str> {
         if self.tool_name.as_deref() != Some("Bash") {

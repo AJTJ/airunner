@@ -131,6 +131,18 @@ pub fn dirty_files(cwd: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Tracked files with uncommitted changes, repo-relative. Untracked files are excluded on
+/// purpose: `air land` refuses on this because its rollback is `git reset --hard`, which
+/// restores tracked files only and leaves untracked ones alone (adopter `land.sh:504-514`).
+pub fn dirty_tracked(cwd: &Path) -> Result<Vec<String>> {
+    let out = run(cwd, &["status", "--porcelain=v1", "--untracked-files=no"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.get(3..))
+        .map(|p| p.rsplit(" -> ").next().unwrap_or(p).to_string())
+        .collect())
+}
+
 /// Files changed on this branch relative to `base` (committed divergence).
 pub fn changed_since(cwd: &Path, base: &str) -> Result<Vec<String>> {
     let out = run(cwd, &["diff", "--name-only", &format!("{base}...HEAD")])?;

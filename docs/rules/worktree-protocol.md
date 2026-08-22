@@ -124,15 +124,19 @@ In order, and none of it is optional:
    touching the spine, and **any decision that could reasonably have gone the other way**.
 4. Close your own beads, with evidence in the reason. **Never print a `bd` command for the owner to
    run.**
-5. Hand over for landing. You do not land, and you do not push.
+5. Hand over for landing: `bd update <id> -s awaiting_review`. The coordinator lands it with
+   `air land <id>` (or `air land --all`). You do not land, and you do not push; `air land` is on
+   the worker deny list in every permission mode.
 
 **[Air enforces]** This is the one refusal. `air handover` (and the `Stop` hook, advisory for one
 round first, then blocking) refuses `awaiting_review`/close unless: a `verify_runs` row exists for
 this worktree at HEAD with exit 0; HEAD contains current `main`; fitness/docs-check are green at
 HEAD; the bead is claimed by this actor (CAS). It prints which check failed and the fixing command
-(plan 0001 §4, §5). `air land` is the owner/coordinator's port of `land.sh`: refuse dirty/main,
-`--no-ff`, verify the merged tree, rewind on red, close attributable beads by evidence, and check the
-recorded green sha is what is being landed (plan 0001 §4).
+(plan 0001 §4, §5). `air land` is the coordinator's port of `land.sh` (built 2026-08-22, air-3pz):
+refuse a worker, a worktree, a branch other than main, a dirty tracked tree, a branch that does not
+contain main, or a recorded green that is not at the branch head; then `--no-ff`, verify the merged
+tree, `git reset --hard` back to the pre-merge tip on red, and close the beads in one `bd` process
+with their claims released as `landed`. Every attempt is a `landings` row, refusals included.
 
 ## 7. Stop, and say so
 

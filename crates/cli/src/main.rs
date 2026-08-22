@@ -116,17 +116,45 @@ enum Cmd {
         #[command(subcommand)]
         op: LeaseOp,
     },
-    /// Resolve a capture: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    /// Resolve captures: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    /// Several captures at once map positionally, in one ledger transaction:
+    /// `air triage c1 c2 --bead air-1 --bead air-2`. One --drop covers every capture named.
+    /// Every bead is checked against bd first; an id bd does not have refuses the pass. A
+    /// capture that was already triaged is re-pointed, old target named in the event line.
     Triage {
-        id: String,
+        #[arg(required = true)]
+        id: Vec<String>,
         #[arg(long)]
-        bead: Option<String>,
+        bead: Vec<String>,
         #[arg(long)]
-        drop: Option<String>,
+        drop: Vec<String>,
+    },
+    /// Coordinator: close landed beads in ONE bd process and release their claims in one
+    /// ledger transaction. `bd` costs ~1.4 s per process whatever it is asked (air-869).
+    Close {
+        #[arg(required = true)]
+        bead: Vec<String>,
+        /// Why they closed; bd records it on every id.
+        #[arg(long)]
+        reason: String,
+    },
+    /// Coordinator: merge a green hand-over into main, verify the merged result, and rewind
+    /// main if it goes red. The one allowed path onto main; it pushes nothing.
+    ///
+    /// A bead is landable when bd holds it in `awaiting_review` and its worker has a recorded
+    /// green at its branch head (`air inbox --owner` lists them). One merge per branch,
+    /// however many beads that branch carries; `--all` takes the longest wait first and stops
+    /// at the first red. The repo's verify comes from `.claude/air.json` `verify_command`,
+    /// default `make verify`.
+    Land {
+        bead: Vec<String>,
+        /// Land every green hand-over, longest wait first, stopping at the first red.
+        #[arg(long)]
+        all: bool,
     },
     /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
     Status {
-        /// Only the conditions that need a human or the coordinator (empty when quiet).
+        /// Only the conditions that need the owner or the coordinator (empty when quiet).
         #[arg(long)]
         attention: bool,
     },
@@ -150,11 +178,12 @@ enum Cmd {
     /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
     ///
     /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
-    /// Bash tool, `</dev/null`) it starts a detached tmux session named <name> instead, prints
-    /// `tmux attach -t <name>`, and exits 0. AIR_CLAUDE_BIN overrides the claude binary;
-    /// AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
+    /// Bash tool, `</dev/null`) it starts a detached tmux session named <project>-<name>
+    /// instead, prints `tmux attach -t <project>-<name>`, and exits 0. AIR_CLAUDE_BIN overrides
+    /// the claude binary; AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
     Worker {
-        name: String,
+        /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
+        name: Option<String>,
         /// Run in a tmux pane the owner can attach to (lets the coordinator launch workers).
         #[arg(long)]
         tmux: bool,
@@ -177,10 +206,40 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
+    /// What the ledger says about every mechanism Air ships: how often each fired, how often
+    /// with nothing following, when it last fired, and the removal condition recorded next to
+    /// it. Facts only; the pass over them is the coordinator's. Read-only.
+    Audit {
+        /// Inclusive YYYY-MM-DD to count from (default: today).
+        #[arg(long)]
+        since: Option<String>,
+    },
     /// Ledger location, sizes, row counts, and the pragmas in effect.
     Doctor,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest,
+}
+
+/// `--repo` may not leave this checkout's repository (air-0lk). A worktree and its main
+/// checkout share a git common dir, so `air --repo <worktree>` from anywhere in the repo is
+/// fine; another project's path is not. Silent when either side is not a repository, because
+/// then there is no project to leave (`air init` on a bare directory is the case).
+fn foreign_repo(repo: &std::path::Path) -> Option<String> {
+    let here = std::env::current_dir().ok()?;
+    let (a, b) = (
+        air_ledger::paths::air_dir_for(&here).ok()?,
+        air_ledger::paths::air_dir_for(repo).ok()?,
+    );
+    if a == b {
+        return None;
+    }
+    Some(format!(
+        "air: refused: --repo {} is another project ({}); this session's is {}. A session may \
+         only touch its own project (air-0lk). Run it from that project's own session.",
+        repo.display(),
+        b.display(),
+        a.display()
+    ))
 }
 
 fn main() -> ExitCode {
@@ -190,6 +249,12 @@ fn main() -> ExitCode {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    if cli.repo.is_some()
+        && let Some(why) = foreign_repo(&repo)
+    {
+        eprintln!("{why}");
+        return ExitCode::from(2);
+    }
     let code = match cli.cmd {
         Cmd::Record { kind, command } => cmd::record::run(&repo, &kind, &command, cli.json),
         Cmd::Handover { bead, enforce } => {
@@ -215,9 +280,9 @@ fn main() -> ExitCode {
             }
             LeaseOp::Beat => cmd::lease::beat(&repo),
         },
-        Cmd::Triage { id, bead, drop } => {
-            cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
-        }
+        Cmd::Triage { id, bead, drop } => cmd::capture::triage(&repo, &id, &bead, &drop, cli.json),
+        Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
+        Cmd::Land { bead, all } => cmd::land::run(&repo, &bead, all, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
@@ -228,9 +293,10 @@ fn main() -> ExitCode {
             task,
             print,
             extra,
-        } => cmd::launch::worker(&repo, &name, &extra, tmux, task.as_deref(), print),
+        } => cmd::launch::worker(&repo, name.as_deref(), &extra, tmux, task.as_deref(), print),
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
+        Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),
     };

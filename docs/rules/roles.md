@@ -35,10 +35,14 @@ Things that need a shared resource (a port, the simulator, Docker, the browser):
 `air lease take <resource> --reason "<why>"`; release when done. A held lease names its holder;
 do not route around it. **[Air enforces: a healthy holder is not broken by `take`]**
 
-Not available to a worker, by deny rule in every permission mode: `air land`, `git push`,
-`bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the worktree. Editing
+Not available to a worker, by deny rule in every permission mode: `air land`, `air close`,
+`git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
+worktree. Editing
 the main checkout is blocked natively. **[Air enforces]** Setting `awaiting_review` or closing
-without a recorded green at HEAD that contains `main` is the one refusal (advisory this round).
+without a recorded green at HEAD that contains `main` is the one refusal: worker launches set
+`AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fix (`air record verify -- make
+verify`). Enforced after the first bypass of the advisory gate (tty-fix, 2026-08-22 06:00,
+air-i59); removed when a full round passes with zero `handover-not-green` events.
 **[Air enforces]**
 
 ## Coordinator (the main checkout, holding no lane)
@@ -52,19 +56,24 @@ Ask the owner only for a genuine edge case (a blocker only they can clear, an am
 acceptance, a resource conflict), through the owner queue.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD, review
-waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent or
-gone with a claim, idle without a claim, hand-over not green, review waiting, lease held by a
-dead session, owner decision waiting, session joined or left). **[fact]**
+waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent
+with a claim, idle without a claim, hand-over not green, review waiting, lease held by a dead
+session, owner decision waiting, session joined or left). **[fact]** Review waiting and owner
+decision waiting push only when the SET changes, not while it ages; the waits themselves are
+always in `air status` and `air inbox --owner` on demand (air-s7c, 2026-08-22). What each
+mechanism costs and the condition under which it goes: `air audit`.
 
 Workers are reached with `SendMessage` to the session name `air status` shows; tmux panes are
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
-denied 30 min later by the permission classifier, 2026-08-22; removed never). **[fact]**
+denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
+zero denied send-keys attempts). **[fact]**
 When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
 reports conditions, status reports everything (standstill 2026-08-22; removed when the
 `review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
-**[fact]** Landings wait on the owner until `air land` exists; the coordinator says which
-branches are green and the landing command every time it reports (2026-08-22, the owner was
-not told; removed by `air land`). **[fact]**
+**[fact]** Landing is the coordinator's: `air land --all` merges every green hand-over into
+main, longest wait first, verifies the merged result, and puts main back where it was on red
+(air-3pz). `air status` names what is ready. **[Air enforces: main checkout, on main, clean
+tracked tree, branch contains main, recorded green at the branch head]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
 `--drop "<why>"`. `--validate` refuses without these sections, per type: task/feature `##
@@ -72,11 +81,13 @@ Acceptance Criteria`; bug `## Steps to Reproduce` + `## Acceptance Criteria`; ep
 Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/types.go`
 `RequiredSections`, main, read 2026-08-22; air-8zz). **[fact]** Workers request beads this way,
 including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
-labelled `human` is awaiting the owner and `air claim` refuses it to workers. Launch workers
+labelled `owner` is awaiting the owner and `air claim` refuses it to workers (the gate is
+`owner`, not `human`: `human` is presence, `owner` is authority; owner, 2026-08-22). Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
-can open). Landing is the repo's own command until `air land` exists.
+can open).
 
-Not available to the coordinator, by deny rule: `git commit` and `git push` on main.
+Not available to the coordinator, by deny rule: `git commit` and `git push` on main. `air land`
+is the one allowed path onto main, and it pushes nothing.
 **[Air enforces]**
 
 ## When refused
