@@ -94,6 +94,48 @@ impl Ledger {
 }
 
 impl Ledger {
+    /// Record the set of conditions holding now: opens rows for new (worker, kind), touches
+    /// `last_seen` on existing ones, and clears rows whose condition is gone. Pure bookkeeping;
+    /// the caller evaluated the conditions. Returns (opened, cleared).
+    pub fn record_conditions(
+        &self,
+        current: &[(String, &str, String)],
+        now: &str,
+    ) -> Result<(usize, usize)> {
+        let mut opened = 0usize;
+        let mut cleared = 0usize;
+        let mut open_rows = self
+            .conn
+            .prepare("SELECT worker, kind FROM conditions WHERE cleared_at IS NULL")?;
+        let existing: Vec<(String, String)> = open_rows
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (w, k, detail) in current {
+            if existing.iter().any(|(ew, ek)| ew == w && ek == k) {
+                self.conn.execute(
+                    "UPDATE conditions SET last_seen=?3, detail=?4 WHERE worker=?1 AND kind=?2 AND cleared_at IS NULL",
+                    rusqlite::params![w, k, now, detail],
+                )?;
+            } else {
+                self.conn.execute(
+                    "INSERT INTO conditions (worker, kind, first_seen, last_seen, detail) VALUES (?1,?2,?3,?3,?4)",
+                    rusqlite::params![w, k, now, detail],
+                )?;
+                opened = opened.saturating_add(1);
+            }
+        }
+        for (ew, ek) in &existing {
+            if !current.iter().any(|(w, k, _)| w == ew && *k == ek.as_str()) {
+                self.conn.execute(
+                    "UPDATE conditions SET cleared_at=?3 WHERE worker=?1 AND kind=?2 AND cleared_at IS NULL",
+                    rusqlite::params![ew, ek, now],
+                )?;
+                cleared = cleared.saturating_add(1);
+            }
+        }
+        Ok((opened, cleared))
+    }
+
     /// Should a hook say this now? True when `fingerprint` differs from what this session was
     /// last told under `key` (or nothing was); records it. A repeat of the identical message
     /// is silent; it re-arms when the fingerprint changes. Pass an empty fingerprint to clear
@@ -136,6 +178,27 @@ fn configure(conn: &Connection) -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod emission_tests {
     use super::Ledger;
+
+    #[test]
+    fn conditions_open_touch_and_clear() {
+        let l = Ledger::open_in_memory().unwrap();
+        let cur = vec![("a".to_string(), "stuck", "x".to_string())];
+        assert_eq!(l.record_conditions(&cur, "t1").unwrap(), (1, 0));
+        assert_eq!(l.record_conditions(&cur, "t2").unwrap(), (0, 0));
+        assert_eq!(l.record_conditions(&[], "t3").unwrap(), (0, 1));
+        let (first, cleared): (String, Option<String>) = l
+            .conn()
+            .query_row("SELECT first_seen, cleared_at FROM conditions", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((first.as_str(), cleared.as_deref()), ("t1", Some("t3")));
+        assert_eq!(
+            l.record_conditions(&cur, "t4").unwrap(),
+            (1, 0),
+            "re-opens as a new row"
+        );
+    }
 
     #[test]
     fn speaks_once_per_change_and_rearms_on_clear() {
