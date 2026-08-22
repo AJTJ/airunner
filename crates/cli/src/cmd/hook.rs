@@ -123,8 +123,8 @@ fn inner(repo: &Path, raw: &str) -> Result<(HookEvent, HookOutcome), String> {
 }
 
 /// What one hook invocation decided, in the shape the event line needs.
-struct Dispatched {
-    outcome: HookOutcome,
+pub struct Dispatched {
+    pub outcome: HookOutcome,
     inputs: serde_json::Value,
     decision: String,
     reason: String,
@@ -459,40 +459,54 @@ fn pre_tool_use(
         && is_handover_command(cmd)
     {
         let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
-        let bead = handover_bead(cmd);
-        let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
-        let v = handover_verdict(&f);
-        let stamped = match &bead {
-            Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
-            None => false,
-        };
-        let decision = if v.pass {
-            "pass"
-        } else if v.block {
-            "refuse"
-        } else {
-            "would-refuse"
-        };
-        let outcome = if v.block {
-            HookOutcome::Block {
-                reason: format!("air: {}", v.message),
-            }
-        } else if !v.pass {
-            HookOutcome::Allow {
-                context: Some(format!("air: {}", v.message)),
-            }
-        } else {
-            HookOutcome::Allow { context: None }
-        };
-        return Ok(Dispatched::new(outcome, decision, v.message.clone())
-            .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
-            .denominator("4 checks"));
+        return handover_gate(ledger, worker, cwd, cmd, enforce);
     }
     Ok(Dispatched::new(
         HookOutcome::Allow { context: None },
         "observed",
         moved,
     ))
+}
+
+/// The hand-over gate for one `bd` status write (air-i59). `enforce` (worker launches set
+/// `AIR_ENFORCE=1`) turns a failed check into a deny whose reason names the fixing command;
+/// otherwise the same message is returned as context and the write is allowed. Pure over the
+/// ledger and the repo, so `air selftest` can run it red and green.
+pub fn handover_gate(
+    ledger: &Ledger,
+    worker: &str,
+    cwd: &Path,
+    cmd: &str,
+    enforce: bool,
+) -> Result<Dispatched, String> {
+    let bead = handover_bead(cmd);
+    let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
+    let v = handover_verdict(&f);
+    let stamped = match &bead {
+        Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
+        None => false,
+    };
+    let decision = if v.pass {
+        "pass"
+    } else if v.block {
+        "refuse"
+    } else {
+        "would-refuse"
+    };
+    let outcome = if v.block {
+        HookOutcome::Block {
+            reason: format!("air: {}", v.message),
+        }
+    } else if !v.pass {
+        HookOutcome::Allow {
+            context: Some(format!("air: {}", v.message)),
+        }
+    } else {
+        HookOutcome::Allow { context: None }
+    };
+    Ok(Dispatched::new(outcome, decision, v.message.clone())
+        .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
+        .denominator("4 checks"))
 }
 
 /// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
