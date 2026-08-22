@@ -107,27 +107,37 @@ impl Ledger {
     /// nothing and "merged but not closed" is not by itself a defect. What is worth carrying
     /// past the print is a REFUTED clause: a bead claiming a file the merge did not touch.
     ///
-    /// "Dealt with since" is the claim row being released for any reason — the status reconcile
-    /// releases it as `closed` once bd says so (air-3eu), `air close` as `landed`. That keeps
-    /// the whole answer inside the ledger: no bd call, so `air status` can ask on every tick.
-    /// Newest first.
+    /// **This is derived from the landing and the acceptance verdict, never from the lifetime
+    /// of a claim row (air-dlw).** It used to clear when the claim was released, which worked
+    /// under hand-over because `awaiting_review` kept the claim open for a while (air-3eu).
+    /// Close-with-proof deleted that window: the worker closes immediately, the status
+    /// reconcile releases the claim on the next tick, and the condition could never fire —
+    /// silently, in exactly the case air-ayp exists to catch. A claim being reconciled away is
+    /// now normal and says nothing about whether the close was justified.
+    ///
+    /// So a refuted bead is reported from its newest landing until that landing stops refuting
+    /// it. Deciding it has been *dealt with* needs bd (reopened, or a successor filed) and is
+    /// the caller's: `air status` clears one bd shows back in the work queue, using lists it
+    /// already fetches. Nothing here calls bd, so this stays askable on every tick.
     ///
     /// Nothing here writes a bd status. A bead named by one of these rows is exactly as open
     /// in bd as it was before the merge, so the merge did not change what it blocks.
     pub fn landed_open(&self) -> Result<Vec<LandedOpen>> {
         let mut out: Vec<LandedOpen> = Vec::new();
-        for l in self.landings()? {
-            for ob in l.open_beads.iter().filter(|o| o.refuted) {
-                let dealt_with: bool = self
-                    .conn
-                    .query_row(
-                        "SELECT count(*) FROM claims WHERE bead=?1 AND released_at IS NOT NULL",
-                        params![ob.bead],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .unwrap_or(0)
-                    > 0;
-                if dealt_with || out.iter().any(|o| o.bead == ob.bead) {
+        // Newest landing wins. `landings()` is newest-first, so the first row that mentions a
+        // bead decides its verdict: a bead re-landed clean is named again without a
+        // refutation, and an older row saying otherwise is history, not the current state.
+        let mut decided: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let rows = self.landings()?;
+        for l in &rows {
+            for bead in &l.beads {
+                if !decided.insert(bead.as_str()) {
+                    continue;
+                }
+                let Some(ob) = l.open_beads.iter().find(|o| &o.bead == bead) else {
+                    continue;
+                };
+                if !ob.refuted {
                     continue;
                 }
                 out.push(LandedOpen {
@@ -240,13 +250,29 @@ mod tests {
         // It round-trips through the row, so the reason survives a restart.
         assert_eq!(l.landings().unwrap()[0].open_beads, r.open_beads);
 
-        // An open claim is not "dealt with".
+        // air-dlw: the claim's lifetime decides nothing here. Under close-with-proof the
+        // worker closes at once and the reconcile releases the claim on the next tick, so a
+        // report keyed on the claim could never fire — which is how this went silent.
         l.record_claim("fd-3", "alpha", &[], "t0").unwrap();
-        assert_eq!(l.landed_open().unwrap().len(), 1);
-
-        // Any release is: the status reconcile releases as `closed` once bd says so
-        // (air-3eu), `air close` as `landed`. Either way somebody looked.
+        assert_eq!(
+            l.landed_open().unwrap().len(),
+            1,
+            "an open claim changes nothing"
+        );
         l.release_claim("fd-3", "alpha", "closed", "t2").unwrap();
+        assert_eq!(
+            l.landed_open().unwrap().len(),
+            1,
+            "and a released one changes nothing: the report is the landing's, not the claim's"
+        );
+
+        // A LATER landing that names the bead without refuting it is what clears it: newest
+        // landing wins, and an older row saying otherwise is history.
+        let mut again = row("2", "landed");
+        again.beads = vec!["fd-3".into()];
+        again.open_beads = vec![];
+        again.finished_at = "t9".into();
+        l.record_landing(&again).unwrap();
         assert!(l.landed_open().unwrap().is_empty());
     }
 
