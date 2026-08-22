@@ -466,3 +466,92 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
     assert_eq!(main["claims"][0]["bead"], "fd-1", "claim kept: {o}");
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
 }
+
+/// air-3eu: a bead that briefly visits `awaiting_review` (a stray `bd update`, reverted a
+/// minute later) was seen by the next status tick and the reconcile released the ledger claim,
+/// leaving the worker "not claimed" while still editing. `awaiting_review` now marks the claim
+/// handed over and keeps it; only `closed` releases it.
+#[test]
+fn awaiting_review_keeps_the_claim_and_close_releases_it() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let row = |bead: &str| -> (String, Option<String>, Option<String>, Option<String>) {
+        let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+        conn.query_row(
+            "SELECT claimed_at, first_handover_at, released_at, release_reason \
+             FROM claims WHERE bead=?1",
+            rusqlite::params![bead],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    let worker_view = |o: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["snapshot"]["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["worker"] == "main")
+            .unwrap()
+            .clone()
+    };
+
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+    let claimed_at = row("fd-1").0;
+
+    // The stray flip: bd holds nothing in_progress and shows the bead in awaiting_review.
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"awaiting_review","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let main = worker_view(&o);
+    assert_eq!(main["handed_over"][0]["bead"], "fd-1", "still held: {o}");
+    assert!(main["claims"].as_array().unwrap().is_empty(), "{o}");
+    let (at, handover, released, _) = row("fd-1");
+    assert_eq!(at, claimed_at, "original claim time kept");
+    assert!(released.is_none(), "the claim must stay open");
+    assert!(handover.is_some(), "marked handed over");
+
+    // Reverted: bd holds it in_progress again, and the row is as it was.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"in_progress","assignee":"tester","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let main = worker_view(&o);
+    assert_eq!(main["claims"][0]["bead"], "fd-1", "claimed again: {o}");
+    assert_eq!(
+        row("fd-1"),
+        (claimed_at.clone(), handover, None, None),
+        "row untouched by the revert"
+    );
+
+    // Closed: the claim is released, with `closed` as the reason.
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"closed","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, o, _) = air(&repo, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{o}");
+    let (at, _, released, reason) = row("fd-1");
+    assert_eq!(at, claimed_at);
+    assert!(released.is_some(), "closed releases the claim");
+    assert_eq!(reason.as_deref(), Some("closed"));
+    assert!(
+        worker_view(&o)["handed_over"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
