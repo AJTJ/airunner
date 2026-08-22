@@ -53,6 +53,7 @@ pub fn run(json: bool) -> i32 {
         probe_change_only_push(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
+        probe_digest_names_its_bead(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -154,6 +155,68 @@ fn probe_review_fact_survives() -> Probe {
     let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
     Probe {
         name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-agq: the digest gate reads a declared `bead:` field instead of guessing from a
+/// filename and an mtime.
+///
+/// It GUARDS, so every way it used to be wrong failed toward permitting, and a missing refusal
+/// looks exactly like a satisfied one. Red covers the three ways it passed when it should not:
+/// a digest for a different bead, a digest touched rather than written, and a file that merely
+/// has the worker's name in it. Green: the digest that declares this bead is accepted, and a
+/// pre-cutoff digest with no front matter still passes so today's work is not invalidated.
+fn probe_digest_names_its_bead() -> Probe {
+    use crate::cmd::handover::{declared_bead, digest_for_bead};
+
+    let res = (|| -> Option<(bool, bool)> {
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&root).ok()?;
+        let dir = root.as_path();
+        // Strict: every file here counts as written after the cutoff, so only a declaration
+        // is accepted. The lenient cutoff below is the history case.
+        let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().ok()?;
+        let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).ok();
+        // A digest for ANOTHER bead, by this worker, written now.
+        write(
+            "2026-08-23-beta-air-other.md",
+            "---\nbead: air-other\n---\n# other\n",
+        )?;
+        let ours = vec!["air-agq".to_string()];
+
+        // Red: it declares a different bead, so it is not this bead's digest, whatever its
+        // name or mtime say.
+        let wrong_bead = !digest_for_bead(dir, "beta", &ours, None, cut);
+        // Red: a file carrying the worker's name and no declaration, written after the
+        // cutoff, is not a substitute — this is the `touch` case and the substring case.
+        write("2026-08-23-beta-notes.md", "# just some notes\n")?;
+        let undeclared_after_cutoff = !digest_for_bead(dir, "beta", &ours, None, cut);
+        let red =
+            wrong_bead && undeclared_after_cutoff && declared_bead("# no front matter").is_none();
+
+        // Green: the digest that declares this bead is accepted.
+        write(
+            "2026-08-23-beta-air-agq.md",
+            "---\nbead: air-agq\n---\n# ours\n",
+        )?;
+        let declared_ok = digest_for_bead(dir, "beta", &ours, None, cut);
+
+        // Green: history still passes. A digest written before the cutoff with no front
+        // matter is matched the old way, so the change does not invalidate what exists.
+        let old = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&old).ok()?;
+        std::fs::write(old.join("2026-08-22-beta-air-old.md"), "# old\n").ok()?;
+        let far_future: jiff::Timestamp = "2999-01-01T00:00:00Z".parse().ok()?;
+        let fallback_ok = digest_for_bead(&old, "beta", &ours, None, far_future);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&old);
+        Some((red, declared_ok && fallback_ok))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: a digest counts when it declares its bead; a different bead, a touch, or a name match do not",
         red_fires: red,
         green_passes: green,
     }
