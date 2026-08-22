@@ -383,3 +383,91 @@ fn init_gates_then_builds_a_project_from_nothing() {
         before
     );
 }
+
+/// air-tdc: a coordinator launches from a Bash tool (stdin is a socket, not a tty). The
+/// launcher must not exec `claude --tmux` there; it starts a detached tmux session instead.
+#[test]
+fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed; detached launch cannot be exercised");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let stub = repo.join("claude-stub.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nprintf '%s\\n' \"$@\" > \"$d/argv.tmp\"\nmv \"$d/argv.tmp\" \"$d/argv.txt\"\nexec sleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let socket = format!("air-test-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .args(["-L", &socket])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "w", "--task", "hello there"])
+        .current_dir(&repo)
+        .env("AIR_CLAUDE_BIN", &stub)
+        .env("AIR_TMUX_SOCKET", &socket)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let has = tmux(&["has-session", "-t", "w"]).status.success();
+    // Poll for the stub's argv file (normally <0.5 s; macOS scans a freshly written
+    // executable on first exec, which has taken >2 s); kill the server regardless.
+    let argv_path = repo.join("argv.txt");
+    let mut argv = String::new();
+    for _ in 0..1000 {
+        if let Ok(s) = std::fs::read_to_string(&argv_path) {
+            argv = s;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    tmux(&["kill-server"]);
+
+    assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(has, "tmux session w missing: {stdout}{stderr}");
+    assert!(stdout.contains("attach -t w"), "{stdout}");
+    assert!(!stderr.contains("tcgetattr"), "{stderr}");
+    let lines: Vec<&str> = argv.lines().collect();
+    assert_eq!(lines.last(), Some(&"hello there"), "{argv}");
+    assert!(lines.iter().all(|l| !l.starts_with("--tmux")), "{argv}");
+    assert_eq!(&lines[..2], ["--worktree", "w"]);
+}
+
+#[test]
+fn worker_print_with_no_tty_shows_the_tmux_command() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "w", "--task", "x", "--print"])
+        .current_dir(&repo)
+        .env("AIR_CLAUDE_BIN", "claude")
+        .env_remove("AIR_TMUX_SOCKET")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("tmux new-session -d -s w -c "),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("--tmux"), "{stdout}");
+}

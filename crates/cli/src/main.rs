@@ -148,12 +148,17 @@ enum Cmd {
         write: bool,
     },
     /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
+    ///
+    /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
+    /// Bash tool, `</dev/null`) it starts a detached tmux session named <name> instead, prints
+    /// `tmux attach -t <name>`, and exits 0. AIR_CLAUDE_BIN overrides the claude binary;
+    /// AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
     Worker {
         name: String,
         /// Run in a tmux pane the owner can attach to (lets the coordinator launch workers).
         #[arg(long)]
         tmux: bool,
-        /// Initial task for the worker, as its first prompt (implies --tmux when launched by the coordinator).
+        /// Initial task for the worker, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
         /// Print the command instead of running it.
