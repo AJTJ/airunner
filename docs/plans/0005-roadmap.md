@@ -3,7 +3,7 @@
 Status: decided 2026-08-21 (owner). Ordered. Each item is built against a named pain; the
 first two are named here, the rest wait for round-one data.
 
-## 1. Greenfield setup: `air init` (next; owner 2026-08-21: "a recipe that gives us everything")
+## 1. Greenfield setup: `air init` (built 2026-08-21)
 
 The binary cannot bundle `bd` (Go, Homebrew) or `claude`; it gates on them first (present,
 pinned version, `bd list --json` answers) and prints the exact install command when not, then

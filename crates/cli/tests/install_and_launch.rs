@@ -269,3 +269,117 @@ fn flaky_head_is_reported_by_record_and_handover() {
         .unwrap();
     assert!(m["detail"].as_str().unwrap().contains("flaky"), "{m}");
 }
+
+#[test]
+fn init_gates_then_builds_a_project_from_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let proj = root.join("newproj");
+    std::fs::create_dir_all(proj.join("ios/fastlane")).unwrap();
+    std::fs::write(proj.join("Makefile"), "deploy-web:\n\techo ship\n").unwrap();
+    std::fs::write(proj.join("ios/fastlane/Fastfile"), "").unwrap();
+    // Fake bd that supports init (creates .beads) and answers list/show.
+    let bd = root.join("bd");
+    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.2.2';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_air"))
+        .parent()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let fake_claude = root.join("claude");
+    std::fs::write(&fake_claude, "#!/bin/sh\necho '9.9.9 (Claude Code)'\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path_ok = format!("{bin_dir}:{}:/usr/bin:/bin", root.display());
+    let run = |path: &str, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&proj)
+            .args(args)
+            .env("PATH", path)
+            .env("AIR_BD_BIN", &bd)
+            .current_dir(&proj)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    // Gate: no claude on PATH → refused, nothing written.
+    let (c, _, err) = run(
+        &format!("{bin_dir}:/usr/bin:/bin"),
+        &["init", "--write", "--prefix", "np"],
+    );
+    assert_eq!(c, 2, "{err}");
+    assert!(!proj.join(".git").exists() && !proj.join(".beads").exists());
+    // Dry run: nothing written.
+    let (c, out, _) = run(&path_ok, &["init", "--prefix", "np"]);
+    assert_eq!(c, 0, "{out}");
+    assert!(
+        out.contains("dry run")
+            && out.contains("deny Bash(make deploy*)")
+            && out.contains("deny Bash(fastlane *)"),
+        "{out}"
+    );
+    assert!(!proj.join(".git").exists());
+    // Write: everything appears.
+    let (c, out, err) = run(&path_ok, &["init", "--write", "--prefix", "np"]);
+    assert_eq!(c, 0, "{out}{err}");
+    assert!(proj.join(".git").is_dir());
+    assert!(
+        std::fs::read_to_string(proj.join(".beads/init.args"))
+            .unwrap()
+            .contains("--prefix np --non-interactive --init-if-missing")
+    );
+    assert_eq!(
+        std::fs::read_to_string(proj.join(".gitignore")).unwrap(),
+        ".air/\n"
+    );
+    let aj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(proj.join(".claude/air.json")).unwrap())
+            .unwrap();
+    assert!(
+        aj["worker_deny"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "Bash(make deploy*)")
+    );
+    assert!(proj.join("CLAUDE.md").exists());
+    assert!(proj.join(".mcp.json").exists() && proj.join(".air/roles.md").exists());
+    assert!(
+        proj.join(".claude/skills/air-decomposition/SKILL.md")
+            .exists()
+    );
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(proj.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert!(settings["hooks"]["PermissionDenied"].is_array());
+    assert!(
+        out.contains("air record verify"),
+        "next steps printed: {out}"
+    );
+    // Idempotent: a second --write changes nothing the user owns.
+    std::fs::write(proj.join("CLAUDE.md"), "# mine\n").unwrap();
+    let before = std::fs::read_to_string(proj.join(".claude/air.json")).unwrap();
+    let (c, _, err) = run(&path_ok, &["init", "--write", "--prefix", "np"]);
+    assert_eq!(c, 0, "{err}");
+    assert_eq!(
+        std::fs::read_to_string(proj.join("CLAUDE.md")).unwrap(),
+        "# mine\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(proj.join(".claude/air.json")).unwrap(),
+        before
+    );
+}
