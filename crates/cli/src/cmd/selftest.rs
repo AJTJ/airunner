@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cmd::emit;
-use crate::cmd::hook::is_handover_command;
+use crate::cmd::hook::{handover_gate, is_handover_command};
 
 #[derive(Debug, Serialize)]
 pub struct Probe {
@@ -45,6 +45,7 @@ pub fn run(json: bool) -> i32 {
         probe_worker_task_prompt(),
         probe_stop_nudge(),
         probe_standstill(),
+        probe_enforced_gate(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -163,6 +164,70 @@ fn probe_lease_take() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "lease: healthy holder denies; dead holder is broken and taken",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-i59: with `AIR_ENFORCE=1` the PreToolUse gate denies `bd update x -s awaiting_review`
+/// when no green is recorded at HEAD, and the reason names the fixing command; once a green
+/// verify run is recorded at HEAD (main merged) the same command is allowed.
+fn probe_enforced_gate() -> Probe {
+    use air_hooks::HookOutcome;
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "probe", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        let cmd = "bd update fd-1 -s awaiting_review";
+        let red = handover_gate(&l, "probe", &dir, cmd, true)?;
+        let red_fires = matches!(&red.outcome, HookOutcome::Block { reason }
+            if reason.contains("air record verify -- make verify"));
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: head,
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t1".into(),
+            finished_at: "t1".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+        })
+        .map_err(|e| e.to_string())?;
+        let green = handover_gate(&l, "probe", &dir, cmd, true)?;
+        let green_passes = matches!(green.outcome, HookOutcome::Allow { context: None });
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red_fires, green_passes))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
         red_fires: red,
         green_passes: green,
     }

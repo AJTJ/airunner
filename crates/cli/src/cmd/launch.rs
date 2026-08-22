@@ -71,8 +71,10 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
 
 /// Pure: the argv for a worker session.
 pub fn worker_argv(name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+    // AIR_ENFORCE=1: the hand-over gate denies instead of advising (air-i59; first bypass of
+    // the advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
     let settings = serde_json::json!({
-        "env": {"AIR_ROLE": "worker", "BEADS_ACTOR": name}
+        "env": {"AIR_ROLE": "worker", "BEADS_ACTOR": name, "AIR_ENFORCE": "1"}
     });
     let mut v: Vec<String> = vec![
         "--worktree".into(),
@@ -383,6 +385,7 @@ mod tests {
             serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])
                 .unwrap();
         assert_eq!(settings["env"]["BEADS_ACTOR"], "frontend");
+        assert_eq!(settings["env"]["AIR_ENFORCE"], "1");
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
@@ -477,5 +480,9 @@ mod tests {
         assert_eq!(&v[..2], ["--channels", "server:air"]);
         assert!(v.contains(&"Bash(git commit *)".to_string()));
         assert!(!v.contains(&"--worktree".to_string()));
+        let settings: serde_json::Value =
+            serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])
+                .unwrap();
+        assert!(settings["env"].get("AIR_ENFORCE").is_none());
     }
 }
