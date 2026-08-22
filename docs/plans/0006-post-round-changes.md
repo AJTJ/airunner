@@ -1,7 +1,8 @@
 # 0006 — Changes proposed from the adopter round, and the do-less pass over them
 
-Status: proposed 2026-08-21, after the first adoption and the first 3-worker round; nothing
-built until the owner rules. Part 1 lists every change the record suggests, with its source.
+Status: ruled and built 2026-08-21 (owner: do A1-A4, A8, B1-B4, C1, C4, C6, C7, C9; D1 = `human`,
+D2 = tmux yes, D3 = keep the deny; A5 replaced by the hand-over order fix: digest before the
+final verify). Part 1 lists every change the record suggested, with its source. Part 1 lists every change the record suggests, with its source.
 Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the round record
 (`../notes/rounds/2026-08-21-adopter/`), `../notes/air-backlog.md`,
 `../research/guardrails-as-throttles.md`, and adopter's own notes named in the round README.

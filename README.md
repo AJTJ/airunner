@@ -50,8 +50,9 @@ Every agent session is a terminal you can watch and type into.
 
 **Launches sessions with their role applied**
 
-- `air worker <name>`: `claude --worktree <name>` with the roles document appended to the
-  system prompt, a deny list that holds in every permission mode (`air land`, `git push`,
+- `air worker <name> [--tmux --task "<task>"]`: `claude --worktree <name>` with the roles document appended to the
+  system prompt, optionally in a tmux pane you can attach to (so the coordinator can launch
+  workers itself and hand each a complete task), a deny list that holds in every permission mode (`air land`, `git push`,
   `bd create`, `bd sync`, raw `bd update --claim`, nested `claude`, leaving the worktree), and
   `AIR_ROLE` / `BEADS_ACTOR` set by flag instead of by files that drift.
 - `air coordinator`: `claude` in the main checkout with the Air channel attached and commits

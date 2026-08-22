@@ -26,6 +26,8 @@ pub const WORKER_DENY: &[&str] = &[
     "Bash(bd sync *)",
     "Bash(bd update *--claim*)",
     "Bash(claude *)",
+    "Bash(air worker *)",
+    "Bash(air coordinator *)",
     "EnterWorktree",
     "ExitWorktree",
 ];
@@ -155,7 +157,31 @@ fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
     }
 }
 
-pub fn worker(repo: &Path, name: &str, extra: &[String], print: bool) -> i32 {
+/// Worker argv with `--tmux` (an attachable pane the owner can open; the coordinator may
+/// launch workers this way, owner ruling 2026-08-21) and an initial task as the prompt.
+/// `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which workers always
+/// have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
+pub fn worker_argv_tmux(base: Vec<String>, task: Option<&str>) -> Vec<String> {
+    let mut v = base;
+    let mode = std::env::var("AIR_TMUX_MODE").ok();
+    v.push(match mode.as_deref() {
+        Some(m) if !m.is_empty() => format!("--tmux={m}"),
+        _ => "--tmux".to_string(),
+    });
+    if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
+        v.push(t.to_string());
+    }
+    v
+}
+
+pub fn worker(
+    repo: &Path,
+    name: &str,
+    extra: &[String],
+    tmux: bool,
+    task: Option<&str>,
+    print: bool,
+) -> i32 {
     if name.is_empty() || name == "main" || name.contains('/') {
         eprintln!("air worker: name must be a worktree name (not `main`, no slashes)");
         return 1;
@@ -167,7 +193,11 @@ pub fn worker(repo: &Path, name: &str, extra: &[String], print: bool) -> i32 {
             return 1;
         }
     };
-    exec_claude(repo, &worker_argv_for(repo, name, &roles, extra), print)
+    let mut argv = worker_argv_for(repo, name, &roles, extra);
+    if tmux || task.is_some() {
+        argv = worker_argv_tmux(argv, task);
+    }
+    exec_claude(repo, &argv, print)
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
@@ -214,6 +244,15 @@ mod tests {
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
+    }
+
+    #[test]
+    fn tmux_adds_the_flag_and_the_task_last() {
+        let base = worker_argv("w", Path::new("/r/roles.md"), &[]);
+        let v = worker_argv_tmux(base.clone(), Some("fix fd-1 end to end"));
+        assert_eq!(&v[v.len() - 2..], ["--tmux", "fix fd-1 end to end"]);
+        let v = worker_argv_tmux(base, None);
+        assert_eq!(v.last().map(String::as_str), Some("--tmux"));
     }
 
     #[test]
