@@ -12,6 +12,7 @@
 pub mod captures;
 pub mod claims;
 pub mod events;
+pub mod landings;
 pub mod leases;
 pub mod paths;
 pub mod schema;

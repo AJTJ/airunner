@@ -48,6 +48,7 @@ pub fn run(json: bool) -> i32 {
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
+        probe_land_refusals(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -114,6 +115,74 @@ fn probe_batch_close() -> Probe {
     .unwrap_or(false);
     Probe {
         name: "close: a worker is refused; ten coordinator closes are one bd argv, one transaction",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-3pz: `air land` refuses a worker, a dirty main, a branch that has not merged main, and
+/// a recorded green that is not at the branch head; a clean green hand-over passes. Pure over
+/// the facts, so the whole refusal set fires without a repo.
+fn probe_land_refusals() -> Probe {
+    use crate::cmd::land::{Facts, check, may_land};
+
+    let none: Vec<String> = vec![];
+    fn ok(dirty: &[String]) -> Facts<'_> {
+        Facts {
+            worker: "alpha",
+            on_main: true,
+            main_checkout: true,
+            dirty,
+            branch_exists: true,
+            already_in_main: false,
+            contains_main: true,
+            branch_head: "abcdef99",
+            green_at: Some("abcdef99"),
+        }
+    }
+    let refusals = [
+        Facts {
+            on_main: false,
+            ..ok(&none)
+        },
+        Facts {
+            main_checkout: false,
+            ..ok(&none)
+        },
+        Facts {
+            branch_exists: false,
+            ..ok(&none)
+        },
+        Facts {
+            contains_main: false,
+            ..ok(&none)
+        },
+        Facts {
+            green_at: Some("00000000"),
+            ..ok(&none)
+        },
+        Facts {
+            green_at: None,
+            ..ok(&none)
+        },
+    ];
+    let dirty = vec!["src/a.rs".to_string()];
+    // Every refusal fires, and every one names a command to run.
+    let red = may_land("alpha").is_err()
+        && check(&ok(&dirty)).is_err()
+        && refusals.iter().all(|f| {
+            check(f)
+                .err()
+                .is_some_and(|m| m.contains('`') && m.starts_with("refused: "))
+        });
+    let green = may_land("main").is_ok()
+        && check(&ok(&none)) == Ok(true)
+        && check(&Facts {
+            already_in_main: true,
+            ..ok(&none)
+        }) == Ok(false);
+    Probe {
+        name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
         red_fires: red,
         green_passes: green,
     }

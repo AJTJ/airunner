@@ -10,6 +10,7 @@ pub mod holdings;
 pub mod hook;
 pub mod init;
 pub mod install;
+pub mod land;
 pub mod launch;
 pub mod lease;
 pub mod mcp;
