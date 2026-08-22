@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cmd::emit;
@@ -147,6 +148,170 @@ fn read_json(path: &Path) -> Result<Value, String> {
     }
 }
 
+/// One change to Air's OWN surface that a repo already running Air has to be told about
+/// (air-6g1).
+///
+/// The incident: this round moved five things under adopter, which has Air installed, and
+/// nothing told it. `air install` already dry-runs; this is that dry run made honest about
+/// version-to-version change.
+///
+/// The diff is computed against the ids recorded in `.air/installed.json`, NOT against a
+/// version number. Version strings do not move on their own, and a comparison keyed to one
+/// silently reports nothing the first time somebody forgets to bump it. Adding an entry here
+/// is the only step: every repo installed before it then sees it.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SurfaceChange {
+    /// Stable id, recorded in `.air/installed.json` once a repo has been told.
+    pub id: &'static str,
+    /// When it landed, and the bead, so the change is traceable to its reason.
+    pub since: &'static str,
+    pub headline: &'static str,
+    /// True when an existing caller keeps working and is wrong, rather than erroring. These
+    /// are the ones worth reading twice.
+    pub silent_break: bool,
+    /// What the repo does about it. "" when nothing is required.
+    pub action: &'static str,
+}
+
+/// Every surface change since Air started recording them. Append; never edit an id.
+pub const SURFACE: &[SurfaceChange] = &[
+    SurfaceChange {
+        id: "land",
+        since: "2026-08-22 (air-3pz)",
+        headline: "`air land [--all]` exists, and landing moved from the owner to the coordinator.",
+        silent_break: false,
+        action: "Alias or retire the repo's own land target; the coordinator lands, `--all` \
+                 takes the queue longest-wait-first and stops at the first red.",
+    },
+    SurfaceChange {
+        id: "close",
+        since: "2026-08-22 (air-869)",
+        headline: "`air close <id>… --reason` closes a landing pass in ONE bd process.",
+        silent_break: false,
+        action: "Use it instead of a loop over `bd close`: bd costs ~1.4 s per process here \
+                 whatever it is asked, so N closes cost N × that. Denied to workers.",
+    },
+    SurfaceChange {
+        id: "inbox-json",
+        since: "2026-08-22 (air-6p5)",
+        headline: "`air inbox --json` returns {captures, landings}, not a bare array.",
+        silent_break: true,
+        action: "Fix any script that indexes the top level as a list. It will not error: it \
+                 will read zero captures and report an empty queue.",
+    },
+    SurfaceChange {
+        id: "enforce-default",
+        since: "2026-08-22 (air-i59)",
+        headline: "Worker launches set AIR_ENFORCE=1: the hand-over gate refuses, it no \
+                   longer advises.",
+        silent_break: false,
+        action: "A worker without a recorded green at HEAD is now denied the `bd` write \
+                 instead of warned. Make sure the repo's verify command is the one workers \
+                 actually run: `air record verify -- <cmd>`.",
+    },
+    SurfaceChange {
+        id: "owner-label",
+        since: "2026-08-22 (air-5hw)",
+        headline: "The authority label is `owner`. `human` is presence only and gates nothing.",
+        silent_break: true,
+        action: "See the migration in docs/rules/adopting-air.md §5a. A repo that used \
+                 `human` as its gate has its owner queue unfenced the moment it upgrades: \
+                 exclude BOTH labels until its beads are relabelled.",
+    },
+    SurfaceChange {
+        id: "tmux-project-names",
+        since: "2026-08-22 (air-5lg)",
+        headline: "tmux sessions are `<project>-<worker>`, not `<worker>`.",
+        silent_break: false,
+        action: "Update any `tmux attach -t <worker>` in the repo's docs or scripts.",
+    },
+    SurfaceChange {
+        id: "bd-ms",
+        since: "2026-08-22 (air-869)",
+        headline: "Event lines carry bd_ms/bd_calls when the command shelled out to bd.",
+        silent_break: false,
+        action: "",
+    },
+];
+
+/// What `.air/installed.json` records, so the diff has a baseline.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Installed {
+    /// Informational: the `air --version` that last wrote this file.
+    pub air_version: String,
+    pub installed_at: String,
+    /// Surface ids this repo has already been told about.
+    pub surface: Vec<String>,
+}
+
+/// Changes this repo has not been told about yet. Pure, so the probe does not need a repo.
+pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
+    SURFACE
+        .iter()
+        .filter(|c| !known.iter().any(|k| k == c.id))
+        .collect()
+}
+
+/// Read `.air/installed.json`. A missing or unreadable file means "told about nothing",
+/// which is the right answer for a repo installed before Air recorded this.
+pub fn read_installed(air_dir: &Path) -> Installed {
+    std::fs::read_to_string(air_dir.join("installed.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_installed(air_dir: &Path, at: &str) -> Result<(), String> {
+    let v = Installed {
+        air_version: env!("CARGO_PKG_VERSION").to_string(),
+        installed_at: at.to_string(),
+        surface: SURFACE.iter().map(|c| c.id.to_string()).collect(),
+    };
+    let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    std::fs::write(air_dir.join("installed.json"), s + "\n")
+        .map_err(|e| format!("{}/installed.json: {e}", air_dir.display()))
+}
+
+/// The upgrade report, or "" when there is nothing to say.
+pub fn render_surface(changes: &[&SurfaceChange], written: bool) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let breaks = changes.iter().filter(|c| c.silent_break).count();
+    let mut s = format!(
+        "\nSURFACE DIFF: {} change(s) to Air since this repo was last installed",
+        changes.len()
+    );
+    if breaks > 0 {
+        s.push_str(&format!(
+            ", {breaks} of which change behaviour WITHOUT erroring"
+        ));
+    }
+    s.push('\n');
+    // Marker first and fixed width: the ids vary in length, so anything after them does not
+    // line up and the two that matter stop standing out.
+    for c in changes {
+        s.push_str(&format!(
+            "  {} {}  {}\n",
+            if c.silent_break { "!!" } else { "  " },
+            c.id,
+            c.headline
+        ));
+        if !c.action.is_empty() {
+            s.push_str(&format!("        do: {}\n", c.action));
+        }
+        s.push_str(&format!("        since {}\n", c.since));
+    }
+    s.push_str(if written {
+        "  recorded in .air/installed.json; this diff will be empty next time.\n"
+    } else {
+        "  read docs/rules/adopting-air.md \"Upgrading an existing installation\", then \
+         `air install --write` to apply and record.\n"
+    });
+    s
+}
+
 fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -177,7 +342,16 @@ struct Plan {
     air_dir: PathBuf,
     skills_dir: PathBuf,
     gitignore_has_air: bool,
+    /// Air's own surface changes this repo has not been told about (air-6g1). Empty on a
+    /// first install: nothing has moved under a repo that never had Air.
+    surface_diff: Vec<&'static SurfaceChange>,
+    previously_installed: bool,
     written: bool,
+}
+
+/// Would wiring the hooks change anything? False means Air is already installed here.
+fn plan_settings_changed(before: &Value, after: &Value) -> bool {
+    before != after
 }
 
 pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
@@ -222,6 +396,16 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         })
         .unwrap_or(false);
 
+    // "Already installed" means the hooks are wired or `.air/roles.md` is there. Without
+    // that, this is a first install and nothing has changed under anyone.
+    let previously_installed = !plan_settings_changed(&before_settings, &after_settings)
+        || air_dir.join("roles.md").exists();
+    let surface_diff = if previously_installed {
+        surface_diff(&read_installed(&air_dir).surface)
+    } else {
+        Vec::new()
+    };
+
     let mut plan = Plan {
         repo: repo.clone(),
         binary,
@@ -234,6 +418,8 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         air_dir: air_dir.clone(),
         skills_dir: skills_dir.clone(),
         gitignore_has_air,
+        surface_diff,
+        previously_installed,
         written: false,
     };
 
@@ -265,6 +451,9 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
                 std::fs::write(dir.join("SKILL.md"), skill_with_name(text, name))
                     .map_err(|e| format!("{}: {e}", dir.display()))?;
             }
+            // Last: the repo has now been told everything above, so record it. Written after
+            // the files so a failed install does not claim the surface was delivered.
+            write_installed(&air_dir, &super::now())?;
             Ok(())
         })();
         if let Err(e) = steps {
@@ -322,6 +511,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         } else {
             "dry run; re-run with --write to apply.\n"
         });
+        s.push_str(&render_surface(&plan.surface_diff, plan.written));
         s
     });
     0

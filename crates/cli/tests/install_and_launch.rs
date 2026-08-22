@@ -124,6 +124,62 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
     );
 }
 
+/// air-6g1: a repo that already has Air, installed before a surface change, is told what
+/// moved under it. A first install is not: nothing has changed under a repo that never had
+/// Air. `air install` says it and exits 0 without writing; `--write` records it, and the
+/// next run is quiet.
+#[test]
+fn install_reports_the_surface_diff_to_an_already_installed_repo() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_air")).parent().unwrap();
+    let path = bin_dir.to_string_lossy().to_string();
+
+    // A first install has nothing to report: this repo never had Air.
+    let (code, out, _) = air(&repo, Some(&path), &["install"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("SURFACE DIFF"), "{out}");
+
+    let (code, out, err) = air(&repo, Some(&path), &["install", "--write"]);
+    assert_eq!(code, 0, "{out}{err}");
+    // The version is recorded, so the next run is quiet.
+    let recorded: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".air/installed.json")).unwrap())
+            .unwrap();
+    assert!(!recorded["air_version"].as_str().unwrap().is_empty());
+    assert!(
+        recorded["surface"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "land")
+    );
+    let (code, out, _) = air(&repo, Some(&path), &["install"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("SURFACE DIFF"), "{out}");
+
+    // Now the adopter case: Air is installed, but from before any of this was recorded.
+    std::fs::remove_file(repo.join(".air/installed.json")).unwrap();
+    let (code, out, _) = air(&repo, Some(&path), &["install"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("SURFACE DIFF"), "{out}");
+    assert!(out.contains("air land"), "{out}");
+    assert!(out.contains("owner-label"), "{out}");
+    // The ones that break a caller without erroring are called out as such.
+    assert!(out.contains("WITHOUT erroring"), "{out}");
+    assert!(out.contains("dry run"), "{out}");
+    // Still a dry run: reporting is not writing.
+    assert!(!repo.join(".air/installed.json").exists(), "{out}");
+
+    // --write records it and the diff goes quiet.
+    let (code, out, err) = air(&repo, Some(&path), &["install", "--write"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(repo.join(".air/installed.json").exists());
+    let (code, out, _) = air(&repo, Some(&path), &["install"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("SURFACE DIFF"), "{out}");
+}
+
 #[test]
 fn launchers_print_the_exact_command() {
     let dir = scratch_repo();
