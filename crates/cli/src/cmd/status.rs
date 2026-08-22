@@ -370,9 +370,6 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
         if ledger.is_green_at(&worker, &head, Kind::Verify).ok() != Some(true) {
             continue;
         }
-        let range = format!("main..{head}");
-        let ids = super::attribution::beads_in_range(repo, &range);
-
         // How long this branch has been waiting: its oldest commit since main. Under
         // close-with-proof there is no hand-over moment to measure from, and the branch point
         // is the honest substitute — it is also what keeps the set from growing.
@@ -384,7 +381,15 @@ pub fn landings_for(repo: &Path) -> Vec<Landing> {
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
             .unwrap_or_else(|| at.clone());
-        for bead in known_beads(&ledger, &ids, &worker, &since) {
+
+        let range = format!("main..{head}");
+        // A declared bead is taken as it stands; only a guessed one is narrowed by who
+        // claimed it and when (air-4re).
+        let found = super::attribution::attributed_in_range(repo, &range);
+        let mut ids = found.declared;
+        ids.extend(known_beads(&ledger, &found.guessed, &worker, &since));
+
+        for bead in ids {
             v.push(Landing {
                 command: land_command(&bead),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
