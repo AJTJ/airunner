@@ -167,11 +167,10 @@ fn probe_audit_registry() -> Probe {
         &[("2026-08-22".to_string(), events.to_string())],
         "2026-08-22",
     );
-    // Red: nothing recorded for review-waiting, so it is a defect and says so.
-    let red = a
-        .rows
-        .iter()
-        .any(|r| r.id == "review-waiting" && r.defect.is_some());
+    // Red: nothing is recorded for `stuck`, so it is a defect and says so. (This probe
+    // pointed at `review-waiting` until air-s7c gave that one a condition, at which point it
+    // went silent and said so, which is the probe doing its job.)
+    let red = a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
         .rows

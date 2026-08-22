@@ -471,10 +471,10 @@ mod tests {
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
         assert_eq!((rw.fires, rw.subjects, rw.repeats), (80, 2, 78));
-        // Nothing was recorded for review-waiting, so it reads as a defect rather than
-        // getting a condition invented for it.
-        assert!(rw.defect.is_some());
-        assert_eq!(rw.condition_met, None);
+        // air-s7c recorded a condition for it, and it needs a person: whether a push led to
+        // an action is not something the ledger can see.
+        assert!(rw.defect.is_none());
+        assert_eq!((rw.removal_kind, rw.condition_met), ("judgement", None));
 
         // A mechanism that never fired is in the output, not omitted.
         let nudge = a.rows.iter().find(|r| r.id == "stop-nudge").unwrap();
@@ -488,8 +488,9 @@ mod tests {
             .unwrap();
         assert_eq!((idle.fires, idle.condition_met), (0, Some(true)));
 
-        // A mechanism with nothing recorded is reported as a defect.
-        assert!(a.rows.iter().any(|r| r.defect.is_some()));
+        // A mechanism with nothing recorded is still reported as a defect (`stuck`, which
+        // the 2026-08-22 pass deliberately left out of scope).
+        assert!(a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some()));
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
