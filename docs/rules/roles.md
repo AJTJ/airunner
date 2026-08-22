@@ -56,13 +56,17 @@ Ask the owner only for a genuine edge case (a blocker only they can clear, an am
 acceptance, a resource conflict), through the owner queue.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD, review
-waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent or
-gone with a claim, idle without a claim, hand-over not green, review waiting, lease held by a
-dead session, owner decision waiting, session joined or left). **[fact]**
+waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent
+with a claim, idle without a claim, hand-over not green, review waiting, lease held by a dead
+session, owner decision waiting, session joined or left). **[fact]** Review waiting and owner
+decision waiting push only when the SET changes, not while it ages; the waits themselves are
+always in `air status` and `air inbox --owner` on demand (air-s7c, 2026-08-22). What each
+mechanism costs and the condition under which it goes: `air audit`.
 
 Workers are reached with `SendMessage` to the session name `air status` shows; tmux panes are
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
-denied 30 min later by the permission classifier, 2026-08-22; removed never). **[fact]**
+denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
+zero denied send-keys attempts). **[fact]**
 When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
 reports conditions, status reports everything (standstill 2026-08-22; removed when the
 `review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).

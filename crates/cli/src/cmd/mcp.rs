@@ -488,13 +488,25 @@ fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String>
 
 // ---------- channel push ----------
 
-/// What has been pushed, keyed by (worker, kind): the minutes at which we last notified.
-/// Bounded by workers × kinds; entries vanish when the condition clears.
-pub type Pushed = BTreeMap<(String, &'static str), i64>;
+/// What has been pushed, keyed by (worker, kind): the minutes at which we last notified, and
+/// the value fingerprint we notified about. Bounded by workers × kinds; entries vanish when
+/// the condition clears.
+pub type Pushed = BTreeMap<(String, &'static str), (i64, String)>;
 
-/// Pure: which conditions to push now. New ones always; existing ones again once their
-/// duration has at least doubled since the last push (escalation without spam). Clears
-/// entries whose condition is gone.
+/// Pure: which conditions to push now.
+///
+/// A condition that carries a `fingerprint` is **change-only** (air-s7c): pushed when it is
+/// new, and again only when that value differs from the one last pushed. Age is deliberately
+/// not part of it — re-pushing because the oldest item got older is the repeat under a new
+/// name, and it is what produced 3 971 `review-waiting` pushes carrying 13 distinct facts on
+/// 2026-08-22.
+///
+/// A condition with no fingerprint keeps the older behaviour: new ones always, existing ones
+/// again once their duration has at least doubled (escalation without spam).
+///
+/// Either way this suppresses the PUSH only. Every evaluation is still written to the event
+/// log by `record_and_log`, because that ratio is what made the finding visible in the first
+/// place. Clears entries whose condition is gone.
 pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> {
     let mut out = Vec::new();
     let mut seen: Vec<(String, &'static str)> = Vec::with_capacity(current.len());
@@ -503,10 +515,16 @@ pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> 
         seen.push(key.clone());
         let again = match pushed.get(&key) {
             None => true,
-            Some(prev) => a.for_minutes >= prev.saturating_mul(2).max(prev.saturating_add(10)),
+            Some((prev_min, prev_fp)) => {
+                if a.fingerprint.is_empty() {
+                    a.for_minutes >= prev_min.saturating_mul(2).max(prev_min.saturating_add(10))
+                } else {
+                    a.fingerprint != *prev_fp
+                }
+            }
         };
         if again {
-            pushed.insert(key, a.for_minutes);
+            pushed.insert(key, (a.for_minutes, a.fingerprint.clone()));
             out.push(a.clone());
         }
     }
@@ -617,6 +635,9 @@ mod tests {
             kind,
             detail: String::new(),
             for_minutes: mins,
+            // No fingerprint: these tests cover the age-escalation path, which is what a
+            // kind without a change-only value still uses.
+            fingerprint: String::new(),
         }
     }
 

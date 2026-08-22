@@ -48,7 +48,8 @@ pub struct Row {
     pub last_fired: Option<String>,
     pub removal: &'static str,
     /// `checkable` when the audit evaluated it; `judgement` when a person must; `none` when
-    /// nothing was recorded; `never` when it was recorded as permanent.
+    /// nothing was recorded. There is no permanent: a mechanism that cannot be removed is
+    /// the throttle the do-less rule exists to prevent (air-s7c).
     pub removal_kind: &'static str,
     /// `Some(true)` = the ledger satisfies the recorded condition over this window.
     /// `None` = not machine-checkable, or nothing recorded.
@@ -87,6 +88,27 @@ struct Ev {
     command: String,
     decision: String,
     conditions: Vec<String>,
+    /// What this firing was about, from the event's own inputs: the file, the bead, else the
+    /// worker. Without it every decision-based mechanism reports exactly one subject, because
+    /// the only thing left to key on is its own command name (air-s7c).
+    subject: String,
+}
+
+/// The most specific thing an event names. Peer warnings are per file, claim refusals per
+/// bead; a mechanism with neither is at least per worker.
+fn subject_of(v: &serde_json::Value) -> String {
+    let inputs = v.get("inputs");
+    let worker = v.get("worker").and_then(|w| w.as_str()).unwrap_or("-");
+    for key in ["path", "bead"] {
+        if let Some(x) = inputs.and_then(|i| i.get(key)).and_then(|x| x.as_str())
+            && !x.is_empty()
+        {
+            // Scoped to the worker: these mechanisms are per session, so the same file
+            // warned about in two worktrees is two subjects, not one repeated.
+            return format!("{worker}:{x}");
+        }
+    }
+    worker.to_string()
 }
 
 fn parse(line: &str) -> Option<Ev> {
@@ -94,6 +116,7 @@ fn parse(line: &str) -> Option<Ev> {
     Some(Ev {
         at: v.get("at")?.as_str()?.to_string(),
         command: v.get("command")?.as_str()?.to_string(),
+        subject: subject_of(&v),
         decision: v
             .get("decision")
             .and_then(|d| d.as_str())
@@ -119,7 +142,7 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
         Fires::Decisions(traces) => traces
             .iter()
             .any(|(c, d)| e.command == *c && e.decision == *d)
-            .then_some(e.command.as_str()),
+            .then_some(e.subject.as_str()),
         Fires::Condition(kind) => e.conditions.iter().find_map(|c| {
             // Entries are `kind:subject`; the subject is what makes a firing distinct.
             let rest = c.strip_prefix(kind)?.strip_prefix(':')?;
@@ -164,6 +187,10 @@ const BOOKKEEPING: &[&str] = &[
     "stopped",
     "timeout",
     "triaged",
+    // Records that a peer warning was deliberately NOT said: the suppression half of
+    // `peer-warning`, and the evidence its once-per-session rule works. It acts on nobody, so
+    // it is bookkeeping rather than a mechanism (air-s7c).
+    "warn-repeat",
 ];
 
 /// Every `command / decision` pair some mechanism claims. A firing outside this set has no
@@ -289,7 +316,6 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             let subs = a.subjects.len();
             let (removal_kind, met) = match m.removal {
                 Removal::Unstated => ("none", None),
-                Removal::Never(_) => ("never", None),
                 Removal::Judgement(_) => ("judgement", None),
                 // "Remove when it stops firing" is answered by the counter and nothing else.
                 Removal::ZeroFirings(_) => ("checkable", Some(n == 0)),
@@ -362,7 +388,6 @@ pub fn render(a: &Audit) -> String {
                         ("checkable", Some(false)) =>
                             "the recorded condition does not hold over this window",
                         ("judgement", _) => "recorded condition is not machine-checkable",
-                        ("never", _) => "recorded as permanent",
                         _ => "nothing recorded",
                     }
                 ));
