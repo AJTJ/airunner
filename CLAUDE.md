@@ -51,6 +51,12 @@ Index items are 1–3 lines; detail lives behind the link.
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
+- **A claim that crosses between projects is checked by the receiver before it is acted on.**
+  Not hedged harder by the sender: a derived statement and an observed one have identical
+  grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
+  read the line cited. Applies in both directions and to commands most of all. Owner, via the
+  2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the receiver
+  opening the file, none by the sender flagging.
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
