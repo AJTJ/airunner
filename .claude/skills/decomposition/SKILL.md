@@ -49,7 +49,8 @@ Filing-time signals:
 
 - Acceptance needs "and" → split (`beads` skill).
 - Checklist in the description → an epic that was not cut (`bd ready` cannot see or claim items;
-  adopter `task-specification-research.md:571-581`, "epics wearing task clothes").
+  adopter `task-specification-research.md:571-581`; the phrase "epics wearing task clothes"
+  is that file's own, at `:25`).
 - Touches two lanes → split by lane, or record the edge and accept serial landing.
 - Worker would have to pick an approach → spike first, or decide it in the description.
 - Many unanswerable questions while writing the acceptance → too uncertain; spike or capture.
@@ -126,8 +127,8 @@ Before filing, every answer is yes:
 - **Valuable**: moves "Done when" closer or retires a named risk.
 - **Small**: one session, one diff (table above).
 - **Testable**: acceptance is one command or test name runnable inside the worktree by the
-  agent. Not prose; not a thing only the owner can do (12 of 49 adopter beads had acceptance
-  no agent could reach, `task-specification-research.md:526-545`).
+  agent. Not prose; not a thing only the owner can do (12 of 49 adopter beads had "acceptance
+  no agent can reach", `task-specification-research.md:526-545`).
 - **Lane named** on the bead, and **checked against the acceptance, not the description**: two
   adopter children had prose that respected a boundary and acceptances that both required the
   same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
@@ -247,3 +248,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
   per-worker queue cutting per `docs/decisions.md` 2026-08-20, and adopter evidence lines
   (file:line). Metis reasoning kept and labelled. Full sources and access dates:
   `docs/research/metis-decomposition-and-agile.md §13`.
+- Citations of the form `task-specification-research.md:<lines>` are into this repo's copy at
+  `docs/research/adopter-notes/notes/task-specification-research.md`, not into
+  adopter's tree: adopter's copy pinned here at `f2ca891` (`docs/research/adopter-notes/PROVENANCE.md`). the adopter is consolidating `docs/notes/` and the original will be
+  deleted, so the line numbers above were re-checked against our copy on 2026-08-22 (air-xsj).
