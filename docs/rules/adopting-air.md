@@ -130,6 +130,11 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
   `air claim` and `air handover` but is not told "work it to completion now" claims and waits.
   roles.md opens the Worker section with the run-to-completion loop; the launch prompt should
   also be a complete task, not a bead id.
+- **bd's agent setup is not installed.** `air init` runs `bd init --skip-agents --skip-hooks`:
+  no AGENTS.md, no `bd prime` SessionStart hook. `bd prime` injects a command reference that
+  tells agents to `bd update --claim` and `bd create`, which Air denies; Air's roles text is
+  the only agent-facing instruction. **[adopter]** remove the `bd prime --hook-json` hook
+  from `.claude/settings.json`.
 - **Air records friction it did not cause.** `PermissionDenied` and `PostToolUseFailure` hooks
   log, per worker, the tool, the command, and who or what refused, so the repo's own guards
   and declined prompts land in the same event stream as Air's.

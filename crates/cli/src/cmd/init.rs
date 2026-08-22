@@ -4,7 +4,9 @@
 //! The binary cannot bundle `bd` or `claude`, so the gate comes first: both present, bd at the
 //! pinned version and answering `bd list --json`, with the exact install command printed when
 //! not. Then, in the target directory: `git init -b main` and a first commit if needed;
-//! `.air/` in `.gitignore`; `bd init --prefix <p> --non-interactive --init-if-missing`;
+//! `.air/` in `.gitignore`; `bd init --prefix <p> --non-interactive --init-if-missing
+//! --skip-agents --skip-hooks` (no AGENTS.md, no `bd prime`: its command reference conflicts
+//! with Air's roles; owner 2026-08-21);
 //! `.claude/air.json` with deny patterns proposed from a scan of the repo's publish targets
 //! (adopter: a new publish target shipped outside an enumerated list; deny the verb, not the
 //! tool); then `air install --write` (hooks, `.mcp.json`, roles, skills); a minimal CLAUDE.md
