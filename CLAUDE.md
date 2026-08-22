@@ -45,6 +45,12 @@ Index items are 1–3 lines; detail lives behind the link.
 - **Steal avidly** from `~/projects/adopter` and `~/projects/metis` (and cite what was taken).
 - **Tests are optimized for speed, always.** They run constantly; per-test cost is a first-class
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
+- **Talking to the owner.** Plain language, short. Lead with the thing the owner has to know or
+  do; stop there. Default is five lines or fewer. No tables, no headers, no bold-label lists,
+  no bead ids unless the owner has to act on one. Do not report each agent finishing each task;
+  report when a round ends, when something is blocked, or when asked. Detail is available on
+  request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
+  2026-08-22, after a status report they refused to read.
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
@@ -85,8 +91,10 @@ Index items are 1–3 lines; detail lives behind the link.
 
 ## Essentials
 
-- Live adopter fleet is running on this machine (`~/projects/adopter`); never modify its state
-  from here.
+- A session may only touch its own project. `AIR_PROJECT` on both launchers; the PreToolUse hook
+  denies a `tmux` command naming another project's session and a `SendMessage` to a peer this
+  project's ledger does not know, and `air --repo` outside this checkout is refused (air-0lk).
+  Other fleets run on this machine (`~/projects/adopter`); the check is the rule, not this line.
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).

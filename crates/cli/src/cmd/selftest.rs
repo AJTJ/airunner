@@ -51,6 +51,7 @@ pub fn run(json: bool) -> i32 {
         probe_surface_diff(),
         probe_audit_states_no_verdict(),
         probe_land_refusals(),
+        probe_project_fence(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -232,6 +233,39 @@ fn probe_land_refusals() -> Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-0lk: a session may only touch its own project. With `AIR_PROJECT=air`, a PreToolUse
+/// hook call for `tmux kill-session -t fd-worker1` denies and names the fix; the same call for
+/// `air-alpha` is allowed. Same pair for a peer in another project's fleet. Driven through the
+/// real hook entry point, so a refusal that never reaches `PreToolUse` fails the probe.
+fn probe_project_fence() -> Probe {
+    use crate::cmd::hook::project_fence;
+    use air_hooks::{HookInput, HookOutcome};
+
+    let peers = ["alpha".to_string(), "beta".to_string()];
+    let call = |raw: String| -> Option<HookOutcome> {
+        let input = HookInput::parse(&raw).ok()?;
+        project_fence(&input, "air", &peers).map(|d| d.outcome)
+    };
+    let bash = |cmd: &str| {
+        call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
+    };
+    let send = |to: &str| {
+        call(serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": to}}).to_string())
+    };
+    let denied = |o: Option<HookOutcome>, needle: &str| {
+        matches!(o, Some(HookOutcome::Block { reason })
+            if reason.contains(needle) && reason.contains("air-0lk"))
+    };
+    Probe {
+        name: "project: tmux and SendMessage into another project are denied with the rule; this project's are allowed",
+        red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
+            && denied(send("adopter-51"), "adopter-51"),
+        green_passes: bash("tmux kill-session -t air-alpha").is_none()
+            && send("alpha-6d").is_none()
+            && bash("tmux ls").is_none(),
     }
 }
 
@@ -459,6 +493,7 @@ fn probe_attention() -> Probe {
                 changed_at: changed.into(),
                 pid: None,
                 pid_alive: None,
+                project: String::new(),
             }),
             ..Default::default()
         }],
@@ -493,6 +528,7 @@ fn probe_standstill() -> Probe {
                 changed_at: changed.into(),
                 pid: None,
                 pid_alive: None,
+                project: String::new(),
             }),
             ..Default::default()
         }],
@@ -695,7 +731,7 @@ fn probe_git_ancestor() -> Probe {
 fn probe_worker_task_prompt() -> Probe {
     use crate::cmd::launch::{task_is_prompt, worker_argv};
     let task = "say hello, it's $HOME";
-    let mut old = worker_argv("w", std::path::Path::new("/r/roles.md"), &[]);
+    let mut old = worker_argv("w", "air", std::path::Path::new("/r/roles.md"), &[]);
     old.push(task.to_string());
     let red = !task_is_prompt(&old, task);
 
