@@ -33,7 +33,8 @@ fn scratch_repo() -> tempfile::TempDir {
 
 /// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
 /// (default: open, unassigned, no labels); `list --status in_progress` answers from
-/// `<dir>/bd.in_progress` (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
+/// `<dir>/bd.in_progress` and `list --status awaiting_review` from `<dir>/bd.awaiting_review`
+/// (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
 ///
 /// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
 /// passes its environment through to bd): macOS charges ~0.5 s on the first exec of every
@@ -53,7 +54,8 @@ echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
   show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; else echo '{"id":"'"$2"'","status":"open","labels":[]}'; fi; exit 0;;
-  list) if [ -f "$d/bd.in_progress" ]; then awk '{printf "%s{\"id\":\"%s\",\"status\":\"in_progress\"}", (NR>1?",":""), $0} BEGIN{printf "["} END{print "]"}' "$d/bd.in_progress"; else echo "[]"; fi; exit 0;;
+  list) f="$d/bd.in_progress"; s=in_progress; case "$*" in *awaiting_review*) f="$d/bd.awaiting_review"; s=awaiting_review;; esac
+       if [ -f "$f" ]; then awk -v s="$s" '{printf "%s{\"id\":\"%s\",\"status\":\"%s\"}", (NR>1?",":""), $0, s} BEGIN{printf "["} END{print "]"}' "$f"; else echo "[]"; fi; exit 0;;
   ready) echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
   *) exit 0;;
@@ -465,6 +467,62 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         .unwrap();
     assert_eq!(main["claims"][0]["bead"], "fd-1", "claim kept: {o}");
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
+}
+
+/// air-6p5: only the owner may merge to main today, so a green hand-over waits on them and
+/// nothing said so. `air inbox --owner` lists the landings with their exact commands next to
+/// the decisions, derived from bd plus the ledger rather than stored twice.
+#[test]
+fn owner_queue_lists_green_landings_with_their_commands() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let head = {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // Claimed, then handed over: bd holds it in awaiting_review, the claim row names alpha.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(repo.join("bd.in_progress"), "").unwrap();
+    std::fs::write(repo.join("bd.awaiting_review"), "fd-1\n").unwrap();
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"awaiting_review","labels":[]}"#,
+    )
+    .unwrap();
+
+    // Not green at HEAD yet: the worker's to fix, so the owner is told nothing.
+    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("owner queue empty"), "{out}");
+
+    let (code, o, e) = air(&repo, &bd, &["record", "verify", "--", "true"]);
+    assert_eq!(code, 0, "{o}{e}");
+    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("1 landing(s) waiting on the owner"), "{out}");
+    assert!(
+        out.contains(head.get(..8).unwrap()) && out.contains("from main"),
+        "{out}"
+    );
+    assert!(
+        out.contains("on main, `git merge --no-ff main` then verify"),
+        "{out}"
+    );
+
+    // And in JSON, next to the captures, so the channel reads one shape.
+    let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["landings"][0]["bead"], "fd-1", "{out}");
+    assert_eq!(v["landings"][0]["worker"], "main", "{out}");
+    assert!(v["captures"].as_array().unwrap().is_empty(), "{out}");
 }
 
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so

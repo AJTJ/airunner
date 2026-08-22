@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use air_ledger::Ledger;
 use air_ledger::claims::Claim;
 use air_ledger::leases::Lease;
 use air_ledger::verify::Kind;
@@ -135,7 +136,160 @@ pub struct Attention {
 /// The landing command for a worker's branch. The repo's own until `air land` exists
 /// (CLAUDE.md); the worktree branch is named after the worker.
 pub fn land_hint(worker: &str) -> String {
-    format!("land it: on main, `git merge --no-ff {worker}` then verify")
+    format!("land it: {}", land_command(worker))
+}
+
+/// The command alone, for a line that already says what it is (air-6p5).
+pub fn land_command(worker: &str) -> String {
+    format!("on main, `git merge --no-ff {worker}` then verify")
+}
+
+/// Who handed `bead` over and when, from the claim row, open or released. The claim row is the
+/// only source (an open-claims scan was why review waits were always empty, air-e7q); since
+/// air-3eu the row is usually still open, stamped by the reconcile, so `first_handover_at` is
+/// what the coalesce finds. `fallback` is used when there is no row at all.
+fn handover_of(ledger: &Ledger, bead: &str, fallback: &str) -> (String, String) {
+    ledger
+        .conn()
+        .query_row(
+            "SELECT worker, coalesce(first_handover_at, released_at, claimed_at) FROM claims \
+             WHERE bead=?1 ORDER BY claimed_at DESC LIMIT 1",
+            rusqlite::params![bead],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .unwrap_or_else(|_| ("?".to_string(), fallback.to_string()))
+}
+
+/// A green hand-over that only the owner can clear (air-6p5). The coordinator may not commit
+/// on main and `air land` does not exist, so two green hand-overs waited on 2026-08-22 with
+/// nothing saying so; the owner found out by reading a tmux pane (capture
+/// 01M0KZETBMSHDXNX6PW15HVSJV). Removal: when `air land` exists and the coordinator may run
+/// it, this drops to a count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Landing {
+    pub bead: String,
+    pub worker: String,
+    /// The worker's HEAD, the commit the recorded green is at.
+    pub head: String,
+    pub minutes: i64,
+    /// The exact command, the repo's own until `air land` exists.
+    pub command: String,
+}
+
+/// Pure: the landings a snapshot shows. A review wait whose worker has a recorded green at
+/// HEAD is the owner's to merge; one that is not green is the worker's to fix, and shows as
+/// `review-waiting` instead.
+pub fn landings(s: &Snapshot) -> Vec<Landing> {
+    s.review_waits
+        .iter()
+        .filter_map(|(bead, worker, minutes)| {
+            let w = s.workers.iter().find(|w| &w.worker == worker)?;
+            if w.green_at_head != Some(true) {
+                return None;
+            }
+            Some(Landing {
+                bead: bead.clone(),
+                worker: worker.clone(),
+                head: w.head.clone()?,
+                minutes: *minutes,
+                command: land_command(worker),
+            })
+        })
+        .collect()
+}
+
+/// Pure: the `waiting on owner` block for the top of `air status`. Empty when nothing waits,
+/// so a quiet fleet prints nothing.
+pub fn waiting_on_owner(s: &Snapshot) -> String {
+    let l = landings(s);
+    let decisions = s.owner_queue_depth;
+    if l.is_empty() && decisions == 0 {
+        return String::new();
+    }
+    let plural = |n: usize, word: &str| {
+        if n == 1 {
+            format!("{n} {word}")
+        } else {
+            format!("{n} {word}s")
+        }
+    };
+    let mut parts = Vec::new();
+    if !l.is_empty() {
+        let named = l
+            .iter()
+            .map(|x| {
+                format!(
+                    "{} {} from {}",
+                    x.bead,
+                    x.head.get(..8).unwrap_or(&x.head),
+                    x.worker
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("{} ({named})", plural(l.len(), "landing")));
+    }
+    if decisions > 0 {
+        parts.push(plural(decisions, "decision"));
+    }
+    let mut out = format!("waiting on owner: {}\n", parts.join(", "));
+    for x in &l {
+        out.push_str(&format!(
+            "  {} ({} min): {}\n",
+            x.bead, x.minutes, x.command
+        ));
+    }
+    if decisions > 0 {
+        out.push_str("  decisions: `air inbox --owner`\n");
+    }
+    out
+}
+
+/// The landings alone, without a full `gather`: bd's `awaiting_review` list, the claim row
+/// that names who handed each over, and that worker's green at HEAD. Derived every time, so
+/// the owner's feed and `air status` cannot disagree (air-6p5). bd absent or slow means no
+/// landings, not an error: `air inbox --owner` still shows the decisions.
+pub fn landings_for(repo: &Path) -> Vec<Landing> {
+    let Ok((ledger, _)) = open(repo) else {
+        return Vec::new();
+    };
+    let mut bd = super::claim::bd_for(repo);
+    if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
+        bd.timeout = std::time::Duration::from_secs(2);
+    }
+    let Ok(beads) = air_bd::WorkLedger::by_status(&bd, "awaiting_review") else {
+        return Vec::new();
+    };
+    let heads: BTreeMap<String, (Option<String>, Option<bool>)> = git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(path, _)| {
+            let name = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
+            let head = git::head(&path).ok();
+            let green = head
+                .as_deref()
+                .and_then(|h| ledger.is_green_at(&name, h, Kind::Verify).ok());
+            (name, (head, green))
+        })
+        .collect();
+    let at = now();
+    beads
+        .into_iter()
+        .filter_map(|i| {
+            let (worker, since) = handover_of(&ledger, &i.id, &at);
+            let (head, green) = heads.get(&worker)?;
+            if *green != Some(true) {
+                return None;
+            }
+            Some(Landing {
+                bead: i.id,
+                command: land_command(&worker),
+                head: head.clone()?,
+                minutes: minutes_between(&since, &at).unwrap_or(0),
+                worker,
+            })
+        })
+        .collect()
 }
 
 /// Minutes between two RFC 3339 timestamps; None when either does not parse.
@@ -537,15 +691,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         .iter()
         .flatten()
         .map(|bead| {
-            let (worker, since) = ledger
-                .conn()
-                .query_row(
-                    "SELECT worker, coalesce(first_handover_at, released_at, claimed_at) FROM claims \
-                     WHERE bead=?1 ORDER BY claimed_at DESC LIMIT 1",
-                    rusqlite::params![bead],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )
-                .unwrap_or_else(|_| ("?".to_string(), at.clone()));
+            let (worker, since) = handover_of(&ledger, bead, &at);
             (
                 bead.clone(),
                 worker,
@@ -696,7 +842,8 @@ pub fn record_and_log(
 }
 
 fn render(s: &Snapshot, att: &[Attention]) -> String {
-    let mut out = String::new();
+    // First, because it is the only thing here nobody else can clear (air-6p5).
+    let mut out = waiting_on_owner(s);
     for w in &s.workers {
         let sess = w
             .session
@@ -972,6 +1119,51 @@ mod tests {
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+    }
+
+    /// air-6p5: two green hand-overs waited on the owner and nothing said so. The line names
+    /// each bead, its sha, who handed it over, and the exact command; a quiet fleet is silent.
+    #[test]
+    fn waiting_on_owner_names_every_landing_and_is_empty_when_nothing_waits() {
+        let mut green = worker("alpha", Some("working"), T_2, vec![], Some(true));
+        green.head = Some("8c190753abcdef".into());
+        let mut red = worker("beta", Some("working"), T_2, vec![], Some(false));
+        red.head = Some("deadbeefcafe".into());
+        let s = Snapshot {
+            workers: vec![green, red],
+            review_waits: vec![
+                ("air-i59".into(), "alpha".into(), 18),
+                // Handed over but not green at HEAD: the worker's to fix, not the owner's.
+                ("air-869".into(), "beta".into(), 2),
+            ],
+            owner_queue_depth: 1,
+            ..Default::default()
+        };
+        let out = waiting_on_owner(&s);
+        assert!(
+            out.starts_with(
+                "waiting on owner: 1 landing (air-i59 8c190753 from alpha), 1 decision\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("air-i59 (18 min): on main, `git merge --no-ff alpha` then verify"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("air-869"),
+            "not green is not a landing: {out}"
+        );
+        assert!(out.contains("decisions: `air inbox --owner`"), "{out}");
+
+        // Nothing waiting: nothing printed, so a quiet fleet stays quiet.
+        let quiet = Snapshot {
+            workers: s.workers.clone(),
+            review_waits: vec![("air-869".into(), "beta".into(), 2)],
+            ..Default::default()
+        };
+        assert_eq!(waiting_on_owner(&quiet), "");
+        assert_eq!(waiting_on_owner(&Snapshot::default()), "");
     }
 
     /// air-3eu: the claim on a handed-over bead stays open so the coordinator still sees the

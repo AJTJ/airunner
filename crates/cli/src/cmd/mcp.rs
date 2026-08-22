@@ -286,9 +286,12 @@ fn resources() -> Vec<Value> {
     [
         ("air://status", "Fleet status snapshot (JSON)"),
         ("air://attention", "Current attention conditions (JSON array)"),
-        ("air://inbox", "Open captures (JSON array)"),
+        ("air://inbox", "Open captures (JSON: captures, landings)"),
         ("air://holdings", "File holdings across worktrees (JSON)"),
-        ("air://owner-queue", "The owner's decision queue (JSON array)"),
+        (
+            "air://owner-queue",
+            "What waits on the owner: decisions and green landings with their commands (JSON)",
+        ),
         ("air://leases", "Held resources with defects and waiters (JSON)"),
     ]
     .iter()
