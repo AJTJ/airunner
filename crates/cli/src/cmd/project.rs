@@ -1,21 +1,40 @@
-//! A session may only touch its own project (air-0lk).
+//! A session may ACT only on its own project. Talking to another one is fine (air-0lk,
+//! air-3oq).
 //!
 //! Incident (owner, 2026-08-22, after the round): a coordinator sees far more than its own
 //! project and nothing stopped it acting on the rest. `tmux ls` is machine-wide, so air-5lg
 //! made the names legible but legible is not fenced: `tmux kill-session` reaches another
-//! project's pane. `ListAgents` in this repo's coordinator listed `adopter-51`, a live agent
-//! of `~/projects/adopter`, as a messageable peer next to `alpha-6d` and `beta-72`; a message
-//! to it is an instruction to another project's fleet. In the same round worker beta proposed
-//! running `air triage` against adopter's captures and the coordinator refused by hand, on
-//! prose (capture 01M0N5783JTB354QQ5NAS0YPAA). CLAUDE.md's "never modify adopter's state" is
-//! exactly the prose the repo's "Machinery over Markdown" rule says should become a check.
+//! project's pane. In the same round worker beta proposed running `air triage` against
+//! adopter's captures and the coordinator refused by hand, on prose (capture
+//! 01M0N5783JTB354QQ5NAS0YPAA). CLAUDE.md's "never modify adopter's state" is exactly the
+//! prose the repo's "Machinery over Markdown" rule says should become a check.
 //!
-//! Everything here is pure so `air selftest` fires every refusal without a tmux server, a peer,
-//! or a second repo. The project name is `cmd::tmux::project_prefix`, the resolver air-5lg
-//! already added for session names; there is not a second one.
+//! ## Acting, not talking
+//!
+//! The owner's rule is that another project's worktrees, tmux sessions and workers are never
+//! ours to kill, restart, re-model or tidy — and that **reading and messaging are fine**.
+//! air-0lk implemented the fence tighter than the rule and denied `SendMessage` too. That was
+//! removed by air-3oq, and the removal is permanent: if a message ever causes harm, that is an
+//! incident to file, not a reason to re-tighten. The cost of the fence is paid in every
+//! exchange that does not happen, and that cost cannot be observed.
+//!
+//! The failure it caused was silent and uninterpretable. A adopter coordinator launched with
+//! `AIR_PROJECT` set would try to reach this fleet and get a denial it had no way to read as
+//! "the fence, not you" — and the cross-project channel is the one that caught three wrong
+//! claims on 2026-08-22, including `acceptance_criteria`, where both coordinators had it
+//! backwards and only an implementing agent got it right. Had the fence existed that morning,
+//! air-ayp would have shipped section-only and printed nothing for 647 of adopter's beads.
+//!
+//! So every refusal here names the fence, the project it is protecting, and what is still
+//! allowed. A denial a peer cannot interpret is the defect, as much as the denial itself.
+//!
+//! Everything here is pure so `air selftest` fires every refusal without a tmux server or a
+//! second repo. The project name is `cmd::tmux::project_prefix`, the resolver air-5lg already
+//! added for session names; there is not a second one.
 //!
 //! Removal condition: when the ledger shows a full quarter with zero cross-project denials AND
-//! the agent channel has its own project scoping, this check has nothing left to catch.
+//! the agent channel has its own project scoping, this check has nothing left to catch. The
+//! messaging clause is not part of that: it is gone, not suspended.
 
 /// A tmux session name this command names, from `-t <target>` and `-s <name>`. A target may
 /// address a window or pane (`session:window.pane`), so only the part before `:` is the
@@ -44,10 +63,10 @@ pub fn tmux_sessions_named(cmd: &str) -> Vec<String> {
     out
 }
 
-/// Does this name belong to `project`? A session Air made is `<project>-<worker>`
+/// Does this session name belong to `project`? A session Air made is `<project>-<worker>`
 /// (air-5lg); `<project>` alone is the project's own. Anything else is another project's, or
 /// old enough that Air cannot tell — and both are refused, because the failure being prevented
-/// is reaching a stranger.
+/// is ACTING on a stranger's fleet.
 pub fn in_project(name: &str, project: &str) -> bool {
     !project.is_empty() && (name == project || name.starts_with(&format!("{project}-")))
 }
@@ -66,10 +85,13 @@ pub fn tmux_refusal(cmd: &str, project: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "refused: tmux session(s) {} are not this project's ({project}). `tmux ls` is \
-         machine-wide; a session may only touch its own project (air-0lk). This project's \
-         sessions are named `{project}-<worker>` and `air status` lists them. If another \
-         project's fleet needs something, ask its owner.",
+        "refused by Air's cross-project fence (air-0lk), protecting project `{project}`: tmux \
+         session(s) {} are not `{project}`'s. `tmux ls` is machine-wide, so a command naming \
+         another project's session would kill or re-model a fleet that is not yours. STILL \
+         ALLOWED: reading anything, and MESSAGING any session on this machine, including \
+         another project's — the fence is about acting, not talking (air-3oq). This project's \
+         sessions are `{project}-<worker>`; `air status` lists them. If another project's \
+         fleet needs something done, message it and ask.",
         foreign.join(", ")
     ))
 }
@@ -85,42 +107,6 @@ pub fn is_tmux_command(cmd: &str) -> bool {
                     .get(i.saturating_sub(1))
                     .is_some_and(|p| matches!(*p, "&&" | "||" | ";" | "|" | "(" | "{")))
     })
-}
-
-/// The parent conversation, which is never another project's.
-const OWN_CONVERSATION: &str = "main";
-
-/// Refuse a `SendMessage` to a peer that is not one of this project's. `known` are the bases a
-/// peer name in this project can carry: every worker in this ledger's sessions plus the
-/// project and the main checkout's directory name. A peer address is `<base>` or
-/// `<base>-<suffix>` (`ListAgents` shows `alpha-6d`, `ai-runner-0e`, `adopter-51`).
-///
-/// Closed by default, per the owner's rule: a name that matches nothing here is refused. That
-/// includes an in-process subagent this session spawned itself, which Air cannot see; the
-/// refusal names the escape (`ListAgents`) rather than pretending the name is foreign.
-pub fn peer_refusal(to: &str, project: &str, known: &[String]) -> Option<String> {
-    let to = to.trim();
-    if to.is_empty() || to == OWN_CONVERSATION {
-        return None;
-    }
-    // A listing can print `name [ref]`; the name is the address.
-    let name = to.split_whitespace().next().unwrap_or(to);
-    let matches =
-        |b: &String| !b.is_empty() && (name == b.as_str() || name.starts_with(&format!("{b}-")));
-    if known.iter().any(matches) || in_project(name, project) {
-        return None;
-    }
-    Some(format!(
-        "refused: `{name}` is not a session of this project ({project}). `ListAgents` shows \
-         every agent on this machine, including other projects' fleets, and a message to one \
-         is an instruction to someone else's workers (air-0lk). This project's peers: {}. If \
-         `{name}` is a subagent you spawned here, name it after this project's lane.",
-        if known.is_empty() {
-            "none recorded yet".to_string()
-        } else {
-            known.join(", ")
-        }
-    ))
 }
 
 #[cfg(test)]
@@ -151,25 +137,19 @@ mod tests {
         assert!(tmux_refusal("cd /x && tmux attach -t fd-x", "air").is_some());
     }
 
+    /// air-3oq: a denial a peer cannot interpret is the defect. It has to say which fence,
+    /// which project, and what is still open — otherwise a fenced coordinator reads it as
+    /// "you are not allowed to talk to them" and stops trying.
     #[test]
-    fn a_peer_outside_this_project_is_refused_and_unknown_names_are_too() {
-        let known: Vec<String> = ["alpha", "beta", "ai-runner"].map(String::from).to_vec();
-        assert_eq!(peer_refusal("alpha-6d", "air", &known), None);
-        assert_eq!(peer_refusal("ai-runner-0e", "air", &known), None);
-        assert_eq!(peer_refusal("air-w1", "air", &known), None);
-        // The parent conversation is never another project's.
-        assert_eq!(peer_refusal("main", "air", &known), None);
-        // The incident.
-        let r = peer_refusal("adopter-51", "air", &known).unwrap();
+    fn the_refusal_names_the_fence_the_project_and_what_is_still_allowed() {
+        let r = tmux_refusal("tmux kill-session -t fd-worker1", "air").unwrap();
+        assert!(r.contains("air-0lk"), "names the fence: {r}");
+        assert!(r.contains("`air`"), "names the project it protects: {r}");
         assert!(
-            r.contains("adopter-51") && r.contains("alpha, beta"),
-            "{r}"
+            r.contains("MESSAGING") && r.contains("air-3oq"),
+            "says messaging is still allowed, and why: {r}"
         );
-        // Closed by default: a name Air cannot place is refused, not allowed.
-        assert!(peer_refusal("researcher", "air", &known).is_some());
-        // A `name [ref]` address is matched on the name.
-        assert_eq!(peer_refusal("alpha-6d [3fa9c1]", "air", &known), None);
-        assert!(peer_refusal("adopter-51 [aaaa]", "air", &known).is_some());
+        assert!(r.contains("message it and ask"), "says what to do: {r}");
     }
 
     #[test]

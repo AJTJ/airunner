@@ -58,6 +58,7 @@ pub fn run(json: bool) -> i32 {
         probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_close_with_proof_sequence(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -186,6 +187,109 @@ fn probe_audit_registry() -> Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-2zq: close-with-proof, end to end. air-i59 made the gate blocking on evidence measured
+/// against the hand-over flow; air-7o3 replaced hand-over with closing, and the question raised
+/// was whether the gate now bills a fresh verify per bead and whether an agent can stall.
+///
+/// Red: once HEAD moves, the next close IS refused until a verify is recorded there — the gate
+/// still bites, which is the half worth keeping. Green: claim, close, take the next bead, close
+/// again on an UNCHANGED HEAD, all on one verify run. So the second close is free and the
+/// sequence in CLAUDE.md's work flow does not stall.
+fn probe_close_with_proof_sequence() -> Probe {
+    use crate::cmd::hook::handover_gate;
+    use air_hooks::HookOutcome;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let green_at = |sha: &str| -> Result<(), String> {
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "probe".into(),
+                sha: sha.to_string(),
+                kind: Kind::Verify,
+                exit_code: 0,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+            })
+            .map_err(|e| e.to_string())
+        };
+        let passes = |bead: &str| -> bool {
+            matches!(
+                handover_gate(&l, "probe", &dir, &format!("bd close {bead}"), true)
+                    .map(|d| d.outcome),
+                Ok(HookOutcome::Allow { .. })
+            )
+        };
+
+        // Bead one: claim, work already committed, verify recorded, close.
+        l.record_claim("fd-1", "probe", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        green_at(&head)?;
+        let first = passes("fd-1");
+
+        // Bead two, finished without moving HEAD (a docs bead already satisfied, a no-op fix).
+        // ONE verify run exists in total, and this close must still pass: a green at a commit
+        // that has not moved is still a green.
+        l.record_claim("fd-2", "probe", &[], "t1")
+            .map_err(|e| e.to_string())?;
+        let second_free = passes("fd-2");
+        let runs: i64 = l
+            .conn()
+            .query_row("SELECT count(*) FROM verify_runs", [], |r| r.get(0))
+            .unwrap_or(-1);
+
+        // Bead three, with a commit: HEAD moved, so the gate demands a verify there.
+        g(&["commit", "-q", "--allow-empty", "-m", "b"])?;
+        l.record_claim("fd-3", "probe", &[], "t2")
+            .map_err(|e| e.to_string())?;
+        let refused_after_commit = !passes("fd-3");
+        // ...and recording one at the new HEAD clears it. No stall.
+        let moved = g(&["rev-parse", "HEAD"])?;
+        green_at(&moved)?;
+        let cleared = passes("fd-3");
+
+        Ok((
+            refused_after_commit,
+            first && second_free && runs == 1 && cleared,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
@@ -511,18 +615,19 @@ fn probe_land_refusals() -> Probe {
     }
 }
 
-/// air-0lk: a session may only touch its own project. With `AIR_PROJECT=air`, a PreToolUse
-/// hook call for `tmux kill-session -t fd-worker1` denies and names the fix; the same call for
-/// `air-alpha` is allowed. Same pair for a peer in another project's fleet. Driven through the
-/// real hook entry point, so a refusal that never reaches `PreToolUse` fails the probe.
+/// air-0lk, corrected by air-3oq: a session may ACT only on its own project, and may TALK to
+/// any of them. With `AIR_PROJECT=air`, a PreToolUse call for `tmux kill-session -t fd-worker1`
+/// denies with a refusal that names the fence, the project and what is still allowed; the same
+/// call for `air-alpha` passes. `SendMessage` to another project's coordinator passes, which is
+/// the half air-0lk got wrong: denying it broke the cross-project channel silently, in the
+/// verification path.
 fn probe_project_fence() -> Probe {
     use crate::cmd::hook::project_fence;
     use air_hooks::{HookInput, HookOutcome};
 
-    let peers = ["alpha".to_string(), "beta".to_string()];
     let call = |raw: String| -> Option<HookOutcome> {
         let input = HookInput::parse(&raw).ok()?;
-        project_fence(&input, "air", &peers).map(|d| d.outcome)
+        project_fence(&input, "air").map(|d| d.outcome)
     };
     let bash = |cmd: &str| {
         call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
@@ -535,11 +640,17 @@ fn probe_project_fence() -> Probe {
             if reason.contains(needle) && reason.contains("air-0lk"))
     };
     Probe {
-        name: "project: tmux and SendMessage into another project are denied with the rule; this project's are allowed",
+        name: "project: acting on another project's tmux session is denied and the refusal is readable; messaging any project is allowed",
         red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
-            && denied(send("adopter-51"), "adopter-51"),
-        green_passes: bash("tmux kill-session -t air-alpha").is_none()
+            // The refusal has to be interpretable, or a fenced peer reads it as "not you"
+            // and stops trying (air-3oq).
+            && denied(bash("tmux kill-session -t fd-worker1"), "MESSAGING")
+            && denied(bash("tmux send-keys -t fd-w1:0.1 hi"), "air-3oq"),
+        // Messaging ANY project is allowed, including one this ledger has never seen: the
+        // fence is about acting, not talking, and denying it broke the channel silently.
+        green_passes: send("adopter-51").is_none()
             && send("alpha-6d").is_none()
+            && bash("tmux kill-session -t air-alpha").is_none()
             && bash("tmux ls").is_none(),
     }
 }
