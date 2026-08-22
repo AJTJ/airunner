@@ -52,7 +52,7 @@ pub fn run(json: bool) -> i32 {
         probe_surface_diff(),
         probe_change_only_push(),
         probe_review_fact_survives(),
-        probe_land_selects_from_the_merge_range(),
+        probe_bead_attribution_reads_a_trailer(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -159,31 +159,44 @@ fn probe_review_fact_survives() -> Probe {
     }
 }
 
-/// air-7kp: `air land` used to select from `bd list --status awaiting_review`, which the
-/// owner's close-with-proof ruling emptied, so `--all` found nothing and the pre-merge
-/// acceptance report printed nothing — on every branch, silently. Selection is now the merge
-/// range.
+/// air-4re: which beads a branch carries is written by a machine and read by a machine.
 ///
-/// Red: a commit message naming beads yields them, so a branch whose worker closed its own
-/// bead is still attributable. Green: the extraction does not invent ids out of ordinary prose
-/// or trailers, and an id shape with no digit (`air-zyo`, `air-ouw` are real) is still found —
-/// a narrower rule would drop real beads, and the reason the loose one is safe is that bd
-/// confirms every candidate and omits what it does not know (air-76z).
-fn probe_land_selects_from_the_merge_range() -> Probe {
-    use crate::cmd::status::bead_ids_in_text;
+/// Red: a commit whose body MENTIONS three beads and carries one `Bead:` trailer is attributed
+/// to one — the case the prose scan cannot get right, because a mention and an attribution
+/// have identical grammar. air-7kp needed an authorship filter and a branch-point bound on top
+/// of the scan and still went 8 → 6 → 3 against one real branch.
+///
+/// Green: the dated fallback still reads history (a commit before the cutoff with no trailer),
+/// and a commit after it with no trailer is attributed to nothing rather than guessed at.
+fn probe_bead_attribution_reads_a_trailer() -> Probe {
+    use crate::cmd::attribution::{Commit, cutoff, ids_of, prose_ids, trailer_ids};
 
-    let msg = "feat(land): select from the merge range (air-7kp)\n\nAlso closes air-zyo and \
-               air-ouw. Co-Authored-By: Someone <x@y.z>\nSee docs/rules/roles.md for the rule.";
-    let found = bead_ids_in_text(msg);
-    let red = found.contains(&"air-7kp".to_string())
-        && found.contains(&"air-zyo".to_string())
-        && found.contains(&"air-ouw".to_string());
-    // Green: no ids conjured from an empty range, and the uppercase trailer is not one.
-    let green = bead_ids_in_text("").is_empty()
-        && !found.iter().any(|f| f.starts_with("Co-"))
-        && bead_ids_in_text("a plain sentence with no bead in it").is_empty();
+    let mentions = "fix(land): select from the merge range\n\nBuilds on air-3pz, measured in \
+                    air-869, supersedes air-7kp.\n\nBead: air-4re\n";
+    let red = trailer_ids(mentions) == ["air-4re"]
+        && ids_of(
+            &[Commit {
+                committed: "2026-08-22T10:00:00Z".to_string(),
+                message: mentions.to_string(),
+            }],
+            prose_ids,
+            cutoff(),
+        ) == ["air-4re"]
+        // ...and the scan on its own would indeed have taken all four.
+        && prose_ids(mentions).len() >= 4;
+
+    let old = Commit {
+        committed: "2020-01-01T00:00:00Z".to_string(),
+        message: "fix: the work (air-old)\n".to_string(),
+    };
+    let new = Commit {
+        committed: "2999-01-01T00:00:00Z".to_string(),
+        message: "fix: the work (air-new)\n".to_string(),
+    };
+    let green = ids_of(&[old], prose_ids, cutoff()) == ["air-old"]
+        && ids_of(&[new], prose_ids, cutoff()).is_empty();
     Probe {
-        name: "land: beads come from the merge range, including ids with no digit; prose invents none",
+        name: "land: a `Bead:` trailer attributes the commit; a mention does not; the prose fallback is dated",
         red_fires: red,
         green_passes: green,
     }
