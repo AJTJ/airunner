@@ -29,9 +29,16 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
+/// None of the tests using `air()` are about bd; a missing binary fails in microseconds where
+/// a real `bd` in a non-beads directory cost 0.25 to 0.5 s per call (air-4vu, 2026-08-22).
+/// Tests that need a bd (doctor, init) build their own fake and set `AIR_BD_BIN` themselves.
 fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, String) {
     let mut c = Command::new(env!("CARGO_BIN_EXE_air"));
-    c.arg("--repo").arg(repo).args(args).current_dir(repo);
+    c.arg("--repo")
+        .arg(repo)
+        .args(args)
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .current_dir(repo);
     if let Some(p) = path_env {
         c.env("PATH", p);
     }
