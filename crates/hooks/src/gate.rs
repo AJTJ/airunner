@@ -223,3 +223,65 @@ mod tests {
         assert_eq!(handover_verdict(&f).missing.len(), n);
     }
 }
+
+/// Stop nudge (air-09i): a worker that holds no claim while beads are ready is told once
+/// which beads are ready, by blocking its stop with the list. `stop_hook_active` is true
+/// when Claude Code is already continuing because of a Stop hook (hooks reference,
+/// https://code.claude.com/docs/en/hooks, accessed 2026-08-22; it also ends the turn after 8
+/// consecutive blocks), so the nudge fires exactly once per stop, never a loop. The
+/// coordinator is never nudged. `stale` marks a ready list older than its freshness window.
+///
+/// Removal condition (bead air-09i): when a round shows nudges that led to a claim <= nudges
+/// ignored, or workers claim the next bead unprompted in > 90% of hand-overs.
+pub fn stop_nudge(
+    role: &str,
+    holds_claim: bool,
+    ready: &[String],
+    stop_hook_active: bool,
+    stale: bool,
+) -> Option<String> {
+    if role != "worker" || holds_claim || stop_hook_active || ready.is_empty() {
+        return None;
+    }
+    let first = ready.first().map(String::as_str).unwrap_or_default();
+    Some(format!(
+        "air: ready: {}{}; claim one (air claim {first}) or say why you are stopping (air capture \"<why>\")",
+        ready.join(", "),
+        if stale {
+            " (ready list may be stale)"
+        } else {
+            ""
+        },
+    ))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod nudge_tests {
+    use super::stop_nudge;
+
+    fn ids() -> Vec<String> {
+        vec!["fd-1".to_string(), "fd-2".to_string()]
+    }
+
+    #[test]
+    fn nudges_only_a_claimless_worker_with_ready_beads_on_a_fresh_stop() {
+        let r = stop_nudge("worker", false, &ids(), false, false).unwrap();
+        assert!(r.contains("ready: fd-1, fd-2"));
+        assert!(r.contains("air claim fd-1"));
+        assert!(!r.contains("stale"));
+        assert!(
+            stop_nudge("worker", false, &ids(), false, true)
+                .unwrap()
+                .contains("may be stale")
+        );
+    }
+
+    #[test]
+    fn every_other_combination_passes() {
+        assert!(stop_nudge("coordinator", false, &ids(), false, false).is_none());
+        assert!(stop_nudge("worker", true, &ids(), false, false).is_none());
+        assert!(stop_nudge("worker", false, &[], false, false).is_none());
+        assert!(stop_nudge("worker", false, &ids(), true, false).is_none());
+    }
+}

@@ -124,6 +124,13 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     if let Some(b) = bead {
         let _ = ledger.stamp_handover(b, &worker, &crate::cmd::now());
     }
+    // A stop usually follows a hand-over: refresh the ready list the Stop hook reads
+    // (air-09i). One bd call, outside any hook budget.
+    let _ = crate::cmd::ready_cache::refresh(
+        repo,
+        &crate::cmd::claim::bd_for(repo),
+        &crate::cmd::now(),
+    );
     log_event(
         &ledger,
         &worker,

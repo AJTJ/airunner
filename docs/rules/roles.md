@@ -16,7 +16,8 @@ coordinator; each worktree is a worker. Air records it on every session and even
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
 implement, write the digest (if the repo asks for one) and commit it with the work,
 `git merge main`, `air record verify -- <cmd>` last so the green is at the commit you hand
-over, `air handover`, `bd update <id> -s awaiting_review`, next bead. A closed bead stays
+over, `air handover`, `bd update <id> -s awaiting_review`, next bead (the Stop hook names the
+ready beads once). A closed bead stays
 closed; unfinished work is a new bead that references it (ask via `air capture`). Stop only for a genuine blocker or an owner-only
 decision; say so in one line with `air capture "<blocker>"` (or `--for owner`), then `air release
 <id> --reason <why>` or take unrelated work.
