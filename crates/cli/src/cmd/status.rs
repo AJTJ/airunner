@@ -328,8 +328,33 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         }
     }
 
-    // Open claims.
+    // Open claims, reconciled against bd first: a bead that bd no longer holds as
+    // in_progress (closed, awaiting_review, reopened) is not "held" by anyone, whatever the
+    // ledger row says. The row is released with the bd status as reason so the history is
+    // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
+    let bd = super::claim::bd_for(repo);
+    let in_progress: Option<std::collections::BTreeSet<String>> =
+        match air_bd::WorkLedger::in_progress(&bd) {
+            Ok(v) => Some(v.into_iter().map(|i| i.id).collect()),
+            Err(e) => {
+                errors.push(format!("bd in_progress (claims not reconciled): {e}"));
+                None
+            }
+        };
+    let mut reconciled = 0usize;
     for c in ledger.open_claims().map_err(|e| e.to_string())? {
+        if let Some(ip) = &in_progress
+            && !ip.contains(&c.bead)
+        {
+            let reason = match air_bd::WorkLedger::show(&bd, &c.bead) {
+                Ok(Some(i)) if i.status == "closed" => "closed",
+                Ok(Some(i)) if i.status == "awaiting_review" => "handed-over",
+                _ => "reconciled",
+            };
+            let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
+            reconciled = reconciled.saturating_add(1);
+            continue;
+        }
         let v = views.entry(c.worker.clone()).or_insert_with(|| WorkerView {
             worker: c.worker.clone(),
             role: super::hook::role_for(&c.worker).to_string(),
@@ -380,6 +405,11 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             })
         })
         .collect();
+    if reconciled > 0 {
+        errors.push(format!(
+            "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
+        ));
+    }
     let inbox = ledger.inbox().map_err(|e| e.to_string())?;
     let owner_q = ledger.inbox_for("owner").map_err(|e| e.to_string())?;
     let stale = std::env::var("AIR_LEASE_STALE_SECS")

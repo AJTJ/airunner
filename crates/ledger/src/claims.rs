@@ -29,6 +29,10 @@ pub const RELEASE_REASONS: &[&str] = &[
     "false-premise",
     "owner-gated",
     "unknown",
+    // Set by reconciliation, never by a worker: bd's status said the claim was over.
+    "closed",
+    "handed-over",
+    "reconciled",
 ];
 
 const COLS: &str = "bead, worker, claimed_at, declared_files, first_handover_at, \
