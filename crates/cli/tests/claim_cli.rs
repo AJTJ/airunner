@@ -318,7 +318,8 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     let close_line = events
         .lines()
         .find(|l| l.contains(r#""command":"close""#))
-        .unwrap_or_else(|| panic!("no close event in {events}"));
+        .unwrap_or_default();
+    assert!(!close_line.is_empty(), "no close event in {events}");
     let e: serde_json::Value = serde_json::from_str(close_line).unwrap();
     assert_eq!(e["bd_calls"], 1, "{close_line}");
     assert!(e["bd_ms"].is_u64(), "{close_line}");
