@@ -141,6 +141,12 @@ enum Cmd {
     /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
     Worker {
         name: String,
+        /// Run in a tmux pane the owner can attach to (lets the coordinator launch workers).
+        #[arg(long)]
+        tmux: bool,
+        /// Initial task for the worker, as its first prompt (implies --tmux when launched by the coordinator).
+        #[arg(long)]
+        task: Option<String>,
         /// Print the command instead of running it.
         #[arg(long)]
         print: bool,
@@ -201,7 +207,13 @@ fn main() -> ExitCode {
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Install { write } => cmd::install::run(&repo, write, cli.json),
-        Cmd::Worker { name, print, extra } => cmd::launch::worker(&repo, &name, &extra, print),
+        Cmd::Worker {
+            name,
+            tmux,
+            task,
+            print,
+            extra,
+        } => cmd::launch::worker(&repo, &name, &extra, tmux, task.as_deref(), print),
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),

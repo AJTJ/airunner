@@ -189,6 +189,28 @@ fn dispatch(
                 transition(&prev, "stuck"),
             )
         }
+        // Friction Air did not cause: a denial by any rule, hook, or the human, or a tool
+        // that ran and failed. Observation only; the command and the reason are the record.
+        HookEvent::PermissionDenied | HookEvent::PostToolUseFailure => {
+            let _ = set_session(ledger, input, worker, "working", None);
+            let command = input
+                .bash_command()
+                .map(str::to_string)
+                .or_else(|| input.edited_path())
+                .unwrap_or_default();
+            let why = input
+                .reason
+                .clone()
+                .or_else(|| input.error.clone())
+                .unwrap_or_default();
+            let denied = input.event() == HookEvent::PermissionDenied;
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
+                if denied { "denied" } else { "failed" },
+                why.chars().take(400).collect::<String>(),
+            )
+            .inputs(serde_json::json!({"command": command}))
+        }
         HookEvent::PreToolUse => pre_tool_use(ledger, worker, cwd, input)?,
         HookEvent::PostToolUse => {
             let prev = set_session(ledger, input, worker, "working", None)?;
@@ -593,6 +615,11 @@ mod tests {
             serde_json::json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}),
         );
         fire(repo, serde_json::json!({"hook_event_name": "Notification"}));
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "PermissionDenied", "tool_name": "Bash",
+            "tool_input": {"command": "cargo test"}, "reason": "denied by lease-guard"}),
+        );
         fire(repo, serde_json::json!({"hook_event_name": "Stop"}));
         fire(
             repo,
@@ -610,7 +637,7 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(got.len(), 7, "one line per invocation: {got:?}");
+        assert_eq!(got.len(), 8, "one line per invocation: {got:?}");
         assert_eq!(got[0].0, "hook.SessionStart");
         assert_eq!(got[0].2, "none -> working");
         assert_eq!(
@@ -632,12 +659,17 @@ mod tests {
             ("hook.Notification", "ignored")
         );
         assert_eq!(
-            (got[5].0.as_str(), got[5].1.as_str()),
+            (got[5].0.as_str(), got[5].1.as_str(), got[5].2.as_str()),
+            ("hook.PermissionDenied", "denied", "denied by lease-guard")
+        );
+        assert_eq!(ev[5]["inputs"]["command"], "cargo test");
+        assert_eq!(
+            (got[6].0.as_str(), got[6].1.as_str()),
             ("hook.Stop", "observed")
         );
-        assert_eq!(got[5].2, "stuck -> idle; coordinator: no hand-over check");
+        assert_eq!(got[6].2, "working -> idle; coordinator: no hand-over check");
         assert_eq!(
-            (got[6].1.as_str(), got[6].2.as_str()),
+            (got[7].1.as_str(), got[7].2.as_str()),
             ("ended", "idle -> gone")
         );
         assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));

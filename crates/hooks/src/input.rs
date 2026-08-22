@@ -10,6 +10,11 @@ pub enum HookEvent {
     PreToolUse,
     PostToolUse,
     PermissionRequest,
+    /// A tool call was refused by a rule, a hook, or the human (observation only; the
+    /// friction Air did not cause, plan 0006 C4).
+    PermissionDenied,
+    /// A tool ran and failed (observation only).
+    PostToolUseFailure,
     PreCompact,
     Stop,
     SubagentStop,
@@ -27,6 +32,8 @@ impl HookEvent {
             HookEvent::PreToolUse => "PreToolUse",
             HookEvent::PostToolUse => "PostToolUse",
             HookEvent::PermissionRequest => "PermissionRequest",
+            HookEvent::PermissionDenied => "PermissionDenied",
+            HookEvent::PostToolUseFailure => "PostToolUseFailure",
             HookEvent::PreCompact => "PreCompact",
             HookEvent::Stop => "Stop",
             HookEvent::SubagentStop => "SubagentStop",
@@ -43,9 +50,14 @@ pub struct HookInput {
     pub session_id: String,
     pub transcript_path: Option<String>,
     pub cwd: Option<String>,
+    #[serde(alias = "hookEventName")]
     pub hook_event_name: Option<HookEvent>,
+    #[serde(alias = "toolName")]
     pub tool_name: Option<String>,
+    #[serde(alias = "toolInput")]
     pub tool_input: Option<serde_json::Value>,
+    /// PostToolUseFailure: the tool's error text.
+    pub error: Option<String>,
     /// Stop / SubagentStop: true when this stop was itself caused by a Stop hook — the loop
     /// guard (never block again when set).
     pub stop_hook_active: Option<bool>,

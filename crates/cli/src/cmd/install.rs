@@ -67,6 +67,8 @@ pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {
         ("PreToolUse", Some("Edit|Write|MultiEdit|Bash")),
         ("PostToolUse", Some("Edit|Write|MultiEdit|Bash")),
         ("PermissionRequest", None),
+        ("PermissionDenied", None),
+        ("PostToolUseFailure", None),
         ("Stop", None),
         ("SubagentStop", None),
         ("SessionEnd", None),
