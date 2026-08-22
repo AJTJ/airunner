@@ -1,4 +1,4 @@
-//! `air land <bead>…` / `air land --all`: the coordinator merges a green hand-over into main.
+//! `air land <bead>…` / `air land --all`: the coordinator merges a green branch into main.
 //!
 //! Incident (2026-08-22, air-3pz): two green hand-overs sat because only the owner may commit
 //! on main and `air land` did not exist. The coordinator could see the work was done and could
@@ -33,8 +33,9 @@ pub fn may_land(worker: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "refused: `air land` runs in the main checkout, and {worker} is a worker. Hand the bead \
-         over instead: `air handover` then `bd update <id> -s awaiting_review`."
+        "refused: `air land` runs in the main checkout, and {worker} is a worker. Close your own \
+         bead instead: `air handover` names anything missing, then `bd close <id> --reason \
+         \"<proof>\"` (owner ruling, 2026-08-22)."
     ))
 }
 
@@ -218,9 +219,9 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             .collect();
         if !missing.is_empty() {
             let msg = format!(
-                "refused: not a green hand-over waiting: {}. `air inbox --owner` lists what is \
-                 (a bead is landable when bd holds it in awaiting_review and its worker has a \
-                 recorded green at HEAD).",
+                "refused: no green branch names {} in its merge range. `air status` lists what \
+                 is landable (a branch with a recorded green at its head; its beads are the \
+                 ones `main..<head>` names in its commit messages).",
                 missing
                     .iter()
                     .map(|b| b.as_str())
@@ -465,16 +466,16 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         green_at_landed: true, // the run above, recorded at `merge`
         changed: &changed,
     };
+    // The acceptance text is fetched HERE, for this branch's beads only: `bd show` costs
+    // ~1.4 s per id, which is fine beside a full verify and ruinous on every `air status`
+    // (air-7kp).
+    let clauses = super::status::acceptance_for(repo, &batch.beads);
     let judged: Vec<acceptance::Judged> = batch
         .beads
         .iter()
         .enumerate()
         .map(|(i, bead)| {
-            acceptance::judge_clauses(
-                bead,
-                batch.acceptance.get(i).cloned().unwrap_or_default(),
-                &ev,
-            )
+            acceptance::judge_clauses(bead, clauses.get(i).cloned().unwrap_or_default(), &ev)
         })
         .collect();
     if !json {
