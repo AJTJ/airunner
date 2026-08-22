@@ -332,6 +332,20 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
 mod tests {
     use super::*;
 
+    /// The embedded roles prose is `include_str!` of docs/rules/roles.md, so the two cannot
+    /// drift; this pins that, and that the intake line names bd's per-type sections (air-8zz).
+    #[test]
+    fn embedded_roles_is_the_docs_copy_and_names_validate_sections() {
+        let on_disk = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/rules/roles.md"
+        ))
+        .unwrap();
+        assert_eq!(ROLES_MD, on_disk);
+        assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
+        assert!(ROLES_MD.contains("epic `## Success"));
+    }
+
     #[test]
     fn merge_hooks_is_idempotent_and_preserves_others() {
         let existing = json!({

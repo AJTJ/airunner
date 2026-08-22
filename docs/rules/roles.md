@@ -50,8 +50,11 @@ waits, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent 
 claim, hand-over not green, lease held by a dead session, owner decision waiting, session
 joined or left). **[fact]**
 
-Intake: `air inbox` → `bd create --validate --estimate <min>` (bd refuses without `## Acceptance
-Criteria`) → `air triage <id> --bead <new>` or `--drop "<why>"`. Workers request beads this way,
+Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
+`--drop "<why>"`. `--validate` refuses without these sections, per type: task/feature `##
+Acceptance Criteria`; bug `## Steps to Reproduce` + `## Acceptance Criteria`; epic `## Success
+Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/types.go`
+`RequiredSections`, main, read 2026-08-22; air-8zz). **[fact]** Workers request beads this way,
 including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
 labelled `human` is awaiting the owner and `air claim` refuses it to workers. Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
