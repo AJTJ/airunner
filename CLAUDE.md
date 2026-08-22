@@ -110,16 +110,31 @@ Index items are 1–3 lines; detail lives behind the link.
 ## This repo's work flow
 
 How a finished bead is handed on is **this repo's** choice, not Air's, and it lives here
-because `.air/roles.md` deliberately no longer says it (air-8zu: adopter closes with proof
-and had Air telling its workers otherwise). Air states what it records and what it refuses;
-the sequence below is ours.
+because `.air/roles.md` deliberately does not say it (air-8zu). Air states what it records and
+what it refuses; the sequence is ours.
 
-A worker, per bead: `air claim <id> [--files a,b]` → implement → write the digest
-(`docs/digests/YYYY-MM-DD-<worker>-<bead>.md`) and commit it with the work → `git merge main`
-→ `air record verify -- make verify` **last**, so the green is at the commit that contains
-`main` → `air handover` → `bd update <id> -s awaiting_review` → next bead.
+**A worker closes its own bead with proof** (owner, 2026-08-22, air-7o3). No `awaiting_review`,
+no waiting for review:
 
-`awaiting_review` is the point of it: nothing lands here except through the coordinator's
-`air land`, so a bead stops at review rather than being closed by the worker who wrote it.
-A repo that lands differently will have a different last step, and that is not a defect.
+    air claim <id> [--files a,b]
+    … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
+    git merge main
+    air record verify -- make verify        # last, so the green is at the commit containing main
+    bd close <id> --reason "<proof>"
+    … next bead
 
+**Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
+the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, 27 probes,
+is. The owner's words: *"the explanation should be proof, not verbosity. Very clear proof."*
+
+**If part of a bead needs the owner, close what you did and file a standalone successor bead**
+naming what he must do. Do not leave the bead open for the remainder: open beads get re-claimed
+and re-derived by the next worker, which is the failure this avoids.
+
+**What makes this safe rather than an honour system:** `air handover`'s gate matches `bd close`
+and `bd update -s closed` as well as `-s awaiting_review` (`is_handover_command`), and worker
+launches set `AIR_ENFORCE=1` by default since air-i59. So a close without a recorded green at a
+HEAD containing `main` is *refused*, not advised. The proof is enforced at the moment of
+closing. Run `air handover` first if you want the missing pieces named before bd refuses them.
+
+`awaiting_review` survives only on beads that already carry it.
