@@ -25,11 +25,13 @@ pub enum Fires {
     /// An attention condition of this kind appeared in a `status`/`status.attention` event's
     /// `inputs.conditions` list (entries are `kind:subject`).
     Condition(&'static str),
-    /// An event line with this command and this decision.
-    Decision {
-        command: &'static str,
-        decision: &'static str,
-    },
+    /// Event lines with any of these `(command, decision)` pairs. Several, because one
+    /// mechanism is often reachable by more than one entry point: the hand-over gate fires
+    /// from the hook and from `air handover`, and the Stop nudge fires on `Stop` and on
+    /// `SubagentStop` through the same function. Giving each trace its own row would mean
+    /// copying one recorded condition onto several mechanisms, which is the invention this
+    /// table exists to prevent (air-0y9).
+    Decisions(&'static [(&'static str, &'static str)]),
 }
 
 /// The recorded condition under which a mechanism is removed.
@@ -83,10 +85,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "`awaiting_review`/close needs a recorded green at HEAD that contains main.",
         added: "2026-08-22 (air-i59)",
         source: "docs/rules/roles.md, Worker section",
-        fires: Fires::Decision {
-            command: "hook.PreToolUse",
-            decision: "refuse",
-        },
+        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse"), ("handover", "refuse")]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },
     Mechanism {
@@ -94,13 +93,17 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "refusal",
         what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
         added: "2026-08-18 (plan 0001)",
-        source: "crates/cli/src/cmd/hook.rs",
-        fires: Fires::Decision {
-            command: "hook.PreToolUse",
-            decision: "would-refuse",
-        },
-        removal: Removal::ZeroFirings(
-            "every launcher sets AIR_ENFORCE=1, at which point the advisory path is unreachable",
+        source: "docs/plans/0001-first-slice.md:143",
+        fires: Fires::Decisions(&[
+            ("hook.PreToolUse", "would-refuse"),
+            ("handover", "would-refuse"),
+        ]),
+        // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
+        // has set awaiting_review/close in this turn and evidence is missing (M1, after one
+        // round of advisory data)" (plan 0001, hook events table). air-i59 acted on that on
+        // 2026-08-22 after the first bypass, which is what put AIR_ENFORCE=1 in the launcher.
+        removal: Removal::Judgement(
+            "one round of advisory data, then blocking (plan 0001, M0 -> M1); air-i59 acted on it, so what is left to decide is whether the advisory arm is still reachable",
         ),
     },
     Mechanism {
@@ -167,10 +170,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "Opening a file a peer is also editing warns once per session, naming them.",
         added: "2026-08-18 (plan 0001)",
         source: "crates/cli/src/cmd/hook.rs",
-        fires: Fires::Decision {
-            command: "hook.PreToolUse",
-            decision: "warn",
-        },
+        fires: Fires::Decisions(&[("hook.PreToolUse", "warn")]),
         removal: Removal::Unstated,
     },
     Mechanism {
@@ -179,10 +179,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "The same peer warning, re-armed because the set of peers on that path changed.",
         added: "2026-08-21 (plan 0006)",
         source: "crates/cli/src/cmd/hook.rs",
-        fires: Fires::Decision {
-            command: "hook.PreToolUse",
-            decision: "warn-repeat",
-        },
+        fires: Fires::Decisions(&[("hook.PreToolUse", "warn-repeat")]),
         removal: Removal::Unstated,
     },
     Mechanism {
@@ -191,13 +188,22 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "At WIP 0 with beads ready, the Stop hook names them once.",
         added: "2026-08-22 (air-09i)",
         source: "crates/hooks/src/gate.rs, stop_nudge",
-        fires: Fires::Decision {
-            command: "hook.Stop",
-            decision: "nudge",
-        },
+        fires: Fires::Decisions(&[("hook.Stop", "nudge"), ("hook.SubagentStop", "nudge")]),
         removal: Removal::Judgement(
             "a round shows nudges that led to a claim <= nudges ignored, or workers claim the next bead unprompted in > 90% of hand-overs",
         ),
+    },
+    Mechanism {
+        id: "claim-refusal",
+        class: "refusal",
+        what: "A claim is refused: held by a peer, labelled `owner`, closed, or bd said no.",
+        added: "2026-08-20 (decisions: wrap beads, never watch it)",
+        source: "crates/cli/src/cmd/claim.rs",
+        fires: Fires::Decisions(&[("claim", "refuse")]),
+        // Nothing is recorded anywhere. Every firing on 2026-08-22 was a real collision,
+        // which is an argument for keeping it, but an argument is not a recorded condition
+        // and this table does not write one on anyone's behalf.
+        removal: Removal::Unstated,
     },
     // The audit is not exempt from its own instrument: it carries a removal condition and
     // shows up as a row like everything else (air-zyo).
@@ -207,10 +213,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "Prints what the ledger says about every mechanism, for a do-less pass.",
         added: "2026-08-22 (air-zyo)",
         source: "crates/cli/src/cmd/audit.rs",
-        fires: Fires::Decision {
-            command: "audit",
-            decision: "reported",
-        },
+        fires: Fires::Decisions(&[("audit", "reported")]),
         removal: Removal::Judgement(
             "two consecutive rounds produce zero stale mechanisms, meaning the tree is small enough that a coordinator sees the whole thing without help",
         ),
@@ -221,10 +224,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "tmux panes are the owner's to watch; the coordinator reaches workers by SendMessage.",
         added: "2026-08-22",
         source: "docs/rules/roles.md, Coordinator section",
-        fires: Fires::Decision {
-            command: "hook.PermissionDenied",
-            decision: "denied",
-        },
+        fires: Fires::Decisions(&[("hook.PermissionDenied", "denied")]),
         removal: Removal::Never(
             "send-keys was allowed once and denied 30 min later by the permission classifier, 2026-08-22",
         ),
