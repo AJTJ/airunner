@@ -83,6 +83,32 @@ A script that depended on something bd no longer provides (`bd events`) should s
 `air status`" rather than error. Retire a target only when its Air replacement has a passed
 check beside it in the adoption log.
 
+### The repo owns its work flow; Air does not
+
+`.air/roles.md` is generated from Air's `ROLES_MD` and overwritten on every install, so a
+target repo cannot edit it and should not try. What it says is therefore deliberately limited
+to **what Air records and what Air refuses**:
+
+| Air says | The repo says |
+|---|---|
+| `air claim` is the claim path; a claim is a commitment to finish now | Whether a finished bead is handed over for review, closed with proof, or something else |
+| The recorded green must be at the commit you hand on, and that commit must contain `main` | Which command counts as verify |
+| A digest must be newer than the claim, where `digest_dir` is set | Where digests live and what goes in one |
+| The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
+| `air handover` names what is missing | When in the loop to run it |
+
+**[adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
+`bd update <id> -s awaiting_review` as the closing step. adopter's owner had ruled that step
+out of existence — a worker there closes its own bead with proof — so its workers were told one
+flow by Air at session start and another by their own CLAUDE.md, and could not fix the file.
+The fix was for Air to stop saying it, not to add per-repo configuration: config is a
+mechanism, and the smaller version is Air not saying what it has no business saying.
+
+Put the repo's own sequence in its CLAUDE.md (this repo keeps ai_runner's under "This repo's
+work flow"). The one refusal still covers both shapes: it matches `bd close` as well as
+`bd update -s closed` / `-s awaiting_review`, so a close-with-proof repo is gated exactly as a
+hand-over repo is.
+
 ## 3. Rules to change in the repo (prose that Air replaces or that is wrong)
 
 | Today | Change to | Why |
@@ -123,7 +149,7 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 - **Air version**: `air selftest` after every `cargo install`; every check proves it fires.
   `air doctor` shows the ledger version (schema migrates forward automatically). When Air's own
   surface has moved — new commands, changed `--json` shapes, a default that became a refusal —
-  §5a is the procedure and `air install` prints the diff.
+  §5c is the checklist to run, §5a the detail behind it, and `air install` prints the diff.
 - **Repo changes**: a new publish or destructive target goes into `.claude/air.json` deny
   patterns; a new exclusive resource is just a new lease name; a new digest location is
   `digest_dir`.
@@ -167,6 +193,9 @@ direction: **Air changed under a repo that already has it installed.** That happ
 first time on 2026-08-22, when one round added two commands, changed a JSON shape, turned a
 warning into a refusal, and redefined a label — under adopter, which had Air installed and
 was told none of it (air-6g1).
+
+**Running an upgrade rather than reading about one? §5c is the checklist, top to bottom.**
+This section and §5b are the detail behind its steps.
 
 ### The one command
 
@@ -255,9 +284,16 @@ below stops mattering:
 2. **CLAUDE.md label list** — document both: `owner` is the gate, `human` is being retired.
 3. **Existing beads** — relabel. `bd list --label human --json` finds them; each one is either
    a real owner gate or was never a gate at all, which is the common case and the reason the
-   word rotted. `bd label add` takes several ids at once
-   (`bd label add <id> <id> … owner`) — one bd process instead of one per bead, which on a
-   27-bead queue is the difference between a second and most of a minute (air-869). adopter's own triage note has a category C
+   word rotted. Several ids in one process:
+
+       bd update <id> <id> … --add-label owner
+
+   `--add-label` is repeatable and `--remove-label` is its companion (verified against bd
+   1.2.2; `bd update [id...] [flags]`). `bd label add <id> <id> … owner` is equally valid and
+   is *not* used here only because its argument order reads correctly either way to a skimmer.
+   `-l` is **not** valid on `bd update` and is silently dropped — it belongs to `bd create`.
+   One process rather than one per bead is the difference between a second and most of a
+   minute on a 27-bead queue (air-869). adopter's own triage note has a category C
    for beads that "carry `human` but need no owner ruling — ordinary agent work"
    (`human-queue-triage.md`), and 27 of 152 beads in one 11-hour round carried
    `human`/`owner` (`adopter-as-built.md:204`).
@@ -269,6 +305,175 @@ below stops mattering:
 `human` was applied to two different things. Copying every `human` onto `owner` moves the rot
 across rather than clearing it, and makes the owner queue longer than it ever needed to be.
 Read each one.
+
+## 5c. The transition checklist (run this top to bottom)
+
+For a repo already running an older Air. **This section is the order**; §5a explains what
+`air install` does and §5b explains the label migration, but neither has to be read first.
+Everything below is run by the owner, in the target repo, except where it says otherwise.
+
+Written for adopter as the first customer (air-5tu). Every adopter-specific fact here is
+cited from this repo's `docs/research/adopter-as-built.md`; nothing in this repo reads or
+writes that fleet.
+
+### Before anything: five checks, and what skipping each costs
+
+These come first because `air install --write` cannot answer them and will not warn you.
+
+Every command below has been run against bd 1.2.2 and its **argument order** checked, not only
+its flag names. Those are two different claims, and a checklist is read under time pressure by
+someone who will not notice that `bd label add owner <ids>` parses `owner` as the first issue
+id — its real usage is `bd label add [issue-id...] [label]`, label **last**. Where a form reads
+correctly either way to a skimmer, this section uses the one that names its argument
+(`bd update <ids…> --add-label owner`) even when the other is also valid.
+**[adopter, 2026-08-22]** that exact inversion was sent and caught before it ran; it would
+have applied a bead id as a label to eight real beads.
+
+**1. Does anything parse `air inbox --json` as a bare array?**
+
+It now returns `{"captures": [...], "landings": [...]}` — with **or without** `--owner`. A
+caller that indexes the top level as a list does not error. It reads zero captures and reports
+an empty queue.
+
+```sh
+# in the target repo
+grep -rn "air inbox" --include=Makefile --include=*.sh --include=*.py --include=*.js .
+```
+
+For each hit, look at what consumes the JSON: `[0]`, `.[]`, `len(...)`, `for x in ...`, or a
+jq filter starting `.[]`. Each becomes `.captures[]` or `["captures"]`.
+
+*Skipping it:* the owner queue silently reads empty. Decisions that were waiting stop being
+reported, and nothing anywhere says so. **This is the only check here whose failure produces no
+signal at all**, which is why it is first: 2 shows up as a bead being offered and then refused,
+4 as a target going red, 3 as a visibly wrong `bd list`, 5 as agents told to run denied
+commands. This one produces a shorter list and no error.
+
+**2. Does the repo's ready target exclude `owner`?**
+
+```sh
+grep -n "exclude-label" Makefile
+```
+
+Check for the **new** label, not just that the old one is still there. A repo that never had
+`owner` in its filter is the dangerous case, because its owner-fence rests entirely on a label
+that nothing gates on after the upgrade.
+
+**[adopter, 2026-08-22]** this is not hypothetical. `adopter-as-built.md:91` recorded
+`--exclude-label owner,runtime,human` from its `Makefile:395-411`, but by the time of the
+migration its `make ready` (`Makefile:464`) filtered `human,runtime,research` and excluded
+`owner` **not at all**. Read the Makefile as it is now; a recorded reading from a previous
+round is not the current state.
+
+*Skipping it:* the moment Air's gate becomes `owner`, beads held back for the owner's decision
+become claimable, and workers start finishing decisions that were never theirs.
+
+*What actually degrades, measured 2026-08-22, and it is three surfaces rather than one:*
+`air claim` refuses an `owner` bead as soon as the label is applied, so that fence works
+immediately. Raw `bd ready` lists the unfenced beads, because the exclusion lives in the
+repo's own target and not in bd. And the Stop hook's offer list **does not degrade at all** if
+`.air/ready.json` predates the relabel: the hook reads that cache rather than bd, and a stale
+cache is still offered, annotated `(ready list may be stale)` — verified in
+`crates/hooks/src/gate.rs`, `stop_nudge`. So a worker can be handed an `owner` bead by the
+Stop hook and refused by `air claim` in the same minute, which reads as Air contradicting
+itself and is really one stale file.
+
+**3. Which `human` beads are real owner gates?**
+
+```sh
+bd list --label human --json
+```
+
+Read each one. adopter's own triage note records a whole category that "carries `human` but
+needs no owner ruling — ordinary agent work", and 27 of 152 beads in one 11-hour round carried
+`human`/`owner` (`adopter-as-built.md:204`).
+
+*Skipping it:* relabelling in bulk moves the rot onto `owner` instead of clearing it, and the
+owner queue stays permanently longer than it needs to be.
+
+**4. Does the repo's own label vocabulary include `owner`?**
+
+Wherever the repo documents its labels — an intake guide, CONTRIBUTING, CLAUDE.md, a lint
+fixture:
+
+```sh
+grep -rn "runtime" --include=*.md docs/ CLAUDE.md 2>/dev/null   # find the list, whatever it is called
+```
+
+Add `owner` to it **before** relabelling any bead.
+
+*The symptom, so it is recognisable when it happens:* a fitness, lint or docs-check target
+starts failing with **"undocumented label"** on several beads at once, immediately after a
+relabel that itself looks fine. It is a green-to-red with nothing to do with the labels'
+meaning.
+
+**[adopter, 2026-08-22]** exactly this. It had *retired* `owner` from its documented list on
+2026-08-21 when it consolidated on `human`, so adding `owner` to nine beads broke
+`make fitness` and produced four undocumented-label failures at once. Fixed by putting `owner`
+back in its `docs/guides/intake.md`.
+
+**5. Is the stale `bd prime --hook-json` hook still in `.claude/settings.json`?**
+
+```sh
+grep -n "bd prime" .claude/settings.json
+```
+
+adopter had exactly one hook, `SessionStart → bd prime --hook-json`
+(`adopter-as-built.md:50`). `air install --write` **merges**, so it adds Air's hooks
+alongside that one and leaves it in place — it will not remove it and does not report it.
+Delete the `bd prime` entry by hand.
+
+*Skipping it:* `bd prime` injects a command reference telling agents to run `bd update --claim`
+and `bd create`, both of which Air denies. Agents get instructions that contradict their deny
+list, and the failure looks like the agent being wrong.
+
+### The run, in order
+
+1. **In the Air checkout**, not the target: `cargo install --path crates/cli`, then
+   `which air` — it must be that binary. `air install --write` refuses if it is not.
+2. `air selftest` — every check proves it fires — then `air doctor`.
+3. Do the five checks above. Fix 2, 4 and 5 now; 1 can be fixed now or immediately after; 3
+   runs across the migration in step 7.
+4. **In the target repo**, `air install`. It writes nothing. Read the SURFACE DIFF: it lists
+   what moved since this repo last installed Air, with `!!` against changes that alter
+   behaviour without erroring. Do those first.
+5. `air install --write`. This records the baseline, so the next `air install` is quiet.
+6. **Restart every agent session** through `air coordinator` / `air worker <name>`. Sessions
+   started before the upgrade hold the old roles text and the old hooks and do not pick the
+   new ones up.
+7. Run the `human` → `owner` migration (§5b). Keep **both** labels excluded from `make ready`
+   for the whole migration so nothing unfences mid-flight; drop `human` only when
+   `bd list --label human` is empty.
+
+### Verify afterwards
+
+```sh
+bd list --label owner --json          # the gate's beads
+air status                            # sessions, claims, review waits, owner queue
+air audit                             # every mechanism, and what it costs
+```
+
+Three things to confirm:
+
+- **The owner queue is still fenced.** `air claim <an owner-labelled bead>` as a worker is
+  refused, naming the label. If it succeeds, step 7 is incomplete.
+- **The ready set is unchanged** except for beads you deliberately relabelled. Compare
+  `make ready` against what you noted in check 2.
+- **The owner queue is not empty by accident.** `air inbox --owner` and, if any script reads
+  it, that script's output too. This is check 1 coming back to be confirmed rather than
+  assumed.
+
+### If it goes wrong
+
+`air install --write` writes exactly five things and nothing else: it merges into
+`.claude/settings.json` and `.mcp.json`, and overwrites `.air/roles.md`,
+`.claude/skills/air-*/SKILL.md`, and `.air/installed.json` (verified against
+`crates/cli/src/cmd/install.rs`, 2026-08-22; §5a has the table). It never touches
+`.claude/air.json`, the ledger, `.beads/`, or any other file.
+
+Of those, the two JSON files and the skills are tracked, so `git diff` shows precisely what
+changed and `git checkout --` reverts it; `.air/` is gitignored and holds nothing you would
+want back. Nothing here needs an uninstall path.
 
 ## 6. Day one, in order
 

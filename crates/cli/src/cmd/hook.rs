@@ -10,7 +10,8 @@
 //! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
 //!   missing; quiet on the ok path and for the coordinator. One block: a worker with no claim
 //!   while beads are ready is nudged once with the ids (air-09i; `stop_hook_active` is the
-//!   loop guard; the ready list is the cache `status`/`handover` wrote, never a bd call).
+//!   loop guard). The cache gates whether to speak; the list itself is confirmed against bd
+//!   at that moment, so the nudge never names a bead `air claim` would refuse (air-ouw).
 //! - SessionStart / PostToolUse / PermissionRequest / SessionEnd: session state rows.
 //!
 //! Every invocation appends exactly one event line to `.air/events/` (`hook.<event>`), including
@@ -283,15 +284,31 @@ fn dispatch(
                 Some(format!("air: {}", v.message))
             };
             // Nudge (air-09i): no claim, beads ready, first stop: block once with the list.
-            // The ready list is the cache `status`/`handover` wrote; no bd call here.
+            //
+            // The cache is the CHEAP GATE, not the answer (air-ouw). It decides whether there
+            // is anything to say at all, which costs nothing on the great majority of stops;
+            // only when the nudge is actually about to speak does this confirm the list
+            // against bd, because naming a bead `air claim` then refuses is Air contradicting
+            // itself. Measured 2026-08-22 on this machine: 172 Stop hooks in a day, of which
+            // 4 reached the nudge condition, and `bd ready --json` is ~0.7 s — so the truth
+            // costs about 3 s a day, and the 168 silent stops still pay nothing.
+            //
+            // If bd does not answer inside the budget the nudge says NOTHING rather than
+            // naming a list it cannot vouch for. A missed nudge costs one idle turn; a wrong
+            // one costs the worker's trust in every later one.
             let now = now();
-            let cache = ready_cache::read(cwd);
-            let (ready, stale) = match &cache {
-                Some(c) => (c.ids.clone(), !ready_cache::is_fresh(&c.at, &now)),
-                None => (Vec::new(), true),
-            };
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
-            let nudge = stop_nudge("worker", holds_claim, &ready, stop_hook_active, stale);
+            let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
+            let would_speak = !holds_claim
+                && !stop_hook_active
+                && !cached.is_empty()
+                && role_for(worker) == "worker";
+            let ready = if would_speak {
+                ready_cache::confirm(cwd).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let nudge = stop_nudge("worker", holds_claim, &ready, stop_hook_active);
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
                 .last_emission(&input.session_id, "nudge")
@@ -325,7 +342,10 @@ fn dispatch(
                 "head": f.head,
                 "stop_hook_active": input.stop_hook_active,
                 "ready": ready,
-                "ready_stale": stale,
+                // Whether this nudge's list came from a live bd call; the cost of that call
+                // is on the same line as bd_ms/bd_calls (air-869), so keeping or dropping the
+                // cache is decided on a number.
+                "ready_confirmed": would_speak,
                 "claim_followed_last_nudge": followed,
             }))
             .denominator("4 checks")
@@ -888,27 +908,28 @@ mod tests {
         let d = stop(&ledger);
         assert_eq!(d.decision, "no-claim");
         assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
-        // No claim, beads ready (air-09i): block once with the ids; pass when Claude Code is
-        // already continuing because of the hook; a stale cache says so.
+        // air-ouw: a cache alone no longer produces a nudge. The cache says there may be
+        // something worth saying; the list is then confirmed against bd, and if bd cannot
+        // answer — as here, where there is no bd for this scratch repo — the hook says
+        // NOTHING rather than naming beads `air claim` might refuse. That silence is the
+        // fix: the nudge used to read this file out loud, and twice on 2026-08-22 it named
+        // a bead that was already claimed or `owner`-labelled.
+        //
+        // The nudge's own text and its filtering are covered by `stop_nudge`'s unit tests in
+        // `crates/hooks/src/gate.rs` and by two `air selftest` probes, neither of which needs
+        // a bd.
         crate::cmd::ready_cache::write(&wt, &["fd-1".into(), "fd-2".into()], &crate::cmd::now());
         let d = stop(&ledger);
-        assert_eq!(d.decision, "nudge");
-        let reason = match &d.outcome {
-            HookOutcome::Block { reason } => reason.clone(),
-            o => format!("not a block: {o:?}"),
-        };
-        assert!(reason.contains("ready: fd-1, fd-2"), "{reason}");
-        assert!(reason.contains("air claim fd-1"));
-        assert!(!reason.contains("stale"));
+        assert_eq!(d.decision, "no-claim", "a cache alone must not nudge");
+        assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
+        assert_eq!(d.inputs["ready_confirmed"], true, "it did try bd");
+        // Nothing it printed can name a bead, since it never had a confirmed list.
+        assert_eq!(d.inputs["ready"].as_array().map(Vec::len), Some(0));
         let d = stop_with(&ledger, true);
         assert_eq!(d.decision, "no-claim");
         assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
-        crate::cmd::ready_cache::write(&wt, &["fd-1".into()], "2020-01-01T00:00:00Z");
-        let d = stop(&ledger);
-        assert!(
-            matches!(&d.outcome, HookOutcome::Block { reason } if reason.contains("may be stale"))
-        );
-        assert_eq!(d.inputs["claim_followed_last_nudge"], false);
+        // ...and it does not even reach for bd when Claude Code is already continuing.
+        assert_eq!(d.inputs["ready_confirmed"], false);
         // A claim ends the nudging, and the measurement records that one followed.
         ledger
             .record_claim("fd-1", "wt", &[], &crate::cmd::now())
@@ -917,7 +938,11 @@ mod tests {
         let d = stop(&ledger);
         assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
         assert_eq!(d.decision, "would-refuse");
-        assert_eq!(d.inputs["claim_followed_last_nudge"], true);
+        // Null, not true: the measurement asks whether a claim followed a NUDGE, and no
+        // nudge fired here because bd never confirmed a list (air-ouw). "No nudge to follow"
+        // and "a nudge that was ignored" stay distinguishable, which is the point of the
+        // field.
+        assert!(d.inputs["claim_followed_last_nudge"].is_null());
         let d = stop(&ledger);
         assert!(
             matches!(d.outcome, HookOutcome::Allow { context: None }),

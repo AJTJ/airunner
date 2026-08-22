@@ -270,7 +270,7 @@ Emerging.
 - CAID (arXiv 2603.21489): single 57.2 / soft (prompt-declared) isolation 55.5 / worktree
   63.3 on PaperBench; the corpus verdict "Either enforce the partition observationally ... or
   stop writing the rule" (`adopter-research-corpus.md:298`,
-  `~/projects/adopter/docs/notes/research-actions.md:184-206`). The abstract confirms the
+  `docs/research/adopter-notes/notes/research-actions.md:184-206`). The abstract confirms the
   +25.6 headline only (https://arxiv.org/abs/2603.21489).
 - adopter's own dead-end list: "Adding a rule to CLAUDE.md to fix a behaviour ... making the
   instruction more explicit did not fix it" (`research-actions.md:585-607`); its enforcement
@@ -346,7 +346,7 @@ the machinery, and two of them get *worse* with capability:
    capability, not less.
 4. **Two behavioural incidents this week were fixed by prose, and the fix worked at once.** A
    worker claimed and sat idle; the coordinator asked the owner whether to assign work instead
-   of assigning it (`~/projects/adopter/docs/notes/air-adoption.md` §9). Both were cured by
+   of assigning it (adopter's `docs/notes/air-adoption.md` §9, read 2026-08-21; not copied into this repo, so this citation does not resolve here). Both were cured by
    a sentence in roles.md ("run to completion"; "active mode: every online worker has work").
    This is F6's "instructions are well followed" operating in Air's favour.
 
@@ -603,5 +603,5 @@ Local (this repo):
 
 Local (adopter, read-only):
 
-- `~/projects/adopter/docs/notes/research-actions.md:184-206,384-428,585-607`
-- `~/projects/adopter/docs/notes/air-adoption.md:244-330` (§9, what was tricky)
+- `docs/research/adopter-notes/notes/research-actions.md:184-206,384-428,585-607`
+- adopter's `docs/notes/air-adoption.md:244-330` (§9, what was tricky) — read 2026-08-21; **not** copied into this repo, unlike the notes under `docs/research/adopter-notes/`, so it will not resolve here
