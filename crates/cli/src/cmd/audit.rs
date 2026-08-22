@@ -9,14 +9,18 @@
 //!
 //! **This command prints facts and stops.** No verdict, no score, no recommendation: the
 //! judgement of what to remove belongs to the owner and the coordinator ("Air supplies facts.
-//! It does not supply judgement"). `air selftest` asserts the rendered output contains no
-//! imperative sentence, so the line cannot be crossed by accident later.
+//! It does not supply judgement").
 //!
-//! Read-only: the event log and nothing else. No bd calls, no network, no writes.
+//! Scope was cut by the owner on 2026-08-22, after the first build, to exactly two things: the
+//! registry of removal conditions, and a counter (firings in the window, last firing). A
+//! "fired with no downstream action" metric was dropped as Air inferring intent it cannot
+//! see — a number that looks authoritative and is not — and the finding that motivated the
+//! bead turned out to be two shell commands over the NDJSON, so the expensive half was built
+//! ahead of measured need. What remains is what removes the named pain: the conditions were
+//! prose nobody could check.
 //!
-//! Removal condition for the audit itself (air-zyo): removed when two consecutive rounds
-//! produce zero stale mechanisms, meaning the tree is small enough that a coordinator sees the
-//! whole thing without help. An audit nobody acts on is the ritual this exists to prevent.
+//! Read-only over the event log. No bd calls, no network. One event line per run, like every
+//! other command, so the audit appears in its own output.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,8 +44,6 @@ pub struct Row {
     pub subjects: usize,
     /// `fires - subjects`: firings that repeated a subject already reported.
     pub repeats: usize,
-    /// For a `NoDownstream` condition: how many of the named event happened in the window.
-    pub downstream: Option<(&'static str, usize)>,
     /// Last time it fired in ANY recorded day, not just the window. `None` = never recorded.
     pub last_fired: Option<String>,
     pub removal: &'static str,
@@ -174,15 +176,6 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
     // One accumulator per mechanism, walked by zip rather than by index: parallel vectors
     // addressed by position are how a row ends up reporting another mechanism's counts.
     let mut acc: Vec<Acc> = MECHANISMS.iter().map(|_| Acc::default()).collect();
-    let mut downstream: BTreeMap<&'static str, usize> = BTreeMap::new();
-    // The distinct commands some mechanism watches for, deduplicated.
-    let watched: std::collections::BTreeSet<&'static str> = MECHANISMS
-        .iter()
-        .filter_map(|m| match m.removal {
-            Removal::NoDownstream { downstream: d, .. } => Some(d),
-            _ => None,
-        })
-        .collect();
     let mut seen_traces: BTreeMap<String, usize> = BTreeMap::new();
     let mut events_scanned = 0usize;
     let mut days_scanned = 0usize;
@@ -196,13 +189,6 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             let Some(e) = parse(line) else { continue };
             if in_window {
                 events_scanned = events_scanned.saturating_add(1);
-                // Count the event once per distinct downstream command, not once per
-                // mechanism naming it: `review-waiting` and `peer-warning` both watch `land`,
-                // and counting per mechanism double-counted every landing.
-                if let Some(d) = watched.iter().find(|d| e.command == **d) {
-                    let slot = downstream.entry(*d).or_default();
-                    *slot = slot.saturating_add(1);
-                }
             }
             let mut attributed = false;
             for (m, a) in MECHANISMS.iter().zip(acc.iter_mut()) {
@@ -243,23 +229,12 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         .map(|(m, a)| {
             let n = a.fires;
             let subs = a.subjects.len();
-            let down = match m.removal {
-                Removal::NoDownstream { downstream: d, .. } => {
-                    Some((d, downstream.get(d).copied().unwrap_or(0)))
-                }
-                _ => None,
-            };
             let (removal_kind, met) = match m.removal {
                 Removal::Unstated => ("none", None),
                 Removal::Never(_) => ("never", None),
                 Removal::Judgement(_) => ("judgement", None),
-                // Recorded as "remove when it stops firing": the window answers it.
+                // "Remove when it stops firing" is answered by the counter and nothing else.
                 Removal::ZeroFirings(_) => ("checkable", Some(n == 0)),
-                // Recorded as "remove when it fires and nothing follows": both halves must
-                // hold. A mechanism that never fired does not meet a condition about firing.
-                Removal::NoDownstream { .. } => {
-                    ("checkable", Some(n > 0 && down.map(|(_, c)| c) == Some(0)))
-                }
             };
             Row {
                 id: m.id,
@@ -270,7 +245,6 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 fires: n,
                 subjects: subs,
                 repeats: n.saturating_sub(subs),
-                downstream: down,
                 last_fired: a.last.clone(),
                 removal: m.removal.text(),
                 removal_kind,
@@ -289,46 +263,6 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         unregistered: seen_traces.into_iter().collect(),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
-}
-
-/// Words that would turn a fact into an instruction. Checked at the start of a sentence, so
-/// "removed when a round passes" (descriptive) is fine and "Remove this" is not.
-const IMPERATIVE_LEADS: &[&str] = &[
-    "consider", "remove", "delete", "drop", "keep", "add", "review", "check", "run", "use", "stop",
-    "prefer", "avoid", "cut", "try", "make", "ensure",
-];
-
-/// Phrases that carry a recommendation wherever they appear.
-const RECOMMENDING: &[&str] = &[
-    "should be",
-    "we should",
-    "you should",
-    "recommend",
-    "candidate for removal",
-    "worth removing",
-    "no longer earns",
-    "safe to remove",
-];
-
-/// Every place `text` reads as an instruction rather than a fact. Empty is the contract
-/// `air audit` holds: it supplies facts, the pass over them is a person's (air-zyo).
-pub fn imperative_hits(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
-    let mut hits: Vec<String> = RECOMMENDING
-        .iter()
-        .filter(|p| lower.contains(**p))
-        .map(|p| (*p).to_string())
-        .collect();
-    for raw in lower.split(['.', '\n', ';']) {
-        let s = raw.trim_start_matches(|c: char| !c.is_alphanumeric());
-        let Some(first) = s.split_whitespace().next() else {
-            continue;
-        };
-        if IMPERATIVE_LEADS.contains(&first) {
-            hits.push(format!("sentence starts with `{first}`"));
-        }
-    }
-    hits
 }
 
 /// The text form. `pub` so `air selftest` can assert on the real output rather than a
@@ -352,9 +286,6 @@ pub fn render(a: &Audit) -> String {
             "  added: {} · recorded in {}\n",
             r.added, r.source
         ));
-        if let Some((d, c)) = r.downstream {
-            s.push_str(&format!("  downstream `{d}` in window: {c}\n"));
-        }
         s.push_str(&format!(
             "  last fired: {}\n",
             r.last_fired
@@ -450,39 +381,35 @@ mod tests {
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
         assert_eq!((rw.fires, rw.subjects, rw.repeats), (80, 2, 78));
-        // Nothing landed, so the recorded condition holds over this window.
-        assert_eq!(rw.downstream, Some(("land", 0)));
-        assert_eq!(rw.condition_met, Some(true));
+        // Nothing was recorded for review-waiting, so it reads as a defect rather than
+        // getting a condition invented for it.
+        assert!(rw.defect.is_some());
+        assert_eq!(rw.condition_met, None);
 
         // A mechanism that never fired is in the output, not omitted.
         let nudge = a.rows.iter().find(|r| r.id == "stop-nudge").unwrap();
         assert_eq!(nudge.fires, 0);
         assert!(nudge.last_fired.is_none());
-        // ...and a "fires and nothing follows" condition is NOT met by never firing.
-        let owner_q = a
+        // A recorded "remove when it stops firing" condition is answered by the counter.
+        let idle = a
             .rows
             .iter()
-            .find(|r| r.id == "owner-decision-waiting")
+            .find(|r| r.id == "idle-without-claim")
             .unwrap();
-        assert_eq!(owner_q.fires, 0);
-        assert_eq!(owner_q.condition_met, Some(false));
+        assert_eq!((idle.fires, idle.condition_met), (0, Some(true)));
 
         // A mechanism with nothing recorded is reported as a defect.
         assert!(a.rows.iter().any(|r| r.defect.is_some()));
 
-        // Facts only: the rendered output instructs nobody.
+        // The rendered form names the mechanism and its counts.
         let text = render(&a);
-        assert!(
-            imperative_hits(&text).is_empty(),
-            "{:?}",
-            imperative_hits(&text)
-        );
+        assert!(text.contains("review-waiting"), "{text}");
     }
 
     /// A landing in the window means the recorded condition no longer holds; `last_fired`
     /// looks at every recorded day, not just the window.
     #[test]
-    fn downstream_action_and_last_fired_outside_the_window() {
+    fn last_fired_looks_outside_the_window() {
         let days = [
             day(
                 "2026-08-20",
@@ -501,8 +428,6 @@ mod tests {
         let a = gather_from(&days, "2026-08-22");
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
         assert_eq!(rw.fires, 1);
-        assert_eq!(rw.downstream, Some(("land", 1)));
-        assert_eq!(rw.condition_met, Some(false), "something landed");
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
 
         // A window after every recorded day: no firings counted, but last_fired still sees
@@ -532,19 +457,5 @@ mod tests {
             "2026-08-22",
         );
         assert_eq!(a.unregistered, vec![("hook.Stop / refuse".to_string(), 1)]);
-    }
-
-    #[test]
-    fn imperative_hits_catches_a_verdict_and_passes_a_fact() {
-        assert_eq!(
-            imperative_hits("Consider removing this condition.").len(),
-            1
-        );
-        assert!(!imperative_hits("This should be removed").is_empty());
-        assert!(imperative_hits("fired 80 times over 2 subjects").is_empty());
-        assert!(
-            imperative_hits("removed when a full round passes with zero events").is_empty(),
-            "descriptive `removed when` is a fact, not an instruction"
-        );
     }
 }

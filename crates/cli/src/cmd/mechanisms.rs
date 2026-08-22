@@ -11,9 +11,11 @@
 //! `install::SURFACE` is: the probe and the binary cannot then disagree, and there is no file
 //! to keep in sync. `air audit` reads it and prints, per mechanism, what the ledger says.
 //!
-//! **This file holds no judgement.** A mechanism's `removal` is what was recorded when it was
-//! added, in the words of whoever added it. Deciding what to cut is the coordinator's pass
-//! over `air audit` output, not something stated here.
+//! **This file holds no judgement, and it invents nothing.** A mechanism's `removal` is what
+//! was actually recorded when it was added, in the words of whoever added it. Where nothing
+//! was recorded the entry says `Unstated` and the audit reports a defect — writing a
+//! plausible-sounding condition in place of the missing one would hide exactly what this
+//! table is for. Deciding what to cut is the coordinator's pass, not something stated here.
 
 use serde::Serialize;
 
@@ -39,14 +41,9 @@ pub enum Removal {
     /// Recorded, but a person has to decide. The audit prints the text and says so; it does
     /// not pretend to evaluate it.
     Judgement(&'static str),
-    /// Recorded as: remove when this stops firing. The audit can check that directly.
+    /// Recorded as: remove when this stops firing. The audit can check that directly
+    /// against the counter.
     ZeroFirings(&'static str),
-    /// Recorded as: remove when it fires and the named downstream event does not follow.
-    /// `downstream` is an event `command` the audit counts over the same window.
-    NoDownstream {
-        text: &'static str,
-        downstream: &'static str,
-    },
     /// Recorded as permanent, with the incident that settled it.
     Never(&'static str),
 }
@@ -55,10 +52,7 @@ impl Removal {
     pub fn text(&self) -> &'static str {
         match self {
             Removal::Unstated => "",
-            Removal::Judgement(t)
-            | Removal::ZeroFirings(t)
-            | Removal::NoDownstream { text: t, .. }
-            | Removal::Never(t) => t,
+            Removal::Judgement(t) | Removal::ZeroFirings(t) | Removal::Never(t) => t,
         }
     }
 }
@@ -116,10 +110,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-e7q)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("review-waiting"),
-        removal: Removal::NoDownstream {
-            text: "it fires and no landing follows in the same window",
-            downstream: "land",
-        },
+        removal: Removal::Unstated,
     },
     Mechanism {
         id: "idle-without-claim",
@@ -150,10 +141,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-21 (plan 0006)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("owner-decision-waiting"),
-        removal: Removal::NoDownstream {
-            text: "it fires and no triage of an owner capture follows",
-            downstream: "triage",
-        },
+        removal: Removal::Unstated,
     },
     Mechanism {
         id: "stuck",
@@ -183,10 +171,7 @@ pub const MECHANISMS: &[Mechanism] = &[
             command: "hook.PreToolUse",
             decision: "warn",
         },
-        removal: Removal::NoDownstream {
-            text: "it fires and the same edit happens anyway, with no landing conflict it prevented",
-            downstream: "land",
-        },
+        removal: Removal::Unstated,
     },
     Mechanism {
         id: "peer-warning-repeat",

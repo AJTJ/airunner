@@ -49,7 +49,7 @@ pub fn run(json: bool) -> i32 {
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
-        probe_audit_states_no_verdict(),
+        probe_audit_registry(),
         probe_land_refusals(),
         probe_project_fence(),
     ];
@@ -71,25 +71,35 @@ pub fn run(json: bool) -> i32 {
     if all_ok { 0 } else { 1 }
 }
 
-/// air-zyo: `air audit` supplies facts and stops. Red: a verdict sentence is caught. Green:
-/// the real rendered output over a scratch event log instructs nobody. The line between
-/// reporting and judging is the bead's design point, so it is a probe and not a convention.
-fn probe_audit_states_no_verdict() -> Probe {
-    use crate::cmd::audit::{gather_from, imperative_hits, render};
+/// air-zyo: the registry's job is that a mechanism nobody wrote a removal condition for is
+/// visible. Red: an entry with nothing recorded is reported as a defect. Green: an entry
+/// with a condition is not, and its counter reads back.
+fn probe_audit_registry() -> Probe {
+    use crate::cmd::audit::gather_from;
 
-    let red = !imperative_hits("Consider removing review-waiting; it should be cut.").is_empty();
     let events = concat!(
-        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1","review-waiting:air-2"]},"decision":"attention"}"#,
-        "\n",
-        r#"{"at":"2026-08-22T02:00:00Z","worker":"beta","command":"hook.PreToolUse","decision":"warn"}"#,
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
         "\n",
     );
-    let days = [("2026-08-22".to_string(), events.to_string())];
-    let text = render(&gather_from(&days, "2026-08-22"));
-    // It has to actually say something, or "no imperatives" is trivially true.
-    let green = text.contains("review-waiting") && imperative_hits(&text).is_empty();
+    let a = gather_from(
+        &[("2026-08-22".to_string(), events.to_string())],
+        "2026-08-22",
+    );
+    // Red: nothing recorded for review-waiting, so it is a defect and says so.
+    let red = a
+        .rows
+        .iter()
+        .any(|r| r.id == "review-waiting" && r.defect.is_some());
+    // Green: a mechanism that does carry one is not a defect, and the counter works.
+    let green = a
+        .rows
+        .iter()
+        .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
+        && a.rows
+            .iter()
+            .any(|r| r.id == "review-waiting" && r.fires == 1 && r.last_fired.is_some());
     Probe {
-        name: "audit: a verdict sentence is caught; the real output states facts only",
+        name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
         green_passes: green,
     }
