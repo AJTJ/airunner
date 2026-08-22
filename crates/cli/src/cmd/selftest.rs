@@ -56,6 +56,7 @@ pub fn run(json: bool) -> i32 {
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
+        probe_project_is_taken_from_what_it_is_told(),
         probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
@@ -679,6 +680,39 @@ fn probe_land_refusals() -> Probe {
 /// call for `air-alpha` passes. `SendMessage` to another project's coordinator passes, which is
 /// the half air-0lk got wrong: denying it broke the cross-project channel silently, in the
 /// verification path.
+/// air-7ah: which project a session belongs to must come from what it is told, not from what
+/// happens to be in the ambient environment. `project_for` read `AIR_PROJECT` directly, so the
+/// hook test asserting a scratch repo's prefix quietly got the ambient value of whatever
+/// session ran it — green everywhere except inside a launched session, which is the only place
+/// `air land` runs. Landing was blocked for every branch and the test was hiding it.
+///
+/// Red: with a project supplied, the supplied value wins over the checkout's beads prefix —
+/// the case that was never exercised. Green: with none supplied, the prefix is used, and a
+/// blank is not a value. Neither arm reads the environment, so this cannot regress the way it
+/// did.
+fn probe_project_is_taken_from_what_it_is_told() -> Probe {
+    use crate::cmd::hook::project_from;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(dir.join(".beads")).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n")
+            .map_err(|e| e.to_string())?;
+        let red = project_from(Some("air"), &dir) == "air";
+        let green = project_from(None, &dir) == "zz"
+            && project_from(Some("   "), &dir) == "zz"
+            && project_from(Some(" air "), &dir) == "air";
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "project: the session's project comes from what it is told, not from ambient AIR_PROJECT",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
 fn probe_project_fence() -> Probe {
     use crate::cmd::hook::project_fence;
     use air_hooks::{HookInput, HookOutcome};
