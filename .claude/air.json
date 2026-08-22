@@ -1,0 +1,6 @@
+{
+  "coordinator_deny": [],
+  "worker_deny": [
+    "Bash(cargo publish *)"
+  ]
+}

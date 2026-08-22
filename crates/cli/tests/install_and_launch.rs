@@ -280,7 +280,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
     std::fs::write(proj.join("ios/fastlane/Fastfile"), "").unwrap();
     // Fake bd that supports init (creates .beads) and answers list/show.
     let bd = root.join("bd");
-    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.2.2';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
+    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.2.2';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; config) echo \"$@\" >> .beads/config.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

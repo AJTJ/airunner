@@ -316,9 +316,18 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
                 ))
             })
             .map_err(|e| e.to_string())?;
+        let worktree_names: Vec<String> = views.keys().cloned().collect();
+        let mut pruned = Vec::new();
         for row in rows {
             let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
             sess.pid_alive = sess.pid.map(super::lease::pid_alive);
+            // A session whose worktree no longer exists and whose process is not alive is
+            // a leftover (SessionEnd is not guaranteed on crash or worktree removal). Prune it
+            // so it never reads as a live worker (dogfooding, 2026-08-22).
+            if !worktree_names.contains(&worker) && sess.pid_alive != Some(true) {
+                pruned.push(sess.session_id.clone());
+                continue;
+            }
             all_sessions.push((worker.clone(), role.clone(), sess.clone()));
             let v = views.entry(worker.clone()).or_insert_with(|| WorkerView {
                 worker: worker.clone(),
@@ -328,6 +337,18 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             if v.session.is_none() {
                 v.session = Some(sess);
             }
+        }
+        for id in &pruned {
+            let _ = ledger.conn().execute(
+                "DELETE FROM sessions WHERE session_id=?1",
+                rusqlite::params![id],
+            );
+        }
+        if !pruned.is_empty() {
+            errors.push(format!(
+                "pruned {} session(s) with no worktree and no live process",
+                pruned.len()
+            ));
         }
     }
 
