@@ -232,12 +232,14 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
     }
 }
 
-/// air-ayp: a landing closes a bead only on evidence Air can point at, and what it cannot
-/// discharge lands merged-but-open — as a `landings` row, never as a bd status.
+/// air-ayp: `air land` closes nothing (the worker closes its own bead with proof), so what a
+/// landing carries past its print is the one signal meaning a wrong close: a clause the merge
+/// CONTRADICTS. As a `landings` row, never as a bd status.
 ///
-/// Red: a bead with a clause Air cannot look up is refused the close, and the ledger reports
-/// it with the clause. Green: a bead whose every clause is discharged closes, and once
-/// somebody actually closes a held-open one the report clears, so nothing lingers.
+/// Red: a bead naming a file the merge did not touch is refuted, not discharged, and the
+/// ledger reports it with the clause. Green: a bead whose every clause is discharged says so;
+/// one Air merely cannot read is neither refuted nor discharged and is not reported; and the
+/// report clears once somebody deals with the bead.
 ///
 /// The no-blocking half is the second assertion: the whole representation is a ledger row, and
 /// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
@@ -252,8 +254,15 @@ fn probe_landed_but_open() -> Probe {
         green_at_landed: true,
         changed: &changed,
     };
-    let undischargeable = judge_clauses(
+    // A clause the merge CONTRADICTS: the bead names a file it did not touch.
+    let refutable = judge_clauses(
         "fd-2",
+        vec!["docs/rules/writing.md names the rule.".into()],
+        &ev,
+    );
+    // A clause Air simply cannot read. Not a defect, and not the wrong-close signal.
+    let unreadable = judge_clauses(
+        "fd-3",
         vec!["The owner rules on the counter-argument.".into()],
         &ev,
     );
@@ -280,7 +289,8 @@ fn probe_landed_but_open() -> Probe {
             beads: vec!["fd-1".into(), "fd-2".into()],
             open_beads: vec![OpenBead {
                 bead: "fd-2".into(),
-                why: undischargeable.why_open(),
+                why: refutable.why_open(),
+                refuted: true,
             }],
             merge_commit: Some("ccc".into()),
             started_at: "t0".into(),
@@ -292,8 +302,9 @@ fn probe_landed_but_open() -> Probe {
         let reported = open.len() == 1
             && open
                 .first()
-                .is_some_and(|o| o.bead == "fd-2" && o.why.contains("nothing Air can look up"));
-        // Closing it for real clears the report: `air close` releases the claim as `landed`.
+                .is_some_and(|o| o.bead == "fd-2" && o.why.contains("docs/rules/writing.md"));
+        // Somebody dealing with the bead clears the report: any claim release counts, since
+        // the status reconcile releases as `closed` once bd says so (air-3eu).
         l.record_claim("fd-2", "alpha", &[], "t2")
             .map_err(|e| e.to_string())?;
         l.release_claims_on(&["fd-2".to_string()], "landed", "t3")
@@ -305,9 +316,12 @@ fn probe_landed_but_open() -> Probe {
     let (reported, cleared) = res;
 
     Probe {
-        name: "land: a clause Air cannot evidence leaves the bead merged-but-open in the ledger, never in a bd status",
-        red_fires: !undischargeable.may_close() && reported,
-        green_passes: discharged.may_close() && cleared,
+        name: "land: a clause the merge contradicts is reported from the ledger, never as a bd status; one Air cannot read is not",
+        red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
+        green_passes: discharged.all_discharged()
+            && !unreadable.refuted()
+            && !unreadable.all_discharged()
+            && cleared,
     }
 }
 

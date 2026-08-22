@@ -147,12 +147,13 @@ enum Cmd {
     /// at the first red. The repo's verify comes from `.claude/air.json` `verify_command`,
     /// default `make verify`.
     ///
-    /// Merging is not closing. Every bead in the merge is printed beside its acceptance
-    /// criteria and Air's verdict on each clause. A bead closes only when Air can point at
-    /// evidence for every clause: a green verify recorded at the landed sha, or a path the
-    /// merge changed. Anything else is merged but left OPEN, with the clause named, and
-    /// `air status` says so until somebody looks and runs `air close`. Air is not the judge
-    /// of prose (air-ayp).
+    /// It closes nothing. The worker closes its own bead with proof before the branch lands
+    /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
+    /// acceptance criteria and Air's verdict on each clause — the only external check on that.
+    /// Air discharges a clause only by lookup: a green verify recorded at the landed sha, or a
+    /// path the merge changed. Everything else it reports as unreadable rather than judging.
+    /// A clause the merge CONTRADICTS is a wrong close, kept on the landings row and named by
+    /// `air status` (air-ayp).
     Land {
         bead: Vec<String>,
         /// Land every green hand-over, longest wait first, stopping at the first red.
