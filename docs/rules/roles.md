@@ -38,7 +38,10 @@ do not route around it. **[Air enforces: a healthy holder is not broken by `take
 Not available to a worker, by deny rule in every permission mode: `air land`, `git push`,
 `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the worktree. Editing
 the main checkout is blocked natively. **[Air enforces]** Setting `awaiting_review` or closing
-without a recorded green at HEAD that contains `main` is the one refusal (advisory this round).
+without a recorded green at HEAD that contains `main` is the one refusal: worker launches set
+`AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fix (`air record verify -- make
+verify`). Enforced after the first bypass of the advisory gate (tty-fix, 2026-08-22 06:00,
+air-i59); removed when a full round passes with zero `handover-not-green` events.
 **[Air enforces]**
 
 ## Coordinator (the main checkout, holding no lane)
