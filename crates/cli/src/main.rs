@@ -116,13 +116,27 @@ enum Cmd {
         #[command(subcommand)]
         op: LeaseOp,
     },
-    /// Resolve a capture: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    /// Resolve captures: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    /// Several captures at once map positionally, in one ledger transaction:
+    /// `air triage c1 c2 --bead air-1 --bead air-2`. One --drop covers every capture named.
+    /// Every bead is checked against bd first; an id bd does not have refuses the pass. A
+    /// capture that was already triaged is re-pointed, old target named in the event line.
     Triage {
-        id: String,
+        #[arg(required = true)]
+        id: Vec<String>,
         #[arg(long)]
-        bead: Option<String>,
+        bead: Vec<String>,
         #[arg(long)]
-        drop: Option<String>,
+        drop: Vec<String>,
+    },
+    /// Coordinator: close landed beads in ONE bd process and release their claims in one
+    /// ledger transaction. `bd` costs ~1.4 s per process whatever it is asked (air-869).
+    Close {
+        #[arg(required = true)]
+        bead: Vec<String>,
+        /// Why they closed; bd records it on every id.
+        #[arg(long)]
+        reason: String,
     },
     /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
     Status {
@@ -216,9 +230,8 @@ fn main() -> ExitCode {
             }
             LeaseOp::Beat => cmd::lease::beat(&repo),
         },
-        Cmd::Triage { id, bead, drop } => {
-            cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
-        }
+        Cmd::Triage { id, bead, drop } => cmd::capture::triage(&repo, &id, &bead, &drop, cli.json),
+        Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),

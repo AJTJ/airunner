@@ -31,10 +31,12 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
-/// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
-/// (default: open, unassigned, no labels); `list --status in_progress` answers from
-/// `<dir>/bd.in_progress` and `list --status awaiting_review` from `<dir>/bd.awaiting_review`
-/// (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
+/// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json` when
+/// it exists, otherwise one open, unassigned, unlabelled issue per id argument, omitting any
+/// id listed in `<dir>/bd.unknown` and still exiting 0 (real bd 1.2.2 does exactly that);
+/// `list --status in_progress` answers from `<dir>/bd.in_progress` and
+/// `list --status awaiting_review` from `<dir>/bd.awaiting_review` (ids, one per line);
+/// `update` exits 1 when `<dir>/bd.fail` exists.
 ///
 /// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
 /// passes its environment through to bd): macOS charges ~0.5 s on the first exec of every
@@ -53,7 +55,14 @@ d="$FAKE_BD_DIR"
 echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
-  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; else echo '{"id":"'"$2"'","status":"open","labels":[]}'; fi; exit 0;;
+  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; exit 0; fi
+       shift; out=""
+       for id in "$@"; do
+         case "$id" in --*) continue;; esac
+         if [ -f "$d/bd.unknown" ] && grep -qx "$id" "$d/bd.unknown"; then continue; fi
+         out="$out${out:+,}{\"id\":\"$id\",\"status\":\"open\",\"labels\":[]}"
+       done
+       echo "[$out]"; exit 0;;
   list) f="$d/bd.in_progress"; s=in_progress; case "$*" in *awaiting_review*) f="$d/bd.awaiting_review"; s=awaiting_review;; esac
        if [ -f "$f" ]; then awk -v s="$s" '{printf "%s{\"id\":\"%s\",\"status\":\"%s\"}", (NR>1?",":""), $0, s} BEGIN{printf "["} END{print "]"}' "$f"; else echo "[]"; fi; exit 0;;
   ready) echo "[]"; exit 0;;
@@ -262,10 +271,249 @@ fn capture_inbox_triage_round_trip() {
 
     let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "fd-7"]);
     assert_eq!(code, 0, "{out}");
-    let (code, _, _) = air(&repo, &bd, &["triage", &id, "--drop", "dup"]);
-    assert_eq!(code, 2);
+    // A resolved capture is re-pointed, not refused (air-76z), and says what it left.
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--drop", "dup"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("re-pointed from bead fd-7"), "{out}");
     let (_, out, _) = air(&repo, &bd, &["inbox"]);
     assert_eq!(out.trim(), "coordinator queue empty");
+}
+
+/// air-869: the incident was ten closes as ten `bd` processes at ~1.4 s each. Ten closes
+/// through Air are ONE bd process and one ledger transaction; the event line carries what
+/// bd cost, and `air status` reads it back. A worker is refused: the one refusal
+/// (hand-over needs green) lives on the worker's path and closing would walk around it.
+#[test]
+fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
+    for id in &ids {
+        let (code, out, _) = air(&repo, &bd, &["claim", id]);
+        assert_eq!(code, 0, "{out}");
+    }
+    // Count only what `air close` runs.
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+
+    let mut argv: Vec<&str> = vec!["--json", "close"];
+    argv.extend(ids.iter().map(String::as_str));
+    argv.extend(["--reason", "landed in 63cc0a5"]);
+    let (code, out, err) = air(&repo, &bd, &argv);
+    assert_eq!(code, 0, "{out}{err}");
+
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| !l.trim().is_empty()).count(),
+        1,
+        "ten closes must be one bd process: {log}"
+    );
+    assert!(log.contains("close fd-1 "), "{log}");
+    assert!(log.contains("fd-10"), "{log}");
+    assert!(log.contains("--reason landed in 63cc0a5"), "{log}");
+
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["bd_processes"], 1);
+    assert_eq!(v["released"].as_array().unwrap().len(), 10);
+    assert!(
+        claims(&repo)
+            .iter()
+            .all(|c| c.2.as_deref() == Some("landed"))
+    );
+
+    // Every event line that shelled out to bd names what it cost.
+    let day = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .next()
+        .unwrap();
+    let events = std::fs::read_to_string(&day).unwrap();
+    let close_line = events
+        .lines()
+        .find(|l| l.contains(r#""command":"close""#))
+        .unwrap_or_default();
+    assert!(!close_line.is_empty(), "no close event in {events}");
+    let e: serde_json::Value = serde_json::from_str(close_line).unwrap();
+    assert_eq!(e["bd_calls"], 1, "{close_line}");
+    assert!(e["bd_ms"].is_u64(), "{close_line}");
+
+    // ...and `air status` reads the median back out of the log.
+    let (code, out, err) = air(&repo, &bd, &["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bd: median"), "{out}");
+
+    // A worker may not close.
+    let wt = repo.join("wt-w");
+    let g = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            wt.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+    let (code, out, _) = air(&wt, &bd, &["close", "fd-1", "--reason", "x"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("coordinator's landing pass"), "{out}");
+    assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
+}
+
+/// air-869: a triage pass resolves every capture in one ledger transaction, mapping
+/// --bead/--drop positionally the way bd maps `bd close --reason`.
+#[test]
+fn triage_resolves_a_whole_pass_at_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let mut ids = Vec::new();
+    for text in ["one", "two", "three"] {
+        let (_, out, _) = air(&repo, &bd, &["--json", "capture", text]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+    // One --bead for three captures is a mistake, not a fan-out.
+    let (code, _, err) = air(
+        &repo,
+        &bd,
+        &["triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1"],
+    );
+    assert_eq!(code, 1, "{err}");
+
+    let (code, out, err) = air(
+        &repo,
+        &bd,
+        &[
+            "--json", "triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1", "--bead", "fd-2",
+            "--drop", "dup",
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["resolved"], 3);
+    assert_eq!(v["inbox_depth"], 0);
+    // A second pass re-points rather than refusing (air-76z).
+    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["repointed"][0]["from"], "bead fd-1");
+    assert_eq!(v["repointed"][0]["to"], "bead fd-9");
+}
+
+/// air-76z: a capture must never end up pointing at a bead that does not exist. The
+/// coordinator chained `air triage C --bead <placeholder>` before `bd create` had made the
+/// id, twice, and `air triage` then refused to touch a resolved capture, so the record was
+/// wrong and stayed wrong.
+#[test]
+fn triage_refuses_an_unknown_bead_and_can_repoint_afterwards() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (_, out, _) = air(&repo, &bd, &["--json", "capture", "needs a bead"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+
+    // bd does not have this one.
+    std::fs::write(repo.join("bd.unknown"), "zz-nope\n").unwrap();
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "zz-nope"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("bd knows no bead zz-nope"), "{out}");
+    assert!(out.contains("Nothing was triaged"), "{out}");
+    // Still open: the refusal wrote nothing.
+    let (_, inbox, _) = air(&repo, &bd, &["inbox"]);
+    assert!(inbox.contains("needs a bead"), "{inbox}");
+
+    // One bd process checks every bead in the pass, however many.
+    std::fs::write(repo.join("bd.log"), "").unwrap();
+    let (code, out, _) = air(&repo, &bd, &["triage", &id, "--bead", "ad-real"]);
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("show ")).count(),
+        1,
+        "{log}"
+    );
+
+    // And the wrong pointer can be corrected after the fact; the event names both ids.
+    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &id, "--bead", "ad-fixed"]);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["repointed"][0]["from"], "bead ad-real");
+    assert_eq!(v["repointed"][0]["to"], "bead ad-fixed");
+    let day = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .next()
+        .unwrap();
+    let events = std::fs::read_to_string(&day).unwrap();
+    assert!(
+        events.contains("re-pointed from bead ad-real to bead ad-fixed"),
+        "{events}"
+    );
+
+    // A capture id nothing matches is reported, not silently accepted.
+    let (code, out, _) = air(
+        &repo,
+        &bd,
+        &["triage", "01NOSUCHCAPTURE", "--bead", "ad-real"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("no such capture"), "{out}");
+}
+
+/// air-76z: if bd cannot answer, nothing is triaged. An unverified id in the record is the
+/// bug this bead exists for, so silence from bd is a refusal, not a pass.
+#[test]
+fn triage_refuses_when_bd_does_not_answer() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (_, out, _) = air(&repo, &bd, &["--json", "capture", "waiting on bd"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+
+    let slow = repo.join("bd-slow");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in show) sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // First exec of a freshly written script pays a macOS security assessment; warm it so
+    // the short budget below measures the stub, not the OS (air-y8m).
+    let _ = Command::new(&slow).arg("ready").output().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["triage", &id, "--bead", "fd-1"])
+        .env("AIR_BD_BIN", &slow)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_PROBE_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("bd did not answer"), "{text}");
+    assert!(text.contains("nothing was triaged"), "{text}");
+    // The capture is untouched, so the coordinator can simply re-run.
+    let (_, inbox, _) = air(&repo, &bd, &["inbox"]);
+    assert!(inbox.contains("waiting on bd"), "{inbox}");
 }
 
 /// Two worktrees contend for one resource; the dead-holder path is exercised by pointing
