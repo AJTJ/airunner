@@ -51,6 +51,14 @@ Index items are 1–3 lines; detail lives behind the link.
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
+- **A claim that crosses between projects is checked by the receiver before it is acted on.**
+  Not hedged harder by the sender: a derived statement and an observed one have identical
+  grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
+  read the line cited. Applies in both directions and to commands most of all. **Check even
+  when you agree. Agreement is when checking feels least necessary and is most valuable.**
+  Owner, via the 2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the
+  receiver opening the file, none by the sender flagging; and a fourth that both sides held and
+  neither checked, plausibly *because* the other had said it.
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
@@ -101,3 +109,35 @@ Index items are 1–3 lines; detail lives behind the link.
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).
+
+## This repo's work flow
+
+How a finished bead is handed on is **this repo's** choice, not Air's, and it lives here
+because `.air/roles.md` deliberately does not say it (air-8zu). Air states what it records and
+what it refuses; the sequence is ours.
+
+**A worker closes its own bead with proof** (owner, 2026-08-22, air-7o3). No `awaiting_review`,
+no waiting for review:
+
+    air claim <id> [--files a,b]
+    … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
+    git merge main
+    air record verify -- make verify        # last, so the green is at the commit containing main
+    bd close <id> --reason "<proof>"
+    … next bead
+
+**Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
+the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, 27 probes,
+is. The owner's words: *"the explanation should be proof, not verbosity. Very clear proof."*
+
+**If part of a bead needs the owner, close what you did and file a standalone successor bead**
+naming what he must do. Do not leave the bead open for the remainder: open beads get re-claimed
+and re-derived by the next worker, which is the failure this avoids.
+
+**What makes this safe rather than an honour system:** `air handover`'s gate matches `bd close`
+and `bd update -s closed` as well as `-s awaiting_review` (`is_handover_command`), and worker
+launches set `AIR_ENFORCE=1` by default since air-i59. So a close without a recorded green at a
+HEAD containing `main` is *refused*, not advised. The proof is enforced at the moment of
+closing. Run `air handover` first if you want the missing pieces named before bd refuses them.
+
+`awaiting_review` survives only on beads that already carry it.

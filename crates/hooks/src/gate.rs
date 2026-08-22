@@ -229,7 +229,14 @@ mod tests {
 /// when Claude Code is already continuing because of a Stop hook (hooks reference,
 /// https://code.claude.com/docs/en/hooks, accessed 2026-08-22; it also ends the turn after 8
 /// consecutive blocks), so the nudge fires exactly once per stop, never a loop. The
-/// coordinator is never nudged. `stale` marks a ready list older than its freshness window.
+/// coordinator is never nudged.
+///
+/// `ready` must be a list the caller has confirmed against live state, not a cached one
+/// (air-ouw). There is no "may be stale" any more: the nudge either names beads `air claim`
+/// will accept or says nothing. It used to name whatever the cache held, so a bead labelled
+/// `owner` after the cache was written was offered here and refused by `air claim` seconds
+/// later — the same fleet contradicting itself out of one stale file. An annotation admitting
+/// a mechanism may be wrong is a mechanism that has not decided what it is for.
 ///
 /// Removal condition (bead air-09i): when a round shows nudges that led to a claim <= nudges
 /// ignored, or workers claim the next bead unprompted in > 90% of hand-overs.
@@ -238,20 +245,14 @@ pub fn stop_nudge(
     holds_claim: bool,
     ready: &[String],
     stop_hook_active: bool,
-    stale: bool,
 ) -> Option<String> {
     if role != "worker" || holds_claim || stop_hook_active || ready.is_empty() {
         return None;
     }
     let first = ready.first().map(String::as_str).unwrap_or_default();
     Some(format!(
-        "air: ready: {}{}; claim one (air claim {first}) or say why you are stopping (air capture \"<why>\")",
+        "air: ready: {}; claim one (air claim {first}) or say why you are stopping (air capture \"<why>\")",
         ready.join(", "),
-        if stale {
-            " (ready list may be stale)"
-        } else {
-            ""
-        },
     ))
 }
 
@@ -266,22 +267,20 @@ mod nudge_tests {
 
     #[test]
     fn nudges_only_a_claimless_worker_with_ready_beads_on_a_fresh_stop() {
-        let r = stop_nudge("worker", false, &ids(), false, false).unwrap();
+        let r = stop_nudge("worker", false, &ids(), false).unwrap();
         assert!(r.contains("ready: fd-1, fd-2"));
         assert!(r.contains("air claim fd-1"));
+        // air-ouw: there is no staleness caveat any more, in either direction. The caller
+        // confirms the list against bd before this is reached, so the nudge either names
+        // beads `air claim` accepts or is not called at all.
         assert!(!r.contains("stale"));
-        assert!(
-            stop_nudge("worker", false, &ids(), false, true)
-                .unwrap()
-                .contains("may be stale")
-        );
     }
 
     #[test]
     fn every_other_combination_passes() {
-        assert!(stop_nudge("coordinator", false, &ids(), false, false).is_none());
-        assert!(stop_nudge("worker", true, &ids(), false, false).is_none());
-        assert!(stop_nudge("worker", false, &[], false, false).is_none());
-        assert!(stop_nudge("worker", false, &ids(), true, false).is_none());
+        assert!(stop_nudge("coordinator", false, &ids(), false).is_none());
+        assert!(stop_nudge("worker", true, &ids(), false).is_none());
+        assert!(stop_nudge("worker", false, &[], false).is_none());
+        assert!(stop_nudge("worker", false, &ids(), true).is_none());
     }
 }
