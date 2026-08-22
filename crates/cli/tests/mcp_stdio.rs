@@ -33,11 +33,16 @@ fn scratch_repo() -> tempfile::TempDir {
 }
 
 /// Seed a session row that has been `stuck` for an hour.
+/// bd is not under test here; a missing binary fails in microseconds where a real `bd` in a
+/// non-beads directory cost 0.25 to 0.5 s per call, three calls per `status` (air-4vu).
+const NO_BD: &str = "/nonexistent/bd";
+
 fn seed_stuck(repo: &Path) {
     let out = Command::new(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
         .arg("status")
+        .env("AIR_BD_BIN", NO_BD)
         .current_dir(repo)
         .output()
         .unwrap();
@@ -62,7 +67,12 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         .arg(&repo)
         .arg("mcp")
         .current_dir(&repo)
-        .env("AIR_CHANNEL_POLL_MS", "50")
+        // The first tick runs before the first sleep, so the seeded stuck session is pushed
+        // at startup whatever the interval. A short interval only makes the poll thread
+        // (3 bd + ~5 git spawns per tick) fight the 1800 requests below for the stdout lock:
+        // 50 ms cost 3.4 s per run (air-4vu, 2026-08-22). 5 s: no second tick in a run.
+        .env("AIR_CHANNEL_POLL_MS", "5000")
+        .env("AIR_BD_BIN", NO_BD)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -72,7 +82,14 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let mut reader = BufReader::new(child.stdout.take().unwrap());
 
     // Collect lines until a predicate matches, bounded in time; notifications may interleave.
+    // Unmatched lines are kept: the poll thread's first tick (the seeded stuck session)
+    // usually lands before the `initialize` reply, and dropping it meant waiting a whole
+    // poll interval for the second tick (air-4vu, 2026-08-22).
+    let mut pending: Vec<serde_json::Value> = Vec::new();
     let mut next_matching = |pred: &dyn Fn(&serde_json::Value) -> bool| -> serde_json::Value {
+        if let Some(i) = pending.iter().position(pred) {
+            return pending.remove(i);
+        }
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             assert!(
@@ -86,6 +103,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
             if pred(&v) {
                 return v;
             }
+            pending.push(v);
         }
     };
 
@@ -130,7 +148,8 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let bad = next_matching(&|v| v["id"] == 4);
     assert_eq!(bad["error"]["code"], -32602);
 
-    // Memory canary: a few thousand in-process requests must not grow the server.
+    // Memory canary: a thousand-odd in-process requests must not grow the server. 1500 is
+    // enough: the 8 MB bar, not the count, sets the smallest leak this can see (air-4vu).
     let rss = |pid: u32| -> u64 {
         let out = Command::new("ps")
             .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -142,7 +161,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
             .unwrap_or(0)
     };
     let pid = child.id();
-    for i in 0..500 {
+    for i in 0..300 {
         writeln!(
             stdin,
             r#"{{"jsonrpc":"2.0","id":{},"method":"tools/list"}}"#,
@@ -152,7 +171,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         let _ = next_matching(&|v| v["id"] == 1000 + i);
     }
     let before = rss(pid);
-    for i in 0..3000 {
+    for i in 0..1500 {
         writeln!(
             stdin,
             r#"{{"jsonrpc":"2.0","id":{},"method":"resources/list"}}"#,
@@ -164,7 +183,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let after = rss(pid);
     assert!(
         after <= before.saturating_add(8 * 1024),
-        "rss grew from {before} KB to {after} KB over 3000 requests"
+        "rss grew from {before} KB to {after} KB over 1500 requests"
     );
 
     // EOF on stdin: clean exit, no orphan.

@@ -34,35 +34,43 @@ fn scratch_repo() -> tempfile::TempDir {
 /// A fake bd: appends argv to `<dir>/bd.log`; `show` answers from `<dir>/bd.issue.json`
 /// (default: open, unassigned, no labels); `list --status in_progress` answers from
 /// `<dir>/bd.in_progress` (ids, one per line); `update` exits 1 when `<dir>/bd.fail` exists.
-fn fake_bd(dir: &Path) -> PathBuf {
-    let script = dir.join("bd");
-    std::fs::write(
-        &script,
-        format!(
-            r#"#!/bin/sh
-echo "$@" >> {log}
+///
+/// The script is written once per test binary and reads `<dir>` from `FAKE_BD_DIR` (air
+/// passes its environment through to bd): macOS charges ~0.5 s on the first exec of every
+/// freshly written executable, which was the largest single cost in this file (air-4vu,
+/// 2026-08-22). `air()` sets `FAKE_BD_DIR` to the repo.
+fn fake_bd(_dir: &Path) -> PathBuf {
+    static SCRIPT: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> = std::sync::OnceLock::new();
+    SCRIPT
+        .get_or_init(|| {
+            let home = tempfile::tempdir().unwrap();
+            let script = home.path().join("bd");
+            std::fs::write(
+                &script,
+                r#"#!/bin/sh
+d="$FAKE_BD_DIR"
+echo "$@" >> "$d/bd.log"
 case "$1" in
   --version) echo "bd version 1.2.2"; exit 0;;
-  show) if [ -f {issue} ]; then cat {issue}; else echo '{{"id":"'"$2"'","status":"open","labels":[]}}'; fi; exit 0;;
-  list) if [ -f {inprog} ]; then awk '{{printf "%s{{\"id\":\"%s\",\"status\":\"in_progress\"}}", (NR>1?",":""), $0}} BEGIN{{printf "["}} END{{print "]"}}' {inprog}; else echo "[]"; fi; exit 0;;
+  show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; else echo '{"id":"'"$2"'","status":"open","labels":[]}'; fi; exit 0;;
+  list) if [ -f "$d/bd.in_progress" ]; then awk '{printf "%s{\"id\":\"%s\",\"status\":\"in_progress\"}", (NR>1?",":""), $0} BEGIN{printf "["} END{print "]"}' "$d/bd.in_progress"; else echo "[]"; fi; exit 0;;
   ready) echo "[]"; exit 0;;
-  update) [ -e {fail} ] && exit 1; exit 0;;
+  update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
   *) exit 0;;
 esac
 "#,
-            log = dir.join("bd.log").display(),
-            issue = dir.join("bd.issue.json").display(),
-            inprog = dir.join("bd.in_progress").display(),
-            fail = dir.join("bd.fail").display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    script
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+            (home, script)
+        })
+        .1
+        .clone()
 }
 
 fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
@@ -71,6 +79,7 @@ fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
         .arg(repo)
         .args(args)
         .env("AIR_BD_BIN", bd)
+        .env("FAKE_BD_DIR", repo)
         .env("BEADS_ACTOR", "tester")
         .current_dir(repo)
         .output()
@@ -207,6 +216,7 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
             .arg(cwd)
             .args(args)
             .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
             .env("AIR_LEASE_PID", pid)
             .current_dir(cwd)
             .output()
