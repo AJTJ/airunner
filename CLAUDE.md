@@ -58,6 +58,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it on adopter | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
 | Integrating Air into a target repo (install, rules to change, self-maintenance) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | What comes next, in order | [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md) |
+| What the adopter round proposes, and the do-less verdict on each | [`docs/plans/0006-post-round-changes.md`](docs/plans/0006-post-round-changes.md) |
 | Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
 | Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |

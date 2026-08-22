@@ -17,6 +17,7 @@
 | Which metrics Air records, exactly how each is defined (the single list) | [`research/verification/ticks/2026-08-18-0430-measurement-spec.md`](research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
 | The first-round surface as built and how to operate it | [`plans/0004-first-round-surface.md`](plans/0004-first-round-surface.md) |
 | What comes next, in order (greenfield `air init`, dogfooding, round-one-driven items) | [`plans/0005-roadmap.md`](plans/0005-roadmap.md) |
+| Changes proposed from the adopter round and the do-less pass over them | [`plans/0006-post-round-changes.md`](plans/0006-post-round-changes.md) |
 | Building the first slice | [`plans/0001-first-slice.md`](plans/0001-first-slice.md) |
 | Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (one procedure; enforced vs judgement; metrics; rejected items) | [`plans/0002-what-to-work-on.md`](plans/0002-what-to-work-on.md) |
 | Skills/reference material to port before building | a private skills inventory |
