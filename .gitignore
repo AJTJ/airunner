@@ -3,3 +3,9 @@ target/
 .DS_Store
 .claude/worktrees/
 .air/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
