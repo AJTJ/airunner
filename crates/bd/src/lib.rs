@@ -71,6 +71,11 @@ pub mod stats {
 pub struct Issue {
     pub id: String,
     pub title: String,
+    /// The whole body, including the `## Acceptance Criteria` section. bd 1.2.2 has no
+    /// separate `acceptance_criteria` field (verified against `bd list --json` and
+    /// `bd show --json`, 2026-08-22): the criteria are a markdown section in here, which is
+    /// what `bd create --validate` requires per type (air-ayp).
+    pub description: String,
     pub status: String,
     pub priority: i64,
     pub assignee: Option<String>,

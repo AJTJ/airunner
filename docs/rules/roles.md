@@ -74,6 +74,11 @@ reports conditions, status reports everything (standstill 2026-08-22; removed wh
 main, longest wait first, verifies the merged result, and puts main back where it was on red
 (air-3pz). `air status` names what is ready. **[Air enforces: main checkout, on main, clean
 tracked tree, branch contains main, recorded green at the branch head]**
+Merging is not closing. `air land` prints every bead beside its acceptance criteria and closes
+only the ones whose every clause it can point at evidence for; the rest merge and stay open,
+named as `landed-not-closed` until a person looks and runs `air close <id> --reason "<what you
+checked>"`. Air is not the judge of prose (air-ayp; adopter closed 99 beads on containment
+alone, 14 partial and 1 not done). **[Air enforces]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
 `--drop "<why>"`. `--validate` refuses without these sections, per type: task/feature `##

@@ -23,7 +23,7 @@ use std::path::Path;
 use air_ledger::landings::Landing as LandingRow;
 use air_ledger::verify::{Kind, VerifyRun, new_id};
 
-use crate::cmd::{emit, log_event, now, open};
+use crate::cmd::{acceptance, emit, log_event, now, open};
 use crate::git;
 
 /// Who may run `air land`. The coordinator's deny list keeps `git commit` and `git push` on
@@ -68,6 +68,9 @@ fn branch_for(worker: &str) -> String {
 struct Batch {
     worker: String,
     beads: Vec<String>,
+    /// Each bead's acceptance clauses, from the same `bd list --json` the landing list came
+    /// from (air-ayp). Parallel to `beads`.
+    acceptance: Vec<Vec<String>>,
     /// Minutes the oldest of those beads has waited; `--all` lands oldest first.
     oldest_minutes: i64,
 }
@@ -80,9 +83,11 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
         let b = by_worker.entry(l.worker.clone()).or_insert_with(|| Batch {
             worker: l.worker.clone(),
             beads: Vec::new(),
+            acceptance: Vec::new(),
             oldest_minutes: 0,
         });
         b.beads.push(l.bead.clone());
+        b.acceptance.push(l.acceptance.clone());
         b.oldest_minutes = b.oldest_minutes.max(l.minutes);
     }
     let mut v: Vec<Batch> = by_worker.into_values().collect();
@@ -169,7 +174,13 @@ pub fn check(f: &Facts<'_>) -> Result<bool, String> {
 
 /// What one branch's landing did.
 enum Outcome {
-    Landed { merge: String, beads: Vec<String> },
+    Landed {
+        merge: String,
+        /// Beads whose acceptance the merge can point at evidence for. Only these close.
+        closable: Vec<String>,
+        /// Beads merged but left open, with the clause Air could not discharge (air-ayp).
+        open: Vec<air_ledger::landings::OpenBead>,
+    },
     Nothing,
     Rewound(String),
     Refused(String),
@@ -246,18 +257,27 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     }
 
     let mut landed: Vec<String> = Vec::new();
+    let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, json) {
-            Outcome::Landed { merge, beads } => {
+            Outcome::Landed {
+                merge,
+                closable,
+                open,
+            } => {
                 lines.push(format!(
                     "landed {} ({}) at {}",
                     batch.worker,
-                    beads.join(" "),
+                    batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
-                landed.extend(beads);
+                for o in &open {
+                    lines.push(format!("  {} merged but NOT closed: {}", o.bead, o.why));
+                }
+                landed.extend(closable);
+                held_open.extend(open);
             }
             Outcome::Nothing => lines.push(format!("{}: already in main", batch.worker)),
             Outcome::Rewound(why) => {
@@ -283,6 +303,13 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             code = 1;
         }
     }
+    if !held_open.is_empty() {
+        lines.push(format!(
+            "{} bead(s) merged but left open; `air status` names them until somebody closes \
+             them with `air close <id> --reason \"<what you checked>\"`",
+            held_open.len()
+        ));
+    }
     let msg = lines.join("\n");
     log_event(
         &ledger,
@@ -291,11 +318,20 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         &inputs,
         if code == 0 { "landed" } else { "stopped" },
         &msg,
-        &format!("{} bead(s)", landed.len()),
+        &format!(
+            "{} closed, {} merged-but-open",
+            landed.len(),
+            held_open.len()
+        ),
     );
     emit(
         json,
-        &serde_json::json!({"ok": code == 0, "landed": landed, "log": lines}),
+        &serde_json::json!({
+            "ok": code == 0,
+            "landed": landed,
+            "merged_not_closed": held_open,
+            "log": lines,
+        }),
         || msg.clone(),
     );
     code
@@ -342,25 +378,33 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    let record_full = |result: &str,
+                       merge: Option<String>,
+                       verify: Option<String>,
+                       step: Option<String>,
+                       open: &[air_ledger::landings::OpenBead]| {
+        let _ = ledger.record_landing(&LandingRow {
+            id: new_id(),
+            worker: batch.worker.clone(),
+            sha: facts.branch_head.to_string(),
+            tip_sha: Some(tip.clone()),
+            result: result.to_string(),
+            failing_step: step,
+            verify_run_id: verify,
+            attempt_no: ledger
+                .landing_attempts(&batch.worker)
+                .unwrap_or(0)
+                .saturating_add(1),
+            beads: batch.beads.clone(),
+            open_beads: open.to_vec(),
+            merge_commit: merge,
+            started_at: started_at.clone(),
+            finished_at: now(),
+        });
+    };
     let record =
         |result: &str, merge: Option<String>, verify: Option<String>, step: Option<String>| {
-            let _ = ledger.record_landing(&LandingRow {
-                id: new_id(),
-                worker: batch.worker.clone(),
-                sha: facts.branch_head.to_string(),
-                tip_sha: Some(tip.clone()),
-                result: result.to_string(),
-                failing_step: step,
-                verify_run_id: verify,
-                attempt_no: ledger
-                    .landing_attempts(&batch.worker)
-                    .unwrap_or(0)
-                    .saturating_add(1),
-                beads: batch.beads.clone(),
-                merge_commit: merge,
-                started_at: started_at.clone(),
-                finished_at: now(),
-            });
+            record_full(result, merge, verify, step, &[]);
         };
     match check(&facts) {
         Ok(false) => return Outcome::Nothing,
@@ -424,10 +468,56 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             batch.worker
         ));
     }
-    record("landed", Some(merge.clone()), Some(run.id), None);
+    // ── air-ayp ────────────────────────────────────────────────────────────────────────
+    // Layer 1, the part that is true under either closure model: read every bead's acceptance
+    // and print it beside Air's verdict, so a wrong close is visible at the moment it lands.
+    // Nothing closes on branch containment.
+    let changed = git::run(repo, &["diff", "--name-only", &format!("{tip}..{merge}")])
+        .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let ev = acceptance::Evidence {
+        green_at_landed: true, // the run above, recorded at `merge`
+        changed: &changed,
+    };
+    let judged: Vec<acceptance::Judged> = batch
+        .beads
+        .iter()
+        .enumerate()
+        .map(|(i, bead)| {
+            acceptance::judge_clauses(
+                bead,
+                batch.acceptance.get(i).cloned().unwrap_or_default(),
+                &ev,
+            )
+        })
+        .collect();
+    if !json {
+        print!("{}", acceptance::report(&judged));
+    }
+    // Layer 2, deletable: close only what layer 1 could point at evidence for.
+    let (closable, open): (Vec<_>, Vec<_>) = judged.iter().partition(|j| j.may_close());
+    let open: Vec<air_ledger::landings::OpenBead> = open
+        .into_iter()
+        .map(|j| air_ledger::landings::OpenBead {
+            bead: j.bead.clone(),
+            why: j.why_open(),
+        })
+        .collect();
+    record_full(
+        if open.is_empty() {
+            "landed"
+        } else {
+            "landed-open"
+        },
+        Some(merge.clone()),
+        Some(run.id),
+        None,
+        &open,
+    );
     Outcome::Landed {
         merge,
-        beads: batch.beads.clone(),
+        closable: closable.iter().map(|j| j.bead.clone()).collect(),
+        open,
     }
 }
 
@@ -501,6 +591,7 @@ mod tests {
             head: "abc".into(),
             minutes,
             command: String::new(),
+            acceptance: Vec::new(),
         };
         let b = batches(&[
             l("air-1", "alpha", 5),
