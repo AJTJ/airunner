@@ -645,6 +645,7 @@ mod tests {
             changed_at: String::new(),
             pid: None,
             pid_alive: None,
+            project: String::new(),
         };
         let mut known = None;
         let a = vec![("main".to_string(), "coordinator".to_string(), sess("aaaa"))];

@@ -220,6 +220,28 @@ enum Cmd {
     Selftest,
 }
 
+/// `--repo` may not leave this checkout's repository (air-0lk). A worktree and its main
+/// checkout share a git common dir, so `air --repo <worktree>` from anywhere in the repo is
+/// fine; another project's path is not. Silent when either side is not a repository, because
+/// then there is no project to leave (`air init` on a bare directory is the case).
+fn foreign_repo(repo: &std::path::Path) -> Option<String> {
+    let here = std::env::current_dir().ok()?;
+    let (a, b) = (
+        air_ledger::paths::air_dir_for(&here).ok()?,
+        air_ledger::paths::air_dir_for(repo).ok()?,
+    );
+    if a == b {
+        return None;
+    }
+    Some(format!(
+        "air: refused: --repo {} is another project ({}); this session's is {}. A session may \
+         only touch its own project (air-0lk). Run it from that project's own session.",
+        repo.display(),
+        b.display(),
+        a.display()
+    ))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let repo = cli
@@ -227,6 +249,12 @@ fn main() -> ExitCode {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    if cli.repo.is_some()
+        && let Some(why) = foreign_repo(&repo)
+    {
+        eprintln!("{why}");
+        return ExitCode::from(2);
+    }
     let code = match cli.cmd {
         Cmd::Record { kind, command } => cmd::record::run(&repo, &kind, &command, cli.json),
         Cmd::Handover { bead, enforce } => {
