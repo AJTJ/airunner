@@ -372,10 +372,12 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
 /// landing carries past its print is the one signal meaning a wrong close: a clause the merge
 /// CONTRADICTS. As a `landings` row, never as a bd status.
 ///
-/// Red: a bead naming a file the merge did not touch is refuted, not discharged, and the
-/// ledger reports it with the clause. Green: a bead whose every clause is discharged says so;
-/// one Air merely cannot read is neither refuted nor discharged and is not reported; and the
-/// report clears once somebody deals with the bead.
+/// Red: a bead naming a file the merge did not touch is refuted, not discharged, the ledger
+/// reports it with the clause, and the report SURVIVES the claim being claimed and released —
+/// which is what air-dlw fixed, because close-with-proof reconciles the claim away at once and
+/// a report keyed on it could never fire. Green: a bead whose every clause is discharged says
+/// so; one Air merely cannot read is neither refuted nor discharged and is not reported; and a
+/// later landing that stops refuting the bead clears it.
 ///
 /// The no-blocking half is the second assertion: the whole representation is a ledger row, and
 /// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
@@ -439,20 +441,45 @@ fn probe_landed_but_open() -> Probe {
             && open
                 .first()
                 .is_some_and(|o| o.bead == "fd-2" && o.why.contains("docs/rules/writing.md"));
-        // Somebody dealing with the bead clears the report: any claim release counts, since
-        // the status reconcile releases as `closed` once bd says so (air-3eu).
+        // air-dlw: the claim's lifetime must NOT decide this. Under close-with-proof the
+        // worker closes at once and the reconcile releases the claim on the next tick, so a
+        // report keyed on the claim could never fire. Claim it, release it as the reconcile
+        // does, and the report has to survive both.
         l.record_claim("fd-2", "alpha", &[], "t2")
             .map_err(|e| e.to_string())?;
-        l.release_claims_on(&["fd-2".to_string()], "landed", "t3")
+        l.release_claims_on(&["fd-2".to_string()], "closed", "t3")
             .map_err(|e| e.to_string())?;
+        let survives_the_claim = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
+
+        // It clears when a LATER landing of the same bead stops refuting it.
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "ddd".into(),
+            tip_sha: Some("ccc".into()),
+            result: "landed".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 2,
+            beads: vec!["fd-2".into()],
+            open_beads: vec![OpenBead {
+                bead: "fd-2".into(),
+                why: "a clause Air cannot read".into(),
+                refuted: false,
+            }],
+            merge_commit: Some("eee".into()),
+            started_at: "t4".into(),
+            finished_at: "t5".into(),
+        })
+        .map_err(|e| e.to_string())?;
         let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-        Ok((reported, cleared))
+        Ok((reported && survives_the_claim, cleared))
     })()
     .unwrap_or((false, false));
     let (reported, cleared) = res;
 
     Probe {
-        name: "land: a clause the merge contradicts is reported from the ledger, never as a bd status; one Air cannot read is not",
+        name: "land: a contradicted clause is reported from the landing and survives the claim being reconciled away; one Air cannot read is not",
         red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
         green_passes: discharged.all_discharged()
             && !unreadable.refuted()

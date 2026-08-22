@@ -1209,29 +1209,32 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
         "{open}"
     );
 
-    // The DURABLE record is the assertion that matters, and it holds: the row names the bead
-    // and the clause the merge contradicts, so a wrong close outlives the scrollback.
-    //
-    // `air status` does NOT currently surface it under close-with-proof, and that is a real
-    // regression rather than an intended weakening of this test (capture
-    // 01M0NGCRN2PQPJRNF3FQ42FVDW, alpha's area via air-ayp): `landed_open()` filters a refuted
-    // bead once a RELEASED claim row exists, and `gather` reconciles a claim away as soon as
-    // bd stops holding the bead `in_progress` — which is now immediate, because the worker
-    // closes it. `awaiting_review` was the only exempted status (air-3eu), and nothing sets
-    // that any more. Restore this assertion with the fix; do not delete it.
-    let (_, s, _) = air(&main, &bd, &["status"]);
-    assert!(!s.is_empty(), "status still answers");
-    let (code, _, _) = air(
-        &main,
-        &bd,
-        &["close", "fd-1", "--reason", "checked by hand"],
-    );
-    assert_eq!(code, 0);
+    // Restored by air-dlw. Beta weakened this to `!s.is_empty()` when close-with-proof made it
+    // fail, with the reason beside it: the condition used to clear on a RELEASED claim row,
+    // and under the new flow the worker closes immediately so the reconcile releases the claim
+    // on the next tick. The report is derived from the landing and the acceptance verdict now,
+    // so the claim being gone says nothing — which is the whole point of air-ayp surviving the
+    // flow change.
     let (_, s, _) = air(&main, &bd, &["status"]);
     assert!(
-        !s.contains("fd-1 landed in"),
-        "cleared once dealt with: {s}"
+        s.contains("fd-1 landed in") && s.contains("CONTRADICTS"),
+        "{s}"
     );
+    // The claim really is reconciled away by now, so this is not passing by accident.
+    let released: i64 = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM claims WHERE bead='fd-1' AND released_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(released, 1, "the claim is gone and the report survives it");
+
+    // Somebody reopens the bead: that is what dealing with it looks like, and it clears.
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    let (_, s, _) = air(&main, &bd, &["status"]);
+    assert!(!s.contains("fd-1 landed in"), "cleared once reopened: {s}");
 }
 
 /// air-3pz: a red verify on the merged result puts main back exactly where it was and leaves
