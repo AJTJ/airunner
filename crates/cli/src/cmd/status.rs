@@ -610,20 +610,24 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     .min()
                     .unwrap_or(now);
                 let age = minutes_between(oldest, now).unwrap_or(0);
-                if age < t.launch_grace_min {
-                    continue; // just launched; the first hook has not fired yet
+                // The launch grace suppresses `gone-with-claim` only — a worker whose first
+                // hook has not fired yet is not gone. It used to `continue`, which skipped the
+                // whole rest of the loop, so a non-green hand-over on a session-less worker
+                // was silent for the grace window and was invisible to any probe that built a
+                // snapshot without a session row (found while probing air-eiv).
+                if age >= t.launch_grace_min {
+                    out.push(Attention {
+                        worker: w.worker.clone(),
+                        kind: "gone-with-claim",
+                        detail: format!(
+                            "no live session but holds {}; restart `air worker {}` or release",
+                            beads(),
+                            w.worker
+                        ),
+                        for_minutes: age,
+                        fingerprint: String::new(),
+                    });
                 }
-                out.push(Attention {
-                    worker: w.worker.clone(),
-                    kind: "gone-with-claim",
-                    detail: format!(
-                        "no live session but holds {}; restart `air worker {}` or release",
-                        beads(),
-                        w.worker
-                    ),
-                    for_minutes: age,
-                    fingerprint: String::new(),
-                });
             }
             None => {}
         }
