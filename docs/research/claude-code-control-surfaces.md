@@ -6,6 +6,96 @@ This document provides authoritative control surfaces available for external Rus
 
 ---
 
+## 0. Live inventory (checked 2026-08-24, Claude Code 2.1.241)
+
+Sections 1 onward were written 2026-08-17 against v2.1.234+ and describe how to *drive* Claude Code
+from outside. This section is the shorter, more perishable thing: **what the harness already
+provides**, taken first-hand from a running session rather than from documentation, so that Air
+stops rebuilding it. `claude --version` reported 2.1.241 on the day of the check.
+
+**How this was produced, so it can be redone in five minutes**: `claude --version`; `claude --help`
+and `claude <subcommand> --help` for the CLI surface; the session's own tool list and skill list for
+the in-session surface; `.claude/settings.json` in this repo for the hook events actually wired.
+Anything below that was *not* observed directly is marked "not checked".
+
+### 0.1 Launch and session control (from `claude --help`, verified)
+
+Isolation and placement: `-w, --worktree [name]` creates a git worktree for the session;
+`--tmux` creates a tmux session for that worktree (requires `--worktree`, iTerm2 native panes when
+available, `--tmux=classic` for plain tmux); `--add-dir` widens tool access; `--teleport`,
+`--cloud`, `--environment`, `--remote-control` move the session elsewhere.
+
+Identity and role: `--agent <name>` selects an agent; `--agents <json>` defines agents inline;
+`--system-prompt`, `--append-system-prompt` (and their `-file` variants);
+`-n, --name` names the session; `--session-id`, `-r/--resume`, `-c/--continue`, `--fork-session`,
+`--from-pr`.
+
+Permission and confinement: `--permission-mode`, `--allowed-tools`, `--disallowed-tools`,
+`--tools`, `--settings`, `--setting-sources`, `--safe-mode`, `--disable-slash-commands`,
+`--dangerously-skip-permissions` and the two-step `--allow-dangerously-skip-permissions`.
+
+Budget and model: **`--max-budget-usd`** (a hard spend ceiling, the thing MartinLoop sells),
+`--model`, `--fallback-model`, `--effort`, `--autocompact`.
+
+Machine-readable driving: `-p/--print`, `--output-format` (including `stream-json`),
+`--input-format`, `--json-schema`, `--include-partial-messages`, **`--include-hook-events`**,
+`--replay-user-messages`, `--forward-subagent-text`, `--verbose`, `--debug-file`.
+
+Background work: `--bg` starts the session as a background agent, managed with `claude agents`
+(which has its own `--cwd`, `--json`, `--all`, `--agent`, `--add-dir`).
+
+Extension: `--mcp-config`, `--strict-mcp-config`, `--plugin-dir`, `--plugin-url`, `--bare`.
+
+Subcommands: `agents`, `auth`, `auto-mode`, `doctor`, `gateway`, `import`, `install`, `mcp`,
+`plugin`, `project` (with `project purge`), `setup-token`, `ultrareview`, `update`.
+
+### 0.2 In-session tools (observed in this session, 2026-08-24)
+
+Sub-agents and orchestration: `Agent` (spawn a subagent, including `subagent_type: "fork"` which
+inherits the caller's context, and `isolation: "worktree"`), `Workflow` (deterministic multi-agent
+scripts with `pipeline`/`parallel`/`phase`), `TaskOutput`, `TaskStop`, `ListAgents`.
+
+Agent-to-agent and cross-session: `SendMessage` to a named subagent, another local Claude session,
+or a cloud session. **`SendMessage` accepts `notify_when_idle: true`: a one-shot subscription that
+delivers exactly one notice when a named session on this machine next goes idle or exits**, with the
+explicit instruction never to poll `ListAgents` in a loop instead.
+
+Waiting and waking: `Monitor` (a script whose every stdout line becomes a notification, `persistent`
+for session length, WebSocket source supported), `Bash` with `run_in_background` for a single
+completion notification, `CronCreate`/`CronList`/`CronDelete`, `ScheduleWakeup` (self-paced loops),
+`PushNotification` (desktop, and phone when Remote Control is connected).
+
+Workspace: `EnterWorktree`/`ExitWorktree`, `EnterPlanMode`/`ExitPlanMode`, `LSP`, `Read`/`Write`/
+`Edit`/`NotebookEdit`, `Bash`, `WebSearch`/`WebFetch`, `ToolSearch` (deferred tool schemas loaded on
+demand), `Skill`, `AskUserQuestion`, `SendUserFile`, `ReportFindings`, `Artifact`, MCP resource
+readers.
+
+### 0.3 The limits that matter to Air
+
+- **`CronCreate` is session-only and short-lived.** Jobs live in memory, are gone when the session
+  exits, fire only while the REPL is idle, and recurring jobs auto-expire after 7 days. So it does
+  **not** replace an external cron that keeps a long-lived coordinator alive across restarts; it
+  replaces in-session polling loops.
+- **`Monitor` and `notify_when_idle` do replace polling.** Air's `idle-without-claim` attention
+  condition polls the ledger and fired 25,958 times over 2 subjects between 2026-08-15 and
+  2026-08-24 (`air audit --since 2026-08-15`). A one-shot idle subscription per worker is the
+  first-party mechanism for the same fact.
+- **Roles, deny lists and env do not need a launcher.** `--agent`/`--agents`, `--append-system-prompt`,
+  `--disallowed-tools`, `--settings` and an `env` block cover what `air worker` assembles by hand.
+  What has no first-party equivalent is the detached start used when the coordinator has no tty.
+- **`--max-budget-usd` exists**, so any future Air spend cap should be a flag, not code.
+- Not checked in this pass: whether hook events gained new types since 2026-08-17, the plugin and
+  gateway surfaces, `auto-mode`, and `import`.
+
+### 0.4 Refresh
+
+Re-run the five commands in the preamble after any Claude Code release that mentions
+orchestration, tasks, permissions or hooks, and on the monthly refresh of
+[`harness-and-orchestrator-landscape.md`](harness-and-orchestrator-landscape.md). If a bullet in
+§0.3 becomes wrong, the corresponding Air mechanism is a deletion candidate that same week.
+
+---
+
 ## 1. Hooks: Lifecycle Control & Event Interception
 
 **Reference:** https://code.claude.com/docs/en/hooks.md

@@ -23,7 +23,10 @@ Index items are 1–3 lines; detail lives behind the link.
   warning. Evidence: `docs/research/guardrails-as-throttles.md` (owner, 2026-08-21).
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
-  case (`docs/research/beads-and-gastown.md §2.5`).
+  case (`docs/research/beads-and-gastown.md §2.5`). **Invoke the `check-resources` skill first**:
+  the harness, the field, then Air, with the answer written where the work is recorded. On
+  2026-08-24 a shallow pass missed eleven projects that had already built parts of Air, one of
+  them the same architecture on the same task store (owner, 2026-08-24).
 - **Building the projects comes first; building Air is secondary.** Air exists so the owner's
   projects get built. When a round is running, Air records and does not change; findings go to
   `docs/notes/air-backlog.md` and the round log, and are reviewed in one pass when there are no
@@ -67,11 +70,15 @@ Index items are 1–3 lines; detail lives behind the link.
 |---|---|
 | Wanting the "why", framing, and every owner decision (dated) | [`docs/decisions.md`](docs/decisions.md) |
 | Orienting in the research | [`docs/README.md`](docs/README.md) — index of all reports |
+| Wondering whether to switch to another harness or orchestrator, or whether a part of Air is now commodity | [`docs/research/harness-and-orchestrator-landscape.md`](docs/research/harness-and-orchestrator-landscape.md) |
+| The full inventory of everything Air ships: every command, table, hook, MCP tool, integration, env var and mechanism, with why each exists, what already does it, and a verdict (living doc, re-run the counts) | [`docs/plans/0007-surface-audit.md`](docs/plans/0007-surface-audit.md) |
+| What Claude Code itself already provides (live inventory, dated, with the limits that matter) | [`docs/research/claude-code-control-surfaces.md`](docs/research/claude-code-control-surfaces.md) §0 |
 | Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
 | Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
 | The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it on adopter | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
 | Integrating Air into a target repo (install, rules to change, self-maintenance) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | What comes next, in order | [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md) |
+| The whole change list from the 2026-08-24/25 audit and adopter's round logs, ruled item by item, with a path for each | [`docs/plans/0008-consolidated-changes.md`](docs/plans/0008-consolidated-changes.md) |
 | What the adopter round proposes, and the do-less verdict on each | [`docs/plans/0006-post-round-changes.md`](docs/plans/0006-post-round-changes.md) |
 | Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
