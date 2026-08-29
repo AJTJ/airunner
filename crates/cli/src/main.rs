@@ -237,6 +237,21 @@ enum Cmd {
         #[arg(long)]
         since: Option<String>,
     },
+    /// A stated `retention` for `.air/events/`: what is `COLLECT`able, what is kept and why,
+    /// and how many `byte(s) collectable`. Prints and stops unless `--apply` is given.
+    ///
+    /// No automatic path, deliberately. The raw event stream is the only artefact that has
+    /// caught the audit's own errors (0007 §11: re-reading the document found nothing,
+    /// re-running the commands found three), so a day the ledger still points at is never
+    /// collected and nothing is removed without being asked twice (air-i7s).
+    Gc {
+        /// Days of history to keep (default 90, chosen against the post-air-5uz rate).
+        #[arg(long)]
+        keep_days: Option<i64>,
+        /// Actually remove the collectable days. Without it, gc reports and stops.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Ledger location, sizes, row counts, the journal mode and schema version in effect, and
     /// whether `bd` is the pinned version. (It printed one pragma while the help said
     /// "pragmas"; air-ha8.)
@@ -328,6 +343,7 @@ fn main() -> ExitCode {
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
+        Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest { prove } => {
             if prove {
