@@ -100,16 +100,33 @@ esac
 }
 
 fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
-        .arg("--repo")
+    air_env(repo, bd, args, &[])
+}
+
+/// `air` with extra environment. The only thing it is used for today is pinning a **dated
+/// cutoff** so a test's colour does not depend on the day it runs.
+///
+/// Two of Air's rules have a date in them — `attribution::FALLBACK_BEFORE` and
+/// `handover::FRONTMATTER_SINCE`, both 2026-08-23T00:00:00Z — because each replaced a guess
+/// with a declaration and let the old artefacts age out. The tests below build their commits
+/// and digests at the CURRENT time, so on 2026-08-22 they were inside the fallback window and
+/// on 2026-08-23 they were outside it: seven tests in this file went red six days after they
+/// landed green, with no code change in between. Every test here now writes what today's rule
+/// wants (a `Bead:` trailer, a `bead:` front-matter line); the one test that is ABOUT a
+/// fallback pins its cutoff through this, and that pin is deleted when the fallback is.
+fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+    cmd.arg("--repo")
         .arg(repo)
         .args(args)
         .env("AIR_BD_BIN", bd)
         .env("FAKE_BD_DIR", repo)
         .env("BEADS_ACTOR", "tester")
-        .current_dir(repo)
-        .output()
-        .unwrap();
+        .current_dir(repo);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).to_string(),
@@ -860,10 +877,17 @@ fn owner_queue_lists_green_landings_with_their_commands() {
 /// the claim, and the old narrowing required `claimed_at >= branch_point`. Landing requires
 /// merging main, so preparing to land was what made the branch unlandable — `air land --all`
 /// answered `{"landed": [], "ok": true}` with every precondition satisfied.
+///
+/// This is the one test in the file that is ABOUT the prose fallback, so it is the one that
+/// pins `attribution::FALLBACK_BEFORE` (see [`air_env`]) instead of writing a trailer. Delete
+/// the pin and the test together when the fallback goes.
 #[test]
 fn a_branch_that_merged_main_is_still_landable_without_a_trailer() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
+    // Far enough ahead that every commit this test makes is "before the cutoff", whenever it
+    // runs. The rule's own env override, not a second copy of the rule.
+    let pin: &[(&str, &str)] = &[("AIR_BEAD_TRAILER_SINCE", "2099-01-01T00:00:00Z")];
 
     std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
     assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
@@ -1143,17 +1167,20 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 fn close_with_proof(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
     std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
     assert_eq!(air(alpha, bd, &["claim", bead]).0, 0);
-    // The commit message is the only thing that attributes this branch to the bead now.
+    // The commit is what attributes this branch to the bead now, through its `Bead:` trailer.
     std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
     // Only the work: `add -A` would sweep in the stub's own bd.log and conflict at merge.
     git(alpha, &["add", "done.txt"]);
-    git(
-        alpha,
-        &["commit", "-q", "-m", &format!("feat: the work ({bead})")],
-    );
+    git(alpha, &["commit", "-q", "-m", &bead_trailer(bead)]);
     // Green last, so it is recorded at the head that carries the commit above.
     assert_eq!(air(alpha, bd, &["record", "verify", "--", "true"]).0, 0);
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
+}
+
+/// The trailer that declares which bead a commit did the work for (air-4re). Guessing it from
+/// the message is the fallback, and the fallback expires: see [`air_env`].
+fn bead_trailer(bead: &str) -> String {
+    format!("feat: the work ({bead})\n\nBead: {bead}\n")
 }
 
 /// The `## Acceptance Criteria` bd returns for every listed bead, as a JSON string literal
