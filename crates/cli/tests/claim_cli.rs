@@ -1167,6 +1167,86 @@ fn acceptance(main: &Path, criteria: &str) {
     .unwrap();
 }
 
+/// air-bxe: the landings row exists from the MERGE onward, not from the exit.
+///
+/// adopter's coordinator reported a land done three times before the process exited, because
+/// the merge commit appears minutes before the verify finishes with the rollback armed. Their
+/// fallback was `pgrep`, which misled them twice. Separately a land killed by a closed pipe
+/// (`air land | head`) merged, verified and wrote nothing, leaving main green at a sha no
+/// landing mentioned.
+///
+/// The observation is made from INSIDE the window: the repo's verify command copies `.air/`
+/// aside while the landing is armed, and the test reads that copy. Asserting on the ledger
+/// after `air land` returns could never distinguish "written at merge time" from "written at
+/// exit", which is the whole of the bead.
+///
+/// This test declares its bead with a `Bead:` trailer rather than relying on the pre-2026-08-23
+/// prose fallback, so it does not share the wall-clock failure air-24e is about.
+#[test]
+fn a_landing_is_recorded_in_flight_while_the_rollback_is_armed() {
+    let (_tmp, main, alpha) = land_repo("sh peek.sh");
+    // The repo's "verify": snapshot the ledger mid-land, then pass. Copying the whole `.air`
+    // directory takes the WAL sidecars with it, so the copy sees the same rows the ledger does.
+    std::fs::write(
+        main.join("peek.sh"),
+        "#!/bin/sh\nrm -rf seen_air\ncp -R .air seen_air\nexit 0\n",
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "peek"]);
+
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    acceptance(&main, "- Verify recorded green at HEAD.\n");
+
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let head = git(&main, &["rev-parse", "HEAD"]);
+
+    // What the ledger said WHILE the merge sat in main with the rollback armed.
+    let seen = rusqlite::Connection::open(main.join("seen_air/ledger.db")).unwrap();
+    let mid: Option<(String, String, String, i64)> = seen
+        .query_row(
+            "SELECT result, merge_commit, tip_sha, pid FROM landings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
+    assert!(
+        mid.is_some(),
+        "a landings row must exist DURING the land, not only after it"
+    );
+    let (result, merge, tip, pid) = mid.unwrap();
+    assert_eq!(result, "in-flight");
+    assert_eq!(
+        merge, head,
+        "and it names the merge that is sitting in main"
+    );
+    assert_ne!(tip, head, "with the sha a rewind would return to");
+    assert!(pid > 0, "and the process to ask about, so nobody greps");
+
+    // Afterwards it is the SAME row, carrying the outcome: one attempt, not two.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let rows: Vec<(String, i64)> = conn
+        .prepare("SELECT result, attempt_no FROM landings")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(rows, vec![("landed".to_string(), 1)]);
+}
+
 /// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the
 /// bead in one bd process, releases the claim, and records the landing.
 #[test]

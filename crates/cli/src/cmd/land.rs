@@ -472,26 +472,34 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    // air-bxe: ONE row per attempt, written more than once. The id and the attempt number are
+    // fixed here so the `in-flight` write and the outcome write are the same row; deriving
+    // `attempt_no` inside the closure would count the row it is about to update.
+    let row_id = new_id();
+    let attempt_no = ledger
+        .landing_attempts(&batch.worker)
+        .unwrap_or(0)
+        .saturating_add(1);
     let record_full = |result: &str,
                        merge: Option<String>,
                        verify: Option<String>,
                        step: Option<String>,
                        open: &[air_ledger::landings::OpenBead]| {
         let _ = ledger.record_landing(&LandingRow {
-            id: new_id(),
+            id: row_id.clone(),
             worker: batch.worker.clone(),
             sha: facts.branch_head.to_string(),
             tip_sha: Some(tip.clone()),
             result: result.to_string(),
             failing_step: step,
             verify_run_id: verify,
-            attempt_no: ledger
-                .landing_attempts(&batch.worker)
-                .unwrap_or(0)
-                .saturating_add(1),
+            attempt_no,
             beads: batch.beads.clone(),
             open_beads: open.to_vec(),
             merge_commit: merge,
+            // The `air land` process, so an `in-flight` row can say whether it is still
+            // running. This is the fact `pgrep` was asked for and got wrong twice.
+            pid: Some(i64::from(std::process::id())),
             started_at: started_at.clone(),
             finished_at: now(),
         });
@@ -521,6 +529,13 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         ));
     }
     let merge = git::head(repo).unwrap_or_default();
+    // air-bxe: main has moved and the rollback is armed from here until the verify reports.
+    // Say so BEFORE the verify, not after it. That window is minutes long, and adopter's
+    // coordinator called a land done inside it three times; `git merge-base --is-ancestor`
+    // answers "is it in main", which is true for the whole window and so answers nothing.
+    // A land killed here (theirs died on a closed pipe, `air land | head`) leaves this row
+    // rather than leaving main green at a sha no landing mentions.
+    record("in-flight", Some(merge.clone()), None, None);
     // Verify the MERGED result. A green on the branch alone is not a green of what landed.
     let cmd = verify_command(repo);
     let Some((prog, args)) = cmd.split_first() else {

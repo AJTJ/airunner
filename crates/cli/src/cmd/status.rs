@@ -77,6 +77,10 @@ pub struct Snapshot {
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
     pub verifies_in_flight: Vec<air_ledger::verify::InFlight>,
+    /// Landings that have merged into main and not yet reported an outcome (air-bxe), each
+    /// with whether the `air land` process that wrote it is still alive. "Is the land done"
+    /// is answered from here, never from a process listing.
+    pub landings_in_flight: Vec<LandingInFlight>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -522,6 +526,62 @@ pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
     let b: jiff::Timestamp = later.parse().ok()?;
     b.duration_since(a).as_secs().checked_div(60)
+}
+
+/// A landing whose merge is in main and whose outcome is not recorded yet (air-bxe).
+#[derive(Debug, Clone, Serialize)]
+pub struct LandingInFlight {
+    pub landing: air_ledger::landings::Landing,
+    /// Is the `air land` process that wrote this row still running? `None` when it recorded no
+    /// pid. `Some(false)` is the interesting one: that land was killed, main still holds the
+    /// merge, and the rollback never ran.
+    pub alive: Option<bool>,
+}
+
+/// Landings still in flight, newest first, each with the liveness of the process that started
+/// it (air-bxe). Unlike a verify row, one of these is NEVER pruned: a killed land left main
+/// changed, and deleting the only evidence of that is the failure, not the tidy-up.
+pub fn landings_in_flight(ledger: &Ledger) -> Vec<LandingInFlight> {
+    ledger
+        .landings_in_flight()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| LandingInFlight {
+            alive: l.pid.map(super::lease::pid_alive),
+            landing: l,
+        })
+        .collect()
+}
+
+/// One line for a landing in flight: what merged, when, and whether anything is still working
+/// on it. The second half is the part `pgrep` was being asked for.
+pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
+    let l = &f.landing;
+    let merge = l.merge_commit.as_deref().unwrap_or("");
+    let elapsed = seconds_between(&l.finished_at, at)
+        .map(|s| format!("{s}s ago"))
+        .unwrap_or_else(|| "at an unreadable time".into());
+    let state = match f.alive {
+        Some(false) => format!(
+            "the `air land` process (pid {}) is GONE: it was killed mid-verify, main still \
+             holds the merge and the rollback never ran. Check main, then `git reset --hard {}` \
+             to undo it or re-run `air land`",
+            l.pid.unwrap_or(0),
+            l.tip_sha.as_deref().unwrap_or("<tip>")
+        ),
+        Some(true) => format!("verifying now (pid {})", l.pid.unwrap_or(0)),
+        None => "no pid recorded, so nothing can say whether it is still running".into(),
+    };
+    format!(
+        "{} ({}) merged at {} {elapsed}, rollback armed to {}: {state}",
+        l.worker,
+        l.beads.join(" "),
+        merge.get(..8).unwrap_or(merge),
+        l.tip_sha
+            .as_deref()
+            .map(|t| t.get(..8).unwrap_or(t).to_string())
+            .unwrap_or_else(|| "-".into()),
+    )
 }
 
 /// Verifies running right now, oldest first, with dead pids pruned on the way out (air-4cr).
@@ -1054,6 +1114,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
+        landings_in_flight: landings_in_flight(&ledger),
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1201,6 +1262,13 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
     for f in &s.verifies_in_flight {
         out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
+    }
+    // air-bxe: the merge commit exists for minutes before the verify decides whether it stays.
+    for f in &s.landings_in_flight {
+        out.push_str(&format!(
+            "landing in flight: {}\n",
+            landing_in_flight_line(f, &s.at)
+        ));
     }
     // Always rendered (air-e7q): what waits on whom.
     out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));
