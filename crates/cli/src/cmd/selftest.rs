@@ -107,6 +107,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
+        Mutation {
+            // Invert the blank-task test: a real task stops becoming the prompt, and a blank one
+            // starts. One branch, and the one this probe is about (air-7q5).
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "if let Some(t) = task.filter(|t| !t.trim().is_empty()) {",
+            to: "if let Some(t) = task.filter(|t| t.trim().is_empty()) {",
+            also_red: &["launch: --task reaches claude as the prompt"],
+        },
+    ),
+    (
         "gate: claim required for the named bead",
         Mutation {
             file: "crates/hooks/src/gate.rs",
@@ -409,8 +420,37 @@ fn restore(repo: &Path, file: &str) {
         .output();
 }
 
+/// air-7q5: starting a session must not start work. The owner drew the line at launch time, and
+/// the mechanism that holds it is that a worker launched with no `--task` gets NO PROMPT: the
+/// roles prose reaches it through `--append-system-prompt-file`, which is context rather than a
+/// turn, so an untriggered session never runs. Red: with a task, the task is the prompt and the
+/// session is triggered. Green: with no task, argv opens on a flag and carries no positional at
+/// all, so there is nothing for claude to answer.
+fn probe_no_task_no_prompt() -> Probe {
+    use crate::cmd::launch::{task_is_prompt, worker_argv_tmux};
+    let base = vec![
+        "--append-system-prompt-file".to_string(),
+        "/r/.air/roles.md".to_string(),
+        "--disallowed-tools".to_string(),
+        "Bash(git push *)".to_string(),
+    ];
+    let task = "work air-1";
+    let with = worker_argv_tmux(base.clone(), false, None, Some(task));
+    let without = worker_argv_tmux(base.clone(), false, None, None);
+    // A blank task is not a task: it must not become an empty prompt either.
+    let blank = worker_argv_tmux(base.clone(), false, None, Some("   "));
+    Probe {
+        name: "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
+        red_fires: with.first().is_some_and(|a| a == task) && task_is_prompt(&with, task),
+        green_passes: without == base
+            && blank == base
+            && without.first().is_some_and(|a| a.starts_with('-')),
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
         probe_handover_matcher(),
