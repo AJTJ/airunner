@@ -261,6 +261,14 @@ agent session, a warning on main-checkout edits while workers are live) are the 
 already pays for. adopter's `pre-commit:39-50` does the first half today, and Air should keep
 it rather than rebuild it.
 
+> **Corrected 2026-08-29 (air-iy1).** The `git commit` half of that recommendation shipped and
+> was then reversed by owner ruling: the coordinator may commit and merge on main, and only
+> `git push` is denied. The boundary is the remote, not main. What the record actually paid for
+> was coordinator drift on *worker* branches, and `air land` addresses that; denying `git commit`
+> stopped the coordinator saving its own prose, which cost the owner a hand-commit on 2026-08-29.
+> The argv in the L1 row above is likewise the 2026-08-20 design, not today's deny list —
+> `launch.rs` `COORDINATOR_DENY` is the live one.
+
 **Evidence that would justify each layer.** L1 worker denies: an event line showing a worker
 session ran `air land`, `git push`, or `bd create` (the advisory L2 hook produces exactly this
 count for free). L2 enforcement (`AIR_ENFORCE=1`): two advisory rounds with at least one
