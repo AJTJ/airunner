@@ -290,6 +290,29 @@ pub const SURFACE: &[SurfaceChange] = &[
                  them. Re-run `air install --write` to get it; it is what `air audit`'s \
                  registry is read with.",
     },
+    // ---- 2026-08-29 ----------------------------------------------------------------
+    // Derived from the day's 50 landings on main, not from a list written afterwards
+    // (air-njb). The filter is the acceptance's: a change that alters what a target repo
+    // SEES, DOES, or MAY DO. Seventeen of the fifty touch `install.rs`, `launch.rs`,
+    // `schema.rs`, `main.rs` or `roles.md`; the rest are internal and are not here.
+    SurfaceChange {
+        // First, because it is about the installer itself and it changes what every other
+        // notice in this list is worth.
+        id: "install-refreshes-matcher",
+        since: "2026-08-29 (air-q07)",
+        headline: "`air install --write` now UPDATES a stale hook matcher. Until today it \
+                   skipped any event that already had an `air hook` entry, so a re-run never \
+                   changed a matcher and your repo still has the one it was FIRST installed \
+                   with.",
+        silent_break: true,
+        action: "Check, do not assume: `grep -o '\"matcher\": \"[^\"]*\"' .claude/settings.json`. \
+                 If a matcher there is narrower than the one this version installs, it has \
+                 been narrower since your first install and every widening since was a \
+                 no-op that reported success. Re-run `air install --write` and diff the file. \
+                 One more trap on top of it: the installer is only as new as the binary, so \
+                 an old `air` cannot write a new matcher however many times you run it - \
+                 check `air --version` against the repo you built from first.",
+    },
     SurfaceChange {
         id: "sendmessage-measured",
         since: "2026-08-29 (air-q07)",
@@ -301,6 +324,120 @@ pub const SURFACE: &[SurfaceChange] = &[
                  which is the bug it replaced: one worker sent ~46,900 characters in a day and \
                  the event log contained none of it. Nothing is gated; there is no threshold \
                  and no refusal.",
+    },
+    SurfaceChange {
+        id: "coordinator-may-commit",
+        since: "2026-08-29 (air-iy1)",
+        headline: "`Bash(git commit *)` is out of COORDINATOR_DENY. The boundary is the \
+                   remote, not main: `git push` is still denied.",
+        silent_break: false,
+        action: "Your coordinator GAINS a permission on its next launch - it can commit on \
+                 main by hand, which it could not before. Nothing forces it to; `air land` is \
+                 still how a worker's branch reaches main. If your repo relied on the deny to \
+                 keep main untouched by the coordinator, that is no longer what stops it.",
+    },
+    SurfaceChange {
+        id: "ledger-v12",
+        since: "2026-08-29 (air-air, air-4cr)",
+        headline: "Ledger schema 11 -> 12: `sessions.model`, and a `verify_inflight` table \
+                   behind `air status`'s in-flight verify reporting.",
+        silent_break: false,
+        action: "It migrates forward on the first write by the new binary and needs nothing \
+                 from you. It does NOT migrate backwards: if two `air` binaries of different \
+                 ages share one `.air/ledger.db`, upgrade them together. That is the case \
+                 worth checking before the first run, not after.",
+    },
+    SurfaceChange {
+        id: "land-fast-forward",
+        since: "2026-08-29 (air-odv)",
+        headline: "`air land` no longer merges then rewinds. It builds the landing commit off \
+                   main, verifies there, and fast-forwards - so main never holds unverified \
+                   code and there is no rollback. The dirty-main refusal went with it, \
+                   because nothing resets any more.",
+        silent_break: false,
+        action: "If you have your own lander, this is FYI and not an instruction to adopt \
+                 ours: the point is that Air's changed shape, so a script that assumed `air \
+                 land` could leave main mid-merge, or that its dirty-tree refusal would stop \
+                 it, is reasoning about behaviour that is gone. If you do use `air land`, \
+                 nothing changes at the call site.",
+    },
+    SurfaceChange {
+        id: "review-waiting-deleted",
+        since: "2026-08-29 (air-okc)",
+        headline: "`review-waiting` and its whole support chain are deleted: the condition, \
+                   `air status`'s `review: N waiting` line, and the `bd list --status \
+                   awaiting_review` call that fed them.",
+        silent_break: true,
+        action: "It last fired here on 2026-08-22 because close-with-proof replaced hand-over \
+                 (air-7o3) and the state stopped occurring. **If your repo still uses \
+                 `awaiting_review`, you are the case this was deleted without**: a surface you \
+                 may be reading is simply gone, and a script grepping `air status` for \
+                 \"review:\" now finds nothing rather than 0. Say so and it can come back - it \
+                 was removed on this repo's evidence, not yours.",
+    },
+    SurfaceChange {
+        id: "audit-splits-pushes",
+        since: "2026-08-29 (air-5uz)",
+        headline: "`air audit` no longer reports \"fires\". A condition now has separate \
+                   `evaluated` and `pushed` counts, because the poll re-evaluates and calling \
+                   that a firing read 10,722 log lines as 45 real pushes.",
+        silent_break: true,
+        action: "A script reading the old field gets nothing and reports zero rather than \
+                 erroring. Also read the counts differently than before: any `pushed` figure \
+                 from a day before 2026-08-29 is uninformative, because nothing recorded a \
+                 push until this landed. A zero there is a fact about what was countable.",
+    },
+    SurfaceChange {
+        id: "gc-retention",
+        since: "2026-08-29 (air-i7s)",
+        headline: "`air gc [--keep-days N] [--apply]` exists and DELETES event files under \
+                   `.air/events/`. It is manual: nothing runs it for you.",
+        silent_break: false,
+        action: "If you archive or ship `.air/events/` anywhere, know that a command now \
+                 removes files from it. Dry-run first - without `--apply` it only reports.",
+    },
+    SurfaceChange {
+        id: "triage-one-at-a-time",
+        since: "2026-08-29 (air-zlq)",
+        headline: "`air triage` takes exactly ONE capture id. Batch mode is deleted.",
+        silent_break: false,
+        action: "A caller passing several ids now fails loudly instead of silently handling \
+                 about two of them under one budget. Loop instead.",
+    },
+    SurfaceChange {
+        id: "fence-deleted",
+        since: "2026-08-29 (air-9u6)",
+        headline: "The cross-project fence is deleted. Air no longer denies a `tmux` command \
+                   naming another project's session.",
+        silent_break: true,
+        action: "It never fired once in any recorded day, which is why it went. If you were \
+                 counting on it as isolation between fleets on one machine, you were counting \
+                 on something that had never acted - the rule stands in `roles.md`, the \
+                 refusal does not.",
+    },
+    SurfaceChange {
+        id: "selftest-prove",
+        since: "2026-08-29 (air-682)",
+        headline: "`air selftest --prove` runs each probe's declared mutation. It EDITS \
+                   TRACKED FILES and rebuilds, and refuses to start on a dirty tree.",
+        silent_break: false,
+        action: "Do not put it in CI beside `air selftest`, and do not run it over \
+                 uncommitted work. Plain `air selftest` is unchanged and still what `make \
+                 verify` should call.",
+    },
+    SurfaceChange {
+        id: "dated-cutoffs",
+        since: "2026-08-29 (air-24e)",
+        headline: "`air doctor` reports every rule with a date in it and whether that date has \
+                   passed. Both of Air's expired on 2026-08-23 and made this repo's test \
+                   suite red for six days with nothing failing at the moment it broke.",
+        silent_break: true,
+        action: "Run `air doctor` and read the `dated rule` lines. If yours say EXPIRED, the \
+                 fallback is dead: a commit now needs a `Bead:` trailer to be attributed and a \
+                 digest needs a `bead:` front-matter line to satisfy the gate. Fixtures in \
+                 your own tests that write a commit or a digest \"now\" were inside the window \
+                 when they were written and are outside it now - that is what went red here, \
+                 and the same clock is in your copy.",
     },
 ];
 
