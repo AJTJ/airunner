@@ -113,6 +113,33 @@ Event stream: `.air/events/YYYY-MM-DD.ndjson`, one line per hook invocation and 
 stamped with `bd_ms`/`bd_calls` when that command shelled out to bd. **About 3 MB per day** and
 nothing collects it; `gc` is still on the roadmap.
 
+### Daily growth, before and after air-5uz (measured 2026-08-29)
+
+Counted over every recorded day in `.air/events`, then replayed through the change-only rule the
+same way the code now applies it: a `status.attention` line is written when the condition SET
+differs from the last one written, and an empty set clears the emission row.
+
+| day | lines | bytes | of which `status.attention` | sets that actually changed | lines after | bytes after |
+|---|---|---|---|---|---|---|
+| 2026-08-22 | 8,691 | 3,084,158 | 2,912 | 60 | 5,839 | 1,648,176 |
+| 2026-08-23 | 7,624 | 3,417,881 | 7,573 | 1 | 52 | 12,562 |
+| 2026-08-24 | 6,176 | 2,708,804 | 6,015 | 1 | 162 | 38,965 |
+| 2026-08-25 | 8,242 | 3,588,236 | 7,667 | 1 | 576 | 139,109 |
+| 2026-08-26 | 2,279 | 1,025,385 | 2,276 | 1 | 4 | 1,160 |
+| 2026-08-29 | 1,165 | 364,939 | 441 | 1 | 725 | 204,110 |
+
+**Before**: 2.77 MB per active day (13.83 MB over the five days of 08-22 to 08-26).
+**After**: 0.37 MB per active day (1.84 MB over the same five). 87% less, and 78% fewer lines
+across the whole stream.
+
+The row worth reading twice is 2026-08-23: **7,573 lines carrying one distinct condition set all
+day**, 3.42 MB to say one thing. That is what `air audit` was counting as firings, and the reason
+`owner-decision-waiting` read as 1,685 against a single push. 2026-08-22 is the only day whose
+residue is large, and it is large because that day's remaining lines are hook traffic, which this
+change does not touch.
+
+The window for `air gc` (air-i7s) should be chosen against the after figure, not the before one.
+
 ## 4. Hook events (9)
 
 Installed into `.claude/settings.json` as `air hook` with a 5 s timeout, merged idempotently:
@@ -475,6 +502,12 @@ So the coordinator is not being spammed. What is true: the event stream carries 
 re-evaluations, nothing collects it, and `air audit`'s own counts are inflated by it to the point
 of being misleading about human-visible behaviour. The corrected recommendation in §10.2 is
 narrower than the one it replaces.
+
+**Fixed 2026-08-29 (air-5uz).** The poll now writes that line on change only, and the audit reports
+`evaluated` and `pushed` as separate columns because they are separate facts. A push is recorded
+where the hooks record theirs, in `hook_emissions`, and leaves a `channel.push` event line, so the
+push count comes from the push rather than from a re-reading of the evaluation. Growth before and
+after is in §3.
 
 This is the failure the `do-less` skill's raw-record rule exists for (air-21c): a derived number
 reads exactly like an observed one. It was caught here only because §9's probe list was read

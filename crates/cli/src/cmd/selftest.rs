@@ -53,6 +53,8 @@ pub fn run(json: bool) -> i32 {
         probe_triage_bead_exists(),
         probe_surface_diff(),
         probe_change_only_push(),
+        probe_conditions_logged_on_change_only(),
+        probe_doctor_enumerates_tables(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -128,6 +130,110 @@ fn probe_change_only_push() -> Probe {
         && !changed.iter().any(|a| a.worker == "air-1");
     Probe {
         name: "channel: an unchanged set pushes once however old it gets; a changed set pushes again",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-5uz: the poll writes the condition set to the event log on change only.
+///
+/// The channel re-evaluates every few seconds. On 2026-08-25 that put 7,667 of the day's
+/// 8,242 event lines in the log, and `air audit` counted them as firings: 1,685 for
+/// `owner-decision-waiting`, which was sent once. A deletion was nearly proposed on that
+/// number. Nothing is lost by the silence, because the `conditions` table already carries
+/// first-seen, last-seen and cleared for every condition.
+///
+/// Red: sixty ticks of an unchanged set write ONE line, not sixty. Green: the set changing
+/// writes again, so the log still says when something happened.
+fn probe_conditions_logged_on_change_only() -> Probe {
+    use crate::cmd::status::{Attention, Snapshot, record_and_log};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let l = Ledger::open_in(&dir).map_err(|e| e.to_string())?;
+        let events = dir
+            .join("events")
+            .join(format!("{}.ndjson", crate::cmd::today()));
+        let lines = |p: &Path| {
+            std::fs::read_to_string(p)
+                .map(|t| t.lines().count())
+                .unwrap_or(0)
+        };
+        let waiting = |mins: i64| Attention {
+            worker: "owner".to_string(),
+            kind: "owner-decision-waiting",
+            detail: format!("4 waiting, oldest {mins} min"),
+            for_minutes: mins,
+            fingerprint: "depth:4".to_string(),
+        };
+
+        // An hour of polling with nothing changing but the clock.
+        for tick in 0..60 {
+            let snap = Snapshot {
+                at: format!("2026-08-25T10:{tick:02}:00Z"),
+                ..Default::default()
+            };
+            record_and_log(&l, "main", &snap, &[waiting(tick)], true);
+        }
+        let red = lines(&events) == 1;
+
+        // A fifth capture joins the owner queue: a real change, said again.
+        let snap = Snapshot {
+            at: "2026-08-25T11:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let changed = Attention {
+            fingerprint: "depth:5".to_string(),
+            ..waiting(61)
+        };
+        record_and_log(&l, "main", &snap, &[changed], true);
+        let green = lines(&events) == 2;
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: an unchanged condition set writes one event line an hour, not one a tick",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-w0e: `air doctor` counts every table the ledger has, asked of `sqlite_master`.
+///
+/// It used to walk a list somebody typed, and reported 7 of the 11 tables at schema v10:
+/// `hook_emissions`, `conditions`, `lease_wants` and `bd_cache` were invisible, which is how
+/// the zero-lease finding nearly went unnoticed. Currency, not presence.
+///
+/// Red: the four tables the list left out are all counted. Green: a table this probe invents,
+/// which no list anywhere could name, is counted too — so the next migration needs no edit
+/// here.
+fn probe_doctor_enumerates_tables() -> Probe {
+    use crate::cmd::doctor::table_rows;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let named = |rows: &[(String, i64)], t: &str| rows.iter().any(|(n, _)| n == t);
+
+        let rows = table_rows(l.conn());
+        let red = ["hook_emissions", "conditions", "lease_wants", "bd_cache"]
+            .iter()
+            .all(|t| named(&rows, t));
+
+        l.conn()
+            .execute_batch("CREATE TABLE a_table_no_list_could_name (x INTEGER)")
+            .map_err(|e| e.to_string())?;
+        let rows = table_rows(l.conn());
+        let green = rows
+            .iter()
+            .any(|(n, c)| n == "a_table_no_list_could_name" && *c == 0);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "doctor: every table the ledger has is counted, including one added after this probe was written",
         red_fires: red,
         green_passes: green,
     }
@@ -338,7 +444,7 @@ fn probe_audit_registry() -> Probe {
         .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
         && a.rows
             .iter()
-            .any(|r| r.id == "review-waiting" && r.fires == 1 && r.last_fired.is_some());
+            .any(|r| r.id == "review-waiting" && r.evaluations == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
@@ -648,7 +754,7 @@ fn probe_audit_unregistered_firing() -> Probe {
             && a.unregistered.is_empty()
             && a.rows
                 .iter()
-                .any(|r| r.id == "claim-refusal" && r.fires == 1)
+                .any(|r| r.id == "claim-refusal" && r.evaluations == 1)
     };
     Probe {
         name: "audit: a firing with no registry row is a defect; a claimed pair counts as its mechanism",

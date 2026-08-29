@@ -1061,8 +1061,31 @@ fn bd_try<T>(
     }
 }
 
+/// What has to change before the event log says the condition set again: the set itself,
+/// each entry with its own value. Age is deliberately not in it — keying on "oldest 40 min"
+/// then "oldest 50 min" rebuilds the repeat under a new name (air-s7c).
+pub fn conditions_fingerprint(att: &[Attention]) -> String {
+    let mut parts: Vec<String> = att
+        .iter()
+        .map(|a| format!("{}:{}:{}", a.kind, a.worker, a.fingerprint))
+        .collect();
+    parts.sort();
+    parts.join("|")
+}
+
 /// Conditions as rows (first-seen/cleared) and one event line that names every kind and
 /// worker, plus the queue depth (plan 0006 C1, C6). Shared by the CLI and the channel poll.
+///
+/// The poll path writes that line **on change only** (air-5uz). It evaluates every few
+/// seconds, so on 2026-08-25 it wrote 7,667 of the day's 8,242 event lines, and `air audit`
+/// read the total as firings: `owner-decision-waiting` showed 1,685 against one push all day,
+/// and a deletion was nearly proposed on that number. Nothing is lost by the silence — the
+/// `conditions` table already carries first-seen, last-seen and cleared for every condition,
+/// which is where a duration query belongs. The gate is `hook_emissions`, the same one the
+/// Stop and peer hooks use for "say it once".
+///
+/// A person running `air status` still gets one line per invocation: that path is one line a
+/// day, not 1,728, and an invocation is itself the fact being recorded.
 pub fn record_and_log(
     ledger: &air_ledger::Ledger,
     worker: &str,
@@ -1081,6 +1104,20 @@ pub fn record_and_log(
         .iter()
         .map(|a| format!("{}:{}", a.kind, a.worker))
         .collect();
+    // An unchanged set has nothing left to say. An empty fingerprint (no conditions) clears
+    // the row, so the next occurrence speaks again.
+    if attention_only
+        && !ledger
+            .emit_if_changed(
+                worker,
+                "status.conditions",
+                &conditions_fingerprint(att),
+                &snap.at,
+            )
+            .unwrap_or(true)
+    {
+        return;
+    }
     log_event(
         ledger,
         worker,
