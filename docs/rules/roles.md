@@ -16,10 +16,11 @@ coordinator; each worktree is a worker. Air records it on every session and even
 Another project's worktrees, tmux sessions and workers are never yours to kill, restart,
 re-model or tidy — `tmux ls` is machine-wide and `ListAgents` lists their sessions next to
 yours. Reading them and messaging them is fine and often the point: the cross-project channel
-caught three wrong claims on 2026-08-22, one of which both coordinators had backwards. A
-`tmux` command naming another project's session is denied, and `air --repo` outside this
-checkout is refused; messaging is not fenced and will not be (air-0lk, air-3oq).
-**[Air enforces: tmux targets and `--repo`, and every refusal says what is still allowed]**
+caught three wrong claims on 2026-08-22, one of which both coordinators had backwards. `air
+--repo` outside this checkout is refused; messaging is not fenced and will not be (air-3oq).
+**[Air enforces: `--repo`]** The tmux half was a refusal too (air-0lk); it fired zero times in
+its whole life and was deleted on 2026-08-29 (air-9u6). The rule stands, the machinery does not:
+another project's sessions are still not yours to kill, and now nothing but this line says so.
 
 Before choosing a closed default, ask what a wrong denial looks like from the outside. For
 `tmux kill-session`, a refusal someone reads. For a message, an empty room nobody notices.
