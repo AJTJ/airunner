@@ -346,6 +346,31 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
+        Mutation {
+            // Put the condition back on bd's raw count. Exactly the pre-fix behaviour, one
+            // branch, and it compiles. The two threshold probes give the counts the same value
+            // deliberately, so they stay GREEN under it — which is what shows this mutation
+            // reaches the counting rule and not the threshold beside it.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "&& s.claimable_depth.is_some_and(|n| n > 0)",
+            to: "&& s.ready_depth.is_some_and(|n| n > 0)",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: Air runs exactly one git merge and it is --ff-only, so no Air command can see a conflict",
+        Mutation {
+            // Reintroduce the three-way merge air-odv removed. It compiles, it is exactly the
+            // regression the claim guards against, and it is one line rather than a blanket
+            // flag. `--no-ff` against a divergent branch is precisely what CAN conflict.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "git::run(repo, &[\"merge\", \"--ff-only\", &merge])",
+            to: "git::run(repo, &[\"merge\", \"--no-ff\", &merge])",
+            also_red: &[],
+        },
+    ),
+    (
         "land: main moves only for a branch that contains main AND is green at its head, which is why no verify runs there",
         Mutation {
             // Drop the containment half of the conjunction. It compiles, it reaches exactly the
@@ -833,6 +858,8 @@ fn all_probes() -> Vec<Probe> {
         probe_land_role_is_where_you_are(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
+        probe_air_runs_no_conflicting_merge(),
+        probe_idle_without_claim_counts_claimable_only(),
     ]
 }
 
@@ -1376,9 +1403,13 @@ fn probe_audit_registry() -> Probe {
     // Red: a mechanism with nothing recorded IS reported as a defect. Asserted against the
     // classifier rather than against a registry row that happens to lack a condition — this
     // probe pointed at `review-waiting` until air-s7c gave that one a condition, then at
-    // `stuck` until air-dqw deleted it, and each time the probe went silent on a registry
-    // change that was not a regression. There is now no `Removal::Unstated` row left, which is
-    // the goal, so a probe that needs one would be a probe that needs a defect to exist.
+    // `stuck` until air-byw gave `stuck` one (air-dqw's deletion was reverted on that finding).
+    // Each time, the probe went silent on a registry change that was not a regression. There is
+    // now no `Removal::Unstated` row left, which is the goal, so a probe that needs one would be
+    // a probe that needs a defect to exist.
+    //
+    // Two lanes reached this same fix independently within the hour; this is main's version,
+    // which asserts the whole verdict tuple rather than only the defect string.
     let red = removal_verdict(Removal::Unstated, 0) == ("none", None, Some(NO_CONDITION))
         && a.rows.iter().all(|r| r.defect.is_none());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
@@ -1850,6 +1881,101 @@ fn probe_land_refusals() -> Probe {
         ) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-uir: `idle-without-claim` fires on beads the worker can actually claim.
+///
+/// It counted bd's raw ready set while `ready_cache::claimable` filters `owner`-labelled beads
+/// and is what the Stop nudge uses — two numbers for one thing, and only one of them was work
+/// a worker could take. It fired on gate at round end on 2026-08-29 with one ready bead,
+/// `air-4t1`, labelled `owner`, which gate had already declined. The claimable count was zero.
+///
+/// This is a condition whose entire output is "go interrupt a worker", so a false fire is the
+/// cheapest possible way to teach a coordinator to ignore conditions.
+///
+/// Red: an idle claimless worker with one claimable bead is reported. Green: the same worker
+/// with a queue of beads it may not claim produces nothing, and `air status` says which count
+/// it means rather than leaving a reader to open the bead and find out.
+fn probe_idle_without_claim_counts_claimable_only() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention, render_for_probe};
+
+    let at = |ready: usize, claimable: usize| Snapshot {
+        at: "2026-08-29T12:30:00Z".into(),
+        workers: vec![crate::cmd::status::WorkerView {
+            worker: "gate".into(),
+            role: "worker".into(),
+            session: Some(crate::cmd::status::Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                changed_at: "2026-08-29T12:00:00Z".into(),
+                pid_alive: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(ready),
+        claimable_depth: Some(claimable),
+        ..Default::default()
+    };
+    let fires = |s: &Snapshot| {
+        attention(s, "2026-08-29T12:30:00Z", Thresholds::default())
+            .iter()
+            .any(|a| a.kind == "idle-without-claim")
+    };
+
+    let red = fires(&at(1, 1));
+    // The round-end state: a non-empty queue with nothing in it for this worker.
+    let green = !fires(&at(1, 0))
+        && !fires(&at(5, 0))
+        // ...and the count is not silently reinterpreted: the line names both.
+        && render_for_probe(&at(3, 1)).contains("ready: 3 (1 claimable; 2 owner-labelled")
+        // When they agree there is nothing to disambiguate and the line stays short.
+        && render_for_probe(&at(3, 3)).contains("ready: 3\n");
+    Probe {
+        name: "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
+/// observe a merge conflict.
+///
+/// air-mun asked for the conflicted paths of a landing to be recorded, so `air audit` could
+/// answer "conflicts in warned files" with a number and peer-warning could be honestly kept or
+/// deleted. air-odv landed the same day and removed the merge that would have produced them:
+/// `air land` builds the landing commit with `commit-tree` and fast-forwards onto it. Measured
+/// on git 2.51: `--ff-only` against a divergent branch aborts with **zero** conflicted paths
+/// and a clean working tree, and `branch_check` refuses such a branch before any git write.
+///
+/// This probe is the guard on that claim. It is a source check rather than a behaviour check on
+/// purpose: the assertion is about what Air *can* run, and a behaviour test can only sample the
+/// paths it happens to take. If someone reintroduces a three-way merge, the claim in
+/// `audit.rs` — that nothing records conflicts because nothing observes them — silently becomes
+/// wrong, and this is what says so.
+///
+/// Red: a `git merge` without `--ff-only` anywhere in the crate is caught. Green: the one merge
+/// that exists is the fast-forward, and the audit's explanation names the real site.
+fn probe_air_runs_no_conflicting_merge() -> Probe {
+    let land = include_str!("land.rs");
+    let audit = include_str!("audit.rs");
+    // Every `git` argv Air builds names its subcommand as a bare "merge" element.
+    let merges: Vec<&str> = land
+        .lines()
+        .filter(|l| l.contains("\"merge\"") && !l.trim_start().starts_with("//"))
+        .collect();
+    let red = merges.len() == 1 && merges.first().is_some_and(|l| l.contains("\"--ff-only\""));
+    let green =
+        // The audit no longer points at `air land` as the place a conflict is seen...
+        !audit.contains("`air land` is where one is observed, so recording")
+        // ...and says where they actually happen instead.
+        && audit.contains("the workers' own")
+        && audit.contains("`git merge main`");
+    Probe {
+        name: "land: Air runs exactly one git merge and it is --ff-only, so no Air command can see a conflict",
         red_fires: red,
         green_passes: green,
     }
@@ -2400,7 +2526,10 @@ fn probe_standstill() -> Probe {
             }),
             ..Default::default()
         }],
+        // air-uir: this probe is about the threshold/liveness, so the two counts agree
+        // here; the counting rule itself is probe_idle_without_claim_counts_claimable_only.
         ready_depth: Some(ready),
+        claimable_depth: Some(ready),
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
@@ -2476,7 +2605,10 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
             }),
             ..Default::default()
         }],
+        // air-uir: this probe is about the threshold/liveness, so the two counts agree
+        // here; the counting rule itself is probe_idle_without_claim_counts_claimable_only.
         ready_depth: Some(2),
+        claimable_depth: Some(2),
         ..Default::default()
     };
     let red = attention(&mk(Some(true)), now, Thresholds::default());

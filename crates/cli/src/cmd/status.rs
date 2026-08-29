@@ -116,8 +116,18 @@ pub struct Snapshot {
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
     /// `bd ready` count at this tick (None when bd did not answer): queue depth over time
-    /// (plan 0006 C6; the round ran dry at 4 with only epics left).
+    /// (plan 0006 C6; the round ran dry at 4 with only epics left). The RAW count, including
+    /// beads no worker may take — it is a measurement of the queue, not of available work.
     pub ready_depth: Option<usize>,
+    /// Of those, the ones a worker could actually claim: `ready_depth` minus the
+    /// `owner`-labelled beads `air claim` refuses to workers (air-uir).
+    ///
+    /// Two numbers because they answer two questions. "How deep is the queue" wants every
+    /// bead; "should I prompt an idle worker" wants only the ones that worker can take.
+    /// `idle-without-claim` used `ready_depth` and so told the coordinator to interrupt a
+    /// worker over work that did not exist for it — at round end on 2026-08-29 the one ready
+    /// bead was `air-4t1`, labelled `owner`, which gate had already declined.
+    pub claimable_depth: Option<usize>,
     /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
@@ -788,19 +798,28 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     // point and is untouched here: there the claim is what needs a person.
                     // Removal: when a dead session is pruned on the pid alone, this is dead
                     // code and goes with it.
+                    // air-uir: on the CLAIMABLE count, not bd's raw one. This is a condition
+                    // whose whole output is "go interrupt a worker", so firing it over work
+                    // the worker cannot take is the cheapest possible way to teach both of
+                    // them to ignore conditions.
+                    //
+                    // Noted plainly because the 2026-08-22 capture was right to: this MOVES
+                    // the threshold rather than renaming a field. The condition now fires
+                    // strictly less often, and what it means is narrower and truer — "there is
+                    // work this worker could start", not "the queue is non-empty".
                     "idle"
                         if !has_claim
                             && w.role == "worker"
                             && sess.pid_alive != Some(false)
-                            && s.ready_depth.is_some_and(|n| n > 0)
+                            && s.claimable_depth.is_some_and(|n| n > 0)
                             && age >= t.idle_noclaim_min =>
                     {
                         out.push(Attention {
                             worker: w.worker.clone(),
                             kind: kinds::IDLE_WITHOUT_CLAIM,
                             detail: format!(
-                                "idle {age} min, {} beads ready; prompt them",
-                                s.ready_depth.unwrap_or(0)
+                                "idle {age} min, {} bead(s) they can claim; prompt them",
+                                s.claimable_depth.unwrap_or(0)
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
@@ -1283,21 +1302,35 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // somebody reopened the bead (air-dlw); no extra bd call, these lists are already here.
     let mut back_in_queue: std::collections::BTreeSet<String> =
         in_progress.iter().flatten().cloned().collect();
+    // air-uir: both counts come off the SAME `bd ready` answer and the same `claimable`
+    // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
+    let mut claimable_depth: Option<usize> = None;
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
             back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             let ids = super::ready_cache::claimable(&v);
+            claimable_depth = Some(ids.len());
+            let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
             super::ready_cache::write(repo, &ids, &super::now());
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
             Some(v.len())
         }
-        None if bd_slow.is_some() => ledger
-            .bd_cache_get("ready_depth")
-            .ok()
-            .flatten()
-            .and_then(|(v, _)| v.parse().ok()),
+        None if bd_slow.is_some() => {
+            // Both degrade together, or `idle-without-claim` would compare today's absence
+            // against yesterday's count.
+            claimable_depth = ledger
+                .bd_cache_get("claimable_depth")
+                .ok()
+                .flatten()
+                .and_then(|(v, _)| v.parse().ok());
+            ledger
+                .bd_cache_get("ready_depth")
+                .ok()
+                .flatten()
+                .and_then(|(v, _)| v.parse().ok())
+        }
         None => None,
     };
     // A bd that did not answer is a fault and is reported. A bd we chose not to call is not,
@@ -1366,6 +1399,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .collect(),
         sessions: all_sessions,
         ready_depth,
+        claimable_depth,
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
@@ -1606,10 +1640,20 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         }
     }
     out.push_str(&format!(
-        "ready: {}{}\n",
+        "ready: {}{}{}\n",
         s.ready_depth
             .map(|n| n.to_string())
             .unwrap_or_else(|| "? (bd did not answer)".into()),
+        // air-uir: say WHICH count this is whenever the two differ. A coordinator reading
+        // "ready: 1" at round end had to open the bead to find the queue was empty for every
+        // worker, which is the same defect one layer up from the condition itself.
+        match (s.ready_depth, s.claimable_depth) {
+            (Some(r), Some(c)) if r != c => format!(
+                " ({c} claimable; {} owner-labelled, which `air claim` refuses to workers)",
+                r.saturating_sub(c)
+            ),
+            _ => String::new(),
+        },
         // Which source, always: "0 ready" from a cache and "0 ready" from bd are different
         // facts, and only one of them is today's (air-cmn).
         match s.bd_source {
@@ -1958,9 +2002,23 @@ mod tests {
         assert!(text.contains("claims: -  idle, no claim"), "{text}");
         let none = Snapshot {
             ready_depth: Some(3),
+            claimable_depth: Some(3),
             ..Default::default()
         };
         assert!(render(&none, &[]).contains("ready: 3\n"));
+
+        // air-uir: when the two differ the line says which is which, because "ready: 1" at
+        // round end sent a coordinator to open the bead to find the queue was empty.
+        let split = Snapshot {
+            ready_depth: Some(3),
+            claimable_depth: Some(1),
+            ..Default::default()
+        };
+        let text = render(&split, &[]);
+        assert!(
+            text.contains("ready: 3 (1 claimable; 2 owner-labelled"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1975,6 +2033,7 @@ mod tests {
                 },
             ],
             ready_depth: Some(5),
+            claimable_depth: Some(5),
             ..Default::default()
         };
         let att = attention(&s, NOW, Thresholds::default());
@@ -1983,16 +2042,29 @@ mod tests {
             (att[0].worker.as_str(), att[0].kind),
             ("w", "idle-without-claim")
         );
-        assert_eq!(att[0].detail, "idle 30 min, 5 beads ready; prompt them");
+        assert_eq!(
+            att[0].detail,
+            "idle 30 min, 5 bead(s) they can claim; prompt them"
+        );
         let t = Thresholds {
             idle_noclaim_min: 1,
             ..Thresholds::default()
         };
         assert_eq!(attention(&s, NOW, t).len(), 2);
-        s.ready_depth = Some(0);
+        s.claimable_depth = Some(0);
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
-        s.ready_depth = None;
+        s.claimable_depth = None;
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+
+        // air-uir: the raw queue being non-empty is NOT the trigger. Five ready beads, none a
+        // worker may claim, is the round-end state that fired this falsely on 2026-08-29 —
+        // `air-4t1` was labelled `owner` and gate had already declined it.
+        s.ready_depth = Some(5);
+        s.claimable_depth = Some(0);
+        assert!(
+            attention(&s, NOW, Thresholds::default()).is_empty(),
+            "a full queue of owner-labelled beads is nothing to prompt anyone about"
+        );
     }
 
     /// air-d10. A dead session is not an idle worker: there is nobody to prompt, and the two
@@ -2007,6 +2079,7 @@ mod tests {
             Snapshot {
                 workers: vec![w],
                 ready_depth: Some(5),
+                claimable_depth: Some(5),
                 ..Default::default()
             }
         };
