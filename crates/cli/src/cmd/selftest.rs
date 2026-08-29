@@ -496,6 +496,9 @@ fn all_probes() -> Vec<Probe> {
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
         probe_gc_keeps_what_it_must(),
+        probe_peer_warning_effect_is_readable(),
+        probe_poll_tick_pays_for_bd_rarely(),
+        probe_registry_traces_are_unambiguous(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -716,6 +719,139 @@ fn probe_gc_keeps_what_it_must() -> Probe {
     Probe {
         name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
         red_fires: red && live,
+        green_passes: green,
+    }
+}
+
+/// air-1ra: whether a peer warning changed what the worker did is readable from the record.
+///
+/// `peer-warning` had 33 firings and no demonstrated effect in either direction, and the
+/// absence of recorded harm was partly because the effect was not recorded. It was: a `warn`
+/// line carries `session_id` and `path`, and so does every `journaled` line. No new recording
+/// was added for this.
+///
+/// Red: warn, then the session edits that file twice more, and it reads IGNORED. Green: warn,
+/// then only the edit already in flight, and it reads heeded — and edits by ANOTHER session,
+/// or to another file, do not count against it, which is the join being a join.
+fn probe_peer_warning_effect_is_readable() -> Probe {
+    use crate::cmd::audit::peer_effect;
+
+    let w = |at: &str, sid: &str, path: &str| {
+        (
+            at.to_string(),
+            "alpha".to_string(),
+            sid.to_string(),
+            path.to_string(),
+        )
+    };
+    let e = |at: &str, sid: &str, path: &str| (at.to_string(), sid.to_string(), path.to_string());
+
+    let warns = [w("10:00", "s1", "a.rs"), w("10:00", "s2", "b.rs")];
+    let edits = [
+        // s1 was warned about a.rs and kept going: the in-flight edit plus two more.
+        e("10:01", "s1", "a.rs"),
+        e("10:02", "s1", "a.rs"),
+        e("10:03", "s1", "a.rs"),
+        // s2 was warned about b.rs and stopped after the edit already in flight.
+        e("10:01", "s2", "b.rs"),
+        // Noise that must not count: another session in the same file, the same session in
+        // another file, and an edit BEFORE the warning.
+        e("10:05", "s9", "b.rs"),
+        e("10:05", "s2", "c.rs"),
+        e("09:00", "s2", "b.rs"),
+    ];
+
+    let p = peer_effect(&warns, &edits);
+    let row = |i: usize| p.warned.get(i);
+    let red = p.warnings == 2
+        && p.ignored == 1
+        && row(0).is_some_and(|r| r.edits_after == 3 && !r.heeded);
+    let green = p.heeded == 1
+        && row(1).is_some_and(|r| r.edits_after == 1 && r.heeded)
+        // Never guessed at: a conflict count nobody records is reported as unrecorded, not 0.
+        && p.conflicts_in_warned_files.is_none();
+    Probe {
+        name: "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-cmn: an ordinary poll tick answers from the cache and never shells out to bd.
+///
+/// The poll ran a full `gather` every ~8 s and every one called bd — `in_progress`, then `show`
+/// once per open claim, then `awaiting_review`, then `ready`: about 5,700 bd calls and 2.3
+/// hours a day waiting on bd, to deliver ~45 pushes (0007 §3). air-djl proposed deleting the
+/// thread over the event volume, which air-5uz had already removed; the cost was here.
+///
+/// This asserts the DECISION, not a process count, because the fallback it arms is the
+/// already-tested slow-bd path: `cache_is_fresh` says whether this tick pays.
+///
+/// Red: with a cached answer a minute old and a 10-minute window, the tick uses the cache.
+/// Green: an answer older than the window, and an empty cache after a restart, both pay — so
+/// the counts cannot go stale forever and the first tick still fills the cache.
+fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
+    use crate::cmd::status::cache_is_fresh;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let now = "2026-08-29T12:00:00Z";
+
+        // Nothing cached: a restart must pay once rather than answer from nothing.
+        let empty_pays = !cache_is_fresh(&l, now, 10);
+
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:59:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = cache_is_fresh(&l, now, 10);
+
+        // The same value, an hour old: outside the window, so this tick pays.
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let green = !cache_is_fresh(&l, now, 10) && empty_pays;
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-8br: no `command / decision` pair is claimed by two mechanisms, and the pairs the audit
+/// treats as bookkeeping are not also claimed as firings.
+///
+/// The registry is the audit's only map of what Air ships. Two rows claiming one trace would
+/// count every firing twice and split it across two removal conditions, and a trace that is
+/// both registered and bookkeeping would be attributed and suppressed at once. Neither is
+/// visible in the output: the numbers would simply be wrong, which is air-5uz's failure shape.
+///
+/// Red: every registered trace is claimed exactly once. Green: no registered trace is also in
+/// the bookkeeping list, and the registry is not empty — a check that passes on nothing is the
+/// anti-pattern this whole command exists against.
+fn probe_registry_traces_are_unambiguous() -> Probe {
+    use crate::cmd::audit::{BOOKKEEPING, registered_traces};
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+
+    let mut all: Vec<String> = Vec::new();
+    for m in MECHANISMS {
+        if let Fires::Decisions(traces) = m.fires {
+            all.extend(traces.iter().map(|(c, d)| format!("{c} / {d}")));
+        }
+    }
+    let distinct = registered_traces();
+    let red = !all.is_empty() && all.len() == distinct.len();
+
+    // A decision word cannot be both a mechanism firing and bookkeeping.
+    let green = !distinct.is_empty()
+        && !all.iter().any(|t| {
+            t.split(" / ")
+                .nth(1)
+                .is_some_and(|d| BOOKKEEPING.contains(&d))
+        });
+    Probe {
+        name: "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
+        red_fires: red,
         green_passes: green,
     }
 }
