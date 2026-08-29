@@ -988,6 +988,20 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             });
         }
     }
+    // air-ob0, narrowed by air-odv: a rewound merge somebody still carries. No NEW rewind can
+    // occur — main is fast-forwarded onto an already-green commit — so this reports history,
+    // and it empties itself when nobody holds those commits any more. Registered with that as
+    // its removal condition so `air audit` can answer it rather than someone arguing it.
+    for r in &s.rewound_carried {
+        out.push(Attention {
+            worker: r.carried_by.join(", "),
+            kind: "rewound-and-carried",
+            detail: rewind_propagation(&r.merge_commit, &r.carried_by).join(" "),
+            for_minutes: minutes_between(&r.rewound_at, now).unwrap_or(0),
+            // The commit and who holds it is the whole fact; its age is not a change.
+            fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
+        });
+    }
     // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
     // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
     // and says it again only when the reason changes.
