@@ -59,6 +59,30 @@ pub fn verify_command(repo: &Path) -> Vec<String> {
     }
 }
 
+/// What `air land` says about the verifies running right now (air-4cr). Empty when nothing is
+/// running, so the ok path is silent.
+///
+/// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
+/// every verify in flight is about to become worthless. adopter's coordinator did this to
+/// three workers in one round with no signal available; their fix was a protocol where the
+/// worker warns first, which is exactly the relayed fact Air exists to remove. A full verify
+/// is ~420 s there and their landing rate was faster, so no cadence solves it.
+///
+/// Warn, never refuse (the bead's own default, owner's call): a coordinator may still have to
+/// land, and this is a fact, not a gate. **Removal condition**: delete when a round's landings
+/// show zero warnings, or show warnings that nothing ever waits on.
+pub fn in_flight_warnings(flights: &[air_ledger::verify::InFlight], at: &str) -> Vec<String> {
+    flights
+        .iter()
+        .map(|f| {
+            format!(
+                "warning: verify in flight, {} — landing now invalidates it and costs a re-run",
+                super::status::in_flight_line(f, at)
+            )
+        })
+        .collect()
+}
+
 /// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
 fn branch_for(worker: &str) -> String {
     format!("worktree-{worker}")
@@ -327,6 +351,22 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
+    // air-4cr. Landing moves main, and the hand-over gate wants a green at a HEAD containing
+    // main, so every verify running right now is about to become worthless. adopter's
+    // coordinator did this to three workers in one round and had no signal; their fix was a
+    // protocol where the worker warns first. Warn, do not refuse (bead air-4cr, owner's
+    // default): a coordinator may still have to land, and a refusal here would be a gate over
+    // a fact. Removal condition: delete this warning when a round's landings show it firing
+    // zero times, or when it fires and nothing ever waits on it.
+    lines.extend(in_flight_warnings(
+        &super::status::verifies_in_flight(&ledger),
+        &now(),
+    ));
+    if !json {
+        for l in &lines {
+            eprintln!("{l}");
+        }
+    }
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, json) {
             Outcome::Landed { merge, noted } => {
@@ -432,26 +472,34 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    // air-bxe: ONE row per attempt, written more than once. The id and the attempt number are
+    // fixed here so the `in-flight` write and the outcome write are the same row; deriving
+    // `attempt_no` inside the closure would count the row it is about to update.
+    let row_id = new_id();
+    let attempt_no = ledger
+        .landing_attempts(&batch.worker)
+        .unwrap_or(0)
+        .saturating_add(1);
     let record_full = |result: &str,
                        merge: Option<String>,
                        verify: Option<String>,
                        step: Option<String>,
                        open: &[air_ledger::landings::OpenBead]| {
         let _ = ledger.record_landing(&LandingRow {
-            id: new_id(),
+            id: row_id.clone(),
             worker: batch.worker.clone(),
             sha: facts.branch_head.to_string(),
             tip_sha: Some(tip.clone()),
             result: result.to_string(),
             failing_step: step,
             verify_run_id: verify,
-            attempt_no: ledger
-                .landing_attempts(&batch.worker)
-                .unwrap_or(0)
-                .saturating_add(1),
+            attempt_no,
             beads: batch.beads.clone(),
             open_beads: open.to_vec(),
             merge_commit: merge,
+            // The `air land` process, so an `in-flight` row can say whether it is still
+            // running. This is the fact `pgrep` was asked for and got wrong twice.
+            pid: Some(i64::from(std::process::id())),
             started_at: started_at.clone(),
             finished_at: now(),
         });
@@ -481,6 +529,13 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         ));
     }
     let merge = git::head(repo).unwrap_or_default();
+    // air-bxe: main has moved and the rollback is armed from here until the verify reports.
+    // Say so BEFORE the verify, not after it. That window is minutes long, and adopter's
+    // coordinator called a land done inside it three times; `git merge-base --is-ancestor`
+    // answers "is it in main", which is true for the whole window and so answers nothing.
+    // A land killed here (theirs died on a closed pipe, `air land | head`) leaves this row
+    // rather than leaving main green at a sha no landing mentions.
+    record("in-flight", Some(merge.clone()), None, None);
     // Verify the MERGED result. A green on the branch alone is not a green of what landed.
     let cmd = verify_command(repo);
     let Some((prog, args)) = cmd.split_first() else {
@@ -512,15 +567,31 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     if exit_code != 0 {
         // Rewind: main goes back exactly where it was, and the branch is untouched.
         let _ = git::run(repo, &["reset", "--hard", &tip]);
-        record("rewound", Some(merge), Some(run.id), Some(cmd.join(" ")));
-        return Outcome::Rewound(format!(
+        // air-ob0: who still holds the un-landed commits. Asked AFTER the reset, so the main
+        // checkout — which contained the merge a moment ago and is the whole point of the
+        // reset — is not named as a carrier. The commit is unreferenced now but still
+        // reachable from any worktree HEAD that merged it, which is exactly the set wanted.
+        let carried_by = super::status::carrying(repo, &merge);
+        record(
+            "rewound",
+            Some(merge.clone()),
+            Some(run.id),
+            Some(cmd.join(" ")),
+        );
+        let mut why = format!(
             "verify exited {exit_code} on the merged result; main is back at {} and `{}` is \
              untouched. The branch is green alone and red merged: ask {} to `git merge main` and \
              re-verify.",
             tip.get(..8).unwrap_or(&tip),
             branch,
             batch.worker
-        ));
+        );
+        // A rollback un-lands from main and cannot un-merge from anyone who already took it.
+        // `air status` holds the same set afterwards, so this message is not the only copy.
+        for line in super::status::rewind_propagation(&merge, &carried_by) {
+            why.push_str(&format!("\n  {line}"));
+        }
+        return Outcome::Rewound(why);
     }
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
     // Layer 1, the part that is true under either closure model: read every bead's acceptance

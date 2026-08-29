@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 10;
+pub const CURRENT_VERSION: i64 = 11;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -183,6 +183,25 @@ const V10: &str = r#"
 ALTER TABLE landings ADD COLUMN open_beads TEXT;
 "#;
 
+/// v11 (2026-08-29, air-4cr + air-bxe): the two facts a coordinator had to relay or `pgrep`
+/// for. `verify_inflight` is one row per verify that has STARTED and not yet exited, so
+/// "someone is mid-verify" is a lookup instead of a warning a worker has to remember to send
+/// (adopter 2026-08-23: a full verify is ~420 s and the landing rate is faster, so no
+/// cadence works). `landings.pid` lets an `in-flight` landing row say whether the process that
+/// wrote it is still alive, which is what `pgrep` was being asked and answered wrongly twice.
+const V11: &str = r#"
+CREATE TABLE IF NOT EXISTS verify_inflight (
+    id          TEXT PRIMARY KEY,            -- ulid, matches the verify_runs row written at exit
+    worker      TEXT NOT NULL,
+    sha         TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    command     TEXT NOT NULL,
+    pid         INTEGER,                     -- the `air record` process; liveness, as sessions do
+    started_at  TEXT NOT NULL
+);
+ALTER TABLE landings ADD COLUMN pid INTEGER;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -226,6 +245,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V10)?;
         conn.pragma_update(None, "user_version", 10)?;
     }
+    if version < 11 {
+        conn.execute_batch(V11)?;
+        conn.pragma_update(None, "user_version", 11)?;
+    }
     Ok(())
 }
 
@@ -246,11 +269,11 @@ mod tests {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants')",
+                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants','verify_inflight')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 8);
+        assert_eq!(n, 9);
     }
 }
