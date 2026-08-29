@@ -242,7 +242,13 @@ enum Cmd {
     /// "pragmas"; air-ha8.)
     Doctor,
     /// Red/green probes for every check (a check that matches nothing prints red).
-    Selftest,
+    Selftest {
+        /// air-682: run each probe's DECLARED mutation and report any probe that stays green.
+        /// Neutralises the rule a probe names, rebuilds, and requires that probe to go red and
+        /// the others to stay green. Edits tracked files, so it refuses a dirty tree.
+        #[arg(long)]
+        prove: bool,
+    },
 }
 
 /// `--repo` may not leave this checkout's repository (air-0lk). A worktree and its main
@@ -323,7 +329,13 @@ fn main() -> ExitCode {
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
-        Cmd::Selftest => cmd::selftest::run(cli.json),
+        Cmd::Selftest { prove } => {
+            if prove {
+                cmd::selftest::prove(&repo, cli.json)
+            } else {
+                cmd::selftest::run(cli.json)
+            }
+        }
     };
     ExitCode::from(u8::try_from(code).unwrap_or(1))
 }
