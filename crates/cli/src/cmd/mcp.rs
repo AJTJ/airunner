@@ -14,7 +14,7 @@
 //! for the same guarantees (rust-safety skill; plan 0003 "no async in hooks").
 //!
 //! Push design: there is no documented way for an outside process to talk to a channel
-//! server, and every attention condition is a clock condition anyway ("stuck for N min").
+//! server, and every attention condition is a clock condition anyway ("idle for N min").
 //! So a poll thread re-evaluates `status::attention` from the ledger every
 //! `AIR_CHANNEL_POLL_SECS` (default 30) and pushes only *new or escalated* conditions; the
 //! de-dupe map is bounded by workers × kinds and pruned when a condition clears.
@@ -186,7 +186,11 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                     "experimental": {"claude/channel": {}}
                 },
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, handover-not-green, inbox-waiting) as they arise."
+                // The list is the conditions that EXIST, checked against every `kind:` in
+                // `status::attention` rather than against memory. It named `stuck` until
+                // air-dqw deleted it. A surface describing something untrue is air-ha8's
+                // defect, and an MCP instructions string is a surface.
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, review-waiting, landed-not-closed, owner-decision-waiting, lease-held-by-dead-session, lease-stale) as they arise."
             }),
         ),
         "ping" => result(id, json!({})),

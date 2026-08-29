@@ -101,7 +101,6 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thresholds {
-    pub stuck_min: i64,
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
@@ -114,7 +113,6 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            stuck_min: 5,
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             launch_grace_min: 3,
@@ -133,7 +131,6 @@ impl Thresholds {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
-        t.stuck_min = get("AIR_ATTENTION_STUCK_MIN", t.stuck_min);
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
@@ -721,24 +718,29 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        // `gone-with-claim` was deleted on 2026-08-22 (air-s7c): it fired zero times in the
-        // audited window and never in any recorded day since it was added on 2026-08-20. A
-        // mechanism that has never fired has never prevented anything. A dead session holding
-        // a claim now falls through to the ordinary session states below, which do fire.
+        // One ARM of `gone-with-claim` was deleted on 2026-08-22 (air-s7c): the one that
+        // fired when a session row existed but its process was dead. It fired zero times in
+        // the audited window. A dead session holding a claim now falls through to the ordinary
+        // session states below, which do fire.
+        //
+        // The kind itself is alive and is raised further down, for a claim held by a worker
+        // with NO session row at all past the launch grace. Said explicitly because this
+        // comment previously read as though the whole condition had gone, and on 2026-08-29 it
+        // led to `gone-with-claim` being struck from the MCP instructions string it belonged
+        // in (air-dqw).
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
+                // `stuck` was deleted on 2026-08-29 (air-dqw). It fired zero times in any
+                // recorded day, including through the 2026-08-22 05:26-05:45 standstill it was
+                // written for and the six days main sat red. The reason it never fired is that
+                // its INPUT never existed: the state is set only by the `PermissionRequest`
+                // hook, and `hook.PermissionRequest` appears zero times in 34,000+ recorded
+                // events across 8 days, so the `sessions` table has only held `running` and
+                // `working`. A condition downstream of an event that never arrives cannot be
+                // repaired by a threshold. The session state itself stays, so that if
+                // `PermissionRequest` ever does arrive, `air status` shows it.
                 match sess.state.as_str() {
-                    "stuck" if age >= t.stuck_min => out.push(Attention {
-                        worker: w.worker.clone(),
-                        kind: "stuck",
-                        detail: format!(
-                            "waiting on a permission prompt{} for {age} min; answer it in their terminal",
-                            sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
-                        ),
-                        for_minutes: age,
-                        fingerprint: String::new(),
-                    }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
                         kind: "idle-with-claim",
@@ -1698,7 +1700,6 @@ mod tests {
         assert_eq!(att[0].for_minutes, 30);
         // Tighten nothing, loosen everything: all time-based ones go quiet.
         let loose = Thresholds {
-            stuck_min: 60,
             idle_with_claim_min: 60,
             silent_with_claim_min: 60,
             launch_grace_min: 3,
