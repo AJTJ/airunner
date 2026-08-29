@@ -52,6 +52,7 @@ pub fn run(json: bool) -> i32 {
         probe_surface_diff(),
         probe_change_only_push(),
         probe_conditions_logged_on_change_only(),
+        probe_doctor_enumerates_tables(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -193,6 +194,44 @@ fn probe_conditions_logged_on_change_only() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: an unchanged condition set writes one event line an hour, not one a tick",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-w0e: `air doctor` counts every table the ledger has, asked of `sqlite_master`.
+///
+/// It used to walk a list somebody typed, and reported 7 of the 11 tables at schema v10:
+/// `hook_emissions`, `conditions`, `lease_wants` and `bd_cache` were invisible, which is how
+/// the zero-lease finding nearly went unnoticed. Currency, not presence.
+///
+/// Red: the four tables the list left out are all counted. Green: a table this probe invents,
+/// which no list anywhere could name, is counted too — so the next migration needs no edit
+/// here.
+fn probe_doctor_enumerates_tables() -> Probe {
+    use crate::cmd::doctor::table_rows;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let named = |rows: &[(String, i64)], t: &str| rows.iter().any(|(n, _)| n == t);
+
+        let rows = table_rows(l.conn());
+        let red = ["hook_emissions", "conditions", "lease_wants", "bd_cache"]
+            .iter()
+            .all(|t| named(&rows, t));
+
+        l.conn()
+            .execute_batch("CREATE TABLE a_table_no_list_could_name (x INTEGER)")
+            .map_err(|e| e.to_string())?;
+        let rows = table_rows(l.conn());
+        let green = rows
+            .iter()
+            .any(|(n, c)| n == "a_table_no_list_could_name" && *c == 0);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "doctor: every table the ledger has is counted, including one added after this probe was written",
         red_fires: red,
         green_passes: green,
     }
