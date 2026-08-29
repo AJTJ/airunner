@@ -247,9 +247,14 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
         }
     };
     let v: Verdict = handover_verdict(&f);
-    if let Some(b) = bead {
-        let _ = ledger.stamp_handover(b, &worker, &crate::cmd::now());
-    }
+    // NOT stamped here (air-eiv). `air handover` is documented as the way to find what is
+    // missing, and it used to increment `handover_attempts` on the claim -- the same counter
+    // `handover-not-green` reads -- so running the diagnostic raised the alarm and the
+    // coordinator went after a worker who was doing exactly what the docs say. A query does
+    // not count as an attempt. The hook path still stamps, in `hook::handover_gate`, because
+    // there a `bd` status write is actually being made.
+    //
+    // Removal: when nothing counts hand-over attempts, the stamp goes from both paths.
     // A stop usually follows a hand-over: refresh the ready list the Stop hook reads
     // (air-09i). One bd call, outside any hook budget.
     let _ = crate::cmd::ready_cache::refresh(
