@@ -81,6 +81,10 @@ pub struct Snapshot {
     /// with whether the `air land` process that wrote it is still alive. "Is the land done"
     /// is answered from here, never from a process listing.
     pub landings_in_flight: Vec<LandingInFlight>,
+    /// Branches `air land --all` would take right now (air-03w). Filled from the same
+    /// `select` the command runs, so the condition and the command cannot disagree. No bd
+    /// call: `select` reads git and the ledger only.
+    pub landable: Vec<Landing>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
     /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
     /// red land leaves behind. The message at rewind time is not the only copy.
@@ -911,6 +915,42 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             fingerprint: format!("{bead}/{worker}"),
         });
     }
+    // air-03w: a branch that is landable NOW. Since air-7o3 the worker closes its own bead with
+    // proof and never sets `awaiting_review`, so `review-waiting` above is a condition whose
+    // subject this repo stopped using; nothing told the coordinator a branch was ready. The
+    // worker signalling is the intent (roles.md); this is the failsafe, so a missed signal is
+    // not a lost one.
+    //
+    // Subject is the WORKER, because one branch is one merge however many beads it carries.
+    // Fingerprint is the branch head: once when it first goes green with main contained, again
+    // only when the head moves, never while it sits. Age is not a change (air-s7c).
+    //
+    // Removal condition (mechanisms.rs `landable`): delete when a round shows every landable
+    // branch landed before this pushed — i.e. the worker's signal is arriving reliably and the
+    // failsafe caught nothing.
+    {
+        let mut by_worker: BTreeMap<&str, (&str, Vec<&str>, i64)> = BTreeMap::new();
+        for l in &s.landable {
+            let e = by_worker
+                .entry(&l.worker)
+                .or_insert((&l.head, Vec::new(), 0));
+            e.1.push(&l.bead);
+            e.2 = e.2.max(l.minutes);
+        }
+        for (worker, (head, beads, minutes)) in by_worker {
+            out.push(Attention {
+                worker: worker.to_string(),
+                kind: "landable",
+                detail: format!(
+                    "{worker} is green at {} with main merged, carrying {}; `air land --all`",
+                    head.get(..8).unwrap_or(head),
+                    beads.join(" ")
+                ),
+                for_minutes: minutes,
+                fingerprint: format!("{worker}@{head}"),
+            });
+        }
+    }
     // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
     // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
     // and says it again only when the reason changes.
@@ -1316,6 +1356,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         verifies_in_flight: verifies_in_flight(&ledger),
         landings_in_flight: landings_in_flight(&ledger),
         rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
+        // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
+        // branch is landable that the command would then skip.
+        landable: landings_for(repo),
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),

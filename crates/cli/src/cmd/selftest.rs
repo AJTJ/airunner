@@ -205,6 +205,58 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        Mutation {
+            // The rule: an in-flight row whose process is gone is not a run in flight. Keep
+            // the shape and neutralise only the liveness test, so the mutation cannot pass by
+            // taking out the whole prune (air-4cr).
+            file: "crates/ledger/src/verify.rs",
+            from: "if f.pid.is_none_or(&alive) {",
+            to: "if f.pid.is_none_or(|_| true) {",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: a landing says in-flight from the merge until it reports, a killed one says so with the rewind sha, and reporting retires the row",
+        Mutation {
+            // The rule: `in-flight` is the state that means "merged, outcome not yet
+            // recorded". One branch, and not the near-identical test in `landed_open` two
+            // functions below, which is a different rule about which landing decides a bead
+            // (air-bxe).
+            file: "crates/ledger/src/landings.rs",
+            from: ".filter(|l| l.result == \"in-flight\")",
+            to: ".filter(|l| l.result == \"landed\")",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: the role is where the process is, so --repo at the main checkout does not make a worker the coordinator",
+        Mutation {
+            // Exactly the pre-fix behaviour: decide on what `--repo` resolved to instead of on
+            // where the process runs. This is the defect air-29a found, so the probe is
+            // evidence only if it falls to it. `land: worker, dirty main, …` legitimately
+            // stays GREEN — its two cases have `where_i_am` and `where_i_pointed` agreeing, so
+            // this mutation does not reach them.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "if super::hook::role_for(here) == \"coordinator\" {",
+            to: "if super::hook::role_for(c.where_i_pointed) == \"coordinator\" {",
+            also_red: &[],
+        },
+    ),
+    (
+        "landable: a branch green with main merged pushes once per head, not while it sits",
+        Mutation {
+            // The rule: what makes a branch landable is its HEAD, so nothing else may enter
+            // the fingerprint. Putting the bead count back in is the exact regression — the
+            // branch re-pushes when a bead joins, which is not a change in whether it can land
+            // (air-03w, air-s7c).
+            file: "crates/cli/src/cmd/status.rs",
+            from: "fingerprint: format!(\"{worker}@{head}\"),",
+            to: "fingerprint: format!(\"{worker}@{head}/{}\", beads.len()),",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -582,6 +634,7 @@ fn all_probes() -> Vec<Probe> {
         probe_verify_in_flight(),
         probe_landing_state(),
         probe_land_role_is_where_you_are(),
+        probe_landable_pushes_once_per_branch(),
     ]
 }
 
@@ -1587,6 +1640,72 @@ fn probe_land_refusals() -> Probe {
         }) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-03w: a branch that goes green with main merged is a condition, pushed once.
+///
+/// Since air-7o3 the worker closes its own bead with proof and never sets `awaiting_review`,
+/// so `review-waiting`'s subject is a state this repo stopped using: nothing told the
+/// coordinator a branch was ready, and it learned by polling `air status`. The worker
+/// signalling on close is the intent (roles.md, owner 2026-08-29); this is the failsafe.
+///
+/// Red: a landable branch produces exactly one push, naming the beads and `air land --all`.
+/// Green: it does not repeat while it sits, however long — age is not a change (air-s7c) — and
+/// a moved head is a real change that pushes again.
+fn probe_landable_pushes_once_per_branch() -> Probe {
+    use crate::cmd::mcp::{Pushed, select_new};
+    use crate::cmd::status::{Landing, Snapshot, Thresholds, attention};
+
+    let snap = |head: &str, beads: &[&str], minutes: i64| Snapshot {
+        landable: beads
+            .iter()
+            .map(|b| Landing {
+                bead: (*b).to_string(),
+                worker: "alpha".into(),
+                head: head.to_string(),
+                minutes,
+                command: format!("air land {b}"),
+                acceptance: Vec::new(),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let at = |s: &Snapshot| attention(s, "2026-08-29T12:00:00Z", Thresholds::default());
+
+    let first = at(&snap("abcdef1234", &["air-1", "air-2"], 5));
+    let landable: Vec<_> = first.iter().filter(|a| a.kind == "landable").collect();
+    // One condition for the branch, however many beads it carries: one branch is one merge.
+    let red = landable.len() == 1
+        && landable.first().is_some_and(|a| {
+            a.worker == "alpha"
+                && a.detail.contains("air-1 air-2")
+                && a.detail.contains("air land --all")
+                && a.detail.contains("abcdef12")
+        });
+
+    let mut pushed = Pushed::new();
+    let pushed_first = select_new(
+        &mut pushed,
+        &at(&snap("abcdef1234", &["air-1", "air-2"], 5)),
+    );
+    // Still sitting there an hour later, and a bead count that changed without the head
+    // moving: neither is a new fact about whether the branch can land.
+    let sitting = select_new(
+        &mut pushed,
+        &at(&snap("abcdef1234", &["air-1", "air-2", "air-3"], 65)),
+    );
+    // The head moved: the worker committed and re-verified, so this is a different tree.
+    let moved = select_new(&mut pushed, &at(&snap("99999999aa", &["air-1"], 1)));
+    let green = pushed_first.iter().filter(|a| a.kind == "landable").count() == 1
+        && !sitting.iter().any(|a| a.kind == "landable")
+        && moved.iter().filter(|a| a.kind == "landable").count() == 1
+        // Nothing landable is silent.
+        && !at(&snap("x", &[], 0)).iter().any(|a| a.kind == "landable");
+    Probe {
+        name: "landable: a branch green with main merged pushes once per head, not while it sits",
         red_fires: red,
         green_passes: green,
     }
