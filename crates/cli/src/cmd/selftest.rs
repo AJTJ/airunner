@@ -694,8 +694,50 @@ fn probe_model_is_recorded_per_session() -> Probe {
     }
 }
 
+/// air-sze: every attention kind the code can emit has a registry row, and every registered
+/// condition kind is one the code can emit.
+///
+/// Five kinds shipped with no row. That was worse than an unregistered decision (air-8br): the
+/// audit can only count kinds the registry names, so an unregistered condition is not
+/// undercounted, it is unseeable — `air audit` reported 14 mechanisms while `attention()` could
+/// emit 12 kinds, 5 of which it had never heard of.
+///
+/// Red: a set comparison both ways, so a new condition without a row fails here rather than
+/// going uncounted, and a row for a kind nothing emits fails too. Green: the registry's
+/// condition kinds are exactly `kinds::ALL`.
+fn probe_every_condition_kind_is_registered() -> Probe {
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+    use crate::cmd::status::kinds;
+
+    let registered: Vec<&str> = MECHANISMS
+        .iter()
+        .filter_map(|m| match m.fires {
+            Fires::Condition(k) => Some(k),
+            Fires::Decisions(_) => None,
+        })
+        .collect();
+    let unregistered: Vec<&&str> = kinds::ALL
+        .iter()
+        .filter(|k| !registered.contains(k))
+        .collect();
+    let orphan: Vec<&&str> = registered
+        .iter()
+        .filter(|k| !kinds::ALL.contains(k))
+        .collect();
+    // A duplicate row would let one kind's condition stand in for another's.
+    let mut seen = registered.clone();
+    seen.sort_unstable();
+    let dupes = seen.windows(2).any(|w| w.first() == w.last());
+    Probe {
+        name: "audit: every attention kind has a registry row, and every registered condition is one the code emits",
+        red_fires: !kinds::ALL.is_empty() && !registered.is_empty(),
+        green_passes: unregistered.is_empty() && orphan.is_empty() && !dupes,
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_every_condition_kind_is_registered(),
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
         probe_no_task_no_prompt(),
@@ -734,7 +776,6 @@ fn all_probes() -> Vec<Probe> {
         probe_poll_tick_pays_for_bd_rarely(),
         probe_registry_traces_are_unambiguous(),
         probe_coordinator_may_commit_never_push(),
-        probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
         probe_land_selection_is_never_silent(),
@@ -1054,6 +1095,38 @@ fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
     }
 }
 
+/// air-iy1: the coordinator's boundary is the remote, not main.
+///
+/// The incident: the coordinator wrote plan 0008, a decisions entry and a CLAUDE.md index row,
+/// could not commit them, and the owner committed by hand — the owner doing a chore the
+/// coordinator was in the middle of. `air land` already merges into main and is already the
+/// coordinator's, so the deny was never protecting main; it stopped the coordinator saving its
+/// own prose. Owner ruling, 2026-08-29.
+///
+/// Asserted on the ARGV the launcher builds, which is where the rule lives — the deny is passed
+/// to `claude --disallowed-tools` at launch. Note what this probe does NOT claim: a coordinator
+/// session already running keeps the flags it started with until it is relaunched against a
+/// rebuilt binary. "The rule is changed" and "that session can commit" are different claims.
+///
+/// Red: `git push` is still denied, for the coordinator and the worker both. Green: `git commit`
+/// is denied for neither role — a worker's commits are the whole point of a worktree, and the
+/// coordinator's own prose is its own to save.
+fn probe_coordinator_may_commit_never_push() -> Probe {
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
+    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
+
+    let red = denies(&coord, "Bash(git push *)") && denies(&worker, "Bash(git push *)");
+    let green = !denies(&coord, "Bash(git commit *)") && !denies(&worker, "Bash(git commit *)");
+    Probe {
+        name: "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-8br: no `command / decision` pair is claimed by two mechanisms, and the pairs the audit
 /// treats as bookkeeping are not also claimed as firings.
 ///
@@ -1087,68 +1160,6 @@ fn probe_registry_traces_are_unambiguous() -> Probe {
         });
     Probe {
         name: "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
-/// air-iy1: the coordinator's boundary is the remote, not main.
-///
-/// The incident: the coordinator wrote plan 0008, a decisions entry and a CLAUDE.md index row,
-/// could not commit them, and the owner committed by hand — the owner doing a chore the
-/// coordinator was in the middle of. `air land` already merges into main and is already the
-/// coordinator's, so the deny was never protecting main; it stopped the coordinator saving its
-/// own prose. Owner ruling, 2026-08-29.
-///
-/// Asserted on the ARGV the launcher builds, which is where the rule lives — the deny is passed
-/// to `claude --disallowed-tools` at launch. Note what this probe does NOT claim: a coordinator
-/// session already running keeps the flags it started with until it is relaunched against a
-/// rebuilt binary. "The rule is changed" and "that session can commit" are different claims.
-///
-/// Red: `git push` is still denied, for the coordinator and the worker both. Green: `git commit`
-/// is denied for neither role — a worker's commits are the whole point of a worktree, and the
-/// coordinator's own prose is its own to save.
-fn probe_coordinator_may_commit_never_push() -> Probe {
-    use crate::cmd::launch::{coordinator_argv, worker_argv};
-
-    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
-    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
-    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
-
-    let red = denies(&coord, "Bash(git push *)") && denies(&worker, "Bash(git push *)");
-    let green = !denies(&coord, "Bash(git commit *)") && !denies(&worker, "Bash(git commit *)");
-    Probe {
-        name: "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
-/// air-s7c: deleting the review-waiting PUSH must not delete the FACT. `air status` renders
-/// review waits and the owner queue on demand, which is a pull and costs nobody a
-/// notification. Red: a snapshot with waits and a queue says so. Green: an empty one says
-/// zero rather than going silent, so "no waits" and "not reported" stay distinguishable.
-fn probe_review_fact_survives() -> Probe {
-    use crate::cmd::status::{Snapshot, render_for_probe};
-
-    let mut s = Snapshot {
-        at: "2026-08-22T10:00:00Z".to_string(),
-        ..Default::default()
-    };
-    s.review_waits = vec![("air-1".to_string(), "alpha".to_string(), 40)];
-    s.owner_queue_depth = 3;
-    let with = render_for_probe(&s);
-    let red = with.contains("review: 1 waiting")
-        && with.contains("air-1")
-        && with.contains("owner queue: 3");
-
-    let empty = render_for_probe(&Snapshot {
-        at: "2026-08-22T10:00:00Z".to_string(),
-        ..Default::default()
-    });
-    let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
-    Probe {
-        name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
         red_fires: red,
         green_passes: green,
     }
@@ -1312,7 +1323,7 @@ fn probe_audit_registry() -> Probe {
     use crate::cmd::mechanisms::Removal;
 
     let events = concat!(
-        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
         "\n",
     );
     let a = gather_from(
@@ -1334,7 +1345,7 @@ fn probe_audit_registry() -> Probe {
         .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
         && a.rows
             .iter()
-            .any(|r| r.id == "review-waiting" && r.evaluations == 1 && r.last_fired.is_some());
+            .any(|r| r.id == "handover-not-green" && r.evaluations == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
@@ -2261,13 +2272,16 @@ fn probe_attention() -> Probe {
 static IDLE_CLAIM_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
-/// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
-/// was silent on them). Green: the same fleet with the review landed, the worker fresh, and
-/// nothing ready is quiet.
+/// air-e7q, the standstill: an idle worker with no claim while beads are ready. Red: the
+/// condition fires on those facts (the old `attention` was silent on them). Green: the same
+/// fleet with the worker fresh and nothing ready is quiet.
+///
+/// The other half of this probe was `review-waiting`, deleted by air-okc: it reported a bead
+/// sitting in `awaiting_review`, and the repo stopped using that state on 2026-08-22 (air-7o3,
+/// close-with-proof). It last fired 2026-08-22T19:31 and never again in five recorded days.
 fn probe_standstill() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
-    let mk = |changed: &str, waits: Vec<(String, String, i64)>, ready: usize| Snapshot {
+    let mk = |changed: &str, ready: usize| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
             role: "worker".into(),
@@ -2285,7 +2299,6 @@ fn probe_standstill() -> Probe {
             }),
             ..Default::default()
         }],
-        review_waits: waits,
         ready_depth: Some(ready),
         ..Default::default()
     };
@@ -2307,23 +2320,16 @@ fn probe_standstill() -> Probe {
             green_passes: false,
         };
     };
-    let red = attention(
-        &mk(&over, vec![("fd-1".into(), "w".into(), 20)], 5),
-        now,
-        Thresholds::default(),
-    );
-    let green = attention(&mk(&under, vec![], 0), now, Thresholds::default());
+    let red = attention(&mk(&over, 5), now, Thresholds::default());
+    let green = attention(&mk(&under, 0), now, Thresholds::default());
     Probe {
         name: STANDSTILL_NAME.get_or_init(|| {
             format!(
-                "attention: review-waiting and idle-without-claim fire at idle_noclaim_min={} min; landed and fresh is quiet",
+                "attention: idle-without-claim fires at idle_noclaim_min={} min; a fresh worker with nothing ready is quiet",
                 t.idle_noclaim_min
             )
         }),
-        red_fires: red
-            .iter()
-            .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
-            && red.iter().any(|a| a.kind == "idle-without-claim"),
+        red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
     }
 }
