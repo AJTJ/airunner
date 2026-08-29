@@ -8,6 +8,7 @@ pub mod capture;
 pub mod claim;
 pub mod close;
 pub mod doctor;
+pub mod gc;
 pub mod handover;
 pub mod holdings;
 pub mod hook;

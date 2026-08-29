@@ -218,20 +218,40 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
-    /// What the ledger says about every mechanism Air ships: how often each `fired` in the
-    /// window, over how many `subject(s)` and with how many `repeat(s)`, when it `last fired`,
-    /// and what it is `removed when`, with what the `ledger says` about that condition. Facts
-    /// only; the pass over them is the coordinator's. Read-only.
+    /// What the ledger says about every mechanism Air ships: how often each was `evaluated`
+    /// in the window, over how many `subject(s)` and with how many `repeat(s)`, how often it
+    /// was `pushed` at a person, when it `last fired`, and what it is `removed when`, with
+    /// what the `ledger says` about that condition. Facts only; the pass over them is the
+    /// coordinator's. Read-only.
     ///
-    /// A "fired with nothing following" count was cut from air-zyo before it shipped (Air
-    /// inferring intent it cannot see) but stayed in this help for a round: the same
-    /// derived-reads-like-observed failure the command exists to surface (air-ha8). Every
-    /// backticked name in this help is a field the command prints, and air selftest checks
-    /// the containment, so the drift cannot come back quietly.
+    /// `evaluated` and `pushed` are different numbers on purpose (air-5uz). The channel
+    /// re-evaluates every condition it holds on every poll; counting that as a firing read
+    /// 10,722 log lines as 10,722 firings against 45 things anyone was actually told, and a
+    /// deletion was nearly proposed on the inflated number. A "fired with nothing following"
+    /// count was cut from air-zyo before it shipped (Air inferring intent it cannot see) but
+    /// stayed in this help for a round: the same derived-reads-like-observed failure the
+    /// command exists to surface (air-ha8). Every backticked name in this help is a field the
+    /// command prints, and air selftest checks the containment, so the drift cannot come back
+    /// quietly.
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
         since: Option<String>,
+    },
+    /// A stated `retention` for `.air/events/`: what is `COLLECT`able, what is kept and why,
+    /// and how many `byte(s) collectable`. Prints and stops unless `--apply` is given.
+    ///
+    /// No automatic path, deliberately. The raw event stream is the only artefact that has
+    /// caught the audit's own errors (0007 §11: re-reading the document found nothing,
+    /// re-running the commands found three), so a day the ledger still points at is never
+    /// collected and nothing is removed without being asked twice (air-i7s).
+    Gc {
+        /// Days of history to keep (default 90, chosen against the post-air-5uz rate).
+        #[arg(long)]
+        keep_days: Option<i64>,
+        /// Actually remove the collectable days. Without it, gc reports and stops.
+        #[arg(long)]
+        apply: bool,
     },
     /// Ledger location, sizes, row counts, the journal mode and schema version in effect, and
     /// whether `bd` is the pinned version. (It printed one pragma while the help said
@@ -320,6 +340,7 @@ fn main() -> ExitCode {
         Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
+        Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::Selftest => cmd::selftest::run(cli.json),
     };
