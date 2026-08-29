@@ -701,6 +701,37 @@ pub fn project_for(cwd: &Path) -> String {
 /// caller can put the transition on the event line. `worker`/`role` are updated on every
 /// hook: `claude --worktree` can fire SessionStart with `cwd` still at the main checkout, and
 /// a row stuck on `main` made a live worker look gone (adopter ad-lpqp).
+/// air-air: the model a session is running, read out of its own transcript.
+///
+/// Recorded rather than inferred, and that is the whole point of the bead: a session launched
+/// with no `--model` inherits whatever the settings happen to hold, so anything Air derived from
+/// a config file would be a guess dressed as a fact. The transcript carries `"model":"<id>"` on
+/// every assistant message, and the FIRST one is the model the session launched with, which is
+/// what the coordinator is asking.
+///
+/// Pure, and bounded: it is handed a prefix of the file, never the whole thing. Transcripts run
+/// to megabytes and this is on the hook path.
+pub fn model_in_transcript(head: &str) -> Option<String> {
+    let key = "\"model\":\"";
+    let start = head.find(key)?.checked_add(key.len())?;
+    let rest = head.get(start..)?;
+    let end = rest.find('"')?;
+    let id = rest.get(..end)?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The first 64 KB of the transcript. The first assistant message is at the top, so this finds
+/// the launch model on the first read; a file that has not been written yet simply yields None
+/// and the next hook tries again.
+fn model_of(path: Option<&str>) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path?).ok()?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let n = f.read(&mut buf).ok()?;
+    let head = String::from_utf8_lossy(buf.get(..n)?).into_owned();
+    model_in_transcript(&head)
+}
+
 fn set_session(
     ledger: &Ledger,
     input: &HookInput,
@@ -717,16 +748,23 @@ fn set_session(
     let pid: Option<i64> = std::env::var("CLAUDE_PID")
         .ok()
         .and_then(|v| v.parse().ok());
+    // Read once per hook, cheaply; None until the transcript has its first assistant message.
+    let model = model_of(input.transcript_path.as_deref());
     ledger
         .conn()
         .execute(
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9) \
+            // air-air: `model` is only ever written when the transcript actually yielded one —
+            // NULLIF plus COALESCE, so a hook that fires before the first assistant message
+            // leaves the recorded model alone instead of blanking it. An empty string here
+            // would be the "guess or empty" the bead rules out.
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,'')) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
              worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid), \
-             project=excluded.project",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project],
+             project=excluded.project, \
+             model=COALESCE(NULLIF(excluded.model,''), sessions.model)",
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project, model],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
