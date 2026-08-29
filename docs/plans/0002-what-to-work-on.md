@@ -73,6 +73,16 @@ What refuses what:
 - Content of the acceptance is the coordinator's: one observable condition runnable inside
   the worktree by the agent, written so that satisfying it *is* the work
   (adopter `task-specification-research.md:526-545, 634-637`, via research §5).
+- **Two questions per clause, asked of the template before it is applied ten times** (air-j88):
+  (1) what settles this, a command, a file state, or a **person**? A person is legitimate and
+  often the only true answer, so write it that way and label the bead `owner`; the defect is a
+  human judgement written as a fact. (2) If it were satisfied, would anything be **different**?
+  Eleven of adopter's 99 auto-closed beads had acceptance no rule could ever settle, and the
+  nine worst were one copied template across ten siblings, not drift. This is where `air land`'s
+  unreadable-clause verdicts come from; the fix is here, at filing. Detail and the third question
+  ("could the instrument satisfy this instead of the code?") are in the `decomposition` skill.
+  **No mechanical check**: a prose regex measured 80% false positives on adopter's queue and
+  was dropped (`decisions.md` 2026-08-29).
 - `--estimate <minutes>` is recorded and compared with actual (measurement spec §2.7); never a
   gate.
 - Citations (`file:line`) must open at filing; a bead whose description and acceptance disagree

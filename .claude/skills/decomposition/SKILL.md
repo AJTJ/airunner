@@ -127,8 +127,10 @@ Before filing, every answer is yes:
 - **Valuable**: moves "Done when" closer or retires a named risk.
 - **Small**: one session, one diff (table above).
 - **Testable**: acceptance is one command or test name runnable inside the worktree by the
-  agent. Not prose; not a thing only the owner can do (12 of 49 adopter beads had "acceptance
-  no agent can reach", `task-specification-research.md:526-545`).
+  agent (12 of 49 adopter beads had "acceptance no agent can reach",
+  `task-specification-research.md:526-545`). Where it cannot be, say so in the clause and label
+  the bead `owner` — see the two questions below, which refine this bullet rather than repeat
+  it: a person is a legitimate settler, an unlabelled one is the defect.
 - **Lane named** on the bead, and **checked against the acceptance, not the description**: two
   adopter children had prose that respected a boundary and acceptances that both required the
   same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
@@ -136,6 +138,37 @@ Before filing, every answer is yes:
 - **Citations** (`file:line`) open and match now.
 - Description and acceptance agree; a contradiction goes to the owner queue (`air capture --for owner`), not a guess.
 - `owner` / `human` / `runtime` labels applied at filing; they are withheld from `next`.
+
+#### The two questions, asked of the TEMPLATE before it is applied
+
+Eleven of adopter's 99 auto-closed beads had acceptance criteria **no closing rule could ever
+have settled**: nine were browser judgements, two needed a live system or a person to record
+evidence. Their finding: *"That is not a failure of the closing rule. Such a criterion reads as
+rigour, passes review, and makes any rule that closes on it look correct."*
+
+The nine were not steady drift. They were **one round and one copied template across ten
+siblings**. So ask these of the template, once, before it becomes ten beads:
+
+1. **What settles this — a command, a file state, or a PERSON?** A person is a legitimate and
+   often the only true answer. Write it that way and label the bead `owner`. The defect is a
+   human judgement written as a fact, because that is the one a rule will close on.
+2. **If it were satisfied, would anything be DIFFERENT?** A clause can pass (1) and still be
+   worthless. `+html.tsx exists` is trivially checkable and the file is inert, so satisfying it
+   ships nothing.
+
+And one level down, which caught four clauses in a single adopter session: **could the
+INSTRUMENT satisfy this instead of the code?** A clause the test harness, the fixture, or the
+probe can make true on its own is not a clause about the work.
+
+This is where `air land`'s unreadable-clause verdicts come from, and **the fix is at filing, not
+at landing**. Air discharges a clause only by lookup and reports the rest as unreadable; it
+cannot judge prose, and nothing downstream will.
+
+**No mechanical check, deliberately.** adopter attempted a prose regex for this and measured
+it at **80% false positives** on their own queue before dropping it; the distinction here is
+finer than the one that failed. If anyone proposes one again, the discriminator is the absence
+of a named observer or artefact, and **the rate must be measured and reported before it is
+wired in** — not after. Recorded in `docs/decisions.md`, 2026-08-29.
 
 ```bash
 echo "<what and why; cites file:line>" | bd create "<verb-first title>" --type=task -p 2 \
