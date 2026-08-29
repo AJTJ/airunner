@@ -618,8 +618,50 @@ fn probe_model_is_recorded_per_session() -> Probe {
     }
 }
 
+/// air-sze: every attention kind the code can emit has a registry row, and every registered
+/// condition kind is one the code can emit.
+///
+/// Five kinds shipped with no row. That was worse than an unregistered decision (air-8br): the
+/// audit can only count kinds the registry names, so an unregistered condition is not
+/// undercounted, it is unseeable — `air audit` reported 14 mechanisms while `attention()` could
+/// emit 12 kinds, 5 of which it had never heard of.
+///
+/// Red: a set comparison both ways, so a new condition without a row fails here rather than
+/// going uncounted, and a row for a kind nothing emits fails too. Green: the registry's
+/// condition kinds are exactly `kinds::ALL`.
+fn probe_every_condition_kind_is_registered() -> Probe {
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+    use crate::cmd::status::kinds;
+
+    let registered: Vec<&str> = MECHANISMS
+        .iter()
+        .filter_map(|m| match m.fires {
+            Fires::Condition(k) => Some(k),
+            Fires::Decisions(_) => None,
+        })
+        .collect();
+    let unregistered: Vec<&&str> = kinds::ALL
+        .iter()
+        .filter(|k| !registered.contains(k))
+        .collect();
+    let orphan: Vec<&&str> = registered
+        .iter()
+        .filter(|k| !kinds::ALL.contains(k))
+        .collect();
+    // A duplicate row would let one kind's condition stand in for another's.
+    let mut seen = registered.clone();
+    seen.sort_unstable();
+    let dupes = seen.windows(2).any(|w| w.first() == w.last());
+    Probe {
+        name: "audit: every attention kind has a registry row, and every registered condition is one the code emits",
+        red_fires: !kinds::ALL.is_empty() && !registered.is_empty(),
+        green_passes: unregistered.is_empty() && orphan.is_empty() && !dupes,
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_every_condition_kind_is_registered(),
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
         probe_no_task_no_prompt(),

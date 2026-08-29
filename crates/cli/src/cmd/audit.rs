@@ -438,6 +438,14 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
     let mut acc: Vec<Acc> = MECHANISMS.iter().map(|_| Acc::default()).collect();
     let mut seen_traces: BTreeMap<String, usize> = BTreeMap::new();
     let registered = registered_traces();
+    // air-sze: the condition kinds the registry knows, for the condition-axis check below.
+    let registered_kinds: std::collections::BTreeSet<&str> = MECHANISMS
+        .iter()
+        .filter_map(|m| match m.fires {
+            Fires::Condition(k) => Some(k),
+            Fires::Decisions(_) => None,
+        })
+        .collect();
     let mut events_scanned = 0usize;
     let mut days_scanned = 0usize;
     // Closes the gate let through: one `pass` per bd status write it inspected (air-2zq).
@@ -510,6 +518,22 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                     .entry(format!("{} / {}", e.command, e.decision))
                     .or_default();
                 *slot = slot.saturating_add(1);
+            }
+            // air-sze: the same check on the CONDITION axis, which had none. The decisions test
+            // above cannot reach an unregistered condition kind: conditions arrive inside a
+            // `status.attention` event whose own command/decision pair IS registered, so the
+            // event attributes and the unknown kind rides along unseen. Five kinds shipped that
+            // way — no row, no count, and invisible to this command rather than merely
+            // undercounted.
+            if in_window {
+                for c in &e.conditions {
+                    let kind = c.split(':').next().unwrap_or(c);
+                    if kind.is_empty() || registered_kinds.contains(kind) {
+                        continue;
+                    }
+                    let slot = seen_traces.entry(format!("condition {kind}")).or_default();
+                    *slot = slot.saturating_add(1);
+                }
             }
         }
     }
