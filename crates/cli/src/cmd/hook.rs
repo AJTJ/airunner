@@ -233,6 +233,20 @@ fn dispatch(
                 d.decision = "journaled".to_string();
                 d.inputs = serde_json::json!({"path": rel});
             }
+            // A closed bead is not held by anyone (air-8p4). PostToolUse is the success
+            // signal: a Bash command that exits non-zero arrives as `PostToolUseFailure`
+            // instead, which this arm never sees (verified in `.air/events/2026-08-29.ndjson`,
+            // three failed Bash calls, all filed as PostToolUseFailure).
+            if let Some(cmd) = input.bash_command()
+                && let Some(bead) = closes_bead(cmd)
+                && ledger
+                    .release_claim(&bead, worker, "closed", &now())
+                    .unwrap_or(false)
+            {
+                d.decision = "released".to_string();
+                d.reason = format!("{bead} closed; claim released");
+                d.inputs = serde_json::json!({"bead": bead, "command": cmd});
+            }
             d
         }
         HookEvent::Stop | HookEvent::SubagentStop if role_for(worker) == "coordinator" => {
@@ -532,6 +546,32 @@ pub fn handover_gate(
     Ok(Dispatched::new(outcome, decision, v.message.clone())
         .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
         .denominator("4 checks"))
+}
+
+/// The bead this command CLOSES, if it closes one (air-8p4).
+///
+/// Narrower than [`is_handover_command`] on purpose: `-s awaiting_review` is a hand-over, not
+/// an ending, and air-3eu is explicit that a handed-over bead is still the worker's until it
+/// lands. Only `bd close` and `-s/--status closed` end a claim.
+///
+/// The failure this closes: a claim row survived `bd close`, so `handover-not-green` and the
+/// idle conditions kept firing on a bead that was closed and landed — three repeats of one
+/// alert on ad-gwyv.1, and a coordinator spending a setup window establishing that a row was
+/// stale rather than a worker stuck. `air status` reconciled it against bd eventually, but only
+/// when bd answered inside its 2 s budget, which under load it does not.
+///
+/// Removal: when nothing computes a condition from an open claim row.
+pub fn closes_bead(cmd: &str) -> Option<String> {
+    if !is_handover_command(cmd) {
+        return None;
+    }
+    let toks: Vec<&str> = cmd.split_whitespace().collect();
+    let closing = toks.contains(&"close")
+        || toks
+            .windows(2)
+            .any(|w| matches!(w, [a, b] if (*a == "-s" || *a == "--status") && *b == "closed"))
+        || toks.contains(&"--status=closed");
+    closing.then(|| handover_bead(cmd)).flatten()
 }
 
 /// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
@@ -1015,6 +1055,42 @@ mod tests {
             Some("fd-3")
         );
         assert_eq!(handover_bead("make verify"), None);
+    }
+
+    /// air-8p4, end to end through the hook: the close releases the claim, the hand-over does
+    /// not, and the event line names the bead so the release is auditable.
+    #[test]
+    fn a_successful_close_releases_the_claim_and_awaiting_review_does_not() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        let open = || crate::cmd::open(repo).unwrap().0.open_claims().unwrap();
+        let post = |cmd: &str| {
+            fire(
+                repo,
+                serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                "tool_input": {"command": cmd}}),
+            );
+        };
+        fire(repo, serde_json::json!({"hook_event_name": "SessionStart"}));
+        {
+            let (l, worker) = crate::cmd::open(repo).unwrap();
+            l.record_claim("fd-1", &worker, &[], "t0").unwrap();
+            l.record_claim("fd-2", &worker, &[], "t0").unwrap();
+        }
+
+        // A hand-over is not an ending: the row stays (air-3eu).
+        post("bd update fd-2 -s awaiting_review");
+        assert_eq!(open().len(), 2, "awaiting_review must not release");
+
+        post("bd close fd-1 --reason done");
+        let held: Vec<String> = open().into_iter().map(|c| c.bead).collect();
+        assert_eq!(held, vec!["fd-2".to_string()], "close must release fd-1");
+
+        let released = events(repo)
+            .iter()
+            .any(|e| e["decision"] == "released" && e["inputs"]["bead"] == "fd-1");
+        assert!(released, "the release must be on the event line");
     }
 
     #[test]
