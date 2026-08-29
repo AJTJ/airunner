@@ -1,6 +1,17 @@
 //! `air selftest`: red/green probes for every check, run against an in-memory ledger and a
 //! scratch git repo. A check that matches nothing prints RED (corpus: guards that pass on
 //! nothing are the anti-pattern). Exit 1 if any probe fails.
+//!
+//! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
+//! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
+//! expectation is computed from itself cannot rot. So derive the fixture from the threshold
+//! (`Thresholds::default().stuck_min`, `attribution::cutoff()`, `install::SURFACE`) rather than
+//! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
+//! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
+//! and see it go red on a mutant that COMPILES, then change the rule's number and see it stay
+//! green. A copied number passes the first and fails the second, which is adopter's ad-m8v1.
+//! The worst case is the number that moves on its own: a hard-coded date against fixtures built
+//! from the clock left main red for six days (air-24e).
 
 use std::path::Path;
 use std::process::Command;
@@ -48,6 +59,7 @@ pub fn run(json: bool) -> i32 {
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
+        probe_close_releases_the_claim(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -260,12 +272,13 @@ fn probe_gc_keeps_what_it_must() -> Probe {
         std::iter::once("2026-01-02".to_string()).collect();
 
     let p = plan(&days, "2026-08-29", 90, &referenced);
-    let red = p.days[1].kept == Some("the ledger still points at this day")
-        && p.days[2].kept == Some("inside the retention window")
+    let kept = |i: usize| p.days.get(i).and_then(|d| d.kept);
+    let red = kept(1) == Some("the ledger still points at this day")
+        && kept(2) == Some("inside the retention window")
         // A clock it cannot read keeps everything. The other direction deletes the record.
         && plan(&days, "not-a-date", 90, &Default::default()).collectable_bytes == 0;
 
-    let green = p.days[0].kept.is_none()
+    let green = kept(0).is_none()
         && p.collectable_bytes == 100
         && p.total_bytes == 700
         // Nothing is removed by planning, and `applied` says so.
@@ -1241,7 +1254,27 @@ fn probe_claim_cas() -> Probe {
     }
 }
 
+/// air-jc0: a timestamp `minutes` before `now`, for a fixture whose age is DERIVED from the
+/// threshold that owns it instead of copied next to it.
+///
+/// `None` when the arithmetic does not land on a real instant. Every call site treats that as
+/// a hard failure and goes red: a probe that cannot find its number must say so, never fall
+/// back to a guess that happens to pass.
+fn minutes_before(now: &str, minutes: i64) -> Option<String> {
+    let t: jiff::Timestamp = now.parse().ok()?;
+    let span = jiff::Span::new().try_minutes(minutes).ok()?;
+    Some(t.checked_sub(span).ok()?.to_string())
+}
+
 /// Attention conditions fire on a stale stuck session and stay quiet on a fresh one.
+///
+/// air-jc0: the two ages are read out of `stuck_min` rather than written beside it. adopter's
+/// ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner had raised to
+/// 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a bigger number but
+/// reading the cap from the script that owns it. Their two controls, both run against this probe
+/// (digest 2026-08-29-diligence-air-jc0): with the `stuck` arm neutralised it goes red; with
+/// `stuck_min` moved 5 -> 90 it stays green and renames itself. Copying 60 and 1 passed the first
+/// control and failed the second.
 fn probe_attention() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
     let mk = |changed: &str| Snapshot {
@@ -1262,14 +1295,40 @@ fn probe_attention() -> Probe {
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
-    let red = attention(&mk("2026-08-20T11:00:00Z"), now, Thresholds::default());
-    let green = attention(&mk("2026-08-20T11:59:00Z"), now, Thresholds::default());
+    let t = Thresholds::default();
+    // One minute past the line and one minute short of it, wherever the line currently is.
+    let (Some(over), Some(under)) = (
+        t.stuck_min
+            .checked_add(1)
+            .and_then(|m| minutes_before(now, m)),
+        t.stuck_min
+            .checked_sub(1)
+            .and_then(|m| minutes_before(now, m)),
+    ) else {
+        return Probe {
+            name: "attention: stuck threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let red = attention(&mk(&over), now, Thresholds::default());
+    let green = attention(&mk(&under), now, Thresholds::default());
     Probe {
-        name: "attention: stale stuck session fires; fresh one is quiet",
+        name: STUCK_NAME.get_or_init(|| {
+            format!(
+                "attention: a stuck session fires at stuck_min={} min and is quiet under it",
+                t.stuck_min
+            )
+        }),
         red_fires: red.iter().any(|a| a.kind == "stuck"),
         green_passes: green.is_empty(),
     }
 }
+
+/// The probe name carries the threshold it read, so a changed rule RENAMES the probe instead of
+/// breaking it — adopter's second control made visible in the output.
+static STUCK_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
 /// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
@@ -1299,22 +1358,36 @@ fn probe_standstill() -> Probe {
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
+    let t = Thresholds::default();
+    // air-jc0: both ages come out of `idle_noclaim_min`, the threshold that decides this
+    // condition, so moving the rule moves the fixture with it.
+    let (Some(over), Some(under)) = (
+        t.idle_noclaim_min
+            .checked_add(1)
+            .and_then(|m| minutes_before(now, m)),
+        t.idle_noclaim_min
+            .checked_sub(1)
+            .and_then(|m| minutes_before(now, m)),
+    ) else {
+        return Probe {
+            name: "attention: idle-without-claim threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
     let red = attention(
-        &mk(
-            "2026-08-20T11:40:00Z",
-            vec![("fd-1".into(), "w".into(), 20)],
-            5,
-        ),
+        &mk(&over, vec![("fd-1".into(), "w".into(), 20)], 5),
         now,
         Thresholds::default(),
     );
-    let green = attention(
-        &mk("2026-08-20T11:59:00Z", vec![], 0),
-        now,
-        Thresholds::default(),
-    );
+    let green = attention(&mk(&under, vec![], 0), now, Thresholds::default());
     Probe {
-        name: "attention: review-waiting and idle-without-claim fire; landed and fresh is quiet",
+        name: STANDSTILL_NAME.get_or_init(|| {
+            format!(
+                "attention: review-waiting and idle-without-claim fire at idle_noclaim_min={} min; landed and fresh is quiet",
+                t.idle_noclaim_min
+            )
+        }),
         red_fires: red
             .iter()
             .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
@@ -1332,6 +1405,22 @@ fn probe_standstill() -> Probe {
 /// `status::attention` puts the dead-session case back and this probe's green half fails.
 fn probe_idle_without_claim_needs_a_live_session() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let now = "2026-08-20T12:00:00Z";
+    let t = Thresholds::default();
+    // air-jc0: the age is derived from `idle_noclaim_min`, not written beside it. As filed this
+    // probe held 30 min against a threshold of 5 — two copies with one owner, so raising the
+    // threshold past 30 would have taken the red side silent while the rule stayed correct.
+    let Some(over) = t
+        .idle_noclaim_min
+        .checked_add(1)
+        .and_then(|m| minutes_before(now, m))
+    else {
+        return Probe {
+            name: "attention: idle-without-claim threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
     let mk = |alive: Option<bool>| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
@@ -1340,7 +1429,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 session_id: "s".into(),
                 state: "idle".into(),
                 detail: None,
-                changed_at: "2026-08-20T11:30:00Z".into(),
+                changed_at: over.clone(),
                 pid: Some(1),
                 pid_alive: alive,
                 project: String::new(),
@@ -1350,7 +1439,6 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
         ready_depth: Some(2),
         ..Default::default()
     };
-    let now = "2026-08-20T12:00:00Z";
     let red = attention(&mk(Some(true)), now, Thresholds::default());
     let green = attention(&mk(Some(false)), now, Thresholds::default());
     Probe {
@@ -1377,6 +1465,80 @@ fn probe_expired_cutoff_is_reported() -> Probe {
         name: "doctor: a dated rule says so when its cutoff has passed",
         red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
         green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
+    }
+}
+
+/// air-8p4: a claim row survived `bd close`, so conditions kept firing on a bead that was
+/// closed and landed. Red: the row still open, `handover-not-green` fires on it — the state
+/// adopter's coordinator spent a setup window diagnosing. Green: the close releases the row
+/// and nothing fires; and `-s awaiting_review` does NOT release it, because a handed-over bead
+/// is still the worker's until it lands (air-3eu).
+///
+/// The mutation that made it red, seen: widening `closes_bead` to `handover_bead(cmd)`, so
+/// `-s awaiting_review` releases too — "red fires / green BLOCKED". The hook path that applies
+/// it is covered separately by `hook::tests::a_successful_close_releases_the_claim_and_awaiting_review_does_not`,
+/// whose mutation is deleting the arm from `dispatch`.
+fn probe_close_releases_the_claim() -> Probe {
+    use crate::cmd::hook::closes_bead;
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+
+    const NOW: &str = "2026-08-20T12:00:00Z";
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w", &[], "2026-08-20T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        l.stamp_handover("fd-1", "w", "2026-08-20T11:50:00Z")
+            .map_err(|e| e.to_string())?;
+        // A live worker, recently seen, so the only thing that can speak is the claim.
+        let fires = |l: &Ledger| -> Result<Vec<&'static str>, String> {
+            let claims = l.open_claims().map_err(|e| e.to_string())?;
+            let s = Snapshot {
+                workers: vec![WorkerView {
+                    worker: "w".into(),
+                    role: "worker".into(),
+                    green_at_head: Some(false),
+                    claims,
+                    session: Some(Session {
+                        session_id: "s".into(),
+                        state: "working".into(),
+                        changed_at: "2026-08-20T11:59:00Z".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            Ok(attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect())
+        };
+        let before = fires(&l)?;
+        // Not an ending: a hand-over leaves the claim held.
+        let handover_keeps_it = closes_bead("bd update fd-1 -s awaiting_review").is_none();
+        // The close, as the PostToolUse arm applies it.
+        let bead = closes_bead("bd close fd-1 --reason done").ok_or("close not recognised")?;
+        let released = l
+            .release_claim(&bead, "w", "closed", "t2")
+            .map_err(|e| e.to_string())?;
+        let after = fires(&l)?;
+        // Threshold-independent on both sides: the claim on fd-1 is what speaks and what goes
+        // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
+        let still_held = l
+            .open_claims()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c.bead == "fd-1");
+        Ok((
+            before.contains(&"handover-not-green"),
+            handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "claim: a closed bead stops alarming; awaiting_review still holds it",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
