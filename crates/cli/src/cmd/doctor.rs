@@ -49,9 +49,54 @@ pub fn bd_check(repo: &Path) -> BdCheck {
     }
 }
 
+/// A rule of Air's whose behaviour changes on a date, and whether that date has passed.
+///
+/// Two rules replaced a guess with a declaration and let the old artefacts age out
+/// ([`crate::cmd::attribution::FALLBACK_BEFORE`],
+/// [`crate::cmd::handover::FRONTMATTER_SINCE`]). Both dates passed on 2026-08-23 and nothing
+/// said so: seven tests in `claim_cli.rs` had been written inside the fallback window and
+/// silently fell outside it, main went red, and it stayed red for six days because a cutoff
+/// passing is not an event anything watches (air-24e).
+///
+/// This is a REPORT, never a refusal: a passed cutoff is not a fault, it is a fallback that is
+/// now dead and can be deleted along with whatever leans on it. Removal: when both fallbacks
+/// are gone and no dated rule is left, this goes with them.
+#[derive(Debug, Serialize)]
+pub struct DatedRule {
+    pub name: &'static str,
+    pub date: &'static str,
+    pub what: &'static str,
+    pub expired: bool,
+}
+
+/// The dated rules, read from the constants themselves rather than copied (`anti-brittleness`:
+/// a probe reads a rule's number from the rule).
+pub fn dated_rules(now: jiff::Timestamp) -> Vec<DatedRule> {
+    let mk = |name, date: &'static str, what| DatedRule {
+        name,
+        date,
+        what,
+        expired: date.parse::<jiff::Timestamp>().is_ok_and(|t| now >= t),
+    };
+    vec![
+        mk(
+            "attribution::FALLBACK_BEFORE",
+            crate::cmd::attribution::FALLBACK_BEFORE,
+            "a commit older than this may have its bead guessed from prose; newer commits need a `Bead:` trailer",
+        ),
+        mk(
+            "handover::FRONTMATTER_SINCE",
+            crate::cmd::handover::FRONTMATTER_SINCE,
+            "a digest older than this may be matched by filename and mtime; newer digests must declare `bead:`",
+        ),
+    ]
+}
+
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub bd: BdCheck,
+    /// Dated rules and whether their cutoff has passed (air-24e).
+    pub dated_rules: Vec<DatedRule>,
     pub air_dir: String,
     pub worker: String,
     pub ledger_bytes: u64,
@@ -114,6 +159,11 @@ pub fn run(repo: &Path, json: bool) -> i32 {
     let rows = table_rows(ledger.conn());
     let report = Report {
         bd: bd_check(repo),
+        dated_rules: dated_rules(
+            crate::cmd::now()
+                .parse()
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH),
+        ),
         air_dir: ledger.dir().display().to_string(),
         worker,
         ledger_bytes,
@@ -150,6 +200,19 @@ pub fn run(repo: &Path, json: bool) -> i32 {
                 "bd list --json: FAILED: {e}\n  a refused schema or a removed subcommand breaks every bd-reading gate; fix bd before installing Air\n"
             )),
             _ => {}
+        }
+        for r in &report.dated_rules {
+            if r.expired {
+                s.push_str(&format!(
+                    "dated rule {} ({}): EXPIRED — {}\n  the fallback is dead: delete it and anything still leaning on it\n",
+                    r.name, r.date, r.what
+                ));
+            } else {
+                s.push_str(&format!(
+                    "dated rule {} ({}): active — {}\n",
+                    r.name, r.date, r.what
+                ));
+            }
         }
         s.trim_end().to_string()
     });
