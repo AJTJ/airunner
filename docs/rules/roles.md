@@ -128,16 +128,22 @@ that contains `main`**; the beads a landing carries are the ones its commits nam
 `Bead: <id>` trailer, so put the trailer on every commit that does a bead's work — no bead status
 is consulted, prose is not read, and a commit without one is attributed to nothing (air-7kp,
 air-4re); and Air records every landing it performs. `air status` names what is ready.
-**[Air enforces, when the landing is Air's: main checkout, on main, clean tracked tree, branch
-contains main, recorded green at the branch head]**
-**The landing verify is not a repeat of the worker's: it runs in the main checkout, where the
-environment differs.** `.git` is a FILE in a worktree and a DIRECTORY in the main checkout, and
-anything reading its shape, `core.hooksPath`, or the cwd can differ between the two. adopter
-2026-08-23: a probe was green in the worktree and red on the merged result for exactly that
-reason, and in the main checkout it did not refuse, so the target RAN and wrote hooks during the
-landing verify. "Every other instrument failure that night was catchable by running the suite.
-This one was only catchable by running it somewhere else." A worker has exactly one environment,
-so a green branch going red on landing is information, not a flake. **[fact]**
+**[Air enforces, when the landing is Air's: main checkout, on main, branch contains main,
+recorded green at the branch head]**
+**Air's landing does not re-verify, and main never holds a commit that has not been verified**
+(air-odv, 2026-08-29). The landing commit is built off main with `git commit-tree` and main is
+fast-forwarded onto it. Because the branch must contain main, that commit's tree is
+byte-identical to the one the worker recorded its green for, so there is nothing new to verify —
+and nothing to roll back, no armed window, and no `git reset --hard` on main. The clean-tree
+refusal went with the reset that was its only reason. **[fact]**
+
+The `.git` shape still differs between a worktree (a FILE) and the main checkout (a DIRECTORY),
+and anything reading it, `core.hooksPath`, or the cwd can differ between the two. That was a
+reason to verify twice while a landing verified in the main checkout (air-eaw, from adopter
+2026-08-23: *"Every other instrument failure that night was catchable by running the suite. This
+one was only catchable by running it somewhere else."*). Air's landing no longer runs anything
+there, so the difference is now a reason to fix a test that reads where it runs, not a reason to
+pay a second full verify per landing.
 Merging is not closing, and a landing closes nothing: the worker closes its own bead with
 proof (owner, 2026-08-22). A landing Air performs prints every bead beside its acceptance criteria and
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause
