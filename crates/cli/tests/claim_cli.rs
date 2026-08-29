@@ -380,10 +380,14 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
 }
 
-/// air-869: a triage pass resolves every capture in one ledger transaction, mapping
-/// --bead/--drop positionally the way bd maps `bd close --reason`.
+/// air-zlq: `air triage` takes ONE capture. The batch it used to take could not finish
+/// verification inside the 5 s probe budget past about three ids, because `bd show` costs
+/// about a second per id (measured 2026-08-29: 1 id 1.6 s, 5 ids 9.6 s, 26 ids 27.9 s).
+/// Batching saved the bd process, which was never the cost here.
+///
+/// Three captures are still resolved, one call each, and re-pointing still works (air-76z).
 #[test]
-fn triage_resolves_a_whole_pass_at_once() {
+fn triage_takes_one_capture_at_a_time() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
@@ -393,30 +397,34 @@ fn triage_resolves_a_whole_pass_at_once() {
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         ids.push(v["id"].as_str().unwrap().to_string());
     }
-    // One --bead for three captures is a mistake, not a fan-out.
+    // A second id is not a second capture to triage: clap refuses the extra argument, so
+    // there is no batch to half-finish.
+    let (code, _, err) = air(&repo, &bd, &["triage", &ids[0], &ids[1], "--bead", "fd-1"]);
+    assert_ne!(code, 0, "{err}");
+    // Promoted or dropped, never both.
     let (code, _, err) = air(
         &repo,
         &bd,
-        &["triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1"],
+        &["triage", &ids[0], "--bead", "fd-1", "--drop", "dup"],
     );
     assert_eq!(code, 1, "{err}");
 
-    let (code, out, err) = air(
-        &repo,
-        &bd,
-        &[
-            "--json", "triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1", "--bead", "fd-2",
-            "--drop", "dup",
-        ],
-    );
-    assert_eq!(code, 0, "{out}{err}");
+    for (id, args) in [
+        (&ids[0], vec!["--bead", "fd-1"]),
+        (&ids[1], vec!["--bead", "fd-2"]),
+        (&ids[2], vec!["--drop", "dup"]),
+    ] {
+        let mut argv = vec!["--json", "triage", id.as_str()];
+        argv.extend(args);
+        let (code, out, err) = air(&repo, &bd, &argv);
+        assert_eq!(code, 0, "{out}{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["resolved"], 1);
+    }
+    let (_, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["resolved"], 3);
     assert_eq!(v["inbox_depth"], 0);
     // A second pass re-points rather than refusing (air-76z).
-    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
-    assert_eq!(code, 0, "{out}");
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["repointed"][0]["from"], "bead fd-1");
     assert_eq!(v["repointed"][0]["to"], "bead fd-9");
 }
