@@ -179,8 +179,15 @@ pub struct PeerEffect {
     pub heeded: usize,
     pub ignored: usize,
     /// `None` = not recorded, and reported as such rather than as zero. Nothing in the ledger
-    /// records a merge conflict or the paths it touched; `air land` is where a conflict is
-    /// observed, so recording conflicted paths there is what would answer this.
+    /// records a merge conflict or the paths it touched.
+    ///
+    /// This said "`air land` is where one is observed" until air-mun (2026-08-29). It is not,
+    /// any more: air-odv landed the same day, and `air land`'s only merge is now
+    /// `merge --ff-only` onto a commit built with `commit-tree`, which cannot conflict —
+    /// measured, against a divergent branch it aborts with zero conflicted paths and a clean
+    /// tree, and `branch_check` refuses such a branch before any git write. The conflicts that
+    /// do happen are the workers' own `git merge main`, and the PreToolUse hook records only
+    /// `{session_id, tool}` for a Bash call, never the command, so nothing sees them.
     pub conflicts_in_warned_files: Option<usize>,
     pub warned: Vec<PeerWarning>,
 }
@@ -878,8 +885,9 @@ fn render_peer(p: &PeerEffect) -> String {
         match p.conflicts_in_warned_files {
             Some(n) => n.to_string(),
             None => "not recorded. Nothing in the ledger records a merge conflict or the paths \
-                     it touched; `air land` is where one is observed, so recording conflicted \
-                     paths there is what would answer this."
+                     it touched. Since air-odv the only merge `air land` runs is `--ff-only`, \
+                     which cannot conflict; the conflicts that happen are the workers' own \
+                     `git merge main`, which no hook records the command of (air-mun)."
                 .to_string(),
         }
     ));
@@ -1015,7 +1023,15 @@ mod tests {
             removal_verdict(Removal::Unstated, 0),
             ("none", None, Some(NO_CONDITION))
         );
-        assert!(a.rows.iter().all(|r| r.defect.is_none()));
+        assert!(
+            a.rows.iter().all(|r| r.defect.is_none()),
+            "every mechanism should record a removal condition; defects: {:?}",
+            a.rows
+                .iter()
+                .filter(|r| r.defect.is_some())
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        );
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
