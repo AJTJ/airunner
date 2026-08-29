@@ -448,8 +448,25 @@ fn probe_no_task_no_prompt() -> Probe {
     }
 }
 
+/// air-uae: two lease stores that disagree deny work while reporting success. adopter's
+/// `make lease-take` wrote Air's ledger and their guard read `ad-leases/`, so `make api` was
+/// refused naming the command that had just succeeded. Neither side said where it was looking.
+/// Red: `air lease status` names its own store, with the path, on every run. Green: it names the
+/// directory it was actually given rather than a fixed string, so a target repo comparing it
+/// against its guard's path gets that repo's answer.
+fn probe_lease_store_is_named() -> Probe {
+    use crate::cmd::lease::store_line;
+    let line = store_line(Path::new("/r/.air"));
+    Probe {
+        name: "lease: `air lease status` names the store it writes, so a second one is visible",
+        red_fires: line.contains("lease store:") && line.contains("/r/.air/ledger.db"),
+        green_passes: !store_line(Path::new("/other/.air")).contains("/r/.air"),
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_lease_store_is_named(),
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
