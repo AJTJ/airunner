@@ -136,20 +136,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "cross-project-fence",
-        class: "refusal",
-        what: "A `tmux` command naming another project's session is denied; the refusal names \
-               the fence, the project, and that reading and messaging stay open.",
-        added: "2026-08-22 (air-0lk, narrowed by air-3oq)",
-        source: "crates/cli/src/cmd/project.rs",
-        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-cross-project")]),
-        // air-0lk recorded the condition; air-3oq added that the messaging clause is gone
-        // rather than suspended, after it broke the cross-project channel silently.
-        removal: Removal::ZeroFirings(
-            "a full quarter with zero cross-project denials AND the agent channel has its own project scoping; the messaging clause is not coming back, it is deleted",
-        ),
-    },
-    Mechanism {
         id: "landed-not-closed",
         class: "attention",
         what: "A bead that landed while the merge CONTRADICTS one of its acceptance clauses: \

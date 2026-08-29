@@ -488,11 +488,6 @@ fn pre_tool_use(
             format!("{moved}; path outside repo"),
         ));
     }
-    // A session may act only on its own project (air-0lk); talking to another is fine
-    // (air-3oq).
-    if let Some(d) = project_fence(input, &project_for(cwd)) {
-        return Ok(d);
-    }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
         && is_handover_command(cmd)
@@ -644,39 +639,19 @@ fn session_state(ledger: &Ledger, session_id: &str) -> Result<Option<String>, St
         })
 }
 
-/// The cross-project refusal on the PreToolUse path (air-0lk): a `tmux` command naming another
-/// project's session. `None` when there is nothing to refuse. It does not depend on
-/// `AIR_ENFORCE`: the failure being prevented is acting on a stranger's fleet, not a sloppy
-/// hand-over. Pure over (input, project) so `air selftest` fires it without a tmux server.
-///
-/// `SendMessage` was fenced here too until air-3oq. It is not any more, permanently: the rule
-/// is about acting on another project, not talking to it, and the denial broke the
-/// cross-project channel silently and uninterpretably.
-pub fn project_fence(input: &HookInput, project: &str) -> Option<Dispatched> {
-    // Its own decision string, not the bare "refuse" the hand-over gate uses: `air audit`
-    // counts firings by (command, decision), so sharing one would file every fence refusal
-    // under the gate's row and under the gate's removal condition (air-3oq).
-    let refuse = |why: String, inputs: serde_json::Value| {
-        Dispatched::new(
-            HookOutcome::Block {
-                reason: format!("air: {why}"),
-            },
-            "refuse-cross-project",
-            why,
-        )
-        .inputs(inputs)
-        .denominator("1 project")
-    };
-    if let Some(cmd) = input.bash_command()
-        && let Some(why) = super::project::tmux_refusal(cmd, project)
-    {
-        return Some(refuse(
-            why,
-            serde_json::json!({"command": cmd, "project": project}),
-        ));
-    }
-    None
-}
+// `project_fence` was here (air-0lk, narrowed by air-3oq, DELETED by air-9u6 on 2026-08-29): a
+// PreToolUse denial of a `tmux` command naming another project's session. It fired zero times
+// in every recorded day of its life. Its own removal condition asked for a quarter of silence;
+// the owner shortened the condition rather than the wait (plan 0008 item 4).
+//
+// The rule it enforced still stands and is stated in CLAUDE.md and roles.md: a session acts
+// only on its own project, and talking to any of them is fine. What is gone is the machinery,
+// because the failure it was built for never recurred and a refusal nobody trips is a throttle
+// with a maintenance cost. `SendMessage` was never to be fenced again (air-3oq); deleting the
+// tmux refusal does not reintroduce any message denial, and no message path was touched.
+//
+// The session's `project` column stays. That is a FACT — which fleet a session belongs to,
+// written by `project_for` below and read by `air status` — and it was never the refusal.
 
 /// The whole project decision, with the environment passed in rather than read (air-7ah).
 ///

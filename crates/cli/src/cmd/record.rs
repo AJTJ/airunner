@@ -56,6 +56,24 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         .map(|v| v.iter().any(|p| !p.starts_with(".air/")))
         .unwrap_or(false);
     let started_at = now();
+    // air-4cr: publish the run BEFORE it starts, so "someone is mid-verify" is a lookup.
+    // adopter's coordinator invalidated three workers' verifies by landing under them and
+    // had no way to know; their fix was a hand protocol where the worker warns first. A full
+    // verify is ~420 s and the landing rate is faster, so no cadence works — only the fact.
+    let id = new_id();
+    let in_flight = air_ledger::verify::InFlight {
+        id: id.clone(),
+        worker: worker.clone(),
+        sha: head.clone(),
+        kind,
+        command: command_line.clone(),
+        pid: Some(i64::from(std::process::id())),
+        started_at: started_at.clone(),
+    };
+    if let Err(e) = ledger.verify_started(&in_flight) {
+        // Never fail the check over the announcement: the exit is the fact, this is courtesy.
+        eprintln!("air record: could not publish the in-flight row: {e}");
+    }
     let t0 = std::time::Instant::now();
     let (exit_code, output_bytes) = match run_tee(prog, args, repo) {
         Ok(x) => x,
@@ -66,8 +84,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     };
     let duration_ms = i64::try_from(t0.elapsed().as_millis()).unwrap_or(i64::MAX);
     let finished_at = now();
+    let _ = ledger.verify_finished(&id);
     let run = VerifyRun {
-        id: new_id(),
+        id,
         worker: worker.clone(),
         sha: head.clone(),
         kind,
