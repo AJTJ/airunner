@@ -59,6 +59,7 @@ pub fn run(json: bool) -> i32 {
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
+        probe_close_releases_the_claim(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1409,6 +1410,80 @@ fn probe_expired_cutoff_is_reported() -> Probe {
         name: "doctor: a dated rule says so when its cutoff has passed",
         red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
         green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
+    }
+}
+
+/// air-8p4: a claim row survived `bd close`, so conditions kept firing on a bead that was
+/// closed and landed. Red: the row still open, `handover-not-green` fires on it — the state
+/// adopter's coordinator spent a setup window diagnosing. Green: the close releases the row
+/// and nothing fires; and `-s awaiting_review` does NOT release it, because a handed-over bead
+/// is still the worker's until it lands (air-3eu).
+///
+/// The mutation that made it red, seen: widening `closes_bead` to `handover_bead(cmd)`, so
+/// `-s awaiting_review` releases too — "red fires / green BLOCKED". The hook path that applies
+/// it is covered separately by `hook::tests::a_successful_close_releases_the_claim_and_awaiting_review_does_not`,
+/// whose mutation is deleting the arm from `dispatch`.
+fn probe_close_releases_the_claim() -> Probe {
+    use crate::cmd::hook::closes_bead;
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+
+    const NOW: &str = "2026-08-20T12:00:00Z";
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w", &[], "2026-08-20T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        l.stamp_handover("fd-1", "w", "2026-08-20T11:50:00Z")
+            .map_err(|e| e.to_string())?;
+        // A live worker, recently seen, so the only thing that can speak is the claim.
+        let fires = |l: &Ledger| -> Result<Vec<&'static str>, String> {
+            let claims = l.open_claims().map_err(|e| e.to_string())?;
+            let s = Snapshot {
+                workers: vec![WorkerView {
+                    worker: "w".into(),
+                    role: "worker".into(),
+                    green_at_head: Some(false),
+                    claims,
+                    session: Some(Session {
+                        session_id: "s".into(),
+                        state: "working".into(),
+                        changed_at: "2026-08-20T11:59:00Z".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            Ok(attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect())
+        };
+        let before = fires(&l)?;
+        // Not an ending: a hand-over leaves the claim held.
+        let handover_keeps_it = closes_bead("bd update fd-1 -s awaiting_review").is_none();
+        // The close, as the PostToolUse arm applies it.
+        let bead = closes_bead("bd close fd-1 --reason done").ok_or("close not recognised")?;
+        let released = l
+            .release_claim(&bead, "w", "closed", "t2")
+            .map_err(|e| e.to_string())?;
+        let after = fires(&l)?;
+        // Threshold-independent on both sides: the claim on fd-1 is what speaks and what goes
+        // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
+        let still_held = l
+            .open_claims()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c.bead == "fd-1");
+        Ok((
+            before.contains(&"handover-not-green"),
+            handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "claim: a closed bead stops alarming; awaiting_review still holds it",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
