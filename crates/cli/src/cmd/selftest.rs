@@ -1,6 +1,17 @@
 //! `air selftest`: red/green probes for every check, run against an in-memory ledger and a
 //! scratch git repo. A check that matches nothing prints RED (corpus: guards that pass on
 //! nothing are the anti-pattern). Exit 1 if any probe fails.
+//!
+//! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
+//! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
+//! expectation is computed from itself cannot rot. So derive the fixture from the threshold
+//! (`Thresholds::default().stuck_min`, `attribution::cutoff()`, `install::SURFACE`) rather than
+//! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
+//! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
+//! and see it go red on a mutant that COMPILES, then change the rule's number and see it stay
+//! green. A copied number passes the first and fails the second, which is adopter's ad-m8v1.
+//! The worst case is the number that moves on its own: a hard-coded date against fixtures built
+//! from the clock left main red for six days (air-24e).
 
 use std::path::Path;
 use std::process::Command;
@@ -1232,6 +1243,22 @@ fn probe_standstill() -> Probe {
 /// `status::attention` puts the dead-session case back and this probe's green half fails.
 fn probe_idle_without_claim_needs_a_live_session() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let now = "2026-08-20T12:00:00Z";
+    let t = Thresholds::default();
+    // air-jc0: the age is derived from `idle_noclaim_min`, not written beside it. As filed this
+    // probe held 30 min against a threshold of 5 — two copies with one owner, so raising the
+    // threshold past 30 would have taken the red side silent while the rule stayed correct.
+    let Some(over) = t
+        .idle_noclaim_min
+        .checked_add(1)
+        .and_then(|m| minutes_before(now, m))
+    else {
+        return Probe {
+            name: "attention: idle-without-claim threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
     let mk = |alive: Option<bool>| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
@@ -1240,7 +1267,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 session_id: "s".into(),
                 state: "idle".into(),
                 detail: None,
-                changed_at: "2026-08-20T11:30:00Z".into(),
+                changed_at: over.clone(),
                 pid: Some(1),
                 pid_alive: alive,
                 project: String::new(),
@@ -1250,7 +1277,6 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
         ready_depth: Some(2),
         ..Default::default()
     };
-    let now = "2026-08-20T12:00:00Z";
     let red = attention(&mk(Some(true)), now, Thresholds::default());
     let green = attention(&mk(Some(false)), now, Thresholds::default());
     Probe {
