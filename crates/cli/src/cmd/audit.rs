@@ -1023,7 +1023,15 @@ mod tests {
             removal_verdict(Removal::Unstated, 0),
             ("none", None, Some(NO_CONDITION))
         );
-        assert!(a.rows.iter().all(|r| r.defect.is_none()));
+        assert!(
+            a.rows.iter().all(|r| r.defect.is_none()),
+            "every mechanism should record a removal condition; defects: {:?}",
+            a.rows
+                .iter()
+                .filter(|r| r.defect.is_some())
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        );
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
