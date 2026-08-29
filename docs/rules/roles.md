@@ -94,16 +94,29 @@ Workers are reached with `SendMessage` to the session name `air status` shows; t
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
 denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
 zero denied send-keys attempts). **[fact]**
-When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
-reports conditions, status reports everything (standstill 2026-08-22; removed when the
-`review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
-**[fact]** Landing is the coordinator's: `air land --all` merges every green branch into main,
+**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions on change, and
+`stuck` — the one that should catch a wedged worker — has never fired in any recorded day and
+carries no removal condition (air-dqw). So a wedged worker can reach nobody. The heartbeat is the
+failsafe, not the reporting path: it runs `air status` and says nothing when nothing changed.
+Incident: the 2026-08-22 05:26-05:45 standstill (air-arq), where the quiet channel rested on the
+coordinator remembering to look. Removed when `stuck` fires on a real wedge before the heartbeat
+catches it, twice. **[fact]**
+
+Landing is the coordinator's: `air land --all` merges every green branch into main,
 oldest first, verifies the merged result, and puts main back where it was on red (air-3pz). A
 branch is landable when it carries a recorded green at its head; the beads reported are the
 ones its commits name in a `Bead: <id>` trailer — no bead status is consulted, and prose is not
 read (air-7kp, air-4re). Put the trailer on every commit that does a bead's work; a commit
 without one is attributed to nothing. `air status` names what is ready. **[Air enforces: main checkout, on main, clean
 tracked tree, branch contains main, recorded green at the branch head]**
+**The landing verify is not a repeat of the worker's: it runs in the main checkout, where the
+environment differs.** `.git` is a FILE in a worktree and a DIRECTORY in the main checkout, and
+anything reading its shape, `core.hooksPath`, or the cwd can differ between the two. adopter
+2026-08-23: a probe was green in the worktree and red on the merged result for exactly that
+reason, and in the main checkout it did not refuse, so the target RAN and wrote hooks during the
+landing verify. "Every other instrument failure that night was catchable by running the suite.
+This one was only catchable by running it somewhere else." A worker has exactly one environment,
+so a green branch going red on landing is information, not a flake. **[fact]**
 Merging is not closing, and `air land` closes nothing: the worker closes its own bead with
 proof (owner, 2026-08-22). The landing prints every bead beside its acceptance criteria and
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause

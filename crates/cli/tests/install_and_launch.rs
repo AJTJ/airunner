@@ -472,10 +472,20 @@ fn init_gates_then_builds_a_project_from_nothing() {
     assert!(proj.join(".mcp.json").exists() && proj.join(".air/roles.md").exists());
     // air-arq: the roles prose a fresh init writes carries the run-to-completion sentence.
     // air-8zu reworded it off "hand-over", which is one repo's flow rather than Air's fact.
+    let roles = std::fs::read_to_string(proj.join(".air/roles.md")).unwrap();
+    assert!(roles.contains("Finishing a bead is not a stop."));
+    // air-eaw: the landing verify runs in the main checkout, where `.git` is a directory rather
+    // than a file, so a green branch can go red there and that is information, not a flake. The
+    // prose is embedded by include_str!, so this asserts it actually reaches a fresh init rather
+    // than only existing in docs/.
     assert!(
-        std::fs::read_to_string(proj.join(".air/roles.md"))
-            .unwrap()
-            .contains("Finishing a bead is not a stop.")
+        roles.contains("The landing verify is not a repeat of the worker's"),
+        "{roles}"
+    );
+    // air-arq: the coordinator's failsafe when the channel is quiet.
+    assert!(
+        roles.contains("A 5-minute heartbeat runs for the whole round."),
+        "{roles}"
     );
     assert!(
         proj.join(".claude/skills/air-decomposition/SKILL.md")
