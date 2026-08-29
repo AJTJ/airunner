@@ -43,6 +43,14 @@ rulings", adopted from adopter). "There is a probe for that" is not proof.
 **Say where it is true.** Closed with proof, landed on main, and in the installed binary are
 three different states. Name the one you mean.
 
+**A true quote does not make the story around it true.** 2026-08-29, an hour after this skill
+was written, its author reported a red build to the coordinator with a confident cause: the test
+assertion named a real mechanism, a plausible story attached itself to it ("that change landed
+without its tests"), and the story went out in the same grammar as the quote. The real cause was
+a constant that had aged past a hard-coded date. `git show --stat` on the commit under suspicion
+would have cost one command. When you catch yourself explaining evidence rather than reading
+more of it, that is the moment.
+
 ## What this owns, and what it does not
 
 `check-resources` asks *does this already exist* before you build. `anti-brittleness` asks *what
