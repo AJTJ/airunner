@@ -82,7 +82,27 @@ pub struct Audit {
     /// literal: "`air status` latency is measured and recorded; if it is seconds, say why in
     /// `air audit`."
     pub latency: Latency,
+    /// Agent-to-agent traffic over the window (air-q07). Measurement only: no threshold, no
+    /// condition, no refusal. If a number here looks alarming, that is a later decision.
+    pub traffic: Vec<Traffic>,
     pub duration_ms: u64,
+}
+
+/// What one worker spent on talking to other agents (air-q07).
+///
+/// The multi-agent question (plan 0008 §9) is unanswerable without this, and answering it from
+/// transcripts would be exactly the derived-reads-as-observed failure air-21c records: one
+/// session's transcript said ~46,900 characters in a day and the ledger said nothing, because
+/// `SendMessage` was not in the PreToolUse matcher.
+///
+/// Removal: when that question is answered, or when a round's numbers stop informing it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Traffic {
+    pub worker: String,
+    pub sent: usize,
+    pub bytes: u64,
+    /// Who it went to, most-messaged first.
+    pub to: Vec<(String, usize)>,
 }
 
 /// The two latencies the fleet actually waits on, over the whole scan (air-p61).
@@ -224,6 +244,9 @@ const BOOKKEEPING: &[&str] = &[
     "green",
     "journaled",
     "landed",
+    // Counting a message is bookkeeping, not a mechanism firing: nothing is decided by it
+    // (air-q07). It has its own block in the report instead.
+    "messaged",
     "no-claim",
     "no-such-bead",
     "observed",
@@ -425,8 +448,101 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             ..Cost::default()
         }),
         latency: latency_of(days),
+        traffic: traffic_of(days, since),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
+}
+
+/// Agent-to-agent traffic per worker, from the `messaged` event lines (air-q07). Pure over
+/// the day texts, so `air selftest` can drive it without a ledger.
+///
+/// A day the matcher did not yet cover contributes nothing, and reads as zero traffic rather
+/// than as an error. That is the honest shape: before this landed the answer WAS zero, and it
+/// was wrong for the same reason.
+pub fn traffic_of(days: &[(String, String)], since: &str) -> Vec<Traffic> {
+    let mut per: BTreeMap<String, (usize, u64, BTreeMap<String, usize>)> = BTreeMap::new();
+    for (day, text) in days {
+        if day.as_str() < since {
+            continue;
+        }
+        for line in text.lines() {
+            if !line.contains("\"messaged\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("decision").and_then(serde_json::Value::as_str) != Some("messaged") {
+                continue;
+            }
+            let worker = v
+                .get("worker")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+                .to_string();
+            let to = v
+                .get("inputs")
+                .and_then(|i| i.get("to"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+                .to_string();
+            let bytes = v
+                .get("inputs")
+                .and_then(|i| i.get("bytes"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let e = per.entry(worker).or_default();
+            e.0 = e.0.saturating_add(1);
+            e.1 = e.1.saturating_add(bytes);
+            let n = e.2.entry(to).or_default();
+            *n = n.saturating_add(1);
+        }
+    }
+    let mut out: Vec<Traffic> = per
+        .into_iter()
+        .map(|(worker, (sent, bytes, to))| {
+            let mut to: Vec<(String, usize)> = to.into_iter().collect();
+            to.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            Traffic {
+                worker,
+                sent,
+                bytes,
+                to,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.worker.cmp(&b.worker)));
+    out
+}
+
+/// The traffic block. Says so explicitly when the answer is zero, because a silent zero here
+/// is indistinguishable from the bug this replaced (air-q07).
+pub fn traffic_lines(t: &[Traffic]) -> String {
+    if t.is_empty() {
+        return "traffic: no agent-to-agent messages recorded in this window. If sessions were \
+                talking, check that the installed PreToolUse matcher includes `SendMessage` \
+                (`air install`).\n"
+            .to_string();
+    }
+    let total: u64 = t.iter().map(|x| x.bytes).sum();
+    let sent: usize = t.iter().map(|x| x.sent).sum();
+    let mut s = format!(
+        "traffic: {sent} agent-to-agent message(s), {total} bytes, over {} sender(s). \
+         Measurement only: no threshold, no condition (air-q07).\n",
+        t.len()
+    );
+    for x in t {
+        let to =
+            x.to.iter()
+                .map(|(who, n)| format!("{who} x{n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+        s.push_str(&format!(
+            "  {}: {} sent, {} bytes -> {to}\n",
+            x.worker, x.sent, x.bytes
+        ));
+    }
+    s
 }
 
 /// bd and `air status` cost over every scanned day, from the same lines (air-p61). Pure over
@@ -516,6 +632,7 @@ pub fn render(a: &Audit) -> String {
         a.duration_ms
     );
     s.push_str(&latency_lines(&a.latency));
+    s.push_str(&traffic_lines(&a.traffic));
     for r in &a.rows {
         s.push_str(&format!(
             "\n{} [{}]  evaluated {} in window over {} subject(s), {} repeat(s); pushed {}\n",

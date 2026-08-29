@@ -62,6 +62,7 @@ pub fn run(json: bool) -> i32 {
         probe_close_releases_the_claim(),
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
+        probe_agent_traffic_is_counted(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1641,6 +1642,50 @@ fn probe_status_bd_budget_follows_the_measurement() -> Probe {
         name: "status: the bd budget is derived from bd's measured cost, not a constant",
         red_fires: theirs > 1760 && ours > 1430 && theirs > ours,
         green_passes: cold == 2_000 && awful <= 8_000 && awful > ours,
+    }
+}
+
+/// air-q07: the cost the owner most wants minimised was the one the ledger did not contain.
+/// `SendMessage` was not in the installed PreToolUse matcher, so counting agent-to-agent
+/// traffic from the event log returned zero — not because there was none, but because it was
+/// invisible.
+///
+/// Red: the installed matcher names `SendMessage`, and a `SendMessage` payload is recognised
+/// as a message with its recipient and a byte count. Green: the audit sums it per worker, no
+/// content is recorded anywhere, and nothing about it is a decision — the report is a report.
+///
+/// The mutation that made it red, seen: dropping `SendMessage` from `install::hook_entries`.
+fn probe_agent_traffic_is_counted() -> Probe {
+    use crate::cmd::audit::traffic_of;
+    use crate::cmd::install::hook_entries;
+    use air_hooks::HookInput;
+
+    let matcher_covers = hook_entries()
+        .iter()
+        .any(|(event, m)| *event == "PreToolUse" && m.is_some_and(|m| m.contains("SendMessage")));
+    let input = HookInput::parse(
+        r#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"SendMessage",
+            "tool_input":{"to":"main","message":"hello there","summary":"greeting"}}"#,
+    )
+    .ok();
+    let parsed = input.as_ref().and_then(HookInput::message_sent);
+    // Two workers, one day, and a line that is not a message.
+    let day = concat!(
+        r#"{"at":"2026-08-29T01:00:00Z","worker":"alpha","command":"hook.PreToolUse","decision":"messaged","inputs":{"to":"main","bytes":100}}"#,
+        "\n",
+        r#"{"at":"2026-08-29T02:00:00Z","worker":"alpha","command":"hook.PreToolUse","decision":"messaged","inputs":{"to":"beta","bytes":40}}"#,
+        "\n",
+        r#"{"at":"2026-08-29T03:00:00Z","worker":"beta","command":"hook.PreToolUse","decision":"observed","inputs":{}}"#,
+        "\n",
+    );
+    let t = traffic_of(&[("2026-08-29".to_string(), day.to_string())], "2026-08-29");
+    let summed =
+        matches!(t.as_slice(), [one] if one.worker == "alpha" && one.sent == 2 && one.bytes == 140);
+    Probe {
+        name: "traffic: SendMessage reaches the hook and the audit sums it per worker",
+        red_fires: matcher_covers && parsed == Some(("main".to_string(), 11)),
+        // No content anywhere: the parse returns a recipient and a length, never the text.
+        green_passes: summed && !format!("{t:?}").contains("hello there"),
     }
 }
 
