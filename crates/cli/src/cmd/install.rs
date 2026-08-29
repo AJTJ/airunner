@@ -608,7 +608,16 @@ mod tests {
         assert!(ROLES_MD.contains("Once you have work, finishing a bead is not a stop."));
         assert!(ROLES_MD.contains("Starting a session is not being given work."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
-        assert!(ROLES_MD.contains("Landing is the coordinator's: `air land --all`"));
+        // air-97z: roles.md states landing as a role boundary and as facts Air records, and
+        // names no landing command. A repo with its own lander keeps it, so the prose that used
+        // to prescribe `air land --all` here is asserted ABSENT, the same shape as the
+        // awaiting_review check below. The deny-list line may still name `air land`: that is a
+        // statement about what Air refuses a worker, not an instruction to a repo.
+        assert!(ROLES_MD.contains("Landing is the coordinator's, not a worker's."));
+        assert!(
+            !ROLES_MD.contains("Landing is the coordinator's: `air land"),
+            "roles.md must not prescribe a landing command (air-97z)"
+        );
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
         // air-8zu: roles.md states what Air records and refuses, never one repo's closing
