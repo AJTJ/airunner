@@ -105,6 +105,39 @@ pub struct Report {
     pub rows: Vec<(String, i64)>,
 }
 
+/// Row counts for every table the ledger actually has, asked of `sqlite_master` rather than
+/// of a list somebody typed (air-w0e).
+///
+/// The list version reported 7 of the 11 tables at schema v10: `hook_emissions`, `conditions`,
+/// `lease_wants` and `bd_cache` were invisible, which is how the zero-lease finding nearly
+/// went unnoticed. A check that enumerates from a hardcoded list stops covering what it claims
+/// the moment the thing it lists grows, and it does so silently, which is the worse half.
+/// Enumerating means the table the next migration adds appears the day it is added and nobody
+/// has to remember this file exists.
+///
+/// SQLite's own `sqlite_*` tables are left out: they are the engine's, not the ledger's.
+/// Removal: when nothing reads row counts, this goes with the command.
+pub fn table_rows(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
+    let names: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' \
+             AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .map(|t| {
+            // The name came from `sqlite_master`, so it is a table this database has; -1 says
+            // the count itself failed rather than pretending the table is empty.
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM \"{t}\""), [], |r| r.get(0))
+                .unwrap_or(-1);
+            (t, n)
+        })
+        .collect()
+}
+
 pub fn run(repo: &Path, json: bool) -> i32 {
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
@@ -123,22 +156,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         .conn()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(-1);
-    let mut rows = Vec::new();
-    for t in [
-        "verify_runs",
-        "edit_journal",
-        "claims",
-        "sessions",
-        "landings",
-        "captures",
-        "leases",
-    ] {
-        let n: i64 = ledger
-            .conn()
-            .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
-            .unwrap_or(-1);
-        rows.push((t.to_string(), n));
-    }
+    let rows = table_rows(ledger.conn());
     let report = Report {
         bd: bd_check(repo),
         dated_rules: dated_rules(
