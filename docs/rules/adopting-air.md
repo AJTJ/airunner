@@ -109,6 +109,61 @@ work flow"). The one refusal still covers both shapes: it matches `bd close` as 
 `bd update -s closed` / `-s awaiting_review`, so a close-with-proof repo is gated exactly as a
 hand-over repo is.
 
+### Find the repo's existing lease store, and collapse to one
+
+**[adopter, 2026-08-23, air-uae]** Coexistence has one exception, and it is the only place
+where leaving the repo's own machinery running is worse than retiring it: **two lease stores that
+disagree deny work while reporting success.**
+
+adopter ran both. `make lease-take` called `air lease take`, which writes the ledger, and
+reported success; their PreToolUse guard read `$(git --git-common-dir)/ad-leases/runtime/`. So
+`make api` was refused with *"take it first: `make lease-take`"* — naming the command that had
+just succeeded. Every worker hit it, twice recorded (ad-3wnp, ad-gpj0, capture
+`01M0NM3YSE05GTNPNGVDQB24FW`).
+
+This is worse than an ordinary overlap because of its failure direction. A lease store that fails
+to record leaves two agents in one file, which someone notices; a second store that disagrees
+denies a command and tells the agent to run the command it just ran, which reads as a bug in the
+agent. Nobody suspects the lock.
+
+So, before the first `air lease take` in a target repo:
+
+1. **Find any existing store.** Look for a directory of lock files (`*-leases/`, `locks/`,
+   `.locks/`) under `$(git --git-common-dir)` or the repo root, a `make` target with `lease` or
+   `lock` in the name, and any PreToolUse or pre-commit guard that reads a path to decide whether
+   a command may run. The guard is the one that matters: it is the half that refuses.
+2. **Pick one, and it is the one the guard reads.** A store nothing enforces is a record; the
+   store the guard reads is the lock. If the repo's is to be it, `air lease` goes unused there
+   and Air records nothing about leases — a fine outcome, not a loss. Do not run both "until the
+   migration is done".
+
+   **If Air's is to be it, count the readers before sizing the change.** It is not one call site.
+   adopter, correcting this section on 2026-08-29: their PreToolUse guard calls
+   `scripts/lease.sh check` rather than reading the directory itself, and `make reseed` and
+   `make seed-demo` refuse *independently inside their own targets*, because they write over HTTP
+   to a fixed port and would otherwise split a seed across two databases. So the migration is the
+   guard, the script it calls, and every target that refuses on its own. Grep for the lock path,
+   not for the guard.
+3. **Confirm from the tool, not from the diff.** `air lease status` names its own store on every
+   run:
+
+       $ air lease status
+       no leases held
+       lease store: /path/to/repo/.air/ledger.db (leases table)
+
+   If that path is not the one the guard reads, there are two stores. That is the whole check,
+   and it is the reason the line exists: adopter's disagreement had to be inferred from a
+   contradiction, because neither side ever said where it was looking.
+
+`air lease` itself stays. The 2026-08-24 audit proposed deleting it on zero rows in this repo's
+ledger, and adopter's round contradicted that: a worker read `air lease status`, saw `runtime`
+held by a peer, and took different work rather than routing around it (owner ruling 2026-08-29;
+`decisions.md`). A verdict from an absence in one repo is not a verdict about a mechanism.
+
+**adopter's repo is theirs to change.** Air's part is this procedure and saying where its own
+store is; the collapse is their call, and the finding was sent to them rather than committed to
+their tree.
+
 ## 3. Rules to change in the repo (prose that Air replaces or that is wrong)
 
 | Today | Change to | Why |

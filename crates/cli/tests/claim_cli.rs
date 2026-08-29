@@ -507,10 +507,14 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
 }
 
-/// air-869: a triage pass resolves every capture in one ledger transaction, mapping
-/// --bead/--drop positionally the way bd maps `bd close --reason`.
+/// air-zlq: `air triage` takes ONE capture. The batch it used to take could not finish
+/// verification inside the 5 s probe budget past about three ids, because `bd show` costs
+/// about a second per id (measured 2026-08-29: 1 id 1.6 s, 5 ids 9.6 s, 26 ids 27.9 s).
+/// Batching saved the bd process, which was never the cost here.
+///
+/// Three captures are still resolved, one call each, and re-pointing still works (air-76z).
 #[test]
-fn triage_resolves_a_whole_pass_at_once() {
+fn triage_takes_one_capture_at_a_time() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
@@ -520,30 +524,34 @@ fn triage_resolves_a_whole_pass_at_once() {
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         ids.push(v["id"].as_str().unwrap().to_string());
     }
-    // One --bead for three captures is a mistake, not a fan-out.
+    // A second id is not a second capture to triage: clap refuses the extra argument, so
+    // there is no batch to half-finish.
+    let (code, _, err) = air(&repo, &bd, &["triage", &ids[0], &ids[1], "--bead", "fd-1"]);
+    assert_ne!(code, 0, "{err}");
+    // Promoted or dropped, never both.
     let (code, _, err) = air(
         &repo,
         &bd,
-        &["triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1"],
+        &["triage", &ids[0], "--bead", "fd-1", "--drop", "dup"],
     );
     assert_eq!(code, 1, "{err}");
 
-    let (code, out, err) = air(
-        &repo,
-        &bd,
-        &[
-            "--json", "triage", &ids[0], &ids[1], &ids[2], "--bead", "fd-1", "--bead", "fd-2",
-            "--drop", "dup",
-        ],
-    );
-    assert_eq!(code, 0, "{out}{err}");
+    for (id, args) in [
+        (&ids[0], vec!["--bead", "fd-1"]),
+        (&ids[1], vec!["--bead", "fd-2"]),
+        (&ids[2], vec!["--drop", "dup"]),
+    ] {
+        let mut argv = vec!["--json", "triage", id.as_str()];
+        argv.extend(args);
+        let (code, out, err) = air(&repo, &bd, &argv);
+        assert_eq!(code, 0, "{out}{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["resolved"], 1);
+    }
+    let (_, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["resolved"], 3);
     assert_eq!(v["inbox_depth"], 0);
     // A second pass re-points rather than refusing (air-76z).
-    let (code, out, _) = air(&repo, &bd, &["--json", "triage", &ids[0], "--bead", "fd-9"]);
-    assert_eq!(code, 0, "{out}");
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["repointed"][0]["from"], "bead fd-1");
     assert_eq!(v["repointed"][0]["to"], "bead fd-9");
 }
@@ -1415,6 +1423,183 @@ fn acceptance(main: &Path, criteria: &str) {
         serde_json::to_string(&body).unwrap(),
     )
     .unwrap();
+}
+
+/// air-bxe: the landings row exists from the MERGE onward, not from the exit.
+///
+/// adopter's coordinator reported a land done three times before the process exited, because
+/// the merge commit appears minutes before the verify finishes with the rollback armed. Their
+/// fallback was `pgrep`, which misled them twice. Separately a land killed by a closed pipe
+/// (`air land | head`) merged, verified and wrote nothing, leaving main green at a sha no
+/// landing mentioned.
+///
+/// The observation is made from INSIDE the window: the repo's verify command copies `.air/`
+/// aside while the landing is armed, and the test reads that copy. Asserting on the ledger
+/// after `air land` returns could never distinguish "written at merge time" from "written at
+/// exit", which is the whole of the bead.
+///
+/// This test declares its bead with a `Bead:` trailer rather than relying on the pre-2026-08-23
+/// prose fallback, so it does not share the wall-clock failure air-24e is about.
+#[test]
+fn a_landing_is_recorded_in_flight_while_the_rollback_is_armed() {
+    let (_tmp, main, alpha) = land_repo("sh peek.sh");
+    // The repo's "verify": snapshot the ledger mid-land, then pass. Copying the whole `.air`
+    // directory takes the WAL sidecars with it, so the copy sees the same rows the ledger does.
+    std::fs::write(
+        main.join("peek.sh"),
+        "#!/bin/sh\nrm -rf seen_air\ncp -R .air seen_air\nexit 0\n",
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "peek"]);
+
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    acceptance(&main, "- Verify recorded green at HEAD.\n");
+
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let head = git(&main, &["rev-parse", "HEAD"]);
+
+    // What the ledger said WHILE the merge sat in main with the rollback armed.
+    let seen = rusqlite::Connection::open(main.join("seen_air/ledger.db")).unwrap();
+    let mid: Option<(String, String, String, i64)> = seen
+        .query_row(
+            "SELECT result, merge_commit, tip_sha, pid FROM landings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
+    assert!(
+        mid.is_some(),
+        "a landings row must exist DURING the land, not only after it"
+    );
+    let (result, merge, tip, pid) = mid.unwrap();
+    assert_eq!(result, "in-flight");
+    assert_eq!(
+        merge, head,
+        "and it names the merge that is sitting in main"
+    );
+    assert_ne!(tip, head, "with the sha a rewind would return to");
+    assert!(pid > 0, "and the process to ask about, so nobody greps");
+
+    // Afterwards it is the SAME row, carrying the outcome: one attempt, not two.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let rows: Vec<(String, i64)> = conn
+        .prepare("SELECT result, attempt_no FROM landings")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(rows, vec![("landed".to_string(), 1)]);
+}
+
+/// air-ob0: a rewind names every worktree that took the un-landed commits.
+///
+/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// anyone who took it."* A worker who merged main during the armed window — the documented
+/// thing to do when main moves — keeps the rewound commits: a recorded green for a tree main
+/// will never have, with `air handover` passing and `air land` merging it straight back. So the
+/// window is not unverified code in main; it is unverified code that has already propagated, to
+/// exactly the workers following the rule.
+///
+/// The window is real here, not simulated: the repo's verify command IS beta merging main, and
+/// it exits red, so the merge beta took is the one main then resets away from. gamma exists and
+/// merges nothing, so the test can tell "named everyone" from "named the right one".
+#[test]
+fn a_rewind_names_the_worktrees_that_took_the_un_landed_commits() {
+    let (_tmp, main, alpha) = land_repo("sh window.sh");
+    let root = main.parent().unwrap().to_path_buf();
+    for name in ["beta", "gamma"] {
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                root.join(name).to_str().unwrap(),
+            ],
+        );
+    }
+    // beta merges main from INSIDE the armed window and keeps working, then the verify fails.
+    // The extra commit matters: it puts beta's HEAD *past* the merge rather than on it, so the
+    // carrier check has to answer containment. Without it, equality alone would pass and the
+    // test would be blind to the case it exists for.
+    let beta = root.join("beta");
+    std::fs::write(
+        main.join("window.sh"),
+        format!(
+            "#!/bin/sh\nexport GIT_AUTHOR_NAME=air GIT_AUTHOR_EMAIL=air@x \
+             GIT_COMMITTER_NAME=air GIT_COMMITTER_EMAIL=air@x\n\
+             git -C {b} merge -q --no-edit main\n\
+             echo more > {b}/beta.txt\n\
+             git -C {b} add beta.txt\n\
+             git -C {b} commit -q -m 'beta keeps working'\n\
+             exit 1\n",
+            b = beta.display()
+        ),
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "window"]);
+
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    let before = git(&main, &["rev-parse", "HEAD"]);
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 1, "the land must go red: {out}{err}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "main rewound");
+
+    // The rewind message names beta and only beta.
+    assert!(out.contains("already in beta"), "{out}{err}");
+    assert!(!out.contains("gamma"), "gamma merged nothing: {out}");
+    assert!(
+        !out.contains("already in main") && !out.contains("in main, beta"),
+        "the checkout that was just reset is not a carrier: {out}"
+    );
+
+    // ...and the message is not the only copy: `air status` holds the same set afterwards.
+    // Read the carried line only: every worktree appears in the status table by definition,
+    // so `st.contains("gamma")` would prove nothing either way.
+    let carried = |repo: &Path| -> String {
+        air(repo, &bd, &["status"])
+            .1
+            .lines()
+            .filter(|l| l.starts_with("rewound and still carried"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let line = carried(&main);
+    assert!(line.contains("beta"), "{line}");
+    assert!(!line.contains("gamma"), "{line}");
+
+    // It clears itself when nobody carries the commits any more. No expiry to choose.
+    git(&beta, &["reset", "--hard", &before]);
+    assert!(carried(&main).is_empty(), "{}", carried(&main));
 }
 
 /// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the

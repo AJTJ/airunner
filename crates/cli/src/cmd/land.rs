@@ -26,17 +26,76 @@ use air_ledger::verify::{Kind, VerifyRun, new_id};
 use crate::cmd::{acceptance, emit, log_event, now, open};
 use crate::git;
 
-/// Who may run `air land`. The coordinator's deny list keeps `git commit` and `git push` on
-/// main; this is the one allowed path onto main, and it pushes nothing.
-pub fn may_land(worker: &str) -> Result<(), String> {
-    if super::hook::role_for(worker) == "coordinator" {
+/// Who is asking, and which checkout they pointed at (air-29a).
+///
+/// `where_i_am` is derived from the process's working directory; `where_i_pointed` from
+/// `--repo`. They are separate because only the first is a fact about the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caller<'a> {
+    /// Worker name of the checkout the process is actually running in. `None` when that
+    /// cannot be determined, which refuses.
+    pub where_i_am: Option<&'a str>,
+    /// Worker name of the checkout `--repo` resolves to.
+    pub where_i_pointed: &'a str,
+}
+
+/// Who may run `air land`. Pure over the caller, so `air selftest` fires every refusal.
+///
+/// ## air-29a: the identity used to be an argument
+///
+/// This check has been at the top of `run` since air-3pz, and it was still bypassable, because
+/// it was fed `worker_name_for(repo)` — and `repo` is `--repo`, which the caller supplies. From
+/// a worktree, `air --repo <main-checkout> land --all` resolved the worker to `main`, `role_for`
+/// said coordinator, and the land proceeded. Reproduced from this worktree on 2026-08-29: the
+/// command got past this check and began evaluating branches, stopping only because the one
+/// candidate happened to fail a precondition.
+///
+/// It is how worker beta landed `worktree-beta` at d10ddab on 2026-08-22 while checking its own
+/// fix, which is the commit at the centre of the following week's investigation.
+///
+/// The `Bash(air land *)` deny pattern was never the backstop either: it matches command TEXT,
+/// so `cargo run -p air -- land`, `./target/debug/air land` and an absolute path all miss it. A
+/// parser that guards counts as absent until proven present (`anti-brittleness`), and neither
+/// of these two was present.
+///
+/// So the role now comes from **where the process is**, which is a fact the OS holds rather than
+/// one the caller writes. Spelling the command differently cannot change it; the only way to
+/// satisfy it is to actually be in the main checkout, which is the authority being claimed.
+/// Nothing here parses anything.
+pub fn may_land(c: &Caller<'_>) -> Result<(), String> {
+    let Some(here) = c.where_i_am else {
+        return Err(
+            "refused: `air land` cannot tell which checkout it is running in, and the role \
+             decides who may land (fix: run it from the main checkout)."
+                .to_string(),
+        );
+    };
+    if super::hook::role_for(here) == "coordinator" {
         return Ok(());
     }
+    // Name the bypass when that is what this is, rather than a generic refusal: a worker that
+    // pointed `--repo` at the main checkout is the exact shape of air-29a.
+    let pointed = if super::hook::role_for(c.where_i_pointed) == "coordinator" {
+        "\n  `--repo` pointed at the main checkout, but the role comes from where the process \
+         runs, not from an argument (air-29a). Spelling the command `cargo run -p air -- land` \
+         or `./target/debug/air land` does not change it either."
+            .to_string()
+    } else {
+        String::new()
+    };
     Err(format!(
-        "refused: `air land` runs in the main checkout, and {worker} is a worker. Close your own \
+        "refused: `air land` runs in the main checkout, and {here} is a worker. Close your own \
          bead instead: `air handover` names anything missing, then `bd close <id> --reason \
-         \"<proof>\"` (owner ruling, 2026-08-22)."
+         \"<proof>\"` (owner ruling, 2026-08-22).{pointed}"
     ))
+}
+
+/// The worker name of the checkout this process is running in, or `None` when there is no
+/// answer (not in a git repo, or the cwd is gone). `None` refuses: an unknown caller is not a
+/// coordinator.
+pub fn where_i_am() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    air_ledger::paths::worker_name_for(&cwd).ok()
 }
 
 /// The repo's verify command, from `.claude/air.json` (`{"verify_command": "make verify"}`),
@@ -57,6 +116,30 @@ pub fn verify_command(repo: &Path) -> Vec<String> {
         Some(s) => s.split_whitespace().map(str::to_string).collect(),
         None => vec!["make".into(), "verify".into()],
     }
+}
+
+/// What `air land` says about the verifies running right now (air-4cr). Empty when nothing is
+/// running, so the ok path is silent.
+///
+/// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
+/// every verify in flight is about to become worthless. adopter's coordinator did this to
+/// three workers in one round with no signal available; their fix was a protocol where the
+/// worker warns first, which is exactly the relayed fact Air exists to remove. A full verify
+/// is ~420 s there and their landing rate was faster, so no cadence solves it.
+///
+/// Warn, never refuse (the bead's own default, owner's call): a coordinator may still have to
+/// land, and this is a fact, not a gate. **Removal condition**: delete when a round's landings
+/// show zero warnings, or show warnings that nothing ever waits on.
+pub fn in_flight_warnings(flights: &[air_ledger::verify::InFlight], at: &str) -> Vec<String> {
+    flights
+        .iter()
+        .map(|f| {
+            format!(
+                "warning: verify in flight, {} — landing now invalidates it and costs a re-run",
+                super::status::in_flight_line(f, at)
+            )
+        })
+        .collect()
 }
 
 /// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
@@ -194,9 +277,19 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    let inputs = serde_json::json!({"beads": beads, "all": all});
-    if let Err(msg) = may_land(&worker) {
-        log_event(&ledger, &worker, "land", &inputs, "refuse", &msg, "role");
+    // air-29a: the role comes from where this process is, never from `--repo`.
+    let here = where_i_am();
+    let caller = Caller {
+        where_i_am: here.as_deref(),
+        where_i_pointed: &worker,
+    };
+    let inputs =
+        serde_json::json!({"beads": beads, "all": all, "caller": here, "repo_worker": worker});
+    if let Err(msg) = may_land(&caller) {
+        // Logged under the CALLER, so a bypass attempt is attributed to whoever made it
+        // rather than to `main`.
+        let actor = here.as_deref().unwrap_or("unknown");
+        log_event(&ledger, actor, "land", &inputs, "refuse", &msg, "role");
         emit(
             json,
             &serde_json::json!({"ok": false, "reason": msg}),
@@ -327,6 +420,22 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
+    // air-4cr. Landing moves main, and the hand-over gate wants a green at a HEAD containing
+    // main, so every verify running right now is about to become worthless. adopter's
+    // coordinator did this to three workers in one round and had no signal; their fix was a
+    // protocol where the worker warns first. Warn, do not refuse (bead air-4cr, owner's
+    // default): a coordinator may still have to land, and a refusal here would be a gate over
+    // a fact. Removal condition: delete this warning when a round's landings show it firing
+    // zero times, or when it fires and nothing ever waits on it.
+    lines.extend(in_flight_warnings(
+        &super::status::verifies_in_flight(&ledger),
+        &now(),
+    ));
+    if !json {
+        for l in &lines {
+            eprintln!("{l}");
+        }
+    }
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, json) {
             Outcome::Landed { merge, noted } => {
@@ -432,26 +541,34 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    // air-bxe: ONE row per attempt, written more than once. The id and the attempt number are
+    // fixed here so the `in-flight` write and the outcome write are the same row; deriving
+    // `attempt_no` inside the closure would count the row it is about to update.
+    let row_id = new_id();
+    let attempt_no = ledger
+        .landing_attempts(&batch.worker)
+        .unwrap_or(0)
+        .saturating_add(1);
     let record_full = |result: &str,
                        merge: Option<String>,
                        verify: Option<String>,
                        step: Option<String>,
                        open: &[air_ledger::landings::OpenBead]| {
         let _ = ledger.record_landing(&LandingRow {
-            id: new_id(),
+            id: row_id.clone(),
             worker: batch.worker.clone(),
             sha: facts.branch_head.to_string(),
             tip_sha: Some(tip.clone()),
             result: result.to_string(),
             failing_step: step,
             verify_run_id: verify,
-            attempt_no: ledger
-                .landing_attempts(&batch.worker)
-                .unwrap_or(0)
-                .saturating_add(1),
+            attempt_no,
             beads: batch.beads.clone(),
             open_beads: open.to_vec(),
             merge_commit: merge,
+            // The `air land` process, so an `in-flight` row can say whether it is still
+            // running. This is the fact `pgrep` was asked for and got wrong twice.
+            pid: Some(i64::from(std::process::id())),
             started_at: started_at.clone(),
             finished_at: now(),
         });
@@ -481,6 +598,13 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         ));
     }
     let merge = git::head(repo).unwrap_or_default();
+    // air-bxe: main has moved and the rollback is armed from here until the verify reports.
+    // Say so BEFORE the verify, not after it. That window is minutes long, and adopter's
+    // coordinator called a land done inside it three times; `git merge-base --is-ancestor`
+    // answers "is it in main", which is true for the whole window and so answers nothing.
+    // A land killed here (theirs died on a closed pipe, `air land | head`) leaves this row
+    // rather than leaving main green at a sha no landing mentions.
+    record("in-flight", Some(merge.clone()), None, None);
     // Verify the MERGED result. A green on the branch alone is not a green of what landed.
     let cmd = verify_command(repo);
     let Some((prog, args)) = cmd.split_first() else {
@@ -512,15 +636,31 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     if exit_code != 0 {
         // Rewind: main goes back exactly where it was, and the branch is untouched.
         let _ = git::run(repo, &["reset", "--hard", &tip]);
-        record("rewound", Some(merge), Some(run.id), Some(cmd.join(" ")));
-        return Outcome::Rewound(format!(
+        // air-ob0: who still holds the un-landed commits. Asked AFTER the reset, so the main
+        // checkout — which contained the merge a moment ago and is the whole point of the
+        // reset — is not named as a carrier. The commit is unreferenced now but still
+        // reachable from any worktree HEAD that merged it, which is exactly the set wanted.
+        let carried_by = super::status::carrying(repo, &merge);
+        record(
+            "rewound",
+            Some(merge.clone()),
+            Some(run.id),
+            Some(cmd.join(" ")),
+        );
+        let mut why = format!(
             "verify exited {exit_code} on the merged result; main is back at {} and `{}` is \
              untouched. The branch is green alone and red merged: ask {} to `git merge main` and \
              re-verify.",
             tip.get(..8).unwrap_or(&tip),
             branch,
             batch.worker
-        ));
+        );
+        // A rollback un-lands from main and cannot un-merge from anyone who already took it.
+        // `air status` holds the same set afterwards, so this message is not the only copy.
+        for line in super::status::rewind_propagation(&merge, &carried_by) {
+            why.push_str(&format!("\n  {line}"));
+        }
+        return Outcome::Rewound(why);
     }
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
     // Layer 1, the part that is true under either closure model: read every bead's acceptance
@@ -673,10 +813,22 @@ mod tests {
         assert_eq!(verify_command(dir.path()), vec!["make", "verify"]);
     }
 
+    /// air-29a: the role is where the process is. Pointing `--repo` at the main checkout does
+    /// not make a worker the coordinator, and an unknown location is not one either.
     #[test]
-    fn a_worker_may_not_land() {
-        assert!(may_land("main").is_ok());
-        let e = may_land("alpha").unwrap_err();
+    fn a_worker_may_not_land_however_it_points_repo() {
+        let at = |here: Option<&'static str>, pointed: &'static str| Caller {
+            where_i_am: here,
+            where_i_pointed: pointed,
+        };
+        assert!(may_land(&at(Some("main"), "main")).is_ok());
+        // Standing in main, --repo naming a worktree: still the coordinator.
+        assert!(may_land(&at(Some("main"), "alpha")).is_ok());
+        let e = may_land(&at(Some("alpha"), "alpha")).unwrap_err();
         assert!(e.contains("air handover"), "{e}");
+        // The incident's own invocation, and the refusal says which bypass it is.
+        let e = may_land(&at(Some("alpha"), "main")).unwrap_err();
+        assert!(e.contains("air-29a") && e.contains("cargo run"), "{e}");
+        assert!(may_land(&at(None, "main")).is_err(), "fails closed");
     }
 }
