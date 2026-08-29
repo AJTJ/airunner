@@ -103,6 +103,9 @@ pub struct Report {
     pub journal_mode: String,
     pub user_version: i64,
     pub rows: Vec<(String, i64)>,
+    /// The event stream's stated retention and what is collectable under it (air-i7s). Here
+    /// because a retention nobody can read is not a stated one.
+    pub events: crate::cmd::gc::Plan,
 }
 
 /// Row counts for every table the ledger actually has, asked of `sqlite_master` rather than
@@ -170,6 +173,12 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         journal_mode,
         user_version,
         rows,
+        events: crate::cmd::gc::plan(
+            &crate::cmd::gc::event_days(ledger.dir()),
+            &crate::cmd::today(),
+            crate::cmd::gc::KEEP_DAYS,
+            &crate::cmd::gc::referenced_days(ledger.conn()),
+        ),
     };
     emit(json, &report, || {
         let mut s = format!(
@@ -183,6 +192,19 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         for (t, n) in &report.rows {
             s.push_str(&format!("  {t}: {n}\n"));
         }
+        let e = &report.events;
+        s.push_str(&format!(
+            "events: {} day(s), {} bytes; retention {} day(s), {} bytes collectable{}\n",
+            e.days.len(),
+            e.total_bytes,
+            e.keep_days,
+            e.collectable_bytes,
+            if e.collectable_bytes > 0 {
+                "; `air gc` to see what, `air gc --apply` to remove it"
+            } else {
+                ""
+            }
+        ));
         let b = &report.bd;
         s.push_str(&format!(
             "bd: {} (pinned {}): {}\n",

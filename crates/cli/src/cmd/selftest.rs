@@ -55,6 +55,7 @@ pub fn run(json: bool) -> i32 {
         probe_change_only_push(),
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
+        probe_gc_keeps_what_it_must(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -235,6 +236,59 @@ fn probe_doctor_enumerates_tables() -> Probe {
     Probe {
         name: "doctor: every table the ledger has is counted, including one added after this probe was written",
         red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-i7s: `air gc` keeps what it must and removes only what it may.
+///
+/// The stream is the only artefact that has caught the audit's own errors (0007 §11), so this
+/// probe is about the failure DIRECTION: a collector that errs must err toward keeping.
+///
+/// Red: an old day the ledger still points at is kept, and so is a day inside the window, and
+/// an unreadable clock keeps everything rather than collecting everything. Green: an old day
+/// nothing points at is the one thing collected, and its bytes are the reported total.
+fn probe_gc_keeps_what_it_must() -> Probe {
+    use crate::cmd::gc::{plan, referenced_days};
+
+    let days = [
+        ("2026-01-01".to_string(), 100u64), // old, unreferenced -> collect
+        ("2026-01-02".to_string(), 200u64), // old, but a landing sits in it -> keep
+        ("2026-08-29".to_string(), 400u64), // inside the window -> keep
+    ];
+    let referenced: std::collections::BTreeSet<String> =
+        std::iter::once("2026-01-02".to_string()).collect();
+
+    let p = plan(&days, "2026-08-29", 90, &referenced);
+    let red = p.days[1].kept == Some("the ledger still points at this day")
+        && p.days[2].kept == Some("inside the retention window")
+        // A clock it cannot read keeps everything. The other direction deletes the record.
+        && plan(&days, "not-a-date", 90, &Default::default()).collectable_bytes == 0;
+
+    let green = p.days[0].kept.is_none()
+        && p.collectable_bytes == 100
+        && p.total_bytes == 700
+        // Nothing is removed by planning, and `applied` says so.
+        && !p.applied;
+
+    // And the referenced set is read from the ledger, not from a list: a landing written now
+    // protects its own day.
+    let live = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.conn()
+            .execute(
+                "INSERT INTO landings (id, worker, sha, result, attempt_no, started_at, finished_at) \
+                 VALUES ('x','alpha','deadbeef','landed',1,'2026-01-02T10:00:00Z','2026-01-02T10:05:00Z')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(referenced_days(l.conn()).contains("2026-01-02"))
+    })()
+    .unwrap_or(false);
+
+    Probe {
+        name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
+        red_fires: red && live,
         green_passes: green,
     }
 }
