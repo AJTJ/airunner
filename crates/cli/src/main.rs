@@ -217,16 +217,21 @@ enum Cmd {
     },
     /// Claude Code hook entrypoint: reads the hook JSON on stdin.
     Hook,
-    /// What the ledger says about every mechanism Air ships: how often each `fired` in the
-    /// window, over how many `subject(s)` and with how many `repeat(s)`, when it `last fired`,
-    /// and what it is `removed when`, with what the `ledger says` about that condition. Facts
-    /// only; the pass over them is the coordinator's. Read-only.
+    /// What the ledger says about every mechanism Air ships: how often each was `evaluated`
+    /// in the window, over how many `subject(s)` and with how many `repeat(s)`, how often it
+    /// was `pushed` at a person, when it `last fired`, and what it is `removed when`, with
+    /// what the `ledger says` about that condition. Facts only; the pass over them is the
+    /// coordinator's. Read-only.
     ///
-    /// A "fired with nothing following" count was cut from air-zyo before it shipped (Air
-    /// inferring intent it cannot see) but stayed in this help for a round: the same
-    /// derived-reads-like-observed failure the command exists to surface (air-ha8). Every
-    /// backticked name in this help is a field the command prints, and air selftest checks
-    /// the containment, so the drift cannot come back quietly.
+    /// `evaluated` and `pushed` are different numbers on purpose (air-5uz). The channel
+    /// re-evaluates every condition it holds on every poll; counting that as a firing read
+    /// 10,722 log lines as 10,722 firings against 45 things anyone was actually told, and a
+    /// deletion was nearly proposed on the inflated number. A "fired with nothing following"
+    /// count was cut from air-zyo before it shipped (Air inferring intent it cannot see) but
+    /// stayed in this help for a round: the same derived-reads-like-observed failure the
+    /// command exists to surface (air-ha8). Every backticked name in this help is a field the
+    /// command prints, and air selftest checks the containment, so the drift cannot come back
+    /// quietly.
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
