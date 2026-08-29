@@ -91,6 +91,28 @@ impl HookInput {
             .map(str::to_string)
     }
 
+    /// For `SendMessage` tool calls: (recipient, message bytes) (air-q07).
+    ///
+    /// **The content is deliberately not returned.** Air records that a message was sent, to
+    /// whom, and how big it was; reading what agents say to each other is not measurement, and
+    /// the event log is not a transcript. `summary` is not read either — it is model text.
+    pub fn message_sent(&self) -> Option<(String, usize)> {
+        if self.tool_name.as_deref() != Some("SendMessage") {
+            return None;
+        }
+        let input = self.tool_input.as_ref()?;
+        let to = input
+            .get("to")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        let bytes = input
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .map_or(0, str::len);
+        Some((to, bytes))
+    }
+
     /// For Bash tool calls: the command string.
     pub fn bash_command(&self) -> Option<&str> {
         if self.tool_name.as_deref() != Some("Bash") {

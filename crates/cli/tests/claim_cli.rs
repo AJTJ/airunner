@@ -134,6 +134,39 @@ fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32,
     )
 }
 
+/// `air hook` with a hook payload on stdin, the way Claude Code invokes it.
+fn air_hook(repo: &Path, bd: &Path, payload: serde_json::Value, enforce: bool) -> (i32, String) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(repo)
+        .arg("hook")
+        .env("AIR_BD_BIN", bd)
+        .env("FAKE_BD_DIR", repo)
+        .env("BEADS_ACTOR", "tester")
+        .env("AIR_ENFORCE", if enforce { "1" } else { "0" })
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut body = payload;
+    body["session_id"] = "s1".into();
+    body["cwd"] = repo.to_string_lossy().to_string().into();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
 fn claims(repo: &Path) -> Vec<(String, String, Option<String>)> {
     let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
     let mut st = conn
@@ -176,6 +209,79 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
         "{log}"
     );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+}
+
+/// air-p61: the other branch of the same timeout. bd hangs and the write did NOT land, so
+/// there is nothing to reconcile.
+///
+/// The dangerous defect here was never the timeout — it was the sentence. A message that says
+/// "nothing was recorded" asserts a state Air cannot know: it stopped waiting, it did not
+/// watch bd finish. So the decision must be its own word (`timeout`, never `bd-refused`, which
+/// means bd answered and said no), and the message must send the reader to `bd show`.
+#[test]
+fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // Hangs on `update` and writes nothing; `show` answers at once and knows nothing.
+    let slow = repo.join("bd-hang");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // Warm the first exec, which pays a macOS security assessment, so the budget below
+    // measures bd and not the OS.
+    let _ = Command::new(&slow)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["claim", "fd-9"])
+        .env("AIR_BD_BIN", &slow)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    // The refusal is printed on stdout by `emit`; stderr carries anything else.
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("bd timed out"), "{err}");
+    assert!(err.contains("bd's state is unknown"), "{err}");
+    assert!(
+        err.contains("bd show fd-9"),
+        "must send the reader to bd: {err}"
+    );
+    assert!(
+        !err.contains("refused"),
+        "a timeout is not a refusal: {err}"
+    );
+    // Nothing in the ledger: the row is written only after a confirmed result.
+    assert!(claims(&repo).is_empty(), "{:?}", claims(&repo));
+    // And the event line carries `timeout`, so `air audit` can count how often it fires.
+    let events = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(events.contains(r#""decision":"timeout""#), "{events}");
+    assert!(!events.contains(r#""decision":"bd-refused""#), "{events}");
 }
 
 /// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
@@ -690,6 +796,53 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     assert!(o.contains("rule on ports"), "{o}");
     let (_, o) = run(&repo, &me, &["--json", "status", "--attention"]);
     assert!(o.contains("owner-decision-waiting"), "{o}");
+}
+
+/// air-eiv: `air handover` is documented as the way to find what is missing, and it used to
+/// increment the very counter `handover-not-green` reads. So the documented diagnostic raised
+/// the alarm, and the coordinator chased a worker who was following the docs.
+///
+/// N direct invocations produce no condition; one hook-path refusal produces one.
+#[test]
+fn air_handover_is_a_query_and_the_hook_path_is_the_attempt() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let alarms = || {
+        let (_, out, _) = air(&repo, &bd, &["--json", "status", "--attention"]);
+        eprintln!("ATTENTION: {out}");
+        let (_, c, _) = air(&repo, &bd, &["--json", "status"]);
+        let v: serde_json::Value = serde_json::from_str(&c).unwrap();
+        eprintln!(
+            "WORKERS: {}",
+            serde_json::to_string(&v["snapshot"]["workers"]).unwrap()
+        );
+        out.matches("handover-not-green").count()
+    };
+    // bd keeps holding fd-1 in_progress, so `air status`'s reconcile leaves the claim open and
+    // the only thing that can move the counter is a hand-over.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+
+    // The diagnostic, run the documented number of times: still nothing to report.
+    for _ in 0..3 {
+        let (code, out, err) = air(&repo, &bd, &["handover", "--bead", "fd-1"]);
+        assert_eq!(code, 0, "{out}{err}");
+        assert!(out.contains("would refuse"), "{out}");
+    }
+    assert_eq!(alarms(), 0, "a query must not raise the alarm");
+
+    // The hook path: an actual `bd close`, refused because there is no green at HEAD. THAT is
+    // a hand-over attempt, and it is the one the coordinator should see.
+    let (code, err) = air_hook(
+        &repo,
+        &bd,
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": {"command": "bd close fd-1 --reason done"}}),
+        true,
+    );
+    assert_eq!(code, 2, "the gate must refuse: {err}");
+    assert_eq!(alarms(), 1, "the hook path must raise it exactly once");
 }
 
 /// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.
@@ -1350,6 +1503,53 @@ fn a_landing_is_recorded_in_flight_while_the_rollback_is_armed() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(rows, vec![("landed".to_string(), 1)]);
+}
+
+/// air-03w: the `landable` condition is what `air land --all` selects on.
+///
+/// Since air-7o3 the worker closes its own bead with proof and never sets `awaiting_review`,
+/// so `review-waiting` reports a state this repo stopped using and nothing told the coordinator
+/// a branch was ready — it learned by polling `air status`.
+///
+/// The probe in `air selftest` covers the condition's shape over a hand-built snapshot. This
+/// covers the WIRING, which that probe cannot see: `gather` filling `landable` from the same
+/// `select` the command runs. Without it, `landable: Vec::new()` in `gather` leaves every
+/// selftest probe green while the condition never fires against a real repo.
+#[test]
+fn a_landable_branch_is_a_condition_and_the_command_agrees() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+
+    // Nothing to land yet: silent.
+    let (_c, out, err) = air(&main, &bd, &["status", "--attention"]);
+    assert!(!out.contains("landable"), "{out}{err}");
+
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    // Green LAST, so it sits at a head containing main. That transition is the whole subject.
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    let (_c, out, err) = air(&main, &bd, &["status", "--attention"]);
+    assert!(out.contains("landable"), "{out}{err}");
+    assert!(out.contains("alpha") && out.contains("fd-1"), "{out}");
+    assert!(out.contains("air land --all"), "{out}");
+
+    // And the command agrees: what the condition named is what `air land` takes.
+    let (code, out, err) = air(&main, &bd, &["land", "--all"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed alpha (fd-1)"), "{out}{err}");
+
+    // Landed, so the condition clears itself — the branch is now an ancestor of main.
+    let (_c, out, _e) = air(&main, &bd, &["status", "--attention"]);
+    assert!(!out.contains("landable"), "{out}");
 }
 
 /// air-ob0: a rewind names every worktree that took the un-landed commits.
