@@ -150,6 +150,22 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "landable",
+        class: "attention",
+        what: "A branch `air land --all` would take right now: green at its head with main \
+               merged, naming the beads it carries. Once per branch head, never while it sits.",
+        added: "2026-08-29 (air-03w)",
+        source: "crates/cli/src/cmd/status.rs",
+        fires: Fires::Condition("landable"),
+        // The worker signalling on close is the intent (roles.md, owner 2026-08-29); this is
+        // the failsafe, so a missed signal is not a lost one. If the signal turns out to be
+        // reliable, the failsafe has nothing left to catch — and that is a count, not a
+        // judgement: every landable branch landed before this pushed.
+        removal: Removal::Judgement(
+            "a round in which every landable branch was landed before this condition pushed, i.e. the worker's own signal arrived first every time",
+        ),
+    },
+    Mechanism {
         id: "landed-not-closed",
         class: "attention",
         what: "A bead that landed while the merge CONTRADICTS one of its acceptance clauses: \
