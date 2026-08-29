@@ -35,6 +35,8 @@ pub mod kinds {
     pub const GONE_WITH_CLAIM: &str = "gone-with-claim";
     pub const HANDOVER_NOT_GREEN: &str = "handover-not-green";
     pub const LANDABLE: &str = "landable";
+    /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
+    pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
     pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
     pub const OWNER_DECISION_WAITING: &str = "owner-decision-waiting";
     pub const LEASE_HELD_BY_DEAD_SESSION: &str = "lease-held-by-dead-session";
@@ -49,6 +51,7 @@ pub mod kinds {
         GONE_WITH_CLAIM,
         HANDOVER_NOT_GREEN,
         LANDABLE,
+        REWOUND_AND_CARRIED,
         LANDED_NOT_CLOSED,
         OWNER_DECISION_WAITING,
         LEASE_HELD_BY_DEAD_SESSION,
@@ -234,6 +237,11 @@ pub struct Landing {
     /// when the snapshot did not come from bd.
     #[serde(default)]
     pub acceptance: Vec<String>,
+    /// Why `air land` would refuse this branch right now, or `None` when it would take it
+    /// (air-y3v). Set by `land::branch_check`, the same predicate the command applies, so the
+    /// list and the refusal cannot disagree. `command` above is the one that matches this.
+    #[serde(default)]
+    pub blocked: Option<String>,
 }
 
 /// Longest wait first, the order `air land --all` uses, so what `air status` lists is the
@@ -414,6 +422,26 @@ pub fn select(repo: &Path) -> Selection {
                 continue;
             }
         }
+        // air-y3v: THE predicate `air land` applies to a branch, not a second implementation
+        // of it. `select` used to stop at the green above, so every land invalidated this list
+        // for every other branch and the surfaces offered `air land <bead>` for branches that
+        // would be refused. `Site` is deliberately not built here: `air status` may be running
+        // from a worktree and has no business asserting where a future `air land` will run.
+        let main_tip = git::head(repo).unwrap_or_default();
+        let facts = super::land::Facts {
+            worker: &worker,
+            branch_exists: true, // the head above came from this worktree
+            already_in_main: git::is_ancestor(repo, &head, &main_tip).unwrap_or(false),
+            contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
+            branch_head: &head,
+            green_at: Some(&head), // established by the green check above
+        };
+        let blocked = match super::land::branch_check(&facts) {
+            Ok(true) => None,
+            // Already in main: nothing waiting, nothing to say.
+            Ok(false) => continue,
+            Err(why) => Some(why),
+        };
         let range = format!("main..{head}");
         let found = super::attribution::attributed_in_range(repo, &range);
         // A declared bead stands as it is; only a guessed one is narrowed (air-4re).
@@ -448,7 +476,15 @@ pub fn select(repo: &Path) -> Selection {
             .unwrap_or_else(|| at.clone());
         for bead in ids {
             out.landings.push(Landing {
-                command: land_command(&bead),
+                // air-y3v: the command a reader can actually run. A branch behind main is
+                // still SHOWN — the coordinator needs to know work is waiting — but what it
+                // needs is a re-merge, and offering `air land` there is what cost the owner
+                // three cycles in an hour.
+                command: match &blocked {
+                    None => land_command(&bead),
+                    Some(_) => super::land::remerge_command(),
+                },
+                blocked: blocked.clone(),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
                 // here: this runs on every `air status` and bd is far too slow per id.
                 acceptance: Vec::new(),
@@ -875,7 +911,10 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     // failsafe caught nothing.
     {
         let mut by_worker: BTreeMap<&str, (&str, Vec<&str>, i64)> = BTreeMap::new();
-        for l in &s.landable {
+        // air-y3v: `landable` carries blocked branches too, so the surfaces can show them with
+        // the command that unblocks them. Only an unblocked one is landABLE, and announcing
+        // otherwise is the defect this condition would otherwise reintroduce.
+        for l in s.landable.iter().filter(|l| l.blocked.is_none()) {
             let e = by_worker
                 .entry(&l.worker)
                 .or_insert((&l.head, Vec::new(), 0));
@@ -895,6 +934,20 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 fingerprint: format!("{worker}@{head}"),
             });
         }
+    }
+    // air-ob0, narrowed by air-odv: a rewound merge somebody still carries. No NEW rewind can
+    // occur — main is fast-forwarded onto an already-green commit — so this reports history,
+    // and it empties itself when nobody holds those commits any more. Registered with that as
+    // its removal condition so `air audit` can answer it rather than someone arguing it.
+    for r in &s.rewound_carried {
+        out.push(Attention {
+            worker: r.carried_by.join(", "),
+            kind: kinds::REWOUND_AND_CARRIED,
+            detail: rewind_propagation(&r.merge_commit, &r.carried_by).join(" "),
+            for_minutes: minutes_between(&r.rewound_at, now).unwrap_or(0),
+            // The commit and who holds it is the whole fact; its age is not a change.
+            fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
+        });
     }
     // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
     // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
@@ -1474,6 +1527,22 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         out.push_str(&format!(
             "landing in flight: {}\n",
             landing_in_flight_line(f, &s.at)
+        ));
+    }
+    // air-y3v: work that is waiting but not yet landable. Shown, because the coordinator needs
+    // to know it exists — and never with `air land` beside it, because that is the command
+    // that cost the owner three cycles in an hour. `command` is what actually unblocks it.
+    for l in s.landable.iter().filter(|l| l.blocked.is_some()) {
+        out.push_str(&format!(
+            "waiting, not landable: {} ({}) at {} — {}; `{}`\n",
+            l.worker,
+            l.bead,
+            l.head.get(..8).unwrap_or(&l.head),
+            l.blocked
+                .as_deref()
+                .unwrap_or("")
+                .trim_start_matches("refused: "),
+            l.command
         ));
     }
     // air-ob0: a rewind un-lands from main and cannot un-merge from whoever took it.
