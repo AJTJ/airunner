@@ -211,6 +211,79 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
 }
 
+/// air-p61: the other branch of the same timeout. bd hangs and the write did NOT land, so
+/// there is nothing to reconcile.
+///
+/// The dangerous defect here was never the timeout — it was the sentence. A message that says
+/// "nothing was recorded" asserts a state Air cannot know: it stopped waiting, it did not
+/// watch bd finish. So the decision must be its own word (`timeout`, never `bd-refused`, which
+/// means bd answered and said no), and the message must send the reader to `bd show`.
+#[test]
+fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // Hangs on `update` and writes nothing; `show` answers at once and knows nothing.
+    let slow = repo.join("bd-hang");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) sleep 3; exit 0;; *) exec {bd} \"$@\";; esac\n",
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // Warm the first exec, which pays a macOS security assessment, so the budget below
+    // measures bd and not the OS.
+    let _ = Command::new(&slow)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["claim", "fd-9"])
+        .env("AIR_BD_BIN", &slow)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    // The refusal is printed on stdout by `emit`; stderr carries anything else.
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("bd timed out"), "{err}");
+    assert!(err.contains("bd's state is unknown"), "{err}");
+    assert!(
+        err.contains("bd show fd-9"),
+        "must send the reader to bd: {err}"
+    );
+    assert!(
+        !err.contains("refused"),
+        "a timeout is not a refusal: {err}"
+    );
+    // Nothing in the ledger: the row is written only after a confirmed result.
+    assert!(claims(&repo).is_empty(), "{:?}", claims(&repo));
+    // And the event line carries `timeout`, so `air audit` can count how often it fires.
+    let events = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(events.contains(r#""decision":"timeout""#), "{events}");
+    assert!(!events.contains(r#""decision":"bd-refused""#), "{events}");
+}
+
 /// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
 /// and recorded at the time it was issued (claimed-late); a re-claim keeps that time; a
 /// digest written between the two satisfies the hand-over check.

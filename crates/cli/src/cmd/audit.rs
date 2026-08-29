@@ -78,7 +78,22 @@ pub struct Audit {
     /// What the hand-over gate costs per bead, from the event log (air-2zq). None when the
     /// window recorded no verify runs.
     pub cost: Option<Cost>,
+    /// What bd and `air status` cost over the scanned days (air-p61). The acceptance is
+    /// literal: "`air status` latency is measured and recorded; if it is seconds, say why in
+    /// `air audit`."
+    pub latency: Latency,
     pub duration_ms: u64,
+}
+
+/// The two latencies the fleet actually waits on, over the whole scan (air-p61).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Latency {
+    /// Median cost of one `bd` process, and how many processes it came from.
+    pub bd: Option<super::bd_latency::BdLatency>,
+    /// `air status` wall time, in percentiles over its own event lines.
+    pub status: Option<super::bd_latency::Percentiles>,
+    /// The bd budget `air status` would use at that median, in milliseconds.
+    pub status_bd_budget_ms: u64,
 }
 
 /// What enforcing a green costs, in the units the decision needs (air-2zq).
@@ -409,7 +424,27 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             closes,
             ..Cost::default()
         }),
+        latency: latency_of(days),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
+    }
+}
+
+/// bd and `air status` cost over every scanned day, from the same lines (air-p61). Pure over
+/// the day texts, so `air selftest` can drive it without a ledger.
+pub fn latency_of(days: &[(String, String)]) -> Latency {
+    let all: String = days
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let bd = super::bd_latency::from_events(&all);
+    Latency {
+        status: super::bd_latency::status_from_events(&all),
+        status_bd_budget_ms: u64::try_from(
+            super::bd_latency::status_bd_budget(bd.map(|l| l.median_ms)).as_millis(),
+        )
+        .unwrap_or(u64::MAX),
+        bd,
     }
 }
 
@@ -434,6 +469,39 @@ pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
     }
 }
 
+/// The latency block, and — when `air status` is measured in seconds — why (air-p61).
+///
+/// The reason is not a guess: `air status` shells out to bd once for `in_progress`, once more
+/// per claim the reconcile has to resolve, and again for `ready` and `awaiting_review`. bd
+/// costs about a second and a half per *process* here whatever the query, so a handful of
+/// processes is the floor and the ledger reads are nowhere in it. adopter's took ~20 s and
+/// they wrapped it in a 60 s timeout in `reclaim.py`; the number belongs where the mechanisms
+/// are priced, not in each reader's head.
+pub fn latency_lines(l: &Latency) -> String {
+    let mut s = String::new();
+    if let Some(bd) = &l.bd {
+        s.push_str(&format!(
+            "latency: bd median {} ms per process over {} process(es); `air status` waits {} ms for one\n",
+            bd.median_ms, bd.calls, l.status_bd_budget_ms
+        ));
+    }
+    if let Some(p) = &l.status {
+        s.push_str(&format!(
+            "latency: `air status` p50 {} ms, p90 {} ms, p99 {} ms, max {} ms over {} run(s)\n",
+            p.p50_ms, p.p90_ms, p.p99_ms, p.max_ms, p.runs
+        ));
+        if p.p50_ms >= 1_000 {
+            s.push_str(
+                "  it is seconds because it shells out to bd: `list --status in_progress`, one \
+                 `show` per claim the reconcile must resolve, then `ready` and \
+                 `awaiting_review`. bd costs ~1.4 s per PROCESS here whatever the query, so a \
+                 handful of processes is the floor; the ledger reads are not in it.\n",
+            );
+        }
+    }
+    s
+}
+
 /// The text form. `pub` so `air selftest` can assert on the real output rather than a
 /// reconstruction of it.
 pub fn render(a: &Audit) -> String {
@@ -447,6 +515,7 @@ pub fn render(a: &Audit) -> String {
         a.events_scanned,
         a.duration_ms
     );
+    s.push_str(&latency_lines(&a.latency));
     for r in &a.rows {
         s.push_str(&format!(
             "\n{} [{}]  evaluated {} in window over {} subject(s), {} repeat(s); pushed {}\n",

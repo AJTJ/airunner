@@ -863,14 +863,19 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     // ledger row says. The row is released with the bd status as reason so the history is
     // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
     //
-    // bd is enrichment, not the spine. It gets a short budget (2 s default, `AIR_BD_TIMEOUT_MS`)
+    // bd is enrichment, not the spine. It gets a short budget (`AIR_BD_TIMEOUT_MS` overrides)
     // and after one timeout no further bd call is made this tick; the counts fall back to the
     // last answer cached in the ledger. Under load bd took 20 s, the same as the MCP tool
     // budget, so the channel got nothing exactly when the fleet was busiest (adopter
     // 2026-08-22, air-19u).
+    //
+    // The budget is DERIVED from what bd costs here today, not a constant (air-p61): a flat
+    // 2 s left 356 ms of headroom over bd's measured p99 and sat below adopter's median
+    // entirely. `status_bd_budget` reads the same measurement `air status` prints.
+    let today_latency = super::bd_latency::for_day(ledger.dir(), &super::today());
     let mut bd = super::claim::bd_for(repo);
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
-        bd.timeout = std::time::Duration::from_secs(2);
+        bd.timeout = super::bd_latency::status_bd_budget(today_latency.map(|l| l.median_ms));
     }
     let mut bd_slow: Option<String> = None;
     let in_progress: Option<std::collections::BTreeSet<String>> = bd_try(
@@ -1070,8 +1075,9 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
         // From the lines already on disk: this tick's own bd cost is logged after gather,
-        // so it lands in the next reading.
-        bd_latency: super::bd_latency::for_day(ledger.dir(), &super::today()),
+        // so it lands in the next reading. Read once, above, because the bd budget is
+        // derived from it.
+        bd_latency: today_latency,
     })
 }
 
