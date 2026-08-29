@@ -1690,7 +1690,8 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                ("stuck", "stuck"),
+                // The worker named "stuck" stays in the fixture: its session state is still a
+                // state, and it must now raise NOTHING, which is the deletion (air-dqw).
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),

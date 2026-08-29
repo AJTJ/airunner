@@ -240,6 +240,15 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "stop-nudge",
         class: "nudge",
         what: "At WIP 0 with beads ready, the Stop hook names them once.",
+        // air-7q5 asked whether this is an auto-start, since starting a session must not start
+        // work. It is NOT, and it is left alone rather than gated. A Stop hook fires only after
+        // the model has produced a turn, and a worker launched with no `--task` is given no
+        // prompt at all (`worker_argv_tmux`; the roles prose arrives via
+        // `--append-system-prompt-file`, which is context, not a turn). So the session has
+        // already been triggered by the time this can fire, and gating it on "has been
+        // triggered" would be a mechanism for a state that is unreachable. Probe:
+        // "launch: a task is the prompt; no task means no prompt, so an untriggered worker
+        // never runs", which carries a declared mutation.
         added: "2026-08-22 (air-09i)",
         source: "crates/hooks/src/gate.rs, stop_nudge",
         fires: Fires::Decisions(&[("hook.Stop", "nudge"), ("hook.SubagentStop", "nudge")]),
