@@ -216,6 +216,29 @@ pub fn peer_effect(
     }
 }
 
+/// What the audit says about a mechanism with no recorded removal condition.
+pub const NO_CONDITION: &str = "no removal condition recorded";
+
+/// How a recorded removal condition is classified, and whether the ledger says it holds:
+/// `(removal_kind, condition_met, defect)`.
+///
+/// Pure and public so a probe can assert the classifier directly (air-dqw). The probe for this
+/// used to work by finding a real registry row that lacked a condition — first `review-waiting`,
+/// then `stuck` — and each time that row gained a condition or was deleted, the probe went
+/// silent on a registry change that was not a regression. Since the goal is that NO row lacks a
+/// condition, a probe that needs one is a probe that needs a defect to exist.
+pub fn removal_verdict(
+    removal: Removal,
+    evaluations: usize,
+) -> (&'static str, Option<bool>, Option<&'static str>) {
+    match removal {
+        Removal::Unstated => ("none", None, Some(NO_CONDITION)),
+        Removal::Judgement(_) => ("judgement", None, None),
+        // "Remove when it stops firing" is answered by the counter and nothing else.
+        Removal::ZeroFirings(_) => ("checkable", Some(evaluations == 0), None),
+    }
+}
+
 /// What one mechanism accumulated over the scan.
 #[derive(Default)]
 struct Acc {
@@ -387,18 +410,6 @@ pub fn registered_traces() -> std::collections::BTreeSet<String> {
 
 /// A condition firing names one subject per event, but one event can carry the same kind for
 /// several subjects. Count them all.
-/// The rule: a mechanism with nothing recorded is a defect, one with a condition is not.
-///
-/// air-byw pulled this out of the row builder so it can be tested WITHOUT a real mechanism that
-/// happens to be `Unstated`. Its probe had already chased that fact twice — it pointed at
-/// `review-waiting` until air-s7c gave that one a condition, then at `stuck` until this bead gave
-/// `stuck` one — and every mechanism now records a condition, so there is no third example to
-/// move to. A test that names the currently-unrecorded mechanism holds a second copy of a fact
-/// the registry owns, and fails on the day someone does the thing it was hoping for (air-jc0).
-pub fn defect_for(removal: Removal) -> Option<&'static str> {
-    matches!(removal, Removal::Unstated).then_some("no removal condition recorded")
-}
-
 fn subjects_in<'a>(m: &Mechanism, e: &'a Ev) -> Vec<&'a str> {
     match m.fires {
         Fires::Decisions(_) => fired(m, e).into_iter().collect(),
@@ -563,12 +574,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 Fires::Decisions(_) => n,
                 Fires::Condition(_) => a.pushes,
             };
-            let (removal_kind, met) = match m.removal {
-                Removal::Unstated => ("none", None),
-                Removal::Judgement(_) => ("judgement", None),
-                // "Remove when it stops firing" is answered by the counter and nothing else.
-                Removal::ZeroFirings(_) => ("checkable", Some(n == 0)),
-            };
+            let (removal_kind, met, defect) = removal_verdict(m.removal, n);
             Row {
                 id: m.id,
                 class: m.class,
@@ -583,7 +589,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 removal: m.removal.text(),
                 removal_kind,
                 condition_met: met,
-                defect: defect_for(m.removal),
+                defect,
             }
         })
         .collect();
@@ -1001,18 +1007,17 @@ mod tests {
             .unwrap();
         assert_eq!((idle.evaluations, idle.condition_met), (0, Some(true)));
 
-        // A mechanism with nothing recorded is reported as a defect. This used to name `stuck`
-        // as the live example; air-byw gave `stuck` a condition, and it was the last
-        // `Removal::Unstated`, so as of 2026-08-29 **every** mechanism records one and there is
-        // no real example left to point at.
-        //
-        // Asserting the mapping rather than a mechanism, because naming one was the defect
-        // air-jc0 is about: the test held a second copy of a fact the registry owns, and it
-        // failed the day someone did the very thing it was hoping for.
-        assert!(Removal::Unstated.text().is_empty());
+        // Nothing recorded IS a defect, asserted against the classifier. It used to be
+        // asserted by finding a registry row that lacked a condition — `review-waiting` until
+        // air-s7c, then `stuck` until air-dqw deleted it — and no row lacks one now, which is
+        // the goal. A test that needs a defect to exist is a test that resists the fix.
+        assert_eq!(
+            removal_verdict(Removal::Unstated, 0),
+            ("none", None, Some(NO_CONDITION))
+        );
         assert!(
             a.rows.iter().all(|r| r.defect.is_none()),
-            "every mechanism should now record a removal condition; defects: {:?}",
+            "every mechanism should record a removal condition; defects: {:?}",
             a.rows
                 .iter()
                 .filter(|r| r.defect.is_some())
