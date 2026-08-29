@@ -5,7 +5,8 @@
 //! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
 //! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
 //! expectation is computed from itself cannot rot. So derive the fixture from the threshold
-//! (`Thresholds::default().stuck_min`, `attribution::cutoff()`, `install::SURFACE`) rather than
+//! (`Thresholds::default().idle_with_claim_min`, `attribution::cutoff()`, `install::SURFACE`)
+//! rather than
 //! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
 //! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
 //! and see it go red on a mutant that COMPILES, then change the rule's number and see it stay
@@ -628,7 +629,8 @@ fn probe_bead_attribution_reads_a_trailer() -> Probe {
 /// visible. Red: an entry with nothing recorded is reported as a defect. Green: an entry
 /// with a condition is not, and its counter reads back.
 fn probe_audit_registry() -> Probe {
-    use crate::cmd::audit::gather_from;
+    use crate::cmd::audit::{NO_CONDITION, gather_from, removal_verdict};
+    use crate::cmd::mechanisms::Removal;
 
     let events = concat!(
         r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
@@ -638,10 +640,14 @@ fn probe_audit_registry() -> Probe {
         &[("2026-08-22".to_string(), events.to_string())],
         "2026-08-22",
     );
-    // Red: nothing is recorded for `stuck`, so it is a defect and says so. (This probe
-    // pointed at `review-waiting` until air-s7c gave that one a condition, at which point it
-    // went silent and said so, which is the probe doing its job.)
-    let red = a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some());
+    // Red: a mechanism with nothing recorded IS reported as a defect. Asserted against the
+    // classifier rather than against a registry row that happens to lack a condition — this
+    // probe pointed at `review-waiting` until air-s7c gave that one a condition, then at
+    // `stuck` until air-dqw deleted it, and each time the probe went silent on a registry
+    // change that was not a regression. There is now no `Removal::Unstated` row left, which is
+    // the goal, so a probe that needs one would be a probe that needs a defect to exist.
+    let red = removal_verdict(Removal::Unstated, 0) == ("none", None, Some(NO_CONDITION))
+        && a.rows.iter().all(|r| r.defect.is_none());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
         .rows
@@ -1427,24 +1433,42 @@ fn minutes_before(now: &str, minutes: i64) -> Option<String> {
     Some(t.checked_sub(span).ok()?.to_string())
 }
 
-/// Attention conditions fire on a stale stuck session and stay quiet on a fresh one.
+/// Attention conditions fire on a session idle past the line with a claim held, and stay quiet
+/// under it.
 ///
-/// air-jc0: the two ages are read out of `stuck_min` rather than written beside it. adopter's
-/// ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner had raised to
-/// 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a bigger number but
-/// reading the cap from the script that owns it. Their two controls, both run against this probe
-/// (digest 2026-08-29-diligence-air-jc0): with the `stuck` arm neutralised it goes red; with
-/// `stuck_min` moved 5 -> 90 it stays green and renames itself. Copying 60 and 1 passed the first
-/// control and failed the second.
+/// air-jc0: the two ages are read out of the threshold rather than written beside it.
+/// adopter's ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner
+/// had raised to 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a
+/// bigger number but reading the cap from the script that owns it. Their two controls, both run
+/// against this probe (digest 2026-08-29-diligence-air-jc0): with the arm neutralised it goes
+/// red; with the threshold moved it stays green and renames itself. Copying the numbers passed
+/// the first control and failed the second.
+///
+/// Repointed from `stuck` to `idle-with-claim` on 2026-08-29 (air-dqw), when `stuck` was
+/// deleted. The subject of the probe is unchanged and is not `stuck`: it is that a threshold is
+/// read from the rule that owns it. `idle_with_claim_min` is the natural stand-in because
+/// `idle` is a state the `sessions` table actually holds, which `stuck` never was.
 fn probe_attention() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    use air_ledger::claims::Claim;
     let mk = |changed: &str| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
             role: "worker".into(),
+            claims: vec![Claim {
+                bead: "air-1".into(),
+                worker: "w".into(),
+                claimed_at: "2026-08-20T10:00:00Z".into(),
+                declared_files: Vec::new(),
+                first_handover_at: None,
+                last_handover_at: None,
+                handover_attempts: 0,
+                released_at: None,
+                release_reason: None,
+            }],
             session: Some(Session {
                 session_id: "s".into(),
-                state: "stuck".into(),
+                state: "idle".into(),
                 detail: None,
                 changed_at: changed.into(),
                 pid: None,
@@ -1459,15 +1483,15 @@ fn probe_attention() -> Probe {
     let t = Thresholds::default();
     // One minute past the line and one minute short of it, wherever the line currently is.
     let (Some(over), Some(under)) = (
-        t.stuck_min
+        t.idle_with_claim_min
             .checked_add(1)
             .and_then(|m| minutes_before(now, m)),
-        t.stuck_min
+        t.idle_with_claim_min
             .checked_sub(1)
             .and_then(|m| minutes_before(now, m)),
     ) else {
         return Probe {
-            name: "attention: stuck threshold could not be read",
+            name: "attention: idle-with-claim threshold could not be read",
             red_fires: false,
             green_passes: false,
         };
@@ -1475,20 +1499,20 @@ fn probe_attention() -> Probe {
     let red = attention(&mk(&over), now, Thresholds::default());
     let green = attention(&mk(&under), now, Thresholds::default());
     Probe {
-        name: STUCK_NAME.get_or_init(|| {
+        name: IDLE_CLAIM_NAME.get_or_init(|| {
             format!(
-                "attention: a stuck session fires at stuck_min={} min and is quiet under it",
-                t.stuck_min
+                "attention: an idle session holding a claim fires at idle_with_claim_min={} min and is quiet under it",
+                t.idle_with_claim_min
             )
         }),
-        red_fires: red.iter().any(|a| a.kind == "stuck"),
+        red_fires: red.iter().any(|a| a.kind == "idle-with-claim"),
         green_passes: green.is_empty(),
     }
 }
 
 /// The probe name carries the threshold it read, so a changed rule RENAMES the probe instead of
 /// breaking it — adopter's second control made visible in the output.
-static STUCK_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static IDLE_CLAIM_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no

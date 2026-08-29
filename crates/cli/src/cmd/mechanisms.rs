@@ -76,6 +76,24 @@ pub struct Mechanism {
 ///
 /// Append when a mechanism is added; the audit reports a mechanism with `Removal::Unstated`
 /// as a defect, so an entry with nothing recorded is visible rather than silently absent.
+///
+/// **Deleted, so nobody re-adds them without evidence:**
+///
+/// - `gone-with-claim` (2026-08-20, removed 2026-08-22, air-s7c): zero firings in the audited
+///   window and never in any recorded day. A dead session holding a claim falls through to the
+///   ordinary session states, which do fire.
+/// - `cross-project-fence` (2026-08-22, removed 2026-08-29, air-9u6): zero firings ever.
+/// - `stuck` (2026-08-20 plan 0004, removed 2026-08-29, air-dqw): zero firings in any recorded
+///   day, including through the 2026-08-22 05:26-05:45 standstill it was written for and the
+///   six days main sat red (air-24e). It was also the only mechanism with no removal condition
+///   recorded, so it cost a defect line in every audit. **Why it never fired matters more than
+///   that it never fired**: its input never existed. The `stuck` session state is set only by
+///   the `PermissionRequest` hook, and `hook.PermissionRequest` appears zero times in 34,000+
+///   events over 8 days; the `sessions` table has only ever held `running` and `working`. So a
+///   longer or shorter threshold would have changed nothing. Do not replace it with a better
+///   `stuck`: the replacement is a coordinator heartbeat running `air status`, which is a poll
+///   and is honest about being one. If a wedged worker goes undetected WITH the heartbeat
+///   running, that incident earns a new mechanism and will have evidence behind it.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -202,15 +220,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         removal: Removal::Judgement(
             "a round shows change-only pushes that led to no owner or coordinator action",
         ),
-    },
-    Mechanism {
-        id: "stuck",
-        class: "attention",
-        what: "A session in the same state past the stuck threshold.",
-        added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs",
-        fires: Fires::Condition("stuck"),
-        removal: Removal::Unstated,
     },
     Mechanism {
         id: "peer-warning",

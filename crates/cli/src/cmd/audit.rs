@@ -181,6 +181,29 @@ pub fn peer_effect(
     }
 }
 
+/// What the audit says about a mechanism with no recorded removal condition.
+pub const NO_CONDITION: &str = "no removal condition recorded";
+
+/// How a recorded removal condition is classified, and whether the ledger says it holds:
+/// `(removal_kind, condition_met, defect)`.
+///
+/// Pure and public so a probe can assert the classifier directly (air-dqw). The probe for this
+/// used to work by finding a real registry row that lacked a condition — first `review-waiting`,
+/// then `stuck` — and each time that row gained a condition or was deleted, the probe went
+/// silent on a registry change that was not a regression. Since the goal is that NO row lacks a
+/// condition, a probe that needs one is a probe that needs a defect to exist.
+pub fn removal_verdict(
+    removal: Removal,
+    evaluations: usize,
+) -> (&'static str, Option<bool>, Option<&'static str>) {
+    match removal {
+        Removal::Unstated => ("none", None, Some(NO_CONDITION)),
+        Removal::Judgement(_) => ("judgement", None, None),
+        // "Remove when it stops firing" is answered by the counter and nothing else.
+        Removal::ZeroFirings(_) => ("checkable", Some(evaluations == 0), None),
+    }
+}
+
 /// What one mechanism accumulated over the scan.
 #[derive(Default)]
 struct Acc {
@@ -489,12 +512,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 Fires::Decisions(_) => n,
                 Fires::Condition(_) => a.pushes,
             };
-            let (removal_kind, met) = match m.removal {
-                Removal::Unstated => ("none", None),
-                Removal::Judgement(_) => ("judgement", None),
-                // "Remove when it stops firing" is answered by the counter and nothing else.
-                Removal::ZeroFirings(_) => ("checkable", Some(n == 0)),
-            };
+            let (removal_kind, met, defect) = removal_verdict(m.removal, n);
             Row {
                 id: m.id,
                 class: m.class,
@@ -509,8 +527,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 removal: m.removal.text(),
                 removal_kind,
                 condition_met: met,
-                defect: matches!(m.removal, Removal::Unstated)
-                    .then_some("no removal condition recorded"),
+                defect,
             }
         })
         .collect();
