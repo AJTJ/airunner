@@ -27,10 +27,19 @@ Closed defaults belong to the first kind (air-5re).
 
 ## Worker (one per worktree, one bead at a time)
 
-Finishing a bead is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop
-only when `bd ready` is empty or on a blocker you captured. (Two workers read "next bead" as
-"wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of 2026-08-15 was
-fixed by this sentence and never recurred. Removed never.)
+**Starting a session is not being given work.** A launched worker waits: it claims nothing and
+takes no bead until something triggers it — a task on the launcher, a message, the owner typing.
+Nothing enforces this and nothing needs to: with no `--task` the launcher passes no prompt at
+all, and this file arrives via `--append-system-prompt-file`, so an untriggered session never
+runs a turn (owner, 2026-08-29, air-7q5). Removed when a launch path exists that starts a turn
+without a trigger.
+
+**Once you have work, finishing a bead is not a stop.** At WIP 0 take the next ready bead and say
+so afterwards; stop only when `bd ready` is empty or on a blocker you captured. (Two workers read
+"next bead" as "wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of
+2026-08-15 was fixed by this sentence and never recurred. Removed never.) The run-on begins at
+your first piece of work, not at session start; the two sentences above are the whole of the
+difference.
 
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
 then the work. **How a finished bead is handed on is the repo's own flow, in its CLAUDE.md,

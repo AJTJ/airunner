@@ -473,7 +473,9 @@ fn init_gates_then_builds_a_project_from_nothing() {
     // air-arq: the roles prose a fresh init writes carries the run-to-completion sentence.
     // air-8zu reworded it off "hand-over", which is one repo's flow rather than Air's fact.
     let roles = std::fs::read_to_string(proj.join(".air/roles.md")).unwrap();
-    assert!(roles.contains("Finishing a bead is not a stop."));
+    // air-7q5: the run-to-completion sentence stays, now scoped to a session that HAS work.
+    assert!(roles.contains("Once you have work, finishing a bead is not a stop."));
+    assert!(roles.contains("Starting a session is not being given work."));
     // air-eaw: the landing verify runs in the main checkout, where `.git` is a directory rather
     // than a file, so a green branch can go red there and that is information, not a flake. The
     // prose is embedded by include_str!, so this asserts it actually reaches a fresh init rather
