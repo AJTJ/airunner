@@ -116,18 +116,19 @@ enum Cmd {
         #[command(subcommand)]
         op: LeaseOp,
     },
-    /// Resolve captures: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
-    /// Several captures at once map positionally, in one ledger transaction:
-    /// `air triage c1 c2 --bead air-1 --bead air-2`. One --drop covers every capture named.
-    /// Every bead is checked against bd first; an id bd does not have refuses the pass. A
-    /// capture that was already triaged is re-pointed, old target named in the event line.
+    /// Resolve ONE capture: --bead <id> after `bd create`, or --drop "<why>" (coordinator).
+    /// The bead is checked against bd first; an id bd does not have refuses it. A capture that
+    /// was already triaged is re-pointed, old target named in the event line.
+    ///
+    /// One at a time on purpose (air-zlq, 2026-08-29). Batching was measured, not assumed:
+    /// `bd show` costs about a second PER ID, so one process for 26 ids took 27.9 s against a
+    /// 5 s verification budget. Batching saved the process, which was never the cost.
     Triage {
-        #[arg(required = true)]
-        id: Vec<String>,
+        id: String,
         #[arg(long)]
-        bead: Vec<String>,
+        bead: Option<String>,
         #[arg(long)]
-        drop: Vec<String>,
+        drop: Option<String>,
     },
     /// Coordinator: close landed beads in ONE bd process and release their claims in one
     /// ledger transaction. `bd` costs ~1.4 s per process whatever it is asked (air-869).
@@ -326,7 +327,9 @@ fn main() -> ExitCode {
             }
             LeaseOp::Beat => cmd::lease::beat(&repo),
         },
-        Cmd::Triage { id, bead, drop } => cmd::capture::triage(&repo, &id, &bead, &drop, cli.json),
+        Cmd::Triage { id, bead, drop } => {
+            cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
+        }
         Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
         Cmd::Land { bead, all } => cmd::land::run(&repo, &bead, all, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),

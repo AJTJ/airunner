@@ -63,6 +63,28 @@ impl VerifyRun {
     }
 }
 
+/// A verify that has STARTED and not yet exited (air-4cr, plan 0008 item 13).
+///
+/// Kept in its own table rather than as a half-written `verify_runs` row on purpose: the
+/// green-evidence queries (`is_green_at`, `runs_at`, `latest_run`) decide the hand-over gate
+/// and must never see a row whose exit code does not exist yet. This table holds no verdict,
+/// only "someone is mid-verify, since T, as pid P".
+///
+/// The row is deleted when the run exits. A crashed `air record` leaves one behind, which is
+/// why every reader filters on the pid being alive — the ledger cannot probe pids, so
+/// liveness is passed in, exactly as `leases` does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlight {
+    /// Same ULID the finished `verify_runs` row will carry, so the two are one run.
+    pub id: String,
+    pub worker: String,
+    pub sha: String,
+    pub kind: Kind,
+    pub command: String,
+    pub pid: Option<i64>,
+    pub started_at: String,
+}
+
 impl Ledger {
     /// Insert a run. The id is generated here (ULID) unless the caller set one.
     pub fn record_verify(&self, run: &VerifyRun) -> Result<()> {
@@ -155,6 +177,72 @@ impl Ledger {
         Ok(self
             .latest_run(worker, sha, kind)?
             .is_some_and(|r| r.is_green()))
+    }
+
+    /// Record that a verify has started. Paired with `verify_finished` on every exit path.
+    pub fn verify_started(&self, f: &InFlight) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO verify_inflight (id, worker, sha, kind, command, pid, \
+             started_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                f.id,
+                f.worker,
+                f.sha,
+                f.kind.as_str(),
+                f.command,
+                f.pid,
+                f.started_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The run with this id is over (green, red, or the command could not start).
+    pub fn verify_finished(&self, id: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM verify_inflight WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    /// Every open in-flight row, oldest first. Callers decide liveness (`in_flight_pruned`).
+    pub fn verifies_in_flight(&self) -> Result<Vec<InFlight>> {
+        let mut st = self.conn().prepare(
+            "SELECT id, worker, sha, kind, command, pid, started_at FROM verify_inflight \
+             ORDER BY started_at ASC",
+        )?;
+        let v = st
+            .query_map([], |r| {
+                let kind_s: String = r.get(3)?;
+                Ok(InFlight {
+                    id: r.get(0)?,
+                    worker: r.get(1)?,
+                    sha: r.get(2)?,
+                    kind: Kind::parse(&kind_s).unwrap_or(Kind::Verify),
+                    command: r.get(4)?,
+                    pid: r.get(5)?,
+                    started_at: r.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    /// In-flight rows whose process is still alive, deleting the rest. `alive` answers "is
+    /// this pid still running"; a row with no pid is kept, since nothing disproves it.
+    ///
+    /// This is the whole answer to "a crashed verify does not leave a permanent in-flight
+    /// row": every reader prunes, so the first `air status` or `air land` after a crash
+    /// clears it. No timer, no expiry window.
+    pub fn in_flight_pruned(&self, alive: impl Fn(i64) -> bool) -> Result<Vec<InFlight>> {
+        let mut live = Vec::new();
+        for f in self.verifies_in_flight()? {
+            if f.pid.is_none_or(&alive) {
+                live.push(f);
+            } else {
+                self.verify_finished(&f.id)?;
+            }
+        }
+        Ok(live)
     }
 }
 
@@ -257,6 +345,67 @@ mod tests {
         let g = ledger.latest_green("w1", Kind::Verify).unwrap().unwrap();
         assert_eq!(g.sha, "aaa");
         assert!(ledger.latest_green("w9", Kind::Verify).unwrap().is_none());
+    }
+
+    fn flight(id: &str, worker: &str, pid: Option<i64>) -> InFlight {
+        InFlight {
+            id: id.into(),
+            worker: worker.into(),
+            sha: "aaa".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid,
+            started_at: "2026-08-29T19:00:00Z".into(),
+        }
+    }
+
+    /// air-4cr: an in-flight row is visible while the run lasts, gone when it exits, and
+    /// invisible to every query that decides whether a tree is green.
+    #[rstest]
+    fn an_in_flight_run_is_visible_and_is_not_evidence(ledger: Ledger) {
+        ledger
+            .verify_started(&flight("r1", "alpha", Some(1)))
+            .unwrap();
+        assert_eq!(ledger.verifies_in_flight().unwrap().len(), 1);
+        // It is not a verdict: nothing about "alpha at aaa" has been decided yet.
+        assert!(!ledger.is_green_at("alpha", "aaa", Kind::Verify).unwrap());
+        assert_eq!(
+            ledger.runs_at("alpha", "aaa", Kind::Verify).unwrap(),
+            (0, 0)
+        );
+        assert!(
+            ledger
+                .latest_run("alpha", "aaa", Kind::Verify)
+                .unwrap()
+                .is_none()
+        );
+
+        ledger.record_verify(&run("alpha", "aaa", 0, "t1")).unwrap();
+        ledger.verify_finished("r1").unwrap();
+        assert!(ledger.verifies_in_flight().unwrap().is_empty());
+        assert!(ledger.is_green_at("alpha", "aaa", Kind::Verify).unwrap());
+    }
+
+    /// air-4cr: a crashed `air record` leaves a row, and the next reader clears it. The row
+    /// with no pid survives, because nothing disproves it.
+    #[rstest]
+    fn a_dead_pid_is_pruned_by_whoever_reads_next(ledger: Ledger) {
+        ledger
+            .verify_started(&flight("live", "alpha", Some(1)))
+            .unwrap();
+        ledger
+            .verify_started(&flight("dead", "beta", Some(2)))
+            .unwrap();
+        ledger
+            .verify_started(&flight("nopid", "gamma", None))
+            .unwrap();
+        let live = ledger.in_flight_pruned(|pid| pid == 1).unwrap();
+        assert_eq!(
+            live.iter().map(|f| f.worker.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "gamma"]
+        );
+        // The prune is a write: the dead row is gone for the next reader too.
+        assert_eq!(ledger.verifies_in_flight().unwrap().len(), 2);
     }
 
     #[rstest]
