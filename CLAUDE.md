@@ -62,6 +62,9 @@ Index items are 1–3 lines; detail lives behind the link.
   Owner, via the 2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the
   receiver opening the file, none by the sender flagging; and a fourth that both sides held and
   neither checked, plausibly *because* the other had said it.
+  **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
+  number about this repo, before claiming a mechanism fires or is shipped, and before saying what
+  the installed `air` does (owner, 2026-08-29, air-476).
 - **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
 
 ## Index — documents
@@ -86,6 +89,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (the single procedure; what Air enforces vs judgement) | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) |
 | Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
 | Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `plain-language` (length budgets; shorter wins), `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
+| About to state a number, a rate, or what the installed `air` does | skill `project-diligence` — re-derive rather than re-read, check the binary against the repo, confirm the probe was seen failing |
 | Rust conventions (errors, lints, MSRV — open decisions) | [`docs/plans/0003-rust-conventions.md`](docs/plans/0003-rust-conventions.md) |
 | Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) · [`docs/rules/writing.md`](docs/rules/writing.md) |
 | Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
