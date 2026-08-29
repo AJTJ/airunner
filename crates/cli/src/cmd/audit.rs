@@ -78,6 +78,8 @@ pub struct Audit {
     /// What the hand-over gate costs per bead, from the event log (air-2zq). None when the
     /// window recorded no verify runs.
     pub cost: Option<Cost>,
+    /// What `peer-warning` changed, per warning (air-1ra).
+    pub peer: PeerEffect,
     pub duration_ms: u64,
 }
 
@@ -107,6 +109,78 @@ pub struct Cost {
     pub runs_per_close: Option<f64>,
 }
 
+/// One peer warning and what the warned session did next (air-1ra).
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerWarning {
+    pub at: String,
+    pub worker: String,
+    pub path: String,
+    /// Edits that session journaled to the warned file AFTER the warning.
+    pub edits_after: usize,
+    /// `edits_after <= 1`. See `PeerEffect` for why the boundary is one and not zero.
+    pub heeded: bool,
+}
+
+/// What `peer-warning` bought, as far as the record can say (air-1ra, plan 0008 item 20).
+///
+/// The mechanism had 33 firings and zero demonstrated effect in either direction, and the
+/// absence of recorded harm was partly because the effect was not recorded. It turns out it
+/// **was** recorded and never read: a `warn` line carries `session_id` and `path`, and so does
+/// every `journaled` line, so "did that session edit the warned file afterwards" is a join over
+/// events Air already writes. No new recording was added for this, and none is needed.
+///
+/// **Why the boundary is one edit and not zero.** A warning is `additionalContext` on a tool
+/// call that is already happening; it cannot stop that call, whose `PostToolUse` lands after
+/// the warning. So one following edit is the floor, not a choice. The distribution over
+/// 2026-08-22 confirms it: 33 warnings, no warning with zero edits after, twelve with exactly
+/// one, and a tail out to 44.
+///
+/// **This carries no threshold and no rule** — item 20's terms. `heeded` and `ignored` are
+/// counts, the per-warning rows are printed so the buckets can be checked against the raw
+/// record, and what to do about them is the owner's.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PeerEffect {
+    pub warnings: usize,
+    pub heeded: usize,
+    pub ignored: usize,
+    /// `None` = not recorded, and reported as such rather than as zero. Nothing in the ledger
+    /// records a merge conflict or the paths it touched; `air land` is where a conflict is
+    /// observed, so recording conflicted paths there is what would answer this.
+    pub conflicts_in_warned_files: Option<usize>,
+    pub warned: Vec<PeerWarning>,
+}
+
+/// Pure: pair each warning with the edits that session made to the warned file afterwards.
+/// `warns` and `edits` are `(at, worker, session_id, path)`, in any order.
+pub fn peer_effect(
+    warns: &[(String, String, String, String)],
+    edits: &[(String, String, String)],
+) -> PeerEffect {
+    let warned: Vec<PeerWarning> = warns
+        .iter()
+        .map(|(at, worker, sid, path)| {
+            let edits_after = edits
+                .iter()
+                .filter(|(a, s, p)| s == sid && p == path && a > at)
+                .count();
+            PeerWarning {
+                at: at.clone(),
+                worker: worker.clone(),
+                path: path.clone(),
+                edits_after,
+                heeded: edits_after <= 1,
+            }
+        })
+        .collect();
+    PeerEffect {
+        warnings: warned.len(),
+        heeded: warned.iter().filter(|w| w.heeded).count(),
+        ignored: warned.iter().filter(|w| !w.heeded).count(),
+        conflicts_in_warned_files: None,
+        warned,
+    }
+}
+
 /// What one mechanism accumulated over the scan.
 #[derive(Default)]
 struct Acc {
@@ -130,6 +204,11 @@ struct Ev {
     /// worker. Without it every decision-based mechanism reports exactly one subject, because
     /// the only thing left to key on is its own command name (air-s7c).
     subject: String,
+    /// `inputs.session_id` and `inputs.path`, for the peer-warning join (air-1ra). Empty when
+    /// the event carries neither, which is most of them.
+    session_id: String,
+    path: String,
+    worker: String,
 }
 
 /// The most specific thing an event names. Peer warnings are per file, claim refusals per
@@ -151,10 +230,24 @@ fn subject_of(v: &serde_json::Value) -> String {
 
 fn parse(line: &str) -> Option<Ev> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let field = |k: &str| {
+        v.get("inputs")
+            .and_then(|i| i.get(k))
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
     Some(Ev {
         at: v.get("at")?.as_str()?.to_string(),
         command: v.get("command")?.as_str()?.to_string(),
         subject: subject_of(&v),
+        session_id: field("session_id"),
+        path: field("path"),
+        worker: v
+            .get("worker")
+            .and_then(|w| w.as_str())
+            .unwrap_or_default()
+            .to_string(),
         decision: v
             .get("decision")
             .and_then(|d| d.as_str())
@@ -303,6 +396,9 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
     let mut days_scanned = 0usize;
     // Closes the gate let through: one `pass` per bd status write it inspected (air-2zq).
     let mut closes = 0usize;
+    // (at, worker, session_id, path) for the peer-warning join (air-1ra).
+    let mut warns: Vec<(String, String, String, String)> = Vec::new();
+    let mut edits: Vec<(String, String, String)> = Vec::new();
 
     for (day, text) in days {
         let in_window = day.as_str() >= since;
@@ -316,6 +412,20 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             }
             if in_window && e.decision == "pass" && e.command == "hook.PreToolUse" {
                 closes = closes.saturating_add(1);
+            }
+            if in_window && !e.session_id.is_empty() && !e.path.is_empty() {
+                match e.decision.as_str() {
+                    "warn" => warns.push((
+                        e.at.clone(),
+                        e.worker.clone(),
+                        e.session_id.clone(),
+                        e.path.clone(),
+                    )),
+                    "journaled" => {
+                        edits.push((e.at.clone(), e.session_id.clone(), e.path.clone()));
+                    }
+                    _ => {}
+                }
             }
             // A push carries the condition it pushed, so it attributes to the same
             // mechanism; it must never also be counted as one more evaluation of it.
@@ -409,6 +519,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             closes,
             ..Cost::default()
         }),
+        peer: peer_effect(&warns, &edits),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -506,6 +617,46 @@ pub fn render(a: &Audit) -> String {
             "  repeats are the waste to watch: a green at a HEAD that has not moved still \
              counts, so a second close on an unchanged commit demands no fresh verify.\n",
         );
+    }
+    s.push_str(&render_peer(&a.peer));
+    s
+}
+
+/// The peer-warning section (air-1ra). Its own function because the definitions have to travel
+/// with the numbers: a bucket whose boundary is not printed beside it is the derived-reads-like-
+/// observed failure again.
+fn render_peer(p: &PeerEffect) -> String {
+    if p.warnings == 0 {
+        return "\npeer-warning effect: no warnings in this window.\n".to_string();
+    }
+    let mut s = format!(
+        "\npeer-warning effect: {} warning(s); {} heeded, {} ignored\n",
+        p.warnings, p.heeded, p.ignored
+    );
+    s.push_str(
+        "  heeded = the warned session made no further edit to that file beyond the one \
+         already in flight. A warning is additionalContext on a tool call and cannot stop \
+         that call, so one following edit is the floor, not a choice.\n",
+    );
+    s.push_str(&format!(
+        "  conflicts in warned files: {}\n",
+        match p.conflicts_in_warned_files {
+            Some(n) => n.to_string(),
+            None => "not recorded. Nothing in the ledger records a merge conflict or the paths \
+                     it touched; `air land` is where one is observed, so recording conflicted \
+                     paths there is what would answer this."
+                .to_string(),
+        }
+    ));
+    for w in &p.warned {
+        s.push_str(&format!(
+            "  {} {:<12} {:<44} {} edit(s) after: {}\n",
+            w.at.get(..19).unwrap_or(&w.at),
+            w.worker,
+            w.path,
+            w.edits_after,
+            if w.heeded { "heeded" } else { "IGNORED" }
+        ));
     }
     s
 }

@@ -68,6 +68,7 @@ pub fn run(json: bool) -> i32 {
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
         probe_gc_keeps_what_it_must(),
+        probe_peer_warning_effect_is_readable(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -302,6 +303,60 @@ fn probe_gc_keeps_what_it_must() -> Probe {
     Probe {
         name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
         red_fires: red && live,
+        green_passes: green,
+    }
+}
+
+/// air-1ra: whether a peer warning changed what the worker did is readable from the record.
+///
+/// `peer-warning` had 33 firings and no demonstrated effect in either direction, and the
+/// absence of recorded harm was partly because the effect was not recorded. It was: a `warn`
+/// line carries `session_id` and `path`, and so does every `journaled` line. No new recording
+/// was added for this.
+///
+/// Red: warn, then the session edits that file twice more, and it reads IGNORED. Green: warn,
+/// then only the edit already in flight, and it reads heeded — and edits by ANOTHER session,
+/// or to another file, do not count against it, which is the join being a join.
+fn probe_peer_warning_effect_is_readable() -> Probe {
+    use crate::cmd::audit::peer_effect;
+
+    let w = |at: &str, sid: &str, path: &str| {
+        (
+            at.to_string(),
+            "alpha".to_string(),
+            sid.to_string(),
+            path.to_string(),
+        )
+    };
+    let e = |at: &str, sid: &str, path: &str| (at.to_string(), sid.to_string(), path.to_string());
+
+    let warns = [w("10:00", "s1", "a.rs"), w("10:00", "s2", "b.rs")];
+    let edits = [
+        // s1 was warned about a.rs and kept going: the in-flight edit plus two more.
+        e("10:01", "s1", "a.rs"),
+        e("10:02", "s1", "a.rs"),
+        e("10:03", "s1", "a.rs"),
+        // s2 was warned about b.rs and stopped after the edit already in flight.
+        e("10:01", "s2", "b.rs"),
+        // Noise that must not count: another session in the same file, the same session in
+        // another file, and an edit BEFORE the warning.
+        e("10:05", "s9", "b.rs"),
+        e("10:05", "s2", "c.rs"),
+        e("09:00", "s2", "b.rs"),
+    ];
+
+    let p = peer_effect(&warns, &edits);
+    let row = |i: usize| p.warned.get(i);
+    let red = p.warnings == 2
+        && p.ignored == 1
+        && row(0).is_some_and(|r| r.edits_after == 3 && !r.heeded);
+    let green = p.heeded == 1
+        && row(1).is_some_and(|r| r.edits_after == 1 && r.heeded)
+        // Never guessed at: a conflict count nobody records is reported as unrecorded, not 0.
+        && p.conflicts_in_warned_files.is_none();
+    Probe {
+        name: "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        red_fires: red,
         green_passes: green,
     }
 }
