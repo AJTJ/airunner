@@ -83,7 +83,11 @@ const HOOK_TIMEOUT_SECS: u64 = 5;
 pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {
     vec![
         ("SessionStart", None),
-        ("PreToolUse", Some("Edit|Write|MultiEdit|Bash")),
+        // `SendMessage` is here to be COUNTED, not gated (air-q07). The cost the owner most
+        // wants minimised — agent-to-agent coordination — was the one thing the ledger did
+        // not contain: one worker sent ~46,900 characters in a day and a query over the event
+        // log returned zero, not because there was none but because it was invisible.
+        ("PreToolUse", Some("Edit|Write|MultiEdit|Bash|SendMessage")),
         ("PostToolUse", Some("Edit|Write|MultiEdit|Bash")),
         ("PermissionRequest", None),
         ("PermissionDenied", None),
@@ -122,13 +126,28 @@ pub fn merge_hooks(mut settings: Value) -> Value {
             .map(|o| o.entry(event).or_insert_with(|| json!([])))
             .and_then(Value::as_array_mut);
         let Some(arr) = arr else { continue };
-        let already = arr.iter().any(|group| {
+        // Ours already there? Then the only thing that can be stale is the matcher, and it
+        // must be UPDATED rather than left (air-q07). Before this, `merge_hooks` treated
+        // "an air hook exists for this event" as done, so a repo that installed Air once kept
+        // its first matcher for ever and re-running `air install --write` changed nothing —
+        // which is how widening the matcher to `SendMessage` would have reported success and
+        // recorded no messages. The idempotence that matters is "running it twice is the same
+        // as running it once", not "never touch what is there".
+        let ours = arr.iter_mut().find(|group| {
             group
                 .get("hooks")
                 .and_then(Value::as_array)
                 .is_some_and(|hs| hs.iter().any(is_ours))
         });
-        if already {
+        if let Some(group) = ours {
+            match (matcher, group.get("matcher").and_then(Value::as_str)) {
+                (Some(want), have) if have != Some(want) => {
+                    if let Some(obj) = group.as_object_mut() {
+                        obj.insert("matcher".into(), json!(want));
+                    }
+                }
+                _ => {}
+            }
             continue;
         }
         let group = match matcher {
@@ -270,6 +289,18 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "A repo running Air had the mechanisms and not the discipline for removing \
                  them. Re-run `air install --write` to get it; it is what `air audit`'s \
                  registry is read with.",
+    },
+    SurfaceChange {
+        id: "sendmessage-measured",
+        since: "2026-08-29 (air-q07)",
+        headline: "The PreToolUse matcher includes `SendMessage`: agent-to-agent messages are \
+                   counted (sender, recipient, byte count -- never content).",
+        silent_break: true,
+        action: "Re-run `air install --write`. Until you do, `air audit`'s traffic block reads \
+                 zero for this repo, and a zero there is indistinguishable from silence -- \
+                 which is the bug it replaced: one worker sent ~46,900 characters in a day and \
+                 the event log contained none of it. Nothing is gated; there is no threshold \
+                 and no refusal.",
     },
 ];
 
@@ -602,7 +633,23 @@ mod tests {
         assert_eq!(pre.len(), 2, "{pre:?}");
         assert_eq!(pre[0]["hooks"][0]["command"], "rtk hook");
         assert_eq!(pre[1]["hooks"][0]["command"], "air hook");
-        assert_eq!(pre[1]["matcher"], "Edit|Write|MultiEdit|Bash");
+        // Read from the rule, not copied beside it (air-jc0): this assertion used to hold a
+        // second copy of the matcher and went red when the matcher legitimately changed.
+        let want = hook_entries()
+            .into_iter()
+            .find(|(e, _)| *e == "PreToolUse")
+            .and_then(|(_, m)| m)
+            .unwrap();
+        assert_eq!(pre[1]["matcher"], want);
+        // air-q07: a stale matcher on OUR entry is updated in place, not left alone. A repo
+        // installed before the matcher widened must get the new one by re-running install.
+        let stale = json!({"hooks": {"PreToolUse": [
+            {"matcher": "Edit", "hooks": [{"type": "command", "command": "air hook"}]}
+        ]}});
+        let fixed = merge_hooks(stale);
+        let pre = fixed["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1, "no duplicate entry: {pre:?}");
+        assert_eq!(pre[0]["matcher"], want, "the matcher must be refreshed");
         assert!(once["hooks"]["SessionStart"][0].get("matcher").is_none());
         for (event, _) in hook_entries() {
             assert!(once["hooks"][event].is_array(), "{event}");
