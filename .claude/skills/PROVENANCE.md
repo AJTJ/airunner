@@ -6,6 +6,7 @@ skill's own `## Provenance` section.
 
 | Skill | Source | Source HEAD | Ported | Class | Adaptations |
 |---|---|---|---|---|---|
+| check-resources | Written here (no upstream skill found; 186 rostered orchestrators checked for one 2026-08-24) | n/a | 2026-08-24 | NEW | Owner ask 2026-08-24: check the harness, the field, and Air before building. Points at `docs/research/claude-code-control-surfaces.md` §0, `docs/research/harness-and-orchestrator-landscape.md`, `docs/plans/0007-surface-audit.md`. Removal condition in the skill. |
 | review | `adopter/.claude/skills/review/` (49 files) + Beads block from `another-project/.claude/skills/review/SKILL.md` | adopter `f2ca891`; another-project | 2026-08-18 | ADAPT | Beads block grafted (bd/air, PR); repo constraints → Air hook path/ledger/beads boundary; fp-review delegation removed; rubric + 48 references verbatim. Lean variant noted: `another-project/.claude/skills/review` (`cce8fc0`), not ported. |
 | architecture-review | `adopter/.claude/skills/architecture-review/` (6 files) | adopter `f2ca891` | 2026-08-18 | ADOPT | SIMP → plan doc (`docs/plans/`); otherwise verbatim. |
 | system-design-review | `adopter/.claude/skills/system-design-review/` (7 files) | adopter `f2ca891` | 2026-08-18 | ADOPT | SIMP → plan doc (`docs/plans/`); otherwise verbatim. |
