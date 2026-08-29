@@ -39,6 +39,14 @@ pub enum Fires {
 pub enum Removal {
     /// Nothing was recorded. `air audit` reports this as a defect rather than skipping it:
     /// a mechanism nobody wrote a removal condition for is the one that outlives its reason.
+    ///
+    /// air-byw: `stuck` was the last mechanism carrying this, so as of 2026-08-29 **every**
+    /// mechanism records a removal condition and the variant is unconstructed. Kept
+    /// deliberately, and the `allow` is the point rather than a workaround: without it the next
+    /// author with nothing to record must pick `Judgement` and invent text, which is exactly the
+    /// invention this file's header forbids. Deleting the variant would turn "I have no
+    /// condition for this" from a reported defect into an unsayable thing.
+    #[allow(dead_code)]
     Unstated,
     /// Recorded, but a person has to decide. The audit prints the text and says so; it does
     /// not pretend to evaluate it.
@@ -221,23 +229,26 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "attention",
         what: "A session waiting on a permission prompt past the stuck threshold.",
         added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs, the `\"stuck\"` arm",
+        source: "crates/cli/src/cmd/status.rs; the state is set only by hook.rs PermissionRequest",
         fires: Fires::Condition("stuck"),
         // Zero firings in every recorded day, and that number settles NOTHING in either
-        // direction (air-dqw, corrected by diligence's air-byw before the deletion shipped).
-        // The state is set only by `HookEvent::PermissionRequest`, which has fired 0 times in
-        // 39,071 event lines over 8 days — not because the hook is broken, but because the
-        // fleet runs in auto mode (`permissions.defaultMode: auto`,
-        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits
-        // on one. Every `PermissionDenied` event says "Blocked by classifier".
+        // direction (air-dqw, corrected by air-byw before the deletion shipped; ledger reverted
+        // it on the finding).
         //
-        // Dormant, not dead: turn auto mode off and this fires immediately with no code change.
-        // A zero is evidence only when the subject occurred and the mechanism stayed silent.
+        // The state is set in exactly ONE place, `HookEvent::PermissionRequest`, and
+        // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days. The hook
+        // is not broken and not misnamed: the harness inventory lists `PermissionRequest` as
+        // "permission prompt needed", and `install.rs` registers it correctly. It never arrives
+        // because the fleet runs in AUTO MODE (`permissions.defaultMode: auto`,
+        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits on
+        // one. Every `PermissionDenied` event says "Blocked by classifier": that classifier
+        // deciding instead of asking.
         //
-        // air-byw owns stating the revival condition on this row; this text is the placeholder
-        // that keeps the row honest until then.
+        // Dormant, not dead. Turn auto mode off and this fires immediately with no code change.
+        // A zero is evidence only when the subject occurred and the mechanism stayed silent
+        // (air-txa); this is the case where the input is suppressed by configuration.
         removal: Removal::Judgement(
-            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the configuration and cannot settle it",
+            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the permission configuration and cannot settle this in either direction",
         ),
     },
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered
