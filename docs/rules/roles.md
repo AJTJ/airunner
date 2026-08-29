@@ -99,9 +99,9 @@ flight. **Idle:** feed no one.
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
 acceptance, a resource conflict), through the owner queue.
 
-Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD, review
-waits, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent
-with a claim, idle without a claim, hand-over not green, review waiting, lease held by a dead
+Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
+landable branches, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent
+with a claim, idle without a claim, hand-over not green, landable branch, lease held by a dead
 session, owner decision waiting, session joined or left). **[fact]** Review waiting and owner
 decision waiting push only when the SET changes, not while it ages; the waits themselves are
 always in `air status` and `air inbox --owner` on demand (air-s7c, 2026-08-22). What each
