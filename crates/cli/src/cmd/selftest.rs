@@ -84,6 +84,7 @@ pub fn run(json: bool) -> i32 {
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
+        probe_land_role_is_where_you_are(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -1018,7 +1019,7 @@ fn probe_triage_bead_exists() -> Probe {
 fn probe_batch_close() -> Probe {
     use crate::cmd::close::may_close;
 
-    let red = may_close("beta").is_err();
+    let red = may_close(Some("beta")).is_err();
     let green = (|| -> Result<bool, String> {
         let ids: Vec<String> = (1..=10).map(|i| format!("fd-{i}")).collect();
         let argv = air_bd::close_argv(&ids, "landed", "main");
@@ -1032,7 +1033,7 @@ fn probe_batch_close() -> Probe {
         let released = l
             .release_claims_on(&ids, "landed", "t1")
             .map_err(|e| e.to_string())?;
-        Ok(may_close("main").is_ok() && one_process && released.len() == ids.len())
+        Ok(may_close(Some("main")).is_ok() && one_process && released.len() == ids.len())
     })()
     .unwrap_or(false);
     Probe {
@@ -1090,14 +1091,14 @@ fn probe_land_refusals() -> Probe {
     ];
     let dirty = vec!["src/a.rs".to_string()];
     // Every refusal fires, and every one names a command to run.
-    let red = may_land("alpha").is_err()
+    let red = may_land(&at("alpha", "alpha")).is_err()
         && check(&ok(&dirty)).is_err()
         && refusals.iter().all(|f| {
             check(f)
                 .err()
                 .is_some_and(|m| m.contains('`') && m.starts_with("refused: "))
         });
-    let green = may_land("main").is_ok()
+    let green = may_land(&at("main", "main")).is_ok()
         && check(&ok(&none)) == Ok(true)
         && check(&Facts {
             already_in_main: true,
@@ -1105,6 +1106,61 @@ fn probe_land_refusals() -> Probe {
         }) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// A caller standing in `here` with `--repo` resolving to `pointed`.
+fn at<'a>(here: &'a str, pointed: &'a str) -> crate::cmd::land::Caller<'a> {
+    crate::cmd::land::Caller {
+        where_i_am: Some(here),
+        where_i_pointed: pointed,
+    }
+}
+
+/// air-29a: `air land`'s role comes from where the process is, not from `--repo`.
+///
+/// The incident: worker beta ran `cargo run -q -p air -- --repo <main> land --all` from its
+/// worktree on 2026-08-22 to check its own fix, and it LANDED — merging `worktree-beta` into
+/// main at d10ddab. Two guards were supposed to stop it and neither did. `Bash(air land *)`
+/// matches command TEXT, so `cargo run`, `./target/debug/air`, and an absolute path all miss
+/// it. And `may_land` was fed `worker_name_for(repo)`, where `repo` is `--repo` — an argument
+/// the caller supplies, so pointing it at the main checkout made the caller `main`.
+///
+/// A parser that guards counts as absent until proven present (`anti-brittleness`). Neither of
+/// these was present. This probe is what proves the replacement fires.
+///
+/// Red: a worker is refused standing in its own worktree, refused while pointing `--repo` at
+/// the main checkout, and refused when Air cannot tell where it is. The `--repo` case names the
+/// bypass. Green: the coordinator standing in the main checkout passes.
+///
+/// Note what the probe does NOT vary: how the command was spelled. That is the point — argv
+/// never reaches this decision, so there is no spelling to enumerate.
+fn probe_land_role_is_where_you_are() -> Probe {
+    use crate::cmd::land::{Caller, may_land};
+
+    let nowhere = Caller {
+        where_i_am: None,
+        where_i_pointed: "main",
+    };
+    let bypass = may_land(&at("alpha", "main"));
+    let red = may_land(&at("alpha", "alpha")).is_err()
+        // The incident's own invocation: in a worktree, --repo at the main checkout.
+        && bypass.as_ref().err().is_some_and(|m| m.contains("air-29a"))
+        && bypass
+            .as_ref()
+            .err()
+            .is_some_and(|m| m.contains("cargo run -p air -- land"))
+        // Fails closed: an unknown location is not a coordinator.
+        && may_land(&nowhere).is_err();
+    // The coordinator's ordinary run, and only from the main checkout.
+    let green = may_land(&at("main", "main")).is_ok()
+        // Standing in main while --repo names a worktree is still the coordinator: the role
+        // is where you are, in both directions.
+        && may_land(&at("main", "alpha")).is_ok();
+    Probe {
+        name: "land: the role is where the process is, so --repo at the main checkout does not make a worker the coordinator",
         red_fires: red,
         green_passes: green,
     }
