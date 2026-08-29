@@ -430,6 +430,7 @@ fn all_probes() -> Vec<Probe> {
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
+        probe_close_releases_the_claim(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -437,6 +438,7 @@ fn all_probes() -> Vec<Probe> {
         probe_change_only_push(),
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
+        probe_gc_keeps_what_it_must(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -601,6 +603,60 @@ fn probe_doctor_enumerates_tables() -> Probe {
     Probe {
         name: "doctor: every table the ledger has is counted, including one added after this probe was written",
         red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-i7s: `air gc` keeps what it must and removes only what it may.
+///
+/// The stream is the only artefact that has caught the audit's own errors (0007 §11), so this
+/// probe is about the failure DIRECTION: a collector that errs must err toward keeping.
+///
+/// Red: an old day the ledger still points at is kept, and so is a day inside the window, and
+/// an unreadable clock keeps everything rather than collecting everything. Green: an old day
+/// nothing points at is the one thing collected, and its bytes are the reported total.
+fn probe_gc_keeps_what_it_must() -> Probe {
+    use crate::cmd::gc::{plan, referenced_days};
+
+    let days = [
+        ("2026-01-01".to_string(), 100u64), // old, unreferenced -> collect
+        ("2026-01-02".to_string(), 200u64), // old, but a landing sits in it -> keep
+        ("2026-08-29".to_string(), 400u64), // inside the window -> keep
+    ];
+    let referenced: std::collections::BTreeSet<String> =
+        std::iter::once("2026-01-02".to_string()).collect();
+
+    let p = plan(&days, "2026-08-29", 90, &referenced);
+    let kept = |i: usize| p.days.get(i).and_then(|d| d.kept);
+    let red = kept(1) == Some("the ledger still points at this day")
+        && kept(2) == Some("inside the retention window")
+        // A clock it cannot read keeps everything. The other direction deletes the record.
+        && plan(&days, "not-a-date", 90, &Default::default()).collectable_bytes == 0;
+
+    let green = kept(0).is_none()
+        && p.collectable_bytes == 100
+        && p.total_bytes == 700
+        // Nothing is removed by planning, and `applied` says so.
+        && !p.applied;
+
+    // And the referenced set is read from the ledger, not from a list: a landing written now
+    // protects its own day.
+    let live = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.conn()
+            .execute(
+                "INSERT INTO landings (id, worker, sha, result, attempt_no, started_at, finished_at) \
+                 VALUES ('x','alpha','deadbeef','landed',1,'2026-01-02T10:00:00Z','2026-01-02T10:05:00Z')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(referenced_days(l.conn()).contains("2026-01-02"))
+    })()
+    .unwrap_or(false);
+
+    Probe {
+        name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
+        red_fires: red && live,
         green_passes: green,
     }
 }
@@ -1764,6 +1820,80 @@ fn probe_expired_cutoff_is_reported() -> Probe {
         name: "doctor: a dated rule says so when its cutoff has passed",
         red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
         green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
+    }
+}
+
+/// air-8p4: a claim row survived `bd close`, so conditions kept firing on a bead that was
+/// closed and landed. Red: the row still open, `handover-not-green` fires on it — the state
+/// adopter's coordinator spent a setup window diagnosing. Green: the close releases the row
+/// and nothing fires; and `-s awaiting_review` does NOT release it, because a handed-over bead
+/// is still the worker's until it lands (air-3eu).
+///
+/// The mutation that made it red, seen: widening `closes_bead` to `handover_bead(cmd)`, so
+/// `-s awaiting_review` releases too — "red fires / green BLOCKED". The hook path that applies
+/// it is covered separately by `hook::tests::a_successful_close_releases_the_claim_and_awaiting_review_does_not`,
+/// whose mutation is deleting the arm from `dispatch`.
+fn probe_close_releases_the_claim() -> Probe {
+    use crate::cmd::hook::closes_bead;
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+
+    const NOW: &str = "2026-08-20T12:00:00Z";
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w", &[], "2026-08-20T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        l.stamp_handover("fd-1", "w", "2026-08-20T11:50:00Z")
+            .map_err(|e| e.to_string())?;
+        // A live worker, recently seen, so the only thing that can speak is the claim.
+        let fires = |l: &Ledger| -> Result<Vec<&'static str>, String> {
+            let claims = l.open_claims().map_err(|e| e.to_string())?;
+            let s = Snapshot {
+                workers: vec![WorkerView {
+                    worker: "w".into(),
+                    role: "worker".into(),
+                    green_at_head: Some(false),
+                    claims,
+                    session: Some(Session {
+                        session_id: "s".into(),
+                        state: "working".into(),
+                        changed_at: "2026-08-20T11:59:00Z".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            Ok(attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect())
+        };
+        let before = fires(&l)?;
+        // Not an ending: a hand-over leaves the claim held.
+        let handover_keeps_it = closes_bead("bd update fd-1 -s awaiting_review").is_none();
+        // The close, as the PostToolUse arm applies it.
+        let bead = closes_bead("bd close fd-1 --reason done").ok_or("close not recognised")?;
+        let released = l
+            .release_claim(&bead, "w", "closed", "t2")
+            .map_err(|e| e.to_string())?;
+        let after = fires(&l)?;
+        // Threshold-independent on both sides: the claim on fd-1 is what speaks and what goes
+        // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
+        let still_held = l
+            .open_claims()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c.bead == "fd-1");
+        Ok((
+            before.contains(&"handover-not-green"),
+            handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "claim: a closed bead stops alarming; awaiting_review still holds it",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
