@@ -789,9 +789,15 @@ mod tests {
             .unwrap();
         assert_eq!((idle.evaluations, idle.condition_met), (0, Some(true)));
 
-        // A mechanism with nothing recorded is still reported as a defect (`stuck`, which
-        // the 2026-08-22 pass deliberately left out of scope).
-        assert!(a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some()));
+        // Nothing recorded IS a defect, asserted against the classifier. It used to be
+        // asserted by finding a registry row that lacked a condition — `review-waiting` until
+        // air-s7c, then `stuck` until air-dqw deleted it — and no row lacks one now, which is
+        // the goal. A test that needs a defect to exist is a test that resists the fix.
+        assert_eq!(
+            removal_verdict(Removal::Unstated, 0),
+            ("none", None, Some(NO_CONDITION))
+        );
+        assert!(a.rows.iter().all(|r| r.defect.is_none()));
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);

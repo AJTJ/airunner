@@ -28,10 +28,19 @@ Closed defaults belong to the first kind (air-5re).
 
 ## Worker (one per worktree, one bead at a time)
 
-Finishing a bead is not a stop. At WIP 0 take the next ready bead and say so afterwards; stop
-only when `bd ready` is empty or on a blocker you captured. (Two workers read "next bead" as
-"wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of 2026-08-15 was
-fixed by this sentence and never recurred. Removed never.)
+**Starting a session is not being given work.** A launched worker waits: it claims nothing and
+takes no bead until something triggers it — a task on the launcher, a message, the owner typing.
+Nothing enforces this and nothing needs to: with no `--task` the launcher passes no prompt at
+all, and this file arrives via `--append-system-prompt-file`, so an untriggered session never
+runs a turn (owner, 2026-08-29, air-7q5). Removed when a launch path exists that starts a turn
+without a trigger.
+
+**Once you have work, finishing a bead is not a stop.** At WIP 0 take the next ready bead and say
+so afterwards; stop only when `bd ready` is empty or on a blocker you captured. (Two workers read
+"next bead" as "wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of
+2026-08-15 was fixed by this sentence and never recurred. Removed never.) The run-on begins at
+your first piece of work, not at session start; the two sentences above are the whole of the
+difference.
 
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
 then the work. **How a finished bead is handed on is the repo's own flow, in its CLAUDE.md,
@@ -95,18 +104,35 @@ Workers are reached with `SendMessage` to the session name `air status` shows; t
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
 denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
 zero denied send-keys attempts). **[fact]**
-When the channel is quiet, `air status` every few minutes is the coordinator's job: the channel
-reports conditions, status reports everything (standstill 2026-08-22; removed when the
-`review-waiting` and `idle-without-claim` conditions cover a full round with no standstill).
-**[fact]** Landing is the coordinator's: `air land --all` merges every green branch into main,
-oldest first, verifies the merged result, and puts main back where it was on red (air-3pz). A
-branch is landable when it carries a recorded green at its head; the beads reported are the
-ones its commits name in a `Bead: <id>` trailer — no bead status is consulted, and prose is not
-read (air-7kp, air-4re). Put the trailer on every commit that does a bead's work; a commit
-without one is attributed to nothing. `air status` names what is ready. **[Air enforces: main checkout, on main, clean
-tracked tree, branch contains main, recorded green at the branch head]**
-Merging is not closing, and `air land` closes nothing: the worker closes its own bead with
-proof (owner, 2026-08-22). The landing prints every bead beside its acceptance criteria and
+**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions on change, and
+`stuck` — the one that should catch a wedged worker — has never fired in any recorded day and
+carries no removal condition (air-dqw). So a wedged worker can reach nobody. The heartbeat is the
+failsafe, not the reporting path: it runs `air status` and says nothing when nothing changed.
+Incident: the 2026-08-22 05:26-05:45 standstill (air-arq), where the quiet channel rested on the
+coordinator remembering to look. Removed when `stuck` fires on a real wedge before the heartbeat
+catches it, twice. **[fact]**
+
+**Landing is the coordinator's, not a worker's.** *How* a branch reaches main is the repo's own
+flow and lives in its CLAUDE.md, exactly as hand-over does: some repos have their own lander,
+some use Air's. Air names no landing command here (air-97z).
+
+What Air states either way: a branch is landable when it carries a **recorded green at a head
+that contains `main`**; the beads a landing carries are the ones its commits name in a
+`Bead: <id>` trailer, so put the trailer on every commit that does a bead's work — no bead status
+is consulted, prose is not read, and a commit without one is attributed to nothing (air-7kp,
+air-4re); and Air records every landing it performs. `air status` names what is ready.
+**[Air enforces, when the landing is Air's: main checkout, on main, clean tracked tree, branch
+contains main, recorded green at the branch head]**
+**The landing verify is not a repeat of the worker's: it runs in the main checkout, where the
+environment differs.** `.git` is a FILE in a worktree and a DIRECTORY in the main checkout, and
+anything reading its shape, `core.hooksPath`, or the cwd can differ between the two. adopter
+2026-08-23: a probe was green in the worktree and red on the merged result for exactly that
+reason, and in the main checkout it did not refuse, so the target RAN and wrote hooks during the
+landing verify. "Every other instrument failure that night was catchable by running the suite.
+This one was only catchable by running it somewhere else." A worker has exactly one environment,
+so a green branch going red on landing is information, not a flake. **[fact]**
+Merging is not closing, and a landing closes nothing: the worker closes its own bead with
+proof (owner, 2026-08-22). A landing Air performs prints every bead beside its acceptance criteria and
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause
 only by lookup (a recorded green at the landed sha, a path the merge changed) and reports the
 rest as unreadable rather than judging prose. A clause the merge CONTRADICTS is a wrong close,
@@ -124,8 +150,8 @@ labelled `owner` is awaiting the owner and `air claim` refuses it to workers (th
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open).
 
-Not available to the coordinator, by deny rule: `git commit` and `git push` on main. `air land`
-is the one allowed path onto main, and it pushes nothing.
+Not available to the coordinator, by deny rule: `git commit` and `git push` on main. Whatever
+path this repo lands by, Air pushes nothing — a landing it performs reaches main and stops there.
 **[Air enforces]**
 
 ## When refused
