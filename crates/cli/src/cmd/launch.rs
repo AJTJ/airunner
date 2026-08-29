@@ -34,8 +34,29 @@ pub const WORKER_DENY: &[&str] = &[
     "ExitWorktree",
 ];
 
-/// Deny rules for the coordinator: it steers, it does not commit on main or push.
-pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)", "Bash(git commit *)"];
+/// Deny rules for the coordinator: it steers and writes on main, but nothing it does reaches
+/// a remote.
+///
+/// `Bash(git commit *)` was here until 2026-08-29 and is gone by the owner's ruling (air-iy1).
+/// The incident: the coordinator wrote plan 0008, a decisions entry and a CLAUDE.md index row,
+/// could not commit them, and the owner committed by hand — the owner doing a chore the
+/// coordinator was in the middle of.
+///
+/// **The boundary the owner drew is the remote, not main.** `air land` already merges into
+/// main and is already the coordinator's, so the deny was never protecting main from the
+/// coordinator; it was stopping it from saving its own prose.
+///
+/// This is NOT precedent from adopter, and the bead's original framing that it was does not
+/// survive checking. Their coordinator cannot hand-commit on main either, and their CLAUDE.md
+/// forbids `git add`/`git commit` in the main checkout outright; what was allowed there was a
+/// scripted path (`land.sh`: refuse, digest, `--no-ff` merge, verify, rewind on red), which is
+/// what `air land` already is. They have never tried this, so they are evidence neither way.
+/// It rests on the owner's ruling alone.
+///
+/// **Removal**: if a coordinator commit ever lands something on main that no worker branch
+/// carried and no landing recorded, this comes back — and `air land` stays the route for
+/// landing a worker's branch regardless. Hand-committing is for the coordinator's own prose.
+pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)"];
 
 /// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
 /// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
@@ -543,7 +564,9 @@ mod tests {
     fn coordinator_argv_attaches_the_channel() {
         let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
         assert_eq!(&v[..2], ["--channels", "server:air"]);
-        assert!(v.contains(&"Bash(git commit *)".to_string()));
+        // The remote is the boundary, not main (air-iy1): push denied, commit allowed.
+        assert!(v.contains(&"Bash(git push *)".to_string()));
+        assert!(!v.contains(&"Bash(git commit *)".to_string()));
         assert!(!v.contains(&"--worktree".to_string()));
         let settings: serde_json::Value =
             serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])
