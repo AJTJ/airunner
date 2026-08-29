@@ -73,6 +73,10 @@ pub struct Snapshot {
     /// `bd ready` count at this tick (None when bd did not answer): queue depth over time
     /// (plan 0006 C6; the round ran dry at 4 with only epics left).
     pub ready_depth: Option<usize>,
+    /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
+    /// them, so the coordinator needs this before merging and the worker never has to relay it.
+    /// Dead pids are pruned by the gather that reads them.
+    pub verifies_in_flight: Vec<air_ledger::verify::InFlight>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -518,6 +522,36 @@ pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
     let b: jiff::Timestamp = later.parse().ok()?;
     b.duration_since(a).as_secs().checked_div(60)
+}
+
+/// Verifies running right now, oldest first, with dead pids pruned on the way out (air-4cr).
+/// Shared by `air status` and `air land`, so both answer the question the same way.
+pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> {
+    ledger
+        .in_flight_pruned(super::lease::pid_alive)
+        .unwrap_or_default()
+}
+
+/// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
+/// a verify is ~420 s in adopter's repo, so a minutes-only reading rounds most of it to 0.
+pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
+    let elapsed = seconds_between(&f.started_at, at)
+        .map(|s| format!("{s}s"))
+        .unwrap_or_else(|| "unknown".into());
+    format!(
+        "{} started {} ago: {} at {}",
+        f.worker,
+        elapsed,
+        f.command,
+        f.sha.get(..8).unwrap_or(&f.sha)
+    )
+}
+
+/// Seconds between two RFC 3339 timestamps; None when either does not parse.
+pub fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
+    let a: jiff::Timestamp = earlier.parse().ok()?;
+    let b: jiff::Timestamp = later.parse().ok()?;
+    Some(b.duration_since(a).as_secs())
 }
 
 /// The pure part. Every condition names the worker, how long, and what to do.
@@ -1017,6 +1051,9 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             .collect(),
         sessions: all_sessions,
         ready_depth,
+        // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
+        // next status clears it, so no expiry window has to be chosen or tuned.
+        verifies_in_flight: verifies_in_flight(&ledger),
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1159,6 +1196,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 ""
             }
         ));
+    }
+    // Silent when nothing is running: a coordinator who lands into an empty screen is right
+    // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
+    for f in &s.verifies_in_flight {
+        out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
     }
     // Always rendered (air-e7q): what waits on whom.
     out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));
