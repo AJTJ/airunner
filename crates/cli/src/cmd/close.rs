@@ -19,13 +19,27 @@ use air_bd::{BdError, WorkLedger};
 use crate::cmd::{emit, log_event, now, open};
 
 /// Who may run `air close`. Pure, so `air selftest` can prove the refusal fires.
-pub fn may_close(worker: &str) -> Result<(), String> {
+/// air-29a: the same guard as `land::may_land`, with the same input, so it had the same hole.
+/// `worker` here is now the caller's actual location (`land::where_i_am`), never
+/// `worker_name_for(--repo)`. Fixed alongside air-29a rather than filed after it: it is one
+/// line of the identical defect, and leaving it would mean the finding was fixed in one of the
+/// two places a reader would look.
+pub fn may_close(worker: Option<&str>) -> Result<(), String> {
+    let Some(worker) = worker else {
+        return Err(
+            "refused: `air close` cannot tell which checkout it is running in, and the role \
+             decides who may close a landing pass (fix: run it from the main checkout)."
+                .to_string(),
+        );
+    };
     if super::hook::role_for(worker) == "coordinator" {
         return Ok(());
     }
     Err(format!(
         "refused: `air close` is the coordinator's landing pass, and {worker} is a worker. \
-         Hand the bead over instead: `air handover` then `bd update <id> -s awaiting_review`."
+         Close your own bead with proof instead: `air handover` names anything missing, then \
+         `bd close <id> --reason \"<proof>\"` (owner ruling, 2026-08-22). The role comes from \
+         where this process runs, so `--repo` does not change it (air-29a)."
     ))
 }
 
@@ -45,11 +59,13 @@ pub fn run(repo: &Path, beads: &[String], reason: &str, json: bool) -> i32 {
             return 1;
         }
     };
-    let inputs = serde_json::json!({"beads": beads, "reason": reason});
-    if let Err(msg) = may_close(&worker) {
+    // air-29a: the role is where this process is, not what `--repo` says.
+    let here = super::land::where_i_am();
+    let inputs = serde_json::json!({"beads": beads, "reason": reason, "caller": here, "repo_worker": worker});
+    if let Err(msg) = may_close(here.as_deref()) {
         log_event(
             &ledger,
-            &worker,
+            here.as_deref().unwrap_or("unknown"),
             "close",
             &inputs,
             "refuse",
