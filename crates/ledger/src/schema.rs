@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 11;
+pub const CURRENT_VERSION: i64 = 12;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -202,6 +202,17 @@ CREATE TABLE IF NOT EXISTS verify_inflight (
 ALTER TABLE landings ADD COLUMN pid INTEGER;
 "#;
 
+/// v12 (2026-08-29, air-air): which model a session is running. The coordinator had no way to
+/// answer "which model is this worker on" except by asking the worker, and a wrong model that is
+/// invisible costs the round while a visible one costs a relaunch.
+///
+/// Recorded, never inferred: the value is read out of the session's own transcript, which carries
+/// `"model":"<id>"` on every assistant message. So a session launched with no `--model` records
+/// what it ACTUALLY inherited rather than what a settings file suggests it might have.
+const V12: &str = r#"
+ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -249,6 +260,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V11)?;
         conn.pragma_update(None, "user_version", 11)?;
     }
+    if version < 12 {
+        conn.execute_batch(V12)?;
+        conn.pragma_update(None, "user_version", 12)?;
+    }
     Ok(())
 }
 
@@ -275,5 +290,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 9);
+    }
+
+    /// air-air: v12 adds `sessions.model` by ALTER, so the case that matters is an EXISTING
+    /// database with rows in it, not a fresh one. A migration tested only from empty is tested
+    /// in the one state no real ledger is ever in.
+    #[test]
+    fn v12_adds_the_model_column_to_a_populated_sessions_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Stop at v11, the state every live ledger was in before this change.
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (session_id, worker, state, changed_at, started_at) \
+             VALUES ('s1','diligence','working','t','t')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 11).unwrap();
+
+        migrate(&conn).unwrap();
+
+        // The row survived, and its model is empty rather than absent: an honest unknown that
+        // the next hook fills in from the transcript.
+        let (worker, model): (String, String) = conn
+            .query_row(
+                "SELECT worker, model FROM sessions WHERE session_id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(worker, "diligence");
+        assert_eq!(model, "");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, CURRENT_VERSION);
     }
 }
