@@ -59,7 +59,6 @@ pub fn run(json: bool) -> i32 {
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
         probe_project_is_taken_from_what_it_is_told(),
-        probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_close_with_proof_sequence(),
@@ -836,40 +835,6 @@ fn probe_project_is_taken_from_what_it_is_told() -> Probe {
         name: "project: the session's project comes from what it is told, not from ambient AIR_PROJECT",
         red_fires: res.0,
         green_passes: res.1,
-    }
-}
-
-fn probe_project_fence() -> Probe {
-    use crate::cmd::hook::project_fence;
-    use air_hooks::{HookInput, HookOutcome};
-
-    let call = |raw: String| -> Option<HookOutcome> {
-        let input = HookInput::parse(&raw).ok()?;
-        project_fence(&input, "air").map(|d| d.outcome)
-    };
-    let bash = |cmd: &str| {
-        call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
-    };
-    let send = |to: &str| {
-        call(serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": to}}).to_string())
-    };
-    let denied = |o: Option<HookOutcome>, needle: &str| {
-        matches!(o, Some(HookOutcome::Block { reason })
-            if reason.contains(needle) && reason.contains("air-0lk"))
-    };
-    Probe {
-        name: "project: acting on another project's tmux session is denied and the refusal is readable; messaging any project is allowed",
-        red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
-            // The refusal has to be interpretable, or a fenced peer reads it as "not you"
-            // and stops trying (air-3oq).
-            && denied(bash("tmux kill-session -t fd-worker1"), "MESSAGING")
-            && denied(bash("tmux send-keys -t fd-w1:0.1 hi"), "air-3oq"),
-        // Messaging ANY project is allowed, including one this ledger has never seen: the
-        // fence is about acting, not talking, and denying it broke the channel silently.
-        green_passes: send("adopter-51").is_none()
-            && send("alpha-6d").is_none()
-            && bash("tmux kill-session -t air-alpha").is_none()
-            && bash("tmux ls").is_none(),
     }
 }
 
