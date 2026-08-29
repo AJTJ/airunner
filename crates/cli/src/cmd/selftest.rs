@@ -1524,10 +1524,15 @@ fn probe_verify_in_flight() -> Probe {
             .is_some_and(|w| w.contains("alpha") && w.contains("invalidates it"));
 
     // A crashed `air record` leaves a row; the next reader clears it, so nothing accumulates.
-    let l = Ledger::open_in_memory().unwrap_or_else(|_| unreachable!("in-memory ledger"));
-    let _ = l.verify_started(&flight("beta", Some(424_242)));
-    let pruned = l.in_flight_pruned(|_| false).is_ok_and(|v| v.is_empty())
-        && l.verifies_in_flight().is_ok_and(|v| v.is_empty());
+    let pruned = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.verify_started(&flight("beta", Some(424_242)))
+            .map_err(|e| e.to_string())?;
+        let live = l.in_flight_pruned(|_| false).map_err(|e| e.to_string())?;
+        let left = l.verifies_in_flight().map_err(|e| e.to_string())?;
+        Ok(live.is_empty() && left.is_empty())
+    })()
+    .unwrap_or(false);
 
     let green = render_for_probe(&snap(vec![]))
         .lines()
