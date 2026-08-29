@@ -63,6 +63,11 @@ pub struct Snapshot {
     pub oldest_owner_capture_at: Option<String>,
     /// Every lease, with the defect the CLI found (None = healthy).
     pub leases: Vec<(Lease, Option<String>)>,
+    /// Who is waiting for a resource, by resource (air-q9c). A lease defect is a signal for
+    /// whoever WANTS the thing, never for the holder, so this is the condition's audience.
+    /// `lease_take` records a want only when it was refused by a HEALTHY lease, so a name in
+    /// here is someone who asked and was told to wait.
+    pub lease_wants: BTreeMap<String, Vec<String>>,
     /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
     /// fact, never a bd status (air-ayp).
     pub landed_open: Vec<air_ledger::landings::LandedOpen>,
@@ -801,6 +806,18 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             });
         }
     }
+    // A lease defect is addressed to whoever WANTS the resource, and never to the holder
+    // (air-q9c). It used to name the holder and tell them to `air lease break` the lease they
+    // were using; adopter saw six of those in a day while the simulator and API were
+    // genuinely running (their ad-m07x). Staleness is a signal for other agents by
+    // construction — the holder knows perfectly well they hold it.
+    //
+    // No audience, no condition: `lease_take` takes a defective lease automatically
+    // (`Take::TakenAfter`), so a defect nobody is waiting on needs no one to act. A name in
+    // `lease_wants` is someone who asked and was refused by a lease that was healthy then and
+    // is not now — for them the fix is simply to ask again.
+    //
+    // Removal: when nothing computes a condition from a lease.
     for (l, defect) in &s.leases {
         let Some(d) = defect else { continue };
         let kind = if d.starts_with("dead") {
@@ -808,16 +825,19 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         } else {
             "lease-stale"
         };
-        out.push(Attention {
-            worker: l.worker.clone(),
-            kind,
-            detail: format!(
-                "{} lease held by {} is {d} (reason: {}); `air lease break {}` or let the next taker break it",
-                l.resource, l.worker, l.reason, l.resource
-            ),
-            for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
-            fingerprint: String::new(),
-        });
+        let waiting = s.lease_wants.get(&l.resource);
+        for who in waiting.into_iter().flatten().filter(|w| **w != l.worker) {
+            out.push(Attention {
+                worker: who.clone(),
+                kind,
+                detail: format!(
+                    "{} is held by {} and is {d} (their reason: {}); it is yours to take now — `air lease take {} --reason \"<why>\"` takes a defective lease",
+                    l.resource, l.worker, l.reason, l.resource
+                ),
+                for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
+                fingerprint: format!("{}/{}", l.resource, l.worker),
+            });
+        }
     }
     // air-03w: a branch that is landable NOW. Since air-7o3 the worker closes its own bead with
     // proof and never sets `awaiting_review`, so `review-waiting` above is a condition whose
@@ -1190,13 +1210,28 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(600);
-    let leases = ledger
+    let leases: Vec<(Lease, Option<String>)> = ledger
         .leases()
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|l| {
             let d = super::lease::defect(&l, &at, stale);
             (l, d)
+        })
+        .collect();
+    // Only for a lease that has a defect: a healthy lease raises nothing, so its waiters are
+    // not an audience yet and there is no reason to read them (air-q9c).
+    let lease_wants: BTreeMap<String, Vec<String>> = leases
+        .iter()
+        .filter(|(_, d)| d.is_some())
+        .filter_map(|(l, _)| {
+            let who: Vec<String> = ledger
+                .lease_wants(&l.resource)
+                .ok()?
+                .into_iter()
+                .map(|(worker, _, _)| worker)
+                .collect();
+            (!who.is_empty()).then(|| (l.resource.clone(), who))
         })
         .collect();
     Ok(Snapshot {
@@ -1207,6 +1242,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         owner_queue_depth: owner_q.len(),
         oldest_owner_capture_at: owner_q.first().map(|c| c.captured_at.clone()),
         leases,
+        lease_wants,
         // A ledger read, so it survives an absent bd (air-ayp). A bead bd shows back in the
         // work queue has been dealt with: somebody reopened it. Deriving it from the claim row
         // instead is what made this silent under close-with-proof (air-dlw).
@@ -1859,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_defects_and_owner_queue_fire() {
+    fn lease_defects_reach_the_waiter_and_never_the_holder() {
         let lease = |res: &str, beat: &str| Lease {
             resource: res.into(),
             worker: "a".into(),
@@ -1870,28 +1906,61 @@ mod tests {
             taken_at: T_30.into(),
             heartbeat_at: beat.into(),
         };
-        let s = Snapshot {
-            leases: vec![
+        let leases = || {
+            vec![
                 (lease(":8080", T_30), Some("dead (pid 1 gone)".into())),
                 (lease("chrome", T_30), Some("stale (idle 30 min)".into())),
                 (lease("runtime", T_2), None),
-            ],
+            ]
+        };
+        // Nobody waiting: two defects and not a word. `air lease take` takes a defective
+        // lease on its own, so a defect with no audience needs no one to act (air-q9c).
+        let quiet = Snapshot {
+            leases: leases(),
+            ..Default::default()
+        };
+        assert_eq!(attention(&quiet, NOW, Thresholds::default()), vec![]);
+
+        // `b` asked for both and was refused while they were healthy. Now they are not.
+        let s = Snapshot {
+            leases: leases(),
+            lease_wants: [
+                (":8080".to_string(), vec!["b".to_string()]),
+                ("chrome".to_string(), vec!["b".to_string()]),
+                // A healthy lease raises nothing however many are waiting.
+                ("runtime".to_string(), vec!["b".to_string()]),
+            ]
+            .into_iter()
+            .collect(),
             owner_queue_depth: 2,
             oldest_owner_capture_at: Some(T_2.into()),
             ..Default::default()
         };
-        let kinds: Vec<&str> = attention(&s, NOW, Thresholds::default())
-            .iter()
-            .map(|a| a.kind)
-            .collect();
+        let att = attention(&s, NOW, Thresholds::default());
         assert_eq!(
-            kinds,
+            att.iter().map(|a| a.kind).collect::<Vec<_>>(),
             vec![
                 "lease-held-by-dead-session",
                 "lease-stale",
                 "owner-decision-waiting"
             ]
         );
+        // Addressed to the waiter, never to the holder, and it names the action as theirs.
+        assert_eq!(att[0].worker, "b");
+        assert_eq!(att[1].worker, "b");
+        assert!(att[0].detail.contains("it is yours to take now"), "{att:?}");
+        assert!(att[0].detail.contains("held by a"), "{att:?}");
+        assert!(!att[0].detail.contains("lease break"), "{att:?}");
+
+        // The holder waiting on their own lease is not an audience for it.
+        let self_only = Snapshot {
+            leases: leases(),
+            lease_wants: [(":8080".to_string(), vec!["a".to_string()])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(attention(&self_only, NOW, Thresholds::default()), vec![]);
     }
 
     #[test]

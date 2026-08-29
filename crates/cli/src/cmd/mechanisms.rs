@@ -119,6 +119,40 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        // The two lease conditions carry different facts — a holder that died, and one that
+        // went quiet — so they are two rows. Both were addressed to the HOLDER until air-q9c,
+        // which is the defect they share: staleness is a signal for other agents, and the
+        // holder is being told to break the thing they are using.
+        id: "lease-stale",
+        class: "attention",
+        what: "A lease someone is WAITING for has gone quiet past the stale threshold, told \
+               to the waiter — never to the holder, who knows they hold it.",
+        added: "2026-08-22; audience fixed 2026-08-29 (air-q9c)",
+        source: "crates/cli/src/cmd/status.rs",
+        fires: Fires::Condition("lease-stale"),
+        // It has never fired here, and that is not yet evidence: our PostToolUse hook beats
+        // every lease the worktree holds on every tool call, so an active Air session cannot
+        // age out. adopter's `scripts/lease.sh` beats only on lease-gated commands, which is
+        // why they saw six firings in a day. The condition to remove it has to be about a
+        // fleet whose holders can go quiet while still working, and ours cannot.
+        removal: Removal::ZeroFirings(
+            "a round in a repo whose leases are NOT heartbeat by the hook (adopter's shape) passes with zero firings, so the condition has no recurrence anywhere Air runs",
+        ),
+    },
+    Mechanism {
+        id: "lease-held-by-dead-session",
+        class: "attention",
+        what: "A lease someone is WAITING for is held by a session whose process is gone, \
+               told to the waiter.",
+        added: "2026-08-22; audience fixed 2026-08-29 (air-q9c)",
+        source: "crates/cli/src/cmd/status.rs",
+        fires: Fires::Condition("lease-held-by-dead-session"),
+        // Same shape as `lease-stale` and the same reason its zero is not yet evidence.
+        removal: Removal::ZeroFirings(
+            "a round in a repo whose leases are NOT heartbeat by the hook (adopter's shape) passes with zero firings",
+        ),
+    },
+    Mechanism {
         id: "landable",
         class: "attention",
         what: "A branch `air land --all` would take right now: green at its head with main \
