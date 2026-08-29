@@ -657,7 +657,6 @@ fn all_probes() -> Vec<Probe> {
         probe_peer_warning_effect_is_readable(),
         probe_poll_tick_pays_for_bd_rarely(),
         probe_registry_traces_are_unambiguous(),
-        probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
         probe_land_selection_is_never_silent(),
@@ -1015,36 +1014,6 @@ fn probe_registry_traces_are_unambiguous() -> Probe {
     }
 }
 
-/// air-s7c: deleting the review-waiting PUSH must not delete the FACT. `air status` renders
-/// review waits and the owner queue on demand, which is a pull and costs nobody a
-/// notification. Red: a snapshot with waits and a queue says so. Green: an empty one says
-/// zero rather than going silent, so "no waits" and "not reported" stay distinguishable.
-fn probe_review_fact_survives() -> Probe {
-    use crate::cmd::status::{Snapshot, render_for_probe};
-
-    let mut s = Snapshot {
-        at: "2026-08-22T10:00:00Z".to_string(),
-        ..Default::default()
-    };
-    s.review_waits = vec![("air-1".to_string(), "alpha".to_string(), 40)];
-    s.owner_queue_depth = 3;
-    let with = render_for_probe(&s);
-    let red = with.contains("review: 1 waiting")
-        && with.contains("air-1")
-        && with.contains("owner queue: 3");
-
-    let empty = render_for_probe(&Snapshot {
-        at: "2026-08-22T10:00:00Z".to_string(),
-        ..Default::default()
-    });
-    let green = empty.contains("review: 0 waiting") && empty.contains("owner queue: 0");
-    Probe {
-        name: "status: review waits and the owner queue are still named on demand (push deleted, fact kept)",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
 /// air-6u5: selection never answers "nothing" when it means "something broke", and a bead
 /// stays attributed after the branch merges `main`.
 ///
@@ -1202,7 +1171,7 @@ fn probe_audit_registry() -> Probe {
     use crate::cmd::audit::gather_from;
 
     let events = concat!(
-        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
         "\n",
     );
     let a = gather_from(
@@ -1211,7 +1180,8 @@ fn probe_audit_registry() -> Probe {
     );
     // Red: nothing is recorded for `stuck`, so it is a defect and says so. (This probe
     // pointed at `review-waiting` until air-s7c gave that one a condition, at which point it
-    // went silent and said so, which is the probe doing its job.)
+    // went silent and said so, which is the probe doing its job. air-okc then deleted that
+    // condition outright, so the counting half now rides on `handover-not-green`.)
     let red = a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
@@ -1220,7 +1190,7 @@ fn probe_audit_registry() -> Probe {
         .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
         && a.rows
             .iter()
-            .any(|r| r.id == "review-waiting" && r.evaluations == 1 && r.last_fired.is_some());
+            .any(|r| r.id == "handover-not-green" && r.evaluations == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
@@ -2129,13 +2099,16 @@ fn probe_attention() -> Probe {
 static STUCK_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
-/// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
-/// was silent on them). Green: the same fleet with the review landed, the worker fresh, and
-/// nothing ready is quiet.
+/// air-e7q, the standstill: an idle worker with no claim while beads are ready. Red: the
+/// condition fires on those facts (the old `attention` was silent on them). Green: the same
+/// fleet with the worker fresh and nothing ready is quiet.
+///
+/// The other half of this probe was `review-waiting`, deleted by air-okc: it reported a bead
+/// sitting in `awaiting_review`, and the repo stopped using that state on 2026-08-22 (air-7o3,
+/// close-with-proof). It last fired 2026-08-22T19:31 and never again in five recorded days.
 fn probe_standstill() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
-    let mk = |changed: &str, waits: Vec<(String, String, i64)>, ready: usize| Snapshot {
+    let mk = |changed: &str, ready: usize| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
             role: "worker".into(),
@@ -2153,7 +2126,6 @@ fn probe_standstill() -> Probe {
             }),
             ..Default::default()
         }],
-        review_waits: waits,
         ready_depth: Some(ready),
         ..Default::default()
     };
@@ -2175,23 +2147,16 @@ fn probe_standstill() -> Probe {
             green_passes: false,
         };
     };
-    let red = attention(
-        &mk(&over, vec![("fd-1".into(), "w".into(), 20)], 5),
-        now,
-        Thresholds::default(),
-    );
-    let green = attention(&mk(&under, vec![], 0), now, Thresholds::default());
+    let red = attention(&mk(&over, 5), now, Thresholds::default());
+    let green = attention(&mk(&under, 0), now, Thresholds::default());
     Probe {
         name: STANDSTILL_NAME.get_or_init(|| {
             format!(
-                "attention: review-waiting and idle-without-claim fire at idle_noclaim_min={} min; landed and fresh is quiet",
+                "attention: idle-without-claim fires at idle_noclaim_min={} min; a fresh worker with nothing ready is quiet",
                 t.idle_noclaim_min
             )
         }),
-        red_fires: red
-            .iter()
-            .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
-            && red.iter().any(|a| a.kind == "idle-without-claim"),
+        red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
     }
 }
