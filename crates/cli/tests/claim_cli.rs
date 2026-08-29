@@ -1505,6 +1505,53 @@ fn a_landing_is_recorded_in_flight_while_the_rollback_is_armed() {
     assert_eq!(rows, vec![("landed".to_string(), 1)]);
 }
 
+/// air-03w: the `landable` condition is what `air land --all` selects on.
+///
+/// Since air-7o3 the worker closes its own bead with proof and never sets `awaiting_review`,
+/// so `review-waiting` reports a state this repo stopped using and nothing told the coordinator
+/// a branch was ready — it learned by polling `air status`.
+///
+/// The probe in `air selftest` covers the condition's shape over a hand-built snapshot. This
+/// covers the WIRING, which that probe cannot see: `gather` filling `landable` from the same
+/// `select` the command runs. Without it, `landable: Vec::new()` in `gather` leaves every
+/// selftest probe green while the condition never fires against a real repo.
+#[test]
+fn a_landable_branch_is_a_condition_and_the_command_agrees() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+
+    // Nothing to land yet: silent.
+    let (_c, out, err) = air(&main, &bd, &["status", "--attention"]);
+    assert!(!out.contains("landable"), "{out}{err}");
+
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    // Green LAST, so it sits at a head containing main. That transition is the whole subject.
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    let (_c, out, err) = air(&main, &bd, &["status", "--attention"]);
+    assert!(out.contains("landable"), "{out}{err}");
+    assert!(out.contains("alpha") && out.contains("fd-1"), "{out}");
+    assert!(out.contains("air land --all"), "{out}");
+
+    // And the command agrees: what the condition named is what `air land` takes.
+    let (code, out, err) = air(&main, &bd, &["land", "--all"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed alpha (fd-1)"), "{out}{err}");
+
+    // Landed, so the condition clears itself — the branch is now an ancestor of main.
+    let (_c, out, _e) = air(&main, &bd, &["status", "--attention"]);
+    assert!(!out.contains("landable"), "{out}");
+}
+
 /// air-ob0: a rewind names every worktree that took the un-landed commits.
 ///
 /// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
