@@ -1399,6 +1399,104 @@ fn a_landable_branch_is_a_condition_and_the_command_agrees() {
     assert!(!out.contains("landable"), "{out}");
 }
 
+/// air-y3v: after a land, the branches left behind read as needing a re-merge, and `air land`
+/// refuses them with the same reason the list gave.
+///
+/// The incident (owner, 2026-08-29, third time in one hour): `air inbox --owner` listed a
+/// branch as landable and printed `air land <bead>` beside it; `air land` then refused the same
+/// branch for not containing main. Two surfaces, one fact, different answers — the landable list
+/// checked only for a recorded green at the head. Every land invalidates the containment
+/// condition for every other branch, so the list went stale the instant a land succeeded.
+///
+/// This drives the real sequence: two green branches, land one, then ask both surfaces about
+/// the other and try to land it.
+#[test]
+fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let root = main.parent().unwrap().to_path_buf();
+    let beta = root.join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let bd = fake_bd(&main);
+
+    // Two branches, both green at a head that contains main, both landable.
+    for (wt, bead, file) in [(&alpha, "fd-1", "a.txt"), (&beta, "fd-2", "b.txt")] {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0);
+        std::fs::write(wt.join(file), "work\n").unwrap();
+        git(wt, &["add", file]);
+        git(
+            wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("feat: work\n\nBead: {bead}\n"),
+            ],
+        );
+        git(wt, &["merge", "-q", "main", "-m", "merge main"]);
+        assert_eq!(air(wt, &bd, &["record", "verify", "--", "true"]).0, 0);
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    // Both offered with `air land` while both are actually landable.
+    let (_c, out, err) = air(&main, &bd, &["inbox", "--owner"]);
+    assert!(out.contains("air land fd-1"), "{out}{err}");
+    assert!(out.contains("air land fd-2"), "{out}{err}");
+
+    // Land one. This moves main past beta's branch point.
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // The incident: beta is still shown, because work IS waiting...
+    let (_c, out, err) = air(&main, &bd, &["inbox", "--owner"]);
+    assert!(out.contains("fd-2"), "still shown: {out}{err}");
+    // ...but never with the command that cannot work.
+    assert!(
+        !out.contains("air land fd-2"),
+        "must not offer a land it would refuse: {out}"
+    );
+    assert!(out.contains("git merge main"), "{out}");
+
+    // `air status` says the same thing.
+    let (_c, st, se) = air(&main, &bd, &["status"]);
+    assert!(st.contains("waiting, not landable"), "{st}{se}");
+    assert!(st.contains("fd-2") && st.contains("git merge main"), "{st}");
+    // And does not announce it as landable.
+    let (_c, att, _e) = air(&main, &bd, &["status", "--attention"]);
+    assert!(!att.contains("landable"), "{att}");
+
+    // And the command refuses with the same reason the list gave.
+    let (code, out, err) = air(&main, &bd, &["land", "fd-2"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("does not contain main"), "{out}{err}");
+    assert!(out.contains("git merge main"), "{out}");
+    // `--all` too: nothing landable, and it says which branch and what to do.
+    let (code, out, _e) = air(&main, &bd, &["land", "--all"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("beta") && out.contains("git merge main"),
+        "{out}"
+    );
+
+    // Re-merge and re-verify, and it is landable again by both surfaces.
+    git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (_c, out, _e) = air(&main, &bd, &["inbox", "--owner"]);
+    assert!(out.contains("air land fd-2"), "{out}");
+    let (code, out, err) = air(&main, &bd, &["land", "fd-2"]);
+    assert_eq!(code, 0, "{out}{err}");
+}
+
 /// air-ob0: a rewind names every worktree that took the un-landed commits.
 ///
 /// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from

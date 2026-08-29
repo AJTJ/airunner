@@ -1512,63 +1512,72 @@ fn probe_batch_close() -> Probe {
 /// a recorded green that is not at the branch head; a clean green hand-over passes. Pure over
 /// the facts, so the whole refusal set fires without a repo.
 fn probe_land_refusals() -> Probe {
-    use crate::cmd::land::{Facts, check, may_land};
+    use crate::cmd::land::{Facts, Site, check, may_land};
 
     let none: Vec<String> = vec![];
-    fn ok(dirty: &[String]) -> Facts<'_> {
-        Facts {
-            worker: "alpha",
+    fn here(dirty: &[String]) -> Site<'_> {
+        Site {
             on_main: true,
             main_checkout: true,
             dirty,
-            branch_exists: true,
-            already_in_main: false,
-            contains_main: true,
-            branch_head: "abcdef99",
-            green_at: Some("abcdef99"),
         }
     }
+    let ok = || Facts {
+        worker: "alpha",
+        branch_exists: true,
+        already_in_main: false,
+        contains_main: true,
+        branch_head: "abcdef99",
+        green_at: Some("abcdef99"),
+    };
+    let sites = [
+        Site {
+            on_main: false,
+            ..here(&none)
+        },
+        Site {
+            main_checkout: false,
+            ..here(&none)
+        },
+    ];
     let refusals = [
         Facts {
-            on_main: false,
-            ..ok(&none)
-        },
-        Facts {
-            main_checkout: false,
-            ..ok(&none)
-        },
-        Facts {
             branch_exists: false,
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             contains_main: false,
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             green_at: Some("00000000"),
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             green_at: None,
-            ..ok(&none)
+            ..ok()
         },
     ];
     let dirty = vec!["src/a.rs".to_string()];
+    let readable = |m: String| m.contains('`') && m.starts_with("refused: ");
     // Every refusal fires, and every one names a command to run.
     let red = may_land(&at("alpha", "alpha")).is_err()
-        && check(&ok(&dirty)).is_err()
-        && refusals.iter().all(|f| {
-            check(f)
-                .err()
-                .is_some_and(|m| m.contains('`') && m.starts_with("refused: "))
-        });
+        && check(&here(&dirty), &ok()).is_err()
+        && sites
+            .iter()
+            .all(|s| check(s, &ok()).err().is_some_and(readable))
+        && refusals
+            .iter()
+            .all(|f| check(&here(&none), f).err().is_some_and(readable));
     let green = may_land(&at("main", "main")).is_ok()
-        && check(&ok(&none)) == Ok(true)
-        && check(&Facts {
-            already_in_main: true,
-            ..ok(&none)
-        }) == Ok(false);
+        && check(&here(&none), &ok()) == Ok(true)
+        && check(
+            &here(&none),
+            &Facts {
+                already_in_main: true,
+                ..ok()
+            },
+        ) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
         red_fires: red,
@@ -1600,6 +1609,7 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
                 minutes,
                 command: format!("air land {b}"),
                 acceptance: Vec::new(),
+                blocked: None,
             })
             .collect(),
         ..Default::default()

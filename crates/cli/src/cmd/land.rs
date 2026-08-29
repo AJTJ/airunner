@@ -183,16 +183,22 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
     v
 }
 
-/// Why a landing cannot be attempted, with the command that fixes it. Pure over the facts, so
-/// `air selftest` can fire every one without a repo (air-3pz).
+/// Where `air land` is being run from. Nothing here is about any particular branch, so it is
+/// the half `air status` cannot answer and must not pretend to (air-y3v).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Facts<'a> {
-    pub worker: &'a str,
+pub struct Site<'a> {
     pub on_main: bool,
     pub main_checkout: bool,
     /// Tracked files with uncommitted changes; the rollback would discard them. Untracked
     /// files survive `git reset --hard` and are not counted.
     pub dirty: &'a [String],
+}
+
+/// Why one BRANCH cannot be landed, with the command that fixes it. Pure over the facts, so
+/// `air selftest` can fire every one without a repo (air-3pz).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facts<'a> {
+    pub worker: &'a str,
     pub branch_exists: bool,
     /// The branch is already an ancestor of main: nothing to land.
     pub already_in_main: bool,
@@ -204,25 +210,51 @@ pub struct Facts<'a> {
 }
 
 /// `Ok(true)` land it, `Ok(false)` nothing to do, `Err(msg)` refuse with the fix.
-pub fn check(f: &Facts<'_>) -> Result<bool, String> {
-    let w = f.worker;
-    if !f.main_checkout {
+///
+/// The site gates first, then [`branch_check`]. Split at air-y3v so `air status` can apply
+/// exactly the branch half without inventing site facts it has no business asserting: it may
+/// be running from a worktree, where `main_checkout` is false and every branch would read as
+/// unlandable.
+pub fn check(site: &Site<'_>, f: &Facts<'_>) -> Result<bool, String> {
+    if !site.main_checkout {
         return Err(
             "refused: `air land` runs in the main checkout; this is a worktree.".to_string(),
         );
     }
-    if !f.on_main {
+    if !site.on_main {
         return Err("refused: main is not checked out here (fix: `git checkout main`)".to_string());
     }
-    if !f.dirty.is_empty() {
+    if !site.dirty.is_empty() {
         return Err(format!(
             "refused: main has uncommitted changes to {} tracked file(s) and a red verify \
              rewinds with `git reset --hard`, which would discard them (fix: commit or move \
              them aside): {}",
-            f.dirty.len(),
-            f.dirty.join(", ")
+            site.dirty.len(),
+            site.dirty.join(", ")
         ));
     }
+    branch_check(f)
+}
+
+/// Everything about whether THIS BRANCH can land, and nothing about where the caller is.
+///
+/// ## air-y3v: one predicate, or the two surfaces lie to each other
+///
+/// `air status` and `air inbox --owner` used to decide landability themselves — a recorded
+/// green at the branch head, and nothing else — while `air land` also required the branch to
+/// contain main. Every land invalidates that second condition for every other branch, so the
+/// list went stale the instant a land succeeded and offered `air land <bead>` for branches
+/// that would be refused. The owner lost three land cycles to it in one hour on 2026-08-29:
+///
+///     $ air inbox --owner
+///       air-1ra  ede1b151  from ledger  (14 min)  air land air-1ra
+///     $ air land air-1ra
+///     ledger: refused: `worktree-ledger` does not contain main
+///
+/// Two implementations of one fact will drift; these had. So `select` calls this, and
+/// `check` calls this, and there is nothing left to keep in agreement.
+pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
+    let w = f.worker;
     if !f.branch_exists {
         return Err(format!(
             "refused: no branch `{}` (fix: the worker's worktree must be on it)",
@@ -235,9 +267,9 @@ pub fn check(f: &Facts<'_>) -> Result<bool, String> {
     if !f.contains_main {
         return Err(format!(
             "refused: `{}` does not contain main, so the recorded green is not a green of what \
-             would land (fix: in {w}'s worktree, `git merge main && air record verify -- {}`)",
+             would land (fix: in {w}'s worktree, `{}`)",
             branch_for(w),
-            "make verify"
+            remerge_command()
         ));
     }
     match f.green_at {
@@ -254,6 +286,13 @@ pub fn check(f: &Facts<'_>) -> Result<bool, String> {
             f.branch_head.get(..8).unwrap_or(f.branch_head)
         )),
     }
+}
+
+/// What a branch behind main has to do before it can land. The command `air status` and
+/// `air inbox --owner` print instead of `air land` for such a branch (air-y3v), and the same
+/// one `branch_check`'s refusal names, so the list and the refusal say the same thing.
+pub fn remerge_command() -> String {
+    "git merge main && air record verify -- make verify".to_string()
 }
 
 /// What one branch's landing did.
@@ -328,12 +367,28 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         );
         return 1;
     }
-    let ready = sel.landings;
+    // air-y3v: `select` now returns branches it can see are blocked, so the coordinator's
+    // surfaces can SHOW them with the command that unblocks them. They are not candidates.
+    // A named bead that is blocked is refused below with the reason the list already gave.
+    let (ready, blocked): (Vec<_>, Vec<_>) =
+        sel.landings.into_iter().partition(|l| l.blocked.is_none());
+    let blocked_line = |l: &super::status::Landing| {
+        format!(
+            "\n  {} [{}]: {}\n    fix: {}",
+            l.worker,
+            l.bead,
+            l.blocked.as_deref().unwrap_or(""),
+            l.command
+        )
+    };
     // ...and nothing landable is a REPORT, not silence: every branch says which precondition
     // it failed and the command that fixes it.
     if all && ready.is_empty() {
         let mut msg = String::from("nothing is landable right now.");
-        if sel.skipped.is_empty() {
+        for l in &blocked {
+            msg.push_str(&blocked_line(l));
+        }
+        if sel.skipped.is_empty() && blocked.is_empty() {
             msg.push_str(" No worker worktree exists to land from.");
         }
         for sk in &sel.skipped {
@@ -361,6 +416,32 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     let wanted: Vec<super::status::Landing> = if all {
         ready
     } else {
+        // air-y3v: a bead whose branch the list already knows is blocked is refused with THAT
+        // reason, not with "no green branch names it". The surface said re-merge; so does this.
+        let named_blocked: Vec<&super::status::Landing> =
+            blocked.iter().filter(|l| beads.contains(&l.bead)).collect();
+        if !named_blocked.is_empty() {
+            let msg = format!(
+                "refused: {} not landable yet.{}",
+                named_blocked
+                    .iter()
+                    .map(|l| l.bead.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                named_blocked
+                    .iter()
+                    .map(|l| blocked_line(l))
+                    .collect::<Vec<_>>()
+                    .join("")
+            );
+            log_event(&ledger, &worker, "land", &inputs, "refuse", &msg, "branch");
+            emit(
+                json,
+                &serde_json::json!({"ok": false, "reason": msg}),
+                || msg.clone(),
+            );
+            return 2;
+        }
         let missing: Vec<&String> = beads
             .iter()
             .filter(|b| !ready.iter().any(|l| &&l.bead == b))
@@ -524,11 +605,13 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             .filter(|g| *g)
             .map(|_| h.to_string())
     });
-    let facts = Facts {
-        worker: &batch.worker,
+    let site = Site {
         on_main: git::run(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).is_ok_and(|b| b == "main"),
         main_checkout: !repo.join(".git").is_file(),
         dirty: &dirty,
+    };
+    let facts = Facts {
+        worker: &batch.worker,
         branch_exists: branch_head.is_some(),
         already_in_main: branch_head
             .as_deref()
@@ -577,7 +660,7 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         |result: &str, merge: Option<String>, verify: Option<String>, step: Option<String>| {
             record_full(result, merge, verify, step, &[]);
         };
-    match check(&facts) {
+    match check(&site, &facts) {
         Ok(false) => return Outcome::Nothing,
         Err(why) => {
             record("refused", None, None, Some("check".into()));
@@ -727,12 +810,17 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
 mod tests {
     use super::*;
 
-    fn ok_facts<'a>(dirty: &'a [String], head: &'a str, green: Option<&'a str>) -> Facts<'a> {
-        Facts {
-            worker: "alpha",
+    fn here(dirty: &[String]) -> Site<'_> {
+        Site {
             on_main: true,
             main_checkout: true,
             dirty,
+        }
+    }
+
+    fn ok_facts<'a>(head: &'a str, green: Option<&'a str>) -> Facts<'a> {
+        Facts {
+            worker: "alpha",
             branch_exists: true,
             already_in_main: false,
             contains_main: true,
@@ -744,43 +832,81 @@ mod tests {
     #[test]
     fn every_refusal_names_the_command_that_fixes_it() {
         let none: Vec<String> = vec![];
-        assert_eq!(check(&ok_facts(&none, "abc", Some("abc"))), Ok(true));
+        assert_eq!(check(&here(&none), &ok_facts("abc", Some("abc"))), Ok(true));
 
-        let mut f = ok_facts(&none, "abc", Some("abc"));
-        f.main_checkout = false;
-        assert!(check(&f).unwrap_err().contains("main checkout"));
+        let mut s = here(&none);
+        s.main_checkout = false;
+        assert!(
+            check(&s, &ok_facts("abc", Some("abc")))
+                .unwrap_err()
+                .contains("main checkout")
+        );
 
-        let mut f = ok_facts(&none, "abc", Some("abc"));
-        f.on_main = false;
-        assert!(check(&f).unwrap_err().contains("git checkout main"));
+        let mut s = here(&none);
+        s.on_main = false;
+        assert!(
+            check(&s, &ok_facts("abc", Some("abc")))
+                .unwrap_err()
+                .contains("git checkout main")
+        );
 
         let dirty = vec!["src/a.rs".to_string()];
-        let f = ok_facts(&dirty, "abc", Some("abc"));
-        let e = check(&f).unwrap_err();
+        let e = check(&here(&dirty), &ok_facts("abc", Some("abc"))).unwrap_err();
         assert!(
             e.contains("git reset --hard") && e.contains("src/a.rs"),
             "{e}"
         );
 
-        let mut f = ok_facts(&none, "abc", Some("abc"));
+        let mut f = ok_facts("abc", Some("abc"));
         f.branch_exists = false;
-        assert!(check(&f).unwrap_err().contains("worktree-alpha"));
+        assert!(
+            check(&here(&none), &f)
+                .unwrap_err()
+                .contains("worktree-alpha")
+        );
 
         // Already in main is not an error: there is simply nothing to do.
-        let mut f = ok_facts(&none, "abc", Some("abc"));
+        let mut f = ok_facts("abc", Some("abc"));
         f.already_in_main = true;
-        assert_eq!(check(&f), Ok(false));
+        assert_eq!(check(&here(&none), &f), Ok(false));
 
-        let mut f = ok_facts(&none, "abc", Some("abc"));
+        let mut f = ok_facts("abc", Some("abc"));
         f.contains_main = false;
-        let e = check(&f).unwrap_err();
+        let e = check(&here(&none), &f).unwrap_err();
         assert!(e.contains("git merge main && air record verify"), "{e}");
+        // air-y3v: and it is the same string the landable list offers, so the surface and the
+        // refusal cannot say different things.
+        assert!(e.contains(&remerge_command()), "{e}");
 
         // Green recorded, but at an older commit than the branch head.
-        let e = check(&ok_facts(&none, "abcdef99", Some("999999aa"))).unwrap_err();
+        let e = check(&here(&none), &ok_facts("abcdef99", Some("999999aa"))).unwrap_err();
         assert!(e.contains("999999aa") && e.contains("abcdef99"), "{e}");
-        let e = check(&ok_facts(&none, "abcdef99", None)).unwrap_err();
+        let e = check(&here(&none), &ok_facts("abcdef99", None)).unwrap_err();
         assert!(e.contains("no recorded green"), "{e}");
+    }
+
+    /// air-y3v: `branch_check` is the whole branch half, and `check` is the site gates plus
+    /// exactly it. If they ever diverge, `air status` and `air land` start disagreeing again.
+    #[test]
+    fn check_is_the_site_gates_plus_branch_check() {
+        let none: Vec<String> = vec![];
+        for f in [
+            ok_facts("abc", Some("abc")),
+            Facts {
+                contains_main: false,
+                ..ok_facts("abc", Some("abc"))
+            },
+            Facts {
+                already_in_main: true,
+                ..ok_facts("abc", Some("abc"))
+            },
+            Facts {
+                green_at: None,
+                ..ok_facts("abc", Some("abc"))
+            },
+        ] {
+            assert_eq!(check(&here(&none), &f), branch_check(&f));
+        }
     }
 
     /// One merge per branch however many beads it carries, oldest wait first.
@@ -793,6 +919,7 @@ mod tests {
             minutes,
             command: String::new(),
             acceptance: Vec::new(),
+            blocked: None,
         };
         let b = batches(&[
             l("air-1", "alpha", 5),
