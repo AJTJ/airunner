@@ -150,6 +150,24 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "rewound-and-carried",
+        class: "attention",
+        what: "A rewound merge that some worktree's HEAD still contains, named with what its \
+               holder must do. Read from history only: no new rewind can occur.",
+        added: "2026-08-29 (air-ob0), narrowed the same day (air-odv)",
+        source: "crates/cli/src/cmd/status.rs",
+        fires: Fires::Condition("rewound-and-carried"),
+        // air-ob0 shipped this to cover a real obligation: a rollback un-lands a branch from
+        // main and cannot un-merge it from a worker who took it during the armed window.
+        // air-odv removed the window hours later — main is fast-forwarded onto an already-green
+        // commit, so nothing can rewind and no NEW rewound row can be written. What is left is
+        // reading the two rows that already exist, which is why the condition is a count rather
+        // than a judgement: when no rewound row is still carried, it has nothing left to say.
+        removal: Removal::ZeroFirings(
+            "no `rewound` landing row is still contained by any worktree HEAD; air-odv made new ones impossible, so this empties rather than being argued about",
+        ),
+    },
+    Mechanism {
         id: "landable",
         class: "attention",
         what: "A branch `air land --all` would take right now: green at its head with main \
