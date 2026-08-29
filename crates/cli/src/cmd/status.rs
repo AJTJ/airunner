@@ -30,6 +30,10 @@ pub struct Session {
     /// Which fleet this session belongs to (air-0lk). The hook writes it from `AIR_PROJECT`,
     /// so a cross-project refusal is derived from the ledger, not from a name's spelling.
     pub project: String,
+    /// air-air: the model this session is running, read from its own transcript by the hook.
+    /// Empty until the transcript has its first assistant message; never guessed from settings,
+    /// because a session with no `--model` inherits whatever the harness gives it.
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1066,7 +1070,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         let mut st = ledger
             .conn()
             .prepare(
-                "SELECT worker, role, session_id, state, detail, changed_at, pid, project \
+                "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1083,6 +1087,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         pid: r.get(6)?,
                         pid_alive: None,
                         project: r.get(7)?,
+                        model: r.get(8)?,
                     },
                 ))
             })
@@ -1497,7 +1502,18 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         let sess = w
             .session
             .as_ref()
-            .map(|x| format!("{} since {}", x.state, x.changed_at))
+            // air-air: the model rides on the session line, so "which model is this worker on"
+            // is a glance rather than a question put to the worker. A session whose transcript
+            // has not yet named one says `model ?` — an honest unknown, never a default filled
+            // in from settings.
+            .map(|x| {
+                let model = if x.model.is_empty() {
+                    "?".to_string()
+                } else {
+                    x.model.clone()
+                };
+                format!("{} since {} [{model}]", x.state, x.changed_at)
+            })
             .unwrap_or_else(|| "no session".to_string());
         let green = match w.green_at_head {
             Some(true) => "green",
@@ -1703,6 +1719,7 @@ mod tests {
                 pid: None,
                 pid_alive: None,
                 project: String::new(),
+                model: String::new(),
             }),
             head: Some("abc".into()),
             green_at_head: green,
