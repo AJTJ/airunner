@@ -60,6 +60,7 @@ pub fn run(json: bool) -> i32 {
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
         probe_close_releases_the_claim(),
+        probe_handover_not_green_is_one_line_per_worker(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1484,6 +1485,79 @@ fn probe_close_releases_the_claim() -> Probe {
         name: "claim: a closed bead stops alarming; awaiting_review still holds it",
         red_fires: res.0,
         green_passes: res.1,
+    }
+}
+
+/// air-0j4: a worker's HEAD is one sha, so every claim it holds is not-green for the same
+/// reason and the same fix. adopter's `air status` printed eleven `handover-not-green` lines
+/// for one worker — one fact, eleven times.
+///
+/// Red: three stuck claims on one worker produce ONE line, and it names all three with a total.
+/// Green: a single claim keeps its original wording, unchanged.
+///
+/// The mutation that made it red, seen: restoring the per-claim `out.push` loop — three lines
+/// instead of one, so the red half's `len() == 1` fails.
+fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    use air_ledger::claims::Claim;
+
+    let claim = |bead: &str, at: &str| Claim {
+        bead: bead.into(),
+        worker: "w".into(),
+        claimed_at: at.into(),
+        declared_files: Vec::new(),
+        first_handover_at: Some(at.into()),
+        last_handover_at: Some(at.into()),
+        handover_attempts: 1,
+        released_at: None,
+        release_reason: None,
+    };
+    let snap = |claims: Vec<Claim>| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            green_at_head: Some(false),
+            claims,
+            // A live worker seen a minute ago, so the claim is the only thing that can speak.
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "working".into(),
+                changed_at: "2026-08-20T11:59:00Z".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let three = attention(
+        &snap(vec![
+            claim("fd-1", "2026-08-20T11:00:00Z"),
+            claim("fd-2", "2026-08-20T11:30:00Z"),
+            claim("fd-3", "2026-08-20T11:40:00Z"),
+        ]),
+        now,
+        Thresholds::default(),
+    );
+    let one = attention(
+        &snap(vec![claim("fd-1", "2026-08-20T11:00:00Z")]),
+        now,
+        Thresholds::default(),
+    );
+    Probe {
+        name: "attention: three stuck claims on one worker are one line, not three",
+        red_fires: three.len() == 1
+            && three.first().is_some_and(|a| {
+                a.kind == "handover-not-green"
+                    && ["fd-1", "fd-2", "fd-3"]
+                        .iter()
+                        .all(|b| a.detail.contains(b))
+                    && a.detail.contains("3 attempts in total")
+            }),
+        green_passes: one.len() == 1
+            && one
+                .first()
+                .is_some_and(|a| a.detail.starts_with("fd-1 handed over 1 time(s)")),
     }
 }
 
