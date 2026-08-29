@@ -144,34 +144,83 @@ to record leaves two agents in one file, which someone notices; a second store t
 denies a command and tells the agent to run the command it just ran, which reads as a bug in the
 agent. Nobody suspects the lock.
 
-So, before the first `air lease take` in a target repo:
+### Migrating a repo's own lease store to `air lease`
 
-1. **Find any existing store.** Look for a directory of lock files (`*-leases/`, `locks/`,
-   `.locks/`) under `$(git --git-common-dir)` or the repo root, a `make` target with `lease` or
-   `lock` in the name, and any PreToolUse or pre-commit guard that reads a path to decide whether
-   a command may run. The guard is the one that matters: it is the half that refuses.
-2. **Pick one, and it is the one the guard reads.** A store nothing enforces is a record; the
-   store the guard reads is the lock. If the repo's is to be it, `air lease` goes unused there
-   and Air records nothing about leases — a fine outcome, not a loss. Do not run both "until the
-   migration is done".
+A repo keeping its own store needs none of this: `air lease` simply goes unused there and Air
+records nothing about leases. **A fine outcome, not a loss.** What follows is for a repo that has
+decided to switch, and it is written to be followed on cutover day without asking Air anything.
 
-   **If Air's is to be it, count the readers before sizing the change.** It is not one call site.
-   adopter, correcting this section on 2026-08-29: their PreToolUse guard calls
-   `scripts/lease.sh check` rather than reading the directory itself, and `make reseed` and
-   `make seed-demo` refuse *independently inside their own targets*, because they write over HTTP
-   to a fixed port and would otherwise split a seed across two databases. So the migration is the
-   guard, the script it calls, and every target that refuses on its own. Grep for the lock path,
-   not for the guard.
-3. **Confirm from the tool, not from the diff.** `air lease status` names its own store on every
-   run:
+**Which store wins is not a preference. It is whichever one the guard reads**, because a store
+nothing enforces is a record and the store that refuses commands is the lock. So the migration is
+not "start calling `air lease take`" — that is what adopter already did, and it is precisely how
+they ended up with two.
 
-       $ air lease status
-       no leases held
-       lease store: /path/to/repo/.air/ledger.db (leases table)
+#### 1. Find every reader, not just the guard
 
-   If that path is not the one the guard reads, there are two stores. That is the whole check,
-   and it is the reason the line exists: adopter's disagreement had to be inferred from a
-   contradiction, because neither side ever said where it was looking.
+Grep for **the lock path**, not for the guard, and not for the make target. The path is the one
+thing every reader must name:
+
+    $ git grep -n 'ad-leases'            # substitute the repo's lock directory
+    $ git grep -rn 'git --git-common-dir'  # where lock paths are usually built
+
+Expect more than one kind of hit, and treat a single hit as a sign you grepped the wrong string:
+
+| pattern | adopter's instance |
+|---|---|
+| the guard that refuses | PreToolUse guard — but it *calls out* rather than reading the path itself |
+| the script the guard calls | `scripts/lease.sh check`, which is the actual reader |
+| the documented take/release commands | `make lease-take`, `make lease-status` |
+| **targets that refuse on their own, inside the recipe** | `make reseed`, `make seed-demo` — they write over HTTP to a fixed port and would otherwise split a seed across two databases |
+
+That last row is the one that makes this a procedure rather than a line. the adopter corrected an
+earlier draft of this section that said "change the guard to read `air lease status --json`":
+**it is not one call site**, and sizing it as one is how a cutover half-lands and leaves exactly
+the two-store state it was meant to end.
+
+#### 2. Drain the old store before switching, not after
+
+Air's `leases` table starts empty. A lock held in the old store at the moment of cutover is
+**invisible to Air**, so the resource it protects can be taken by a second agent immediately —
+the two-store failure inverted, and worse, because now nothing refuses at all.
+
+So, with the fleet stopped:
+
+    $ ls -la "$(git --git-common-dir)"/<lock-dir>/*/     # every held resource, and its age
+
+Release each one through the repo's own release path while it still works. Expect debris rather
+than a clean list: adopter's directory held a `log` file last written days earlier with no lock
+beside it, and nothing documented that this was normal. A file that is not a lock is not a held
+lease; a lock whose holder is gone is released, not preserved. Then **move the directory aside**
+(`mv <lock-dir> <lock-dir>.pre-air`) rather than deleting it, so a reader you missed in step 1
+fails loudly instead of silently reading an empty store and permitting everything.
+
+#### 3. Verify with a command whose output settles it
+
+Two checks. The first is that Air's store is the only one anything names:
+
+    $ air lease status
+    no leases held
+    lease store: /path/to/repo/.air/ledger.db (leases table)
+
+    $ git grep -n '<old-lock-dir>'
+    (no output outside documentation and history)
+
+The second is the incident itself, reproduced and passing. This is the check that matters, because
+the failure being prevented is a *gated command refusing after a successful take*:
+
+    $ air lease take runtime --reason "cutover check"
+    $ make <the-target-that-used-to-refuse>     # must RUN, not refuse
+    $ air lease release runtime
+
+If the gated command still refuses while `air lease status` shows the lease held, step 1 missed a
+reader. That is the whole diagnostic, and it is the one adopter did not have: their disagreement
+had to be inferred from a contradiction, because neither side ever said where it was looking.
+
+**adopter is switching to `air lease`**, effective the next time Air is built there (owner,
+2026-08-29). Their `make land` stays theirs — see the landing note above; this is the lease store
+only. Note the ordering trap on their side and anyone's: `air lease status` only names its store
+in a build that has that change, so a repo checking with an older binary sees nothing new and
+concludes wrongly. A tool is only true where it is installed.
 
 `air lease` itself stays. The 2026-08-24 audit proposed deleting it on zero rows in this repo's
 ledger, and adopter's round contradicted that: a worker read `air lease status`, saw `runtime`
