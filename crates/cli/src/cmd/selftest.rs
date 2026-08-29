@@ -47,6 +47,7 @@ pub fn run(json: bool) -> i32 {
         probe_nudge_names_only_claimable(),
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
+        probe_expired_cutoff_is_reported(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1196,6 +1197,26 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
         name: "attention: idle-without-claim fires for a live session, not a dead one",
         red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: !green.iter().any(|a| a.kind == "idle-without-claim"),
+    }
+}
+
+/// air-24e: a rule with a date in it goes quiet when the date passes. Both of Air's cutoffs
+/// passed on 2026-08-23, seven tests went red because their fixtures had been written inside
+/// the fallback window, and main stayed red six days because nothing watches a date. Red: a
+/// clock past the cutoff reports it EXPIRED. Green: a clock before it reports it active.
+///
+/// The mutation that made it red: hardcoding `expired: false` in `doctor::dated_rules` — the
+/// probe's red half then finds no expired rule.
+fn probe_expired_cutoff_is_reported() -> Probe {
+    use crate::cmd::doctor::dated_rules;
+    // Two clocks that need no date of their own, so this probe holds no copy of a rule's
+    // number: after every possible cutoff, and before every one Air will ever carry.
+    let after = dated_rules(jiff::Timestamp::MAX);
+    let before = dated_rules(jiff::Timestamp::UNIX_EPOCH);
+    Probe {
+        name: "doctor: a dated rule says so when its cutoff has passed",
+        red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
+        green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
     }
 }
 
