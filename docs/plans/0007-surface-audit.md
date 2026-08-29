@@ -138,7 +138,41 @@ day**, 3.42 MB to say one thing. That is what `air audit` was counting as firing
 residue is large, and it is large because that day's remaining lines are hook traffic, which this
 change does not touch.
 
-The window for `air gc` (air-i7s) should be chosen against the after figure, not the before one.
+**`air gc` took its window from the after figure** (air-i7s, 2026-08-29): 90 days, about 33 MB
+at 0.37 MB per active day. The same window against the pre-fix 2.77 MB would have been 250 MB.
+`air doctor` states the retention and what is collectable under it.
+
+### What the channel poll costs, re-measured after air-5uz (2026-08-29, for air-djl)
+
+air-5uz cut what the poll **writes**. It did not touch what the poll **runs**: every tick still
+calls `status::gather`, which shells out to bd. Both halves are countable from the log, because
+each line carries `inputs.duration_ms` and the process-cumulative `bd_calls`/`bd_ms`.
+
+| day | poll ticks | pollers | median gap | median `gather` | bd calls | time waiting on bd |
+|---|---|---|---|---|---|---|
+| 2026-08-22 | 2,912 | 5 | 7.6 s | 3,832 ms | 704 | 0.32 h |
+| 2026-08-23 | 7,573 | 3 | 8.2 s | 4,013 ms | 5,243 | 2.23 h |
+| 2026-08-24 | 6,015 | 3 | 8.8 s | 3,852 ms | 2,011 | 0.78 h |
+| 2026-08-25 | 7,667 | 3 | 8.6 s | 3,895 ms | 5,674 | 2.26 h |
+| 2026-08-26 | 2,276 | 3 | 7.4 s | 3,982 ms | 1,572 | 0.66 h |
+
+**The stated grounds for deleting the poll are gone, and a larger cost is in their place.**
+0008 item 3 says the poll "writes about 3 MB of events a day to convey 45 pushes". After air-5uz
+it writes 1 to 60 lines a day. What it actually costs is **~5,700 bd calls and ~2.3 hours of
+waiting on bd per day**, at a median `gather` of 3.9 s, running around the clock whether or not
+anyone is watching.
+
+Where the bd calls come from: `gather` calls `in_progress`, then `show` once **per open claim**,
+then `awaiting_review`, then `ready` (`status.rs:837-967`). Only one attention condition needs
+any of it — `idle-without-claim` reads `ready_depth` — plus `review-waiting`, which is derived
+from bd's `awaiting_review` and is dead in this repo since close-with-proof. Everything else is
+ledger and git.
+
+**Method note, because the number that is easy to get here is wrong.** `bd_calls` and `bd_ms` on
+an event line are `air_bd::stats::snapshot()`, which is cumulative for the life of the process
+(`crates/bd/src/lib.rs:52-64`). They must be differenced per (day, poller), never summed.
+Summing them gives 12.4 million bd calls for 2026-08-25, which is nonsense and reads exactly
+like a measurement. This is air-21c again, inside the bead that exists to fix air-21c.
 
 ## 4. Hook events (9)
 
