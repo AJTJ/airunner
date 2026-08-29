@@ -70,6 +70,7 @@ pub fn run(json: bool) -> i32 {
         probe_gc_keeps_what_it_must(),
         probe_peer_warning_effect_is_readable(),
         probe_poll_tick_pays_for_bd_rarely(),
+        probe_registry_traces_are_unambiguous(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -399,6 +400,44 @@ fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-8br: no `command / decision` pair is claimed by two mechanisms, and the pairs the audit
+/// treats as bookkeeping are not also claimed as firings.
+///
+/// The registry is the audit's only map of what Air ships. Two rows claiming one trace would
+/// count every firing twice and split it across two removal conditions, and a trace that is
+/// both registered and bookkeeping would be attributed and suppressed at once. Neither is
+/// visible in the output: the numbers would simply be wrong, which is air-5uz's failure shape.
+///
+/// Red: every registered trace is claimed exactly once. Green: no registered trace is also in
+/// the bookkeeping list, and the registry is not empty — a check that passes on nothing is the
+/// anti-pattern this whole command exists against.
+fn probe_registry_traces_are_unambiguous() -> Probe {
+    use crate::cmd::audit::{BOOKKEEPING, registered_traces};
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+
+    let mut all: Vec<String> = Vec::new();
+    for m in MECHANISMS {
+        if let Fires::Decisions(traces) = m.fires {
+            all.extend(traces.iter().map(|(c, d)| format!("{c} / {d}")));
+        }
+    }
+    let distinct = registered_traces();
+    let red = !all.is_empty() && all.len() == distinct.len();
+
+    // A decision word cannot be both a mechanism firing and bookkeeping.
+    let green = !distinct.is_empty()
+        && !all.iter().any(|t| {
+            t.split(" / ")
+                .nth(1)
+                .is_some_and(|d| BOOKKEEPING.contains(&d))
+        });
+    Probe {
+        name: "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
         red_fires: red,
         green_passes: green,
     }
