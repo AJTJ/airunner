@@ -321,6 +321,21 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: main moves only for a branch that contains main AND is green at its head, which is why no verify runs there",
+        Mutation {
+            // Drop the containment half of the conjunction. It compiles, it reaches exactly the
+            // branch under test, and it is the state that would let main move to a commit whose
+            // tree nothing has verified — which is what the removed rewind used to cover for.
+            // `land: worker, dirty main, …` shares this rule and is expected to fall with it.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "    if !f.contains_main {",
+            to: "    if false {",
+            also_red: &[
+                "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+            ],
+        },
+    ),
+    (
         "landable: a branch green with main merged pushes once per head, not while it sits",
         Mutation {
             // The rule: what makes a branch landable is its HEAD, so nothing else may enter
@@ -790,6 +805,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landing_state(),
         probe_land_role_is_where_you_are(),
         probe_landable_pushes_once_per_branch(),
+        probe_nothing_unverified_reaches_main(),
     ]
 }
 
@@ -1743,65 +1759,122 @@ fn probe_batch_close() -> Probe {
 /// a recorded green that is not at the branch head; a clean green hand-over passes. Pure over
 /// the facts, so the whole refusal set fires without a repo.
 fn probe_land_refusals() -> Probe {
-    use crate::cmd::land::{Facts, check, may_land};
+    use crate::cmd::land::{Facts, Site, check, may_land};
 
-    let none: Vec<String> = vec![];
-    fn ok(dirty: &[String]) -> Facts<'_> {
-        Facts {
-            worker: "alpha",
+    fn here() -> Site {
+        Site {
             on_main: true,
             main_checkout: true,
-            dirty,
-            branch_exists: true,
-            already_in_main: false,
-            contains_main: true,
-            branch_head: "abcdef99",
-            green_at: Some("abcdef99"),
         }
     }
+    let ok = || Facts {
+        worker: "alpha",
+        branch_exists: true,
+        already_in_main: false,
+        contains_main: true,
+        branch_head: "abcdef99",
+        green_at: Some("abcdef99"),
+    };
+    let sites = [
+        Site {
+            on_main: false,
+            ..here()
+        },
+        Site {
+            main_checkout: false,
+            ..here()
+        },
+    ];
     let refusals = [
         Facts {
-            on_main: false,
-            ..ok(&none)
-        },
-        Facts {
-            main_checkout: false,
-            ..ok(&none)
-        },
-        Facts {
             branch_exists: false,
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             contains_main: false,
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             green_at: Some("00000000"),
-            ..ok(&none)
+            ..ok()
         },
         Facts {
             green_at: None,
-            ..ok(&none)
+            ..ok()
         },
     ];
-    let dirty = vec!["src/a.rs".to_string()];
+    let readable = |m: String| m.contains('`') && m.starts_with("refused: ");
     // Every refusal fires, and every one names a command to run.
     let red = may_land(&at("alpha", "alpha")).is_err()
-        && check(&ok(&dirty)).is_err()
-        && refusals.iter().all(|f| {
-            check(f)
-                .err()
-                .is_some_and(|m| m.contains('`') && m.starts_with("refused: "))
-        });
+        && sites
+            .iter()
+            .all(|s| check(s, &ok()).err().is_some_and(readable))
+        && refusals
+            .iter()
+            .all(|f| check(&here(), f).err().is_some_and(readable));
     let green = may_land(&at("main", "main")).is_ok()
-        && check(&ok(&none)) == Ok(true)
-        && check(&Facts {
-            already_in_main: true,
-            ..ok(&none)
-        }) == Ok(false);
+        && check(&here(), &ok()) == Ok(true)
+        && check(
+            &here(),
+            &Facts {
+                already_in_main: true,
+                ..ok()
+            },
+        ) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-odv: nothing reaches main without a green at the branch head AND main contained.
+///
+/// Those two together are what make the landing commit's tree byte-identical to the tree the
+/// worker verified, which is the entire reason no verify runs at landing time and no rewind is
+/// possible. If either can be satisfied without the other, main can move to a commit nothing
+/// has verified — the state the old merge-then-rewind design held for minutes at a time, and
+/// which twice outlived a killed land (d10ddab, 35660df).
+///
+/// Red: a branch that contains main but has no green, one whose green is at an older sha, and
+/// one green but behind main are each refused. Green: both together pass, and nothing else does.
+fn probe_nothing_unverified_reaches_main() -> Probe {
+    use crate::cmd::land::{Facts, Site, branch_check};
+
+    let both = || Facts {
+        worker: "alpha",
+        branch_exists: true,
+        already_in_main: false,
+        contains_main: true,
+        branch_head: "abcdef99",
+        green_at: Some("abcdef99"),
+    };
+    let refused = |f: Facts<'_>| branch_check(&f).is_err();
+    let red = refused(Facts {
+        green_at: None,
+        ..both()
+    }) && refused(Facts {
+        green_at: Some("00000000"),
+        ..both()
+    }) && refused(Facts {
+        contains_main: false,
+        ..both()
+    });
+    // Only the conjunction lands, and `check` from a clean site agrees with it — the same
+    // predicate `air status` uses, so the two cannot drift (air-y3v).
+    let site = Site {
+        on_main: true,
+        main_checkout: true,
+    };
+    let green = branch_check(&both()) == Ok(true)
+        && crate::cmd::land::check(&site, &both()) == Ok(true)
+        // Already in main is the one non-refusal that also does not move main.
+        && branch_check(&Facts {
+            already_in_main: true,
+            ..both()
+        }) == Ok(false);
+    Probe {
+        name: "land: main moves only for a branch that contains main AND is green at its head, which is why no verify runs there",
         red_fires: red,
         green_passes: green,
     }
@@ -1831,6 +1904,7 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
                 minutes,
                 command: format!("air land {b}"),
                 acceptance: Vec::new(),
+                blocked: None,
             })
             .collect(),
         ..Default::default()
