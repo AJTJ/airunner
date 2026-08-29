@@ -101,7 +101,8 @@ Index items are 1–3 lines; detail lives behind the link.
 |---|---|
 | `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) + NDJSON events (`.air/events/`): `verify_runs`, `edit_journal`, `claims`, `sessions` (with `role`), `landings`, `captures` (schema v2). No time-based expiry. **Built.** |
 | `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, edit journal; `air hook` dispatches SessionStart/PreToolUse/PostToolUse/PermissionRequest/Stop/SessionEnd, fails open, ~100 ms, **one event line per invocation** (transitions included). Advisory unless `AIR_ENFORCE=1`. **Built.** |
-| `crates/cli` (`air`) | Built: `record` (command/duration/bytes/dirty, suspicious flags), `handover` (4 checks incl. digest), `holdings`, `claim`/`release` (wrap `bd --claim`), `capture [--for owner]`/`inbox [--owner]`/`triage`, `lease take|release|status|break|beat`, `status [--attention]`, `mcp`, `init` (gate + everything), `install`, `worker [name] [--tmux --task]`/`coordinator` (+ `.claude/air.json` deny patterns), `close`, `land [--all]`, `hook`, `doctor`, `selftest` (20 probes). Next (after round-one data): `next`, `peer`, `merge-advice`, `gc`, PreCompact re-inject. |
+| `crates/cli` (`air`) | Built: `record` (command/duration/bytes/dirty, suspicious flags), `handover` (4 checks incl. digest), `holdings`, `claim`/`release` (wrap `bd --claim`), `capture [--for owner]`/`inbox [--owner]`/`triage`, `lease take|release|status|break|beat`, `status [--attention]`, `mcp`, `init` (gate + everything), `install`, `worker [name] [--tmux --task]`/`coordinator` (+ `.claude/air.json` deny patterns), `close`, `land [--all]`, `hook`, `doctor`, `selftest` (probe count is whatever it prints; this line used to carry a copy
+of it and was stale by 14, air-jc0). Next (after round-one data): `next`, `peer`, `merge-advice`, `gc`, PreCompact re-inject. |
 | `air mcp` | One stdio MCP server: the coordinator's **channel** (pushes attention conditions from a ledger poll; no sockets, no timers) plus tools (`air_*`) and resources (`air://status`, …) that invoke the CLI. Synchronous, bounded, panic-isolated. **Built.** |
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` with native worktree isolation, roles prose appended, deny list that holds in every permission mode, env instead of drifting files; coordinator gets the channel. **Built.** |
 | Hand-over gate | The one refusal: `awaiting_review`/close needs recorded green at HEAD + main merged. Never blocks a prompt or a WIP commit. |
@@ -144,8 +145,11 @@ accepted a digest written for a different bead, and accepted `touch` on an old o
 guards fails toward permitting, so it now wants the bead declared rather than guessed.
 
 **Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
-the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, 27 probes,
-is. The owner's words: *"the explanation should be proof, not verbosity. Very clear proof."*
+the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, with the
+probe count your own run printed, is. The owner's words: *"the explanation should be proof, not
+verbosity. Very clear proof."* Quote the count from the run you just did, never from here: this
+sentence carried `27 probes` against a real 34 for long enough that two lanes could have copied
+it (air-jc0).
 
 **If part of a bead needs the owner, close what you did and file a standalone successor bead**
 naming what he must do. Do not leave the bead open for the remainder: open beads get re-claimed
