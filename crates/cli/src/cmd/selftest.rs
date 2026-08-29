@@ -658,8 +658,45 @@ fn probe_lease_store_is_named() -> Probe {
     }
 }
 
+/// air-air: "which model is this worker on" was a question the coordinator had to ASK, and a
+/// wrong model that is invisible costs the round while a visible one costs a relaunch.
+///
+/// The value is READ, never inferred: a session launched with no `--model` inherits whatever the
+/// harness gives it, so anything derived from a settings file would be a guess wearing a fact's
+/// grammar. It comes out of the session's own transcript, which names the model on every
+/// assistant message.
+///
+/// Red: two sessions on different models are distinguishable, and the launch flag reaches the
+/// argv as a flag rather than as one more deny-list value (air-2ct). Green: a transcript that has
+/// not named a model yet yields None, so the recorded value is left alone rather than blanked —
+/// an honest unknown instead of an empty string.
+fn probe_model_is_recorded_per_session() -> Probe {
+    use crate::cmd::hook::model_in_transcript;
+    let line = |m: &str| format!(r#"{{"type":"assistant","message":{{"model":"{m}","id":"x"}}}}"#);
+    let a = model_in_transcript(&line("claude-opus-5"));
+    let b = model_in_transcript(&line("claude-haiku-4-5-20251001"));
+    // The launch flag must survive as a FLAG: appended bare after the variadic --disallowed-tools
+    // it would be read as another deny rule.
+    let argv = crate::with_model(Some("claude-opus-5"), &["--tmux".to_string()]);
+    let red = a.as_deref() == Some("claude-opus-5")
+        && b.as_deref() == Some("claude-haiku-4-5-20251001")
+        && a != b
+        && argv.first().is_some_and(|x| x == "--model")
+        && argv.get(1).is_some_and(|x| x == "claude-opus-5");
+    let green = model_in_transcript(r#"{"type":"user","message":{"content":"hi"}}"#).is_none()
+        && model_in_transcript("").is_none()
+        && model_in_transcript(r#"{"model":""}"#).is_none()
+        && crate::with_model(None, &["--tmux".to_string()]) == vec!["--tmux".to_string()];
+    Probe {
+        name: "status: a session's model is read from its transcript; two models are distinguishable, an unnamed one is not guessed",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
         probe_no_task_no_prompt(),
         probe_gate_verify(),
@@ -2182,6 +2219,7 @@ fn probe_attention() -> Probe {
                 pid: None,
                 pid_alive: None,
                 project: String::new(),
+                model: String::new(),
             }),
             ..Default::default()
         }],
@@ -2243,6 +2281,7 @@ fn probe_standstill() -> Probe {
                 pid: None,
                 pid_alive: None,
                 project: String::new(),
+                model: String::new(),
             }),
             ..Default::default()
         }],
@@ -2326,6 +2365,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 pid: Some(1),
                 pid_alive: alive,
                 project: String::new(),
+                model: String::new(),
             }),
             ..Default::default()
         }],
