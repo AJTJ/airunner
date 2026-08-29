@@ -69,6 +69,7 @@ pub fn run(json: bool) -> i32 {
         probe_doctor_enumerates_tables(),
         probe_gc_keeps_what_it_must(),
         probe_peer_warning_effect_is_readable(),
+        probe_poll_tick_pays_for_bd_rarely(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -356,6 +357,47 @@ fn probe_peer_warning_effect_is_readable() -> Probe {
         && p.conflicts_in_warned_files.is_none();
     Probe {
         name: "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-cmn: an ordinary poll tick answers from the cache and never shells out to bd.
+///
+/// The poll ran a full `gather` every ~8 s and every one called bd — `in_progress`, then `show`
+/// once per open claim, then `awaiting_review`, then `ready`: about 5,700 bd calls and 2.3
+/// hours a day waiting on bd, to deliver ~45 pushes (0007 §3). air-djl proposed deleting the
+/// thread over the event volume, which air-5uz had already removed; the cost was here.
+///
+/// This asserts the DECISION, not a process count, because the fallback it arms is the
+/// already-tested slow-bd path: `cache_is_fresh` says whether this tick pays.
+///
+/// Red: with a cached answer a minute old and a 10-minute window, the tick uses the cache.
+/// Green: an answer older than the window, and an empty cache after a restart, both pay — so
+/// the counts cannot go stale forever and the first tick still fills the cache.
+fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
+    use crate::cmd::status::cache_is_fresh;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let now = "2026-08-29T12:00:00Z";
+
+        // Nothing cached: a restart must pay once rather than answer from nothing.
+        let empty_pays = !cache_is_fresh(&l, now, 10);
+
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:59:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = cache_is_fresh(&l, now, 10);
+
+        // The same value, an hour old: outside the window, so this tick pays.
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let green = !cache_is_fresh(&l, now, 10) && empty_pays;
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
         red_fires: red,
         green_passes: green,
     }
