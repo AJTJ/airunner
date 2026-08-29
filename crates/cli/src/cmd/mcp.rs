@@ -532,6 +532,46 @@ pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> 
     out
 }
 
+/// Record that a condition was actually **said** to the coordinator, as distinct from
+/// evaluated (air-5uz).
+///
+/// Until this existed the only trace of the channel was the per-tick line `record_and_log`
+/// writes, so `air audit` counted evaluations and called them fires: 10,722 log lines against
+/// 45 real pushes on 2026-08-22. The gate is `hook_emissions`, the same table the Stop and
+/// peer hooks use, so a channel that starts again does not re-say what the last process
+/// already said; the event line is what makes the push countable.
+fn record_push(ledger: Option<&(air_ledger::Ledger, String)>, at: &str, a: &Attention) {
+    let Some((ledger, worker)) = ledger else {
+        return;
+    };
+    // Age-escalating kinds carry no value fingerprint; for those the minute count IS the
+    // change `select_new` just decided on, so it is what must differ to speak again.
+    let fingerprint = if a.fingerprint.is_empty() {
+        format!("min:{}", a.for_minutes)
+    } else {
+        a.fingerprint.clone()
+    };
+    let key = format!("channel:{}:{}", a.kind, a.worker);
+    if !ledger
+        .emit_if_changed(worker, &key, &fingerprint, at)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    crate::cmd::log_event(
+        ledger,
+        worker,
+        "channel.push",
+        &json!({
+            "conditions": [format!("{}:{}", a.kind, a.worker)],
+            "for_minutes": a.for_minutes,
+        }),
+        "pushed",
+        &a.detail,
+        "1 condition pushed",
+    );
+}
+
 fn channel_event(a: &Attention) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -595,10 +635,12 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
                 match status::gather(repo) {
                     Ok(snap) => {
                         let att = status::attention(&snap, &snap.at, thresholds);
-                        if let Ok((ledger, worker)) = crate::cmd::open(repo) {
-                            status::record_and_log(&ledger, &worker, &snap, &att, true);
+                        let opened = crate::cmd::open(repo).ok();
+                        if let Some((ledger, worker)) = opened.as_ref() {
+                            status::record_and_log(ledger, worker, &snap, &att, true);
                         }
                         for a in select_new(&mut pushed, &att) {
+                            record_push(opened.as_ref(), &snap.at, &a);
                             out.send(&channel_event(&a));
                         }
                         for (kind, worker, text) in
