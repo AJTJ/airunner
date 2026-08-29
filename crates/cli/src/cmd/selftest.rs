@@ -5,7 +5,8 @@
 //! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
 //! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
 //! expectation is computed from itself cannot rot. So derive the fixture from the threshold
-//! (`Thresholds::default().stuck_min`, `attribution::cutoff()`, `install::SURFACE`) rather than
+//! (`Thresholds::default().idle_with_claim_min`, `attribution::cutoff()`, `install::SURFACE`)
+//! rather than
 //! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
 //! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
 //! and see it go red on a mutant that COMPILES, then change the rule's number and see it stay
@@ -84,6 +85,81 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // The ledger lane's probes, 2026-08-29. Each anchor was run by hand when the probe was
+    // written, and each names ONE branch: the change-only gate, the enumeration, the
+    // referenced-day protection, the join's file-and-order keys, the freshness window, the
+    // bookkeeping overlap, the push deny.
+    (
+        "status: an unchanged condition set writes one event line an hour, not one a tick",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "    if attention_only\n        && !ledger",
+            to: "    if false\n        && !ledger",
+            also_red: &[],
+        },
+    ),
+    (
+        "doctor: every table the ledger has is counted, including one added after this probe was written",
+        Mutation {
+            // Back to the seven names the list held, which is the old behaviour expressed in
+            // the new code path, so the mutant reaches exactly what the probe exercises.
+            file: "crates/cli/src/cmd/doctor.rs",
+            from: "AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            to: "AND name = 'verify_runs' ORDER BY name",
+            also_red: &[],
+        },
+    ),
+    (
+        "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
+        Mutation {
+            file: "crates/cli/src/cmd/gc.rs",
+            from: "} else if referenced.contains(day) {",
+            to: "} else if false && referenced.contains(day) {",
+            also_red: &[],
+        },
+    ),
+    (
+        "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        Mutation {
+            // Keep the session key, drop the file and the ordering: the join stops being a join
+            // without the guard disappearing, which is the wrong-path trap this avoids.
+            file: "crates/cli/src/cmd/audit.rs",
+            from: ".filter(|(a, s, p)| s == sid && p == path && a > at)",
+            to: ".filter(|(_a, s, _p)| s == sid)",
+            also_red: &[],
+        },
+    ),
+    (
+        "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: ".is_some_and(|age| age < max_age_min)",
+            to: ".is_some_and(|age| age < 0)",
+            also_red: &[],
+        },
+    ),
+    (
+        "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
+        Mutation {
+            // Restore the overlap this probe found for real: `reported` was bookkeeping AND the
+            // audit mechanism's trace, which is why `air gc` fired invisibly (air-8br).
+            file: "crates/cli/src/cmd/audit.rs",
+            from: "    \"released\",\n    \"stopped\",",
+            to: "    \"released\",\n    \"reported\",\n    \"stopped\",",
+            also_red: &[],
+        },
+    ),
+    (
+        "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
+        Mutation {
+            // Put the commit deny back: the probe's GREEN half is what falls, which is the half
+            // the owner's ruling changed (air-iy1).
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\"];",
+            to: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\", \"Bash(git commit *)\"];",
+            also_red: &[],
+        },
+    ),
     (
         "gate: verify-green-at-head",
         Mutation {
@@ -714,6 +790,7 @@ fn all_probes() -> Vec<Probe> {
         probe_peer_warning_effect_is_readable(),
         probe_poll_tick_pays_for_bd_rarely(),
         probe_registry_traces_are_unambiguous(),
+        probe_coordinator_may_commit_never_push(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
         probe_land_selection_is_never_silent(),
@@ -1034,6 +1111,38 @@ fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
     }
 }
 
+/// air-iy1: the coordinator's boundary is the remote, not main.
+///
+/// The incident: the coordinator wrote plan 0008, a decisions entry and a CLAUDE.md index row,
+/// could not commit them, and the owner committed by hand — the owner doing a chore the
+/// coordinator was in the middle of. `air land` already merges into main and is already the
+/// coordinator's, so the deny was never protecting main; it stopped the coordinator saving its
+/// own prose. Owner ruling, 2026-08-29.
+///
+/// Asserted on the ARGV the launcher builds, which is where the rule lives — the deny is passed
+/// to `claude --disallowed-tools` at launch. Note what this probe does NOT claim: a coordinator
+/// session already running keeps the flags it started with until it is relaunched against a
+/// rebuilt binary. "The rule is changed" and "that session can commit" are different claims.
+///
+/// Red: `git push` is still denied, for the coordinator and the worker both. Green: `git commit`
+/// is denied for neither role — a worker's commits are the whole point of a worktree, and the
+/// coordinator's own prose is its own to save.
+fn probe_coordinator_may_commit_never_push() -> Probe {
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
+    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
+
+    let red = denies(&coord, "Bash(git push *)") && denies(&worker, "Bash(git push *)");
+    let green = !denies(&coord, "Bash(git commit *)") && !denies(&worker, "Bash(git commit *)");
+    Probe {
+        name: "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-8br: no `command / decision` pair is claimed by two mechanisms, and the pairs the audit
 /// treats as bookkeeping are not also claimed as firings.
 ///
@@ -1226,7 +1335,8 @@ fn probe_bead_attribution_reads_a_trailer() -> Probe {
 /// visible. Red: an entry with nothing recorded is reported as a defect. Green: an entry
 /// with a condition is not, and its counter reads back.
 fn probe_audit_registry() -> Probe {
-    use crate::cmd::audit::gather_from;
+    use crate::cmd::audit::{NO_CONDITION, gather_from, removal_verdict};
+    use crate::cmd::mechanisms::Removal;
 
     let events = concat!(
         r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
@@ -1236,15 +1346,17 @@ fn probe_audit_registry() -> Probe {
         &[("2026-08-22".to_string(), events.to_string())],
         "2026-08-22",
     );
-    // Red: a mechanism with nothing recorded IS a defect, asserted against the rule rather than
-    // against whichever mechanism currently lacks a condition.
+    // Red: a mechanism with nothing recorded IS reported as a defect. Asserted against the
+    // classifier rather than against a registry row that happens to lack a condition — this
+    // probe pointed at `review-waiting` until air-s7c gave that one a condition, then at
+    // `stuck` until air-byw gave `stuck` one (air-dqw's deletion was reverted on that finding).
+    // Each time, the probe went silent on a registry change that was not a regression. There is
+    // now no `Removal::Unstated` row left, which is the goal, so a probe that needs one would be
+    // a probe that needs a defect to exist.
     //
-    // This probe chased that fact twice: it named `review-waiting` until air-s7c gave that one a
-    // condition, then `stuck` until air-byw gave `stuck` one — and `stuck` was the last
-    // `Removal::Unstated`, so there is no third mechanism to move to. Naming one was a second
-    // copy of a fact the registry owns, and it broke each time someone did the thing the probe
-    // was hoping for (air-jc0). It now reads `defect_for`, which owns the rule.
-    let red = crate::cmd::audit::defect_for(crate::cmd::mechanisms::Removal::Unstated).is_some()
+    // Two lanes reached this same fix independently within the hour; this is main's version,
+    // which asserts the whole verdict tuple rather than only the defect string.
+    let red = removal_verdict(Removal::Unstated, 0) == ("none", None, Some(NO_CONDITION))
         && a.rows.iter().all(|r| r.defect.is_none());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
@@ -2155,24 +2267,42 @@ fn minutes_before(now: &str, minutes: i64) -> Option<String> {
     Some(t.checked_sub(span).ok()?.to_string())
 }
 
-/// Attention conditions fire on a stale stuck session and stay quiet on a fresh one.
+/// Attention conditions fire on a session idle past the line with a claim held, and stay quiet
+/// under it.
 ///
-/// air-jc0: the two ages are read out of `stuck_min` rather than written beside it. adopter's
-/// ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner had raised to
-/// 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a bigger number but
-/// reading the cap from the script that owns it. Their two controls, both run against this probe
-/// (digest 2026-08-29-diligence-air-jc0): with the `stuck` arm neutralised it goes red; with
-/// `stuck_min` moved 5 -> 90 it stays green and renames itself. Copying 60 and 1 passed the first
-/// control and failed the second.
+/// air-jc0: the two ages are read out of the threshold rather than written beside it.
+/// adopter's ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner
+/// had raised to 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a
+/// bigger number but reading the cap from the script that owns it. Their two controls, both run
+/// against this probe (digest 2026-08-29-diligence-air-jc0): with the arm neutralised it goes
+/// red; with the threshold moved it stays green and renames itself. Copying the numbers passed
+/// the first control and failed the second.
+///
+/// Repointed from `stuck` to `idle-with-claim` on 2026-08-29 (air-dqw), when `stuck` was
+/// deleted. The subject of the probe is unchanged and is not `stuck`: it is that a threshold is
+/// read from the rule that owns it. `idle_with_claim_min` is the natural stand-in because
+/// `idle` is a state the `sessions` table actually holds, which `stuck` never was.
 fn probe_attention() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    use air_ledger::claims::Claim;
     let mk = |changed: &str| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
             role: "worker".into(),
+            claims: vec![Claim {
+                bead: "air-1".into(),
+                worker: "w".into(),
+                claimed_at: "2026-08-20T10:00:00Z".into(),
+                declared_files: Vec::new(),
+                first_handover_at: None,
+                last_handover_at: None,
+                handover_attempts: 0,
+                released_at: None,
+                release_reason: None,
+            }],
             session: Some(Session {
                 session_id: "s".into(),
-                state: "stuck".into(),
+                state: "idle".into(),
                 detail: None,
                 changed_at: changed.into(),
                 pid: None,
@@ -2188,15 +2318,15 @@ fn probe_attention() -> Probe {
     let t = Thresholds::default();
     // One minute past the line and one minute short of it, wherever the line currently is.
     let (Some(over), Some(under)) = (
-        t.stuck_min
+        t.idle_with_claim_min
             .checked_add(1)
             .and_then(|m| minutes_before(now, m)),
-        t.stuck_min
+        t.idle_with_claim_min
             .checked_sub(1)
             .and_then(|m| minutes_before(now, m)),
     ) else {
         return Probe {
-            name: "attention: stuck threshold could not be read",
+            name: "attention: idle-with-claim threshold could not be read",
             red_fires: false,
             green_passes: false,
         };
@@ -2204,20 +2334,20 @@ fn probe_attention() -> Probe {
     let red = attention(&mk(&over), now, Thresholds::default());
     let green = attention(&mk(&under), now, Thresholds::default());
     Probe {
-        name: STUCK_NAME.get_or_init(|| {
+        name: IDLE_CLAIM_NAME.get_or_init(|| {
             format!(
-                "attention: a stuck session fires at stuck_min={} min and is quiet under it",
-                t.stuck_min
+                "attention: an idle session holding a claim fires at idle_with_claim_min={} min and is quiet under it",
+                t.idle_with_claim_min
             )
         }),
-        red_fires: red.iter().any(|a| a.kind == "stuck"),
+        red_fires: red.iter().any(|a| a.kind == "idle-with-claim"),
         green_passes: green.is_empty(),
     }
 }
 
 /// The probe name carries the threshold it read, so a changed rule RENAMES the probe instead of
 /// breaking it — adopter's second control made visible in the output.
-static STUCK_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static IDLE_CLAIM_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// air-e7q, the standstill: an idle worker with no claim while beads are ready. Red: the
