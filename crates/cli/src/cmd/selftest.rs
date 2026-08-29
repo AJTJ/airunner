@@ -333,6 +333,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: Air runs exactly one git merge and it is --ff-only, so no Air command can see a conflict",
+        Mutation {
+            // Reintroduce the three-way merge air-odv removed. It compiles, it is exactly the
+            // regression the claim guards against, and it is one line rather than a blanket
+            // flag. `--no-ff` against a divergent branch is precisely what CAN conflict.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "git::run(repo, &[\"merge\", \"--ff-only\", &merge])",
+            to: "git::run(repo, &[\"merge\", \"--no-ff\", &merge])",
+            also_red: &[],
+        },
+    ),
+    (
         "land: main moves only for a branch that contains main AND is green at its head, which is why no verify runs there",
         Mutation {
             // Drop the containment half of the conjunction. It compiles, it reaches exactly the
@@ -819,6 +831,7 @@ fn all_probes() -> Vec<Probe> {
         probe_land_role_is_where_you_are(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
+        probe_air_runs_no_conflicting_merge(),
     ]
 }
 
@@ -1840,6 +1853,46 @@ fn probe_land_refusals() -> Probe {
         ) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
+/// observe a merge conflict.
+///
+/// air-mun asked for the conflicted paths of a landing to be recorded, so `air audit` could
+/// answer "conflicts in warned files" with a number and peer-warning could be honestly kept or
+/// deleted. air-odv landed the same day and removed the merge that would have produced them:
+/// `air land` builds the landing commit with `commit-tree` and fast-forwards onto it. Measured
+/// on git 2.51: `--ff-only` against a divergent branch aborts with **zero** conflicted paths
+/// and a clean working tree, and `branch_check` refuses such a branch before any git write.
+///
+/// This probe is the guard on that claim. It is a source check rather than a behaviour check on
+/// purpose: the assertion is about what Air *can* run, and a behaviour test can only sample the
+/// paths it happens to take. If someone reintroduces a three-way merge, the claim in
+/// `audit.rs` — that nothing records conflicts because nothing observes them — silently becomes
+/// wrong, and this is what says so.
+///
+/// Red: a `git merge` without `--ff-only` anywhere in the crate is caught. Green: the one merge
+/// that exists is the fast-forward, and the audit's explanation names the real site.
+fn probe_air_runs_no_conflicting_merge() -> Probe {
+    let land = include_str!("land.rs");
+    let audit = include_str!("audit.rs");
+    // Every `git` argv Air builds names its subcommand as a bare "merge" element.
+    let merges: Vec<&str> = land
+        .lines()
+        .filter(|l| l.contains("\"merge\"") && !l.trim_start().starts_with("//"))
+        .collect();
+    let red = merges.len() == 1 && merges.first().is_some_and(|l| l.contains("\"--ff-only\""));
+    let green =
+        // The audit no longer points at `air land` as the place a conflict is seen...
+        !audit.contains("`air land` is where one is observed, so recording")
+        // ...and says where they actually happen instead.
+        && audit.contains("the workers' own")
+        && audit.contains("`git merge main`");
+    Probe {
+        name: "land: Air runs exactly one git merge and it is --ff-only, so no Air command can see a conflict",
         red_fires: red,
         green_passes: green,
     }
