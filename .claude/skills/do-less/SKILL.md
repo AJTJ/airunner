@@ -99,6 +99,18 @@ The cheap version of the check: name the event, row, or field the mechanism read
 **that** over the same window. A zero there settles it; a zero in the mechanism's own firings
 does not.
 
+**Prefer the table that holds the fact over the log that holds the narrative.** Counting `stuck`
+in the event log is contaminated by the investigation itself: `grep` finds the word in capture
+text and tool-call records, and returns 3 where the answer is 0. The `sessions` table cannot be
+contaminated, because prose is never written to it:
+
+    sqlite> SELECT state, count(*) FROM sessions GROUP BY state;
+    idle|2   running|1   working|2        -- never `stuck`, in any row, ever
+
+Same question, no parsing, no false positives. Where a count decides something, look for the
+structured place the fact lives before reaching for the log. (ledger, 2026-08-29, arriving at the
+same zero without having to be careful.)
+
 **Before a measurement is used to justify removing a mechanism, check it against the raw
 record for that mechanism.** A derived statement reads exactly like an observed one, and the
 derivation is invisible at the point of use — the plausible number is the dangerous one, so

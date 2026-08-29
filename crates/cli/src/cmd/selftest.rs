@@ -1236,11 +1236,16 @@ fn probe_audit_registry() -> Probe {
         &[("2026-08-22".to_string(), events.to_string())],
         "2026-08-22",
     );
-    // Red: nothing is recorded for `stuck`, so it is a defect and says so. (This probe
-    // pointed at `review-waiting` until air-s7c gave that one a condition, at which point it
-    // went silent and said so, which is the probe doing its job. air-okc then deleted that
-    // condition outright, so the counting half now rides on `handover-not-green`.)
-    let red = a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some());
+    // Red: a mechanism with nothing recorded IS a defect, asserted against the rule rather than
+    // against whichever mechanism currently lacks a condition.
+    //
+    // This probe chased that fact twice: it named `review-waiting` until air-s7c gave that one a
+    // condition, then `stuck` until air-byw gave `stuck` one — and `stuck` was the last
+    // `Removal::Unstated`, so there is no third mechanism to move to. Naming one was a second
+    // copy of a fact the registry owns, and it broke each time someone did the thing the probe
+    // was hoping for (air-jc0). It now reads `defect_for`, which owns the rule.
+    let red = crate::cmd::audit::defect_for(crate::cmd::mechanisms::Removal::Unstated).is_some()
+        && a.rows.iter().all(|r| r.defect.is_none());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
         .rows
