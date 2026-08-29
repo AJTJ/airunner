@@ -140,6 +140,72 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "attention: idle-without-claim fires for a live session, not a dead one",
+        Mutation {
+            // The one clause air-d10 added. Not the whole arm: taking that out would silence
+            // the condition entirely and prove only that the probe is connected.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "sess.pid_alive != Some(false)",
+            to: "true",
+            also_red: &[],
+        },
+    ),
+    (
+        "doctor: a dated rule says so when its cutoff has passed",
+        Mutation {
+            // The comparison itself, so a rule's date stops being read. Renaming the function
+            // would not build, which proves nothing (failure mode 1).
+            file: "crates/cli/src/cmd/doctor.rs",
+            from: "expired: date.parse::<jiff::Timestamp>().is_ok_and(|t| now >= t),",
+            to: "expired: false,",
+            also_red: &[],
+        },
+    ),
+    (
+        "claim: a closed bead stops alarming; awaiting_review still holds it",
+        Mutation {
+            // Widen `closes_bead` back to every hand-over, so `-s awaiting_review` releases
+            // the claim too. That is the air-3eu regression the probe's green half is about,
+            // and it leaves the close path working, which is what makes it one branch.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "closing.then(|| handover_bead(cmd)).flatten()",
+            to: "handover_bead(cmd)",
+            also_red: &[],
+        },
+    ),
+    (
+        "attention: three stuck claims on one worker are one line, not three",
+        Mutation {
+            // Collapse by throwing claims away instead of by naming them: one line, but it
+            // reports one bead of three. The probe's red half asks for all three by name.
+            file: "crates/cli/src/cmd/status.rs",
+            from: ".filter(|c| c.handover_attempts > 0)\n                .collect()",
+            to: ".filter(|c| c.handover_attempts > 0)\n                .take(1)\n                .collect()",
+            also_red: &[],
+        },
+    ),
+    (
+        "status: the bd budget is derived from bd's measured cost, not a constant",
+        Mutation {
+            // Stop reading the measurement, so every budget is the floor. The function still
+            // returns a Duration and the cap still holds; only the derivation goes.
+            file: "crates/cli/src/cmd/bd_latency.rs",
+            from: ".and_then(|m| m.checked_mul(4))",
+            to: ".and_then(|_| None)",
+            also_red: &[],
+        },
+    ),
+    (
+        "traffic: SendMessage reaches the hook and the audit sums it per worker",
+        Mutation {
+            // The matcher, which is the thing that made the count zero in the first place.
+            file: "crates/cli/src/cmd/install.rs",
+            from: "Some(\"Edit|Write|MultiEdit|Bash|SendMessage\")",
+            to: "Some(\"Edit|Write|MultiEdit|Bash\")",
+            also_red: &[],
+        },
+    ),
+    (
         "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
         Mutation {
             // The rule: an in-flight row whose process is gone is not a run in flight. Keep
@@ -540,6 +606,9 @@ fn all_probes() -> Vec<Probe> {
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
         probe_close_releases_the_claim(),
+        probe_handover_not_green_is_one_line_per_worker(),
+        probe_status_bd_budget_follows_the_measurement(),
+        probe_agent_traffic_is_counted(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -2231,6 +2300,150 @@ fn probe_close_releases_the_claim() -> Probe {
         name: "claim: a closed bead stops alarming; awaiting_review still holds it",
         red_fires: res.0,
         green_passes: res.1,
+    }
+}
+
+/// air-0j4: a worker's HEAD is one sha, so every claim it holds is not-green for the same
+/// reason and the same fix. adopter's `air status` printed eleven `handover-not-green` lines
+/// for one worker — one fact, eleven times.
+///
+/// Red: three stuck claims on one worker produce ONE line, and it names all three with a total.
+/// Green: a single claim keeps its original wording, unchanged.
+///
+/// The mutation that made it red, seen: restoring the per-claim `out.push` loop — three lines
+/// instead of one, so the red half's `len() == 1` fails.
+fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    use air_ledger::claims::Claim;
+
+    let claim = |bead: &str, at: &str| Claim {
+        bead: bead.into(),
+        worker: "w".into(),
+        claimed_at: at.into(),
+        declared_files: Vec::new(),
+        first_handover_at: Some(at.into()),
+        last_handover_at: Some(at.into()),
+        handover_attempts: 1,
+        released_at: None,
+        release_reason: None,
+    };
+    let snap = |claims: Vec<Claim>| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            green_at_head: Some(false),
+            claims,
+            // A live worker seen a minute ago, so the claim is the only thing that can speak.
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "working".into(),
+                changed_at: "2026-08-20T11:59:00Z".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let three = attention(
+        &snap(vec![
+            claim("fd-1", "2026-08-20T11:00:00Z"),
+            claim("fd-2", "2026-08-20T11:30:00Z"),
+            claim("fd-3", "2026-08-20T11:40:00Z"),
+        ]),
+        now,
+        Thresholds::default(),
+    );
+    let one = attention(
+        &snap(vec![claim("fd-1", "2026-08-20T11:00:00Z")]),
+        now,
+        Thresholds::default(),
+    );
+    Probe {
+        name: "attention: three stuck claims on one worker are one line, not three",
+        red_fires: three.len() == 1
+            && three.first().is_some_and(|a| {
+                a.kind == "handover-not-green"
+                    && ["fd-1", "fd-2", "fd-3"]
+                        .iter()
+                        .all(|b| a.detail.contains(b))
+                    && a.detail.contains("3 attempts in total")
+            }),
+        green_passes: one.len() == 1
+            && one
+                .first()
+                .is_some_and(|a| a.detail.starts_with("fd-1 handed over 1 time(s)")),
+    }
+}
+
+/// air-p61: `air status`'s bd budget was a flat 2 s, chosen before anything measured bd. bd's
+/// measured p99 here is 1644 ms — 356 ms of headroom — and adopter's MEDIAN is 1760 ms,
+/// above the whole budget, so their status reconcile timed out on ordinary calls.
+///
+/// Red: at adopter's measured median the budget rises above it, instead of sitting under it.
+/// Green: it never exceeds the cap that keeps `air status` inside the MCP tool budget
+/// (air-19u), and a ledger with no measurement yet keeps the old floor.
+///
+/// No number here is a second copy of a rule: the two inputs are measurements from the two
+/// repos' event logs, and both assertions are relations (`>`, `<=`) rather than equalities
+/// against a constant, so moving the multiplier cannot silently silence this (air-jc0).
+fn probe_status_bd_budget_follows_the_measurement() -> Probe {
+    use crate::cmd::bd_latency::status_bd_budget;
+    let ms = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    // Measured medians: adopter 1760 ms over 260,601 calls; this repo 1430 ms over 495,892.
+    let theirs = ms(status_bd_budget(Some(1760)));
+    let ours = ms(status_bd_budget(Some(1430)));
+    let cold = ms(status_bd_budget(None));
+    // A pathological median must not push the budget into the channel's own budget.
+    let awful = ms(status_bd_budget(Some(60_000)));
+    Probe {
+        name: "status: the bd budget is derived from bd's measured cost, not a constant",
+        red_fires: theirs > 1760 && ours > 1430 && theirs > ours,
+        green_passes: cold == 2_000 && awful <= 8_000 && awful > ours,
+    }
+}
+
+/// air-q07: the cost the owner most wants minimised was the one the ledger did not contain.
+/// `SendMessage` was not in the installed PreToolUse matcher, so counting agent-to-agent
+/// traffic from the event log returned zero — not because there was none, but because it was
+/// invisible.
+///
+/// Red: the installed matcher names `SendMessage`, and a `SendMessage` payload is recognised
+/// as a message with its recipient and a byte count. Green: the audit sums it per worker, no
+/// content is recorded anywhere, and nothing about it is a decision — the report is a report.
+///
+/// The mutation that made it red, seen: dropping `SendMessage` from `install::hook_entries`.
+fn probe_agent_traffic_is_counted() -> Probe {
+    use crate::cmd::audit::traffic_of;
+    use crate::cmd::install::hook_entries;
+    use air_hooks::HookInput;
+
+    let matcher_covers = hook_entries()
+        .iter()
+        .any(|(event, m)| *event == "PreToolUse" && m.is_some_and(|m| m.contains("SendMessage")));
+    let input = HookInput::parse(
+        r#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"SendMessage",
+            "tool_input":{"to":"main","message":"hello there","summary":"greeting"}}"#,
+    )
+    .ok();
+    let parsed = input.as_ref().and_then(HookInput::message_sent);
+    // Two workers, one day, and a line that is not a message.
+    let day = concat!(
+        r#"{"at":"2026-08-29T01:00:00Z","worker":"alpha","command":"hook.PreToolUse","decision":"messaged","inputs":{"to":"main","bytes":100}}"#,
+        "\n",
+        r#"{"at":"2026-08-29T02:00:00Z","worker":"alpha","command":"hook.PreToolUse","decision":"messaged","inputs":{"to":"beta","bytes":40}}"#,
+        "\n",
+        r#"{"at":"2026-08-29T03:00:00Z","worker":"beta","command":"hook.PreToolUse","decision":"observed","inputs":{}}"#,
+        "\n",
+    );
+    let t = traffic_of(&[("2026-08-29".to_string(), day.to_string())], "2026-08-29");
+    let summed =
+        matches!(t.as_slice(), [one] if one.worker == "alpha" && one.sent == 2 && one.bytes == 140);
+    Probe {
+        name: "traffic: SendMessage reaches the hook and the audit sums it per worker",
+        red_fires: matcher_covers && parsed == Some(("main".to_string(), 11)),
+        // No content anywhere: the parse returns a recipient and a length, never the text.
+        green_passes: summed && !format!("{t:?}").contains("hello there"),
     }
 }
 

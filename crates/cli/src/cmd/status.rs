@@ -803,37 +803,76 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     .min()
                     .unwrap_or(now);
                 let age = minutes_between(oldest, now).unwrap_or(0);
-                if age < t.launch_grace_min {
-                    continue; // just launched; the first hook has not fired yet
+                // The launch grace suppresses `gone-with-claim` only — a worker whose first
+                // hook has not fired yet is not gone. It used to `continue`, which skipped the
+                // whole rest of the loop, so a non-green hand-over on a session-less worker
+                // was silent for the grace window and was invisible to any probe that built a
+                // snapshot without a session row (found while probing air-eiv).
+                if age >= t.launch_grace_min {
+                    out.push(Attention {
+                        worker: w.worker.clone(),
+                        kind: "gone-with-claim",
+                        detail: format!(
+                            "no live session but holds {}; restart `air worker {}` or release",
+                            beads(),
+                            w.worker
+                        ),
+                        for_minutes: age,
+                        fingerprint: String::new(),
+                    });
                 }
-                out.push(Attention {
-                    worker: w.worker.clone(),
-                    kind: "gone-with-claim",
-                    detail: format!(
-                        "no live session but holds {}; restart `air worker {}` or release",
-                        beads(),
-                        w.worker
-                    ),
-                    for_minutes: age,
-                    fingerprint: String::new(),
-                });
             }
             None => {}
         }
-        for c in &w.claims {
-            if c.handover_attempts > 0 && w.green_at_head == Some(false) {
-                let since = c.last_handover_at.as_deref().unwrap_or(now);
-                out.push(Attention {
-                    worker: w.worker.clone(),
-                    kind: "handover-not-green",
-                    detail: format!(
-                        "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
-                        c.bead, c.handover_attempts, since
-                    ),
-                    for_minutes: minutes_between(since, now).unwrap_or(0),
-                    fingerprint: String::new(),
-                });
-            }
+        // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
+        // every claim it holds is not-green for the SAME reason and the same fix; adopter's
+        // status printed eleven lines for one worker, which is one fact eleven times. The
+        // single-claim wording is unchanged, because that is the case that reads well already.
+        //
+        // Removal: when no worker ever holds two claims at once, this collapses nothing and
+        // the loop above can go back to pushing per claim.
+        let stuck: Vec<&Claim> = if w.green_at_head == Some(false) {
+            w.claims
+                .iter()
+                .filter(|c| c.handover_attempts > 0)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
+        // one, and the beads read in the order they have been waiting.
+        let oldest = stuck
+            .iter()
+            .filter_map(|c| c.last_handover_at.as_deref())
+            .min()
+            .unwrap_or(now);
+        let detail = match stuck.as_slice() {
+            [] => None,
+            [c] => Some(format!(
+                "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
+                c.bead,
+                c.handover_attempts,
+                c.last_handover_at.as_deref().unwrap_or(now)
+            )),
+            many => Some(format!(
+                "{} beads handed over without green verify at HEAD ({}); {} attempts in total; oldest {}",
+                many.len(),
+                many.iter()
+                    .map(|c| c.bead.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                many.iter().map(|c| c.handover_attempts).sum::<i64>(),
+                oldest
+            )),
+        };
+        if let Some(detail) = detail {
+            out.push(Attention {
+                worker: w.worker.clone(),
+                kind: "handover-not-green",
+                detail,
+                for_minutes: minutes_between(oldest, now).unwrap_or(0),
+                fingerprint: String::new(),
+            });
         }
     }
     for (l, defect) in &s.leases {
@@ -1087,14 +1126,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // ledger row says. The row is released with the bd status as reason so the history is
     // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
     //
-    // bd is enrichment, not the spine. It gets a short budget (2 s default, `AIR_BD_TIMEOUT_MS`)
+    // bd is enrichment, not the spine. It gets a short budget (`AIR_BD_TIMEOUT_MS` overrides)
     // and after one timeout no further bd call is made this tick; the counts fall back to the
     // last answer cached in the ledger. Under load bd took 20 s, the same as the MCP tool
     // budget, so the channel got nothing exactly when the fleet was busiest (adopter
     // 2026-08-22, air-19u).
+    //
+    // The budget is DERIVED from what bd costs here today, not a constant (air-p61): a flat
+    // 2 s left 356 ms of headroom over bd's measured p99 and sat below adopter's median
+    // entirely. `status_bd_budget` reads the same measurement `air status` prints.
+    let today_latency = super::bd_latency::for_day(ledger.dir(), &super::today());
     let mut bd = super::claim::bd_for(repo);
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
-        bd.timeout = std::time::Duration::from_secs(2);
+        bd.timeout = super::bd_latency::status_bd_budget(today_latency.map(|l| l.median_ms));
     }
     // `bd_try` skips every later call once this is set, and each call site already falls back
     // to `bd_cache`. Setting it up front is how "do not call bd this tick" is expressed: one
@@ -1319,8 +1363,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
         // From the lines already on disk: this tick's own bd cost is logged after gather,
-        // so it lands in the next reading.
-        bd_latency: super::bd_latency::for_day(ledger.dir(), &super::today()),
+        // so it lands in the next reading. Read once, above, because the bd budget is
+        // derived from it (air-p61).
+        bd_latency: today_latency,
         bd_source: match (bd_skipped, bd_slow.is_some()) {
             (true, _) => "cache",
             (false, true) => "stale",
