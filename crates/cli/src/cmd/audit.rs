@@ -918,21 +918,29 @@ mod tests {
         (name.to_string(), lines.join("\n") + "\n")
     }
 
-    /// The round this bead came from: review-waiting fired on many beads, over and over, and
+    /// The round this bead came from: one condition fired on many subjects, over and over, and
     /// nothing landed. The audit reproduces that ratio from the event log alone.
+    ///
+    /// The original fixture used `review-waiting`, the condition that produced the ratio.
+    /// air-okc deleted it, so this uses `handover-not-green`, which has the same per-subject
+    /// shape; the arithmetic under test is the audit's, not the condition's.
     #[test]
-    fn reproduces_the_review_waiting_ratio_and_finds_never_fired() {
+    fn reproduces_the_repeat_ratio_and_finds_never_fired() {
         let mut lines: Vec<String> = Vec::new();
         for i in 0..40 {
             lines.push(format!(
-                r#"{{"at":"2026-08-22T0{}:00:00Z","worker":"main","command":"status.attention","inputs":{{"conditions":["review-waiting:air-i59","review-waiting:air-3eu"]}},"decision":"attention"}}"#,
+                r#"{{"at":"2026-08-22T0{}:00:00Z","worker":"main","command":"status.attention","inputs":{{"conditions":["handover-not-green:alpha","handover-not-green:beta"]}},"decision":"attention"}}"#,
                 i % 10
             ));
         }
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let a = gather_from(&[day("2026-08-22", &refs)], "2026-08-22");
 
-        let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
+        let rw = a
+            .rows
+            .iter()
+            .find(|r| r.id == "handover-not-green")
+            .unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
         assert_eq!((rw.evaluations, rw.subjects, rw.repeats), (80, 2, 78));
         // air-cmn restated the condition as a counter. It used to be a Judgement nothing
@@ -964,7 +972,7 @@ mod tests {
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
-        assert!(text.contains("review-waiting"), "{text}");
+        assert!(text.contains("handover-not-green"), "{text}");
     }
 
     /// air-5uz: a push and an evaluation are different facts and are counted apart. The
@@ -1021,19 +1029,23 @@ mod tests {
             day(
                 "2026-08-20",
                 &[
-                    r#"{"at":"2026-08-20T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["review-waiting:air-1"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-20T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
                 ],
             ),
             day(
                 "2026-08-22",
                 &[
-                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["review-waiting:air-2"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
                     r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"land","decision":"landed"}"#,
                 ],
             ),
         ];
         let a = gather_from(&days, "2026-08-22");
-        let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
+        let rw = a
+            .rows
+            .iter()
+            .find(|r| r.id == "handover-not-green")
+            .unwrap();
         assert_eq!(rw.evaluations, 1);
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
 
@@ -1043,7 +1055,7 @@ mod tests {
         let rw = older
             .rows
             .iter()
-            .find(|r| r.id == "review-waiting")
+            .find(|r| r.id == "handover-not-green")
             .unwrap();
         assert_eq!((rw.evaluations, rw.subjects), (0, 0));
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
