@@ -23,8 +23,11 @@ use crate::cmd::emit;
 pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 
 /// The coordinator's procedures, embedded and installed as skills in the target repo so every
-/// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21). The
-/// same text is served as MCP prompts by `air mcp`.
+/// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21).
+///
+/// This used to end "the same text is served as MCP prompts by `air mcp`". It never was:
+/// `prompts/list` returns `[]` and `mcp.rs:796` asserts it (air-w0e). A surface describing
+/// something untrue is air-ha8's defect, and a doc comment is a surface.
 pub const SKILLS: &[(&str, &str)] = &[
     // air-ha8: a project adopting Air got the mechanisms (hooks, deny rules, attention
     // conditions, the removal-condition registry) and not the discipline for removing them,
