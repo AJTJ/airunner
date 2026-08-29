@@ -1247,6 +1247,103 @@ fn a_landing_is_recorded_in_flight_while_the_rollback_is_armed() {
     assert_eq!(rows, vec![("landed".to_string(), 1)]);
 }
 
+/// air-ob0: a rewind names every worktree that took the un-landed commits.
+///
+/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// anyone who took it."* A worker who merged main during the armed window — the documented
+/// thing to do when main moves — keeps the rewound commits: a recorded green for a tree main
+/// will never have, with `air handover` passing and `air land` merging it straight back. So the
+/// window is not unverified code in main; it is unverified code that has already propagated, to
+/// exactly the workers following the rule.
+///
+/// The window is real here, not simulated: the repo's verify command IS beta merging main, and
+/// it exits red, so the merge beta took is the one main then resets away from. gamma exists and
+/// merges nothing, so the test can tell "named everyone" from "named the right one".
+#[test]
+fn a_rewind_names_the_worktrees_that_took_the_un_landed_commits() {
+    let (_tmp, main, alpha) = land_repo("sh window.sh");
+    let root = main.parent().unwrap().to_path_buf();
+    for name in ["beta", "gamma"] {
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                root.join(name).to_str().unwrap(),
+            ],
+        );
+    }
+    // beta merges main from INSIDE the armed window and keeps working, then the verify fails.
+    // The extra commit matters: it puts beta's HEAD *past* the merge rather than on it, so the
+    // carrier check has to answer containment. Without it, equality alone would pass and the
+    // test would be blind to the case it exists for.
+    let beta = root.join("beta");
+    std::fs::write(
+        main.join("window.sh"),
+        format!(
+            "#!/bin/sh\nexport GIT_AUTHOR_NAME=air GIT_AUTHOR_EMAIL=air@x \
+             GIT_COMMITTER_NAME=air GIT_COMMITTER_EMAIL=air@x\n\
+             git -C {b} merge -q --no-edit main\n\
+             echo more > {b}/beta.txt\n\
+             git -C {b} add beta.txt\n\
+             git -C {b} commit -q -m 'beta keeps working'\n\
+             exit 1\n",
+            b = beta.display()
+        ),
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "window"]);
+
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    let before = git(&main, &["rev-parse", "HEAD"]);
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 1, "the land must go red: {out}{err}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "main rewound");
+
+    // The rewind message names beta and only beta.
+    assert!(out.contains("already in beta"), "{out}{err}");
+    assert!(!out.contains("gamma"), "gamma merged nothing: {out}");
+    assert!(
+        !out.contains("already in main") && !out.contains("in main, beta"),
+        "the checkout that was just reset is not a carrier: {out}"
+    );
+
+    // ...and the message is not the only copy: `air status` holds the same set afterwards.
+    // Read the carried line only: every worktree appears in the status table by definition,
+    // so `st.contains("gamma")` would prove nothing either way.
+    let carried = |repo: &Path| -> String {
+        air(repo, &bd, &["status"])
+            .1
+            .lines()
+            .filter(|l| l.starts_with("rewound and still carried"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let line = carried(&main);
+    assert!(line.contains("beta"), "{line}");
+    assert!(!line.contains("gamma"), "{line}");
+
+    // It clears itself when nobody carries the commits any more. No expiry to choose.
+    git(&beta, &["reset", "--hard", &before]);
+    assert!(carried(&main).is_empty(), "{}", carried(&main));
+}
+
 /// air-3pz: the coordinator merges a green hand-over, verifies the *merged* result, closes the
 /// bead in one bd process, releases the claim, and records the landing.
 #[test]
