@@ -37,6 +37,13 @@ Claiming a bead is a commitment to work it to completion now: `air claim <id> [-
 then the work. **How a finished bead is handed on is the repo's own flow, in its CLAUDE.md,
 not Air's to prescribe** — some repos hand over for review, some close with proof.
 
+**Signal the coordinator when you close a bead** (owner, 2026-08-29). One `SendMessage`: the
+bead, the proof, and whether your branch is now landable. Nothing polls for this on your behalf
+in time to be useful, and the coordinator's next move depends on it. Air records the fact
+underneath — the `landable` condition fires once when a branch first goes green with `main`
+merged — so a signal you forget is not a fact anyone loses; it is one that arrives later than
+it should have. **[fact]**
+
 Two constraints, because Air checks them and they are about ordering rather than procedure:
 
 - **The recorded green has to be at the commit you hand on, and that commit has to contain
