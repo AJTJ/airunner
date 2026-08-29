@@ -73,6 +73,18 @@ pub struct Snapshot {
     /// `bd ready` count at this tick (None when bd did not answer): queue depth over time
     /// (plan 0006 C6; the round ran dry at 4 with only epics left).
     pub ready_depth: Option<usize>,
+    /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
+    /// them, so the coordinator needs this before merging and the worker never has to relay it.
+    /// Dead pids are pruned by the gather that reads them.
+    pub verifies_in_flight: Vec<air_ledger::verify::InFlight>,
+    /// Landings that have merged into main and not yet reported an outcome (air-bxe), each
+    /// with whether the `air land` process that wrote it is still alive. "Is the land done"
+    /// is answered from here, never from a process listing.
+    pub landings_in_flight: Vec<LandingInFlight>,
+    /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
+    /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
+    /// red land leaves behind. The message at rewind time is not the only copy.
+    pub rewound_carried: Vec<RewoundCarried>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -522,6 +534,179 @@ pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
     let b: jiff::Timestamp = later.parse().ok()?;
     b.duration_since(a).as_secs().checked_div(60)
+}
+
+/// A landing whose merge is in main and whose outcome is not recorded yet (air-bxe).
+#[derive(Debug, Clone, Serialize)]
+pub struct LandingInFlight {
+    pub landing: air_ledger::landings::Landing,
+    /// Is the `air land` process that wrote this row still running? `None` when it recorded no
+    /// pid. `Some(false)` is the interesting one: that land was killed, main still holds the
+    /// merge, and the rollback never ran.
+    pub alive: Option<bool>,
+}
+
+/// Landings still in flight, newest first, each with the liveness of the process that started
+/// it (air-bxe). Unlike a verify row, one of these is NEVER pruned: a killed land left main
+/// changed, and deleting the only evidence of that is the failure, not the tidy-up.
+pub fn landings_in_flight(ledger: &Ledger) -> Vec<LandingInFlight> {
+    ledger
+        .landings_in_flight()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| LandingInFlight {
+            alive: l.pid.map(super::lease::pid_alive),
+            landing: l,
+        })
+        .collect()
+}
+
+/// One line for a landing in flight: what merged, when, and whether anything is still working
+/// on it. The second half is the part `pgrep` was being asked for.
+pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
+    let l = &f.landing;
+    let merge = l.merge_commit.as_deref().unwrap_or("");
+    let elapsed = seconds_between(&l.finished_at, at)
+        .map(|s| format!("{s}s ago"))
+        .unwrap_or_else(|| "at an unreadable time".into());
+    let state = match f.alive {
+        Some(false) => format!(
+            "the `air land` process (pid {}) is GONE: it was killed mid-verify, main still \
+             holds the merge and the rollback never ran. Check main, then `git reset --hard {}` \
+             to undo it or re-run `air land`",
+            l.pid.unwrap_or(0),
+            l.tip_sha.as_deref().unwrap_or("<tip>")
+        ),
+        Some(true) => format!("verifying now (pid {})", l.pid.unwrap_or(0)),
+        None => "no pid recorded, so nothing can say whether it is still running".into(),
+    };
+    format!(
+        "{} ({}) merged at {} {elapsed}, rollback armed to {}: {state}",
+        l.worker,
+        l.beads.join(" "),
+        merge.get(..8).unwrap_or(merge),
+        l.tip_sha
+            .as_deref()
+            .map(|t| t.get(..8).unwrap_or(t).to_string())
+            .unwrap_or_else(|| "-".into()),
+    )
+}
+
+/// A rewound merge that is still sitting in somebody's worktree (air-ob0).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RewoundCarried {
+    /// The merge commit `air land` reset main away from.
+    pub merge_commit: String,
+    pub worker: String,
+    /// Workers whose branch HEAD still contains it.
+    pub carried_by: Vec<String>,
+    pub rewound_at: String,
+}
+
+/// Which worktrees' HEADs contain `sha`, by worker name. One `merge-base --is-ancestor` each,
+/// over the worktree list Air already enumerates (air-ob0).
+pub fn carrying(repo: &Path, sha: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, _) in git::worktrees(repo).unwrap_or_default() {
+        let Ok(head) = git::head(&path) else { continue };
+        if head == sha || git::is_ancestor(&path, sha, &head).unwrap_or(false) {
+            let name = air_ledger::paths::worker_name_for(&path).unwrap_or_else(|_| {
+                path.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Rewound landings whose merge is still carried by somebody (air-ob0), newest first.
+///
+/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// anyone who took it."* A worker who merged main during the armed window — the documented
+/// thing to do when main moves — keeps the rewound commits. That is a recorded green for a tree
+/// main will never have, with `air handover` passing and `air land` merging it back in.
+///
+/// So the window is not unverified code in main. It is unverified code that has already
+/// propagated, to exactly the workers following the rule.
+///
+/// Self-clearing, with no expiry to choose: a rewound merge that is back in main (it re-landed)
+/// or that nobody carries any more simply stops matching.
+pub fn rewound_carried(
+    repo: &Path,
+    ledger: &Ledger,
+    main_head: Option<&str>,
+) -> Vec<RewoundCarried> {
+    let mut out = Vec::new();
+    for l in ledger.landings().unwrap_or_default() {
+        if l.result != "rewound" {
+            continue;
+        }
+        let Some(merge) = l.merge_commit.as_deref().filter(|m| !m.is_empty()) else {
+            continue;
+        };
+        // Back in main means it landed on a later attempt: nothing to warn about.
+        if main_head.is_some_and(|h| git::is_ancestor(repo, merge, h).unwrap_or(false)) {
+            continue;
+        }
+        let carried_by = carrying(repo, merge);
+        if carried_by.is_empty() {
+            continue;
+        }
+        out.push(RewoundCarried {
+            merge_commit: merge.to_string(),
+            worker: l.worker.clone(),
+            carried_by,
+            rewound_at: l.finished_at.clone(),
+        });
+    }
+    out
+}
+
+/// What a rewind owes the worktrees that took the un-landed commits (air-ob0). Empty when
+/// nobody carries them, which is the ordinary case.
+pub fn rewind_propagation(merge: &str, carried_by: &[String]) -> Vec<String> {
+    if carried_by.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "the un-landed commits are already in {}: their branch contains {} and their recorded \
+         green is for a tree main will never have. Each must `git reset` or re-merge main and \
+         re-verify before handing over — `air handover` will pass on it as it stands.",
+        carried_by.join(", "),
+        merge.get(..8).unwrap_or(merge)
+    )]
+}
+
+/// Verifies running right now, oldest first, with dead pids pruned on the way out (air-4cr).
+/// Shared by `air status` and `air land`, so both answer the question the same way.
+pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> {
+    ledger
+        .in_flight_pruned(super::lease::pid_alive)
+        .unwrap_or_default()
+}
+
+/// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
+/// a verify is ~420 s in adopter's repo, so a minutes-only reading rounds most of it to 0.
+pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
+    let elapsed = seconds_between(&f.started_at, at)
+        .map(|s| format!("{s}s"))
+        .unwrap_or_else(|| "unknown".into());
+    format!(
+        "{} started {} ago: {} at {}",
+        f.worker,
+        elapsed,
+        f.command,
+        f.sha.get(..8).unwrap_or(&f.sha)
+    )
+}
+
+/// Seconds between two RFC 3339 timestamps; None when either does not parse.
+pub fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
+    let a: jiff::Timestamp = earlier.parse().ok()?;
+    let b: jiff::Timestamp = later.parse().ok()?;
+    Some(b.duration_since(a).as_secs())
 }
 
 /// The pure part. Every condition names the worker, how long, and what to do.
@@ -1082,6 +1267,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .collect(),
         sessions: all_sessions,
         ready_depth,
+        // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
+        // next status clears it, so no expiry window has to be chosen or tuned.
+        verifies_in_flight: verifies_in_flight(&ledger),
+        landings_in_flight: landings_in_flight(&ledger),
+        rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1266,6 +1456,24 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 ""
             }
         ));
+    }
+    // Silent when nothing is running: a coordinator who lands into an empty screen is right
+    // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
+    for f in &s.verifies_in_flight {
+        out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
+    }
+    // air-bxe: the merge commit exists for minutes before the verify decides whether it stays.
+    for f in &s.landings_in_flight {
+        out.push_str(&format!(
+            "landing in flight: {}\n",
+            landing_in_flight_line(f, &s.at)
+        ));
+    }
+    // air-ob0: a rewind un-lands from main and cannot un-merge from whoever took it.
+    for r in &s.rewound_carried {
+        for line in rewind_propagation(&r.merge_commit, &r.carried_by) {
+            out.push_str(&format!("rewound and still carried: {line}\n"));
+        }
     }
     // Always rendered (air-e7q): what waits on whom.
     out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));

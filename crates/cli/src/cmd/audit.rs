@@ -741,10 +741,16 @@ mod tests {
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
         assert_eq!((rw.evaluations, rw.subjects, rw.repeats), (80, 2, 78));
-        // air-s7c recorded a condition for it, and it needs a person: whether a push led to
-        // an action is not something the ledger can see.
+        // air-cmn restated the condition as a counter. It used to be a Judgement nothing
+        // could settle ("pushes that led to no action"), which the ledger cannot see; it is
+        // now zero beads in `awaiting_review`, which this window plainly does not meet.
+        // `review-waiting` fires once per waiting bead per evaluation, so zero evaluations
+        // and zero waiting beads are the same fact.
         assert!(rw.defect.is_none());
-        assert_eq!((rw.removal_kind, rw.condition_met), ("judgement", None));
+        assert_eq!(
+            (rw.removal_kind, rw.condition_met),
+            ("checkable", Some(false))
+        );
 
         // A mechanism that never fired is in the output, not omitted.
         let nudge = a.rows.iter().find(|r| r.id == "stop-nudge").unwrap();

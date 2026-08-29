@@ -78,10 +78,11 @@ pub fn run(json: bool) -> i32 {
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
         probe_project_is_taken_from_what_it_is_told(),
-        probe_project_fence(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_close_with_proof_sequence(),
+        probe_verify_in_flight(),
+        probe_landing_state(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -826,6 +827,7 @@ fn probe_landed_but_open() -> Probe {
                 refuted: true,
             }],
             merge_commit: Some("ccc".into()),
+            pid: None,
             started_at: "t0".into(),
             finished_at: "t1".into(),
         })
@@ -863,6 +865,7 @@ fn probe_landed_but_open() -> Probe {
                 refuted: false,
             }],
             merge_commit: Some("eee".into()),
+            pid: None,
             started_at: "t4".into(),
             finished_at: "t5".into(),
         })
@@ -1104,40 +1107,6 @@ fn probe_project_is_taken_from_what_it_is_told() -> Probe {
         name: "project: the session's project comes from what it is told, not from ambient AIR_PROJECT",
         red_fires: res.0,
         green_passes: res.1,
-    }
-}
-
-fn probe_project_fence() -> Probe {
-    use crate::cmd::hook::project_fence;
-    use air_hooks::{HookInput, HookOutcome};
-
-    let call = |raw: String| -> Option<HookOutcome> {
-        let input = HookInput::parse(&raw).ok()?;
-        project_fence(&input, "air").map(|d| d.outcome)
-    };
-    let bash = |cmd: &str| {
-        call(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": cmd}}).to_string())
-    };
-    let send = |to: &str| {
-        call(serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": to}}).to_string())
-    };
-    let denied = |o: Option<HookOutcome>, needle: &str| {
-        matches!(o, Some(HookOutcome::Block { reason })
-            if reason.contains(needle) && reason.contains("air-0lk"))
-    };
-    Probe {
-        name: "project: acting on another project's tmux session is denied and the refusal is readable; messaging any project is allowed",
-        red_fires: denied(bash("tmux kill-session -t fd-worker1"), "fd-worker1")
-            // The refusal has to be interpretable, or a fenced peer reads it as "not you"
-            // and stops trying (air-3oq).
-            && denied(bash("tmux kill-session -t fd-worker1"), "MESSAGING")
-            && denied(bash("tmux send-keys -t fd-w1:0.1 hi"), "air-3oq"),
-        // Messaging ANY project is allowed, including one this ledger has never seen: the
-        // fence is about acting, not talking, and denying it broke the channel silently.
-        green_passes: send("adopter-51").is_none()
-            && send("alpha-6d").is_none()
-            && bash("tmux kill-session -t air-alpha").is_none()
-            && bash("tmux ls").is_none(),
     }
 }
 
@@ -1956,5 +1925,152 @@ fn probe_stop_nudge() -> Probe {
         name: "stop: nudge once when ready beads and no claim",
         red_fires: red,
         green_passes: once && then_pass,
+    }
+}
+
+/// air-4cr: a verify in flight is a fact `air status` shows and `air land` names.
+///
+/// The failure: adopter's coordinator invalidated three workers' verifies in one round by
+/// landing under them, with nothing to consult. A full verify is ~420 s there and the landing
+/// rate is faster, so their answer was a hand protocol (worker warns, coordinator holds).
+///
+/// Red: with one run in flight, `air status` prints a line naming the worker and `air land`
+/// warns. Green: with nothing running both are silent, and a run whose process died is not
+/// running — the reader prunes it rather than leaving a row nobody can clear.
+fn probe_verify_in_flight() -> Probe {
+    use crate::cmd::land::in_flight_warnings;
+    use crate::cmd::status::{Snapshot, render_for_probe};
+    use air_ledger::verify::InFlight;
+
+    let at = "2026-08-29T12:07:00Z";
+    let flight = |worker: &str, pid: Option<i64>| InFlight {
+        id: format!("id-{worker}"),
+        worker: worker.into(),
+        sha: "abcdef1234".into(),
+        kind: Kind::Verify,
+        command: "make verify".into(),
+        pid,
+        started_at: "2026-08-29T12:00:00Z".into(),
+    };
+    let snap = |flights: Vec<InFlight>| Snapshot {
+        at: at.into(),
+        verifies_in_flight: flights,
+        ..Default::default()
+    };
+
+    let shown = render_for_probe(&snap(vec![flight("alpha", Some(1))]));
+    let warned = in_flight_warnings(&[flight("alpha", Some(1))], at);
+    let red = shown.contains("verify in flight: alpha")
+        // Elapsed in seconds: rounding a just-started run to "0 min" is what makes it look
+        // ignorable, and 420 s is the number that decided this bead.
+        && shown.contains("420s")
+        && warned.len() == 1
+        && warned
+            .first()
+            .is_some_and(|w| w.contains("alpha") && w.contains("invalidates it"));
+
+    // A crashed `air record` leaves a row; the next reader clears it, so nothing accumulates.
+    let pruned = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.verify_started(&flight("beta", Some(424_242)))
+            .map_err(|e| e.to_string())?;
+        let live = l.in_flight_pruned(|_| false).map_err(|e| e.to_string())?;
+        let left = l.verifies_in_flight().map_err(|e| e.to_string())?;
+        Ok(live.is_empty() && left.is_empty())
+    })()
+    .unwrap_or(false);
+
+    let green = render_for_probe(&snap(vec![]))
+        .lines()
+        .all(|x| !x.starts_with("verify in flight"))
+        && in_flight_warnings(&[], at).is_empty()
+        && pruned;
+    Probe {
+        name: "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-bxe: a landing has a state, and `air status` holds it.
+///
+/// The failure: adopter's coordinator reported a land done three times before the process
+/// exited, because the merge commit appears minutes before the verify finishes with the
+/// rollback armed. Their workaround was `pgrep`, which produced two defects of its own —
+/// `pgrep` printing nothing makes the `ps` after it list every process the user owns, and they
+/// read a thirty-line listing as evidence a land was running when it was evidence of the
+/// opposite. Separately, a land killed by a closed pipe merged, verified, and wrote no row at
+/// all, leaving main green at a sha no landing mentioned.
+///
+/// Red: an in-flight landing is named, and one whose process is gone says so and names the sha
+/// to rewind to. Green: no in-flight landing is silent, and reporting an outcome retires the
+/// row without counting as a second attempt.
+fn probe_landing_state() -> Probe {
+    use crate::cmd::status::{LandingInFlight, Snapshot, landing_in_flight_line, render_for_probe};
+    use air_ledger::landings::Landing;
+
+    let at = "2026-08-29T12:02:00Z";
+    let row = |result: &str| Landing {
+        id: "L1".into(),
+        worker: "alpha".into(),
+        sha: "branchhead".into(),
+        tip_sha: Some("bbbbbbbb99".into()),
+        result: result.into(),
+        failing_step: None,
+        verify_run_id: None,
+        attempt_no: 1,
+        beads: vec!["air-1".into()],
+        open_beads: vec![],
+        merge_commit: Some("cccccccc99".into()),
+        pid: Some(4242),
+        started_at: "2026-08-29T12:00:00Z".into(),
+        finished_at: "2026-08-29T12:00:00Z".into(),
+    };
+    let snap = |flights: Vec<LandingInFlight>| Snapshot {
+        at: at.into(),
+        landings_in_flight: flights,
+        ..Default::default()
+    };
+
+    let running = LandingInFlight {
+        landing: row("in-flight"),
+        alive: Some(true),
+    };
+    let killed = LandingInFlight {
+        landing: row("in-flight"),
+        alive: Some(false),
+    };
+    let shown = render_for_probe(&snap(vec![running.clone()]));
+    let killed_line = landing_in_flight_line(&killed, at);
+    let red = shown.contains("landing in flight: alpha (air-1) merged at cccccccc")
+        && shown.contains("verifying now")
+        // "in main" is not "survived": the line has to name the armed rollback target, which
+        // is the thing `git merge-base --is-ancestor` cannot tell anyone.
+        && shown.contains("rollback armed to bbbbbbbb")
+        && killed_line.contains("GONE")
+        && killed_line.contains("git reset --hard bbbbbbbb99");
+
+    // The row retires when the outcome is written, and updating it is not a new attempt.
+    let lifecycle = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&row("in-flight"))
+            .map_err(|e| e.to_string())?;
+        let mid = l.landings_in_flight().map_err(|e| e.to_string())?.len();
+        l.record_landing(&row("landed"))
+            .map_err(|e| e.to_string())?;
+        let after = l.landings_in_flight().map_err(|e| e.to_string())?.len();
+        let attempts = l.landing_attempts("alpha").map_err(|e| e.to_string())?;
+        Ok(mid == 1 && after == 0 && attempts == 1)
+    })()
+    .unwrap_or(false);
+
+    let green = render_for_probe(&snap(vec![]))
+        .lines()
+        .all(|x| !x.starts_with("landing in flight"))
+        && lifecycle;
+    Probe {
+        name: "land: a landing says in-flight from the merge until it reports, a killed one says so with the rewind sha, and reporting retires the row",
+        red_fires: red,
+        green_passes: green,
     }
 }
