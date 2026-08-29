@@ -333,6 +333,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
+        Mutation {
+            // Put the condition back on bd's raw count. Exactly the pre-fix behaviour, one
+            // branch, and it compiles. The two threshold probes give the counts the same value
+            // deliberately, so they stay GREEN under it — which is what shows this mutation
+            // reaches the counting rule and not the threshold beside it.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "&& s.claimable_depth.is_some_and(|n| n > 0)",
+            to: "&& s.ready_depth.is_some_and(|n| n > 0)",
+            also_red: &[],
+        },
+    ),
+    (
         "land: Air runs exactly one git merge and it is --ff-only, so no Air command can see a conflict",
         Mutation {
             // Reintroduce the three-way merge air-odv removed. It compiles, it is exactly the
@@ -832,6 +845,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
+        probe_idle_without_claim_counts_claimable_only(),
     ]
 }
 
@@ -1858,6 +1872,61 @@ fn probe_land_refusals() -> Probe {
     }
 }
 
+/// air-uir: `idle-without-claim` fires on beads the worker can actually claim.
+///
+/// It counted bd's raw ready set while `ready_cache::claimable` filters `owner`-labelled beads
+/// and is what the Stop nudge uses — two numbers for one thing, and only one of them was work
+/// a worker could take. It fired on gate at round end on 2026-08-29 with one ready bead,
+/// `air-4t1`, labelled `owner`, which gate had already declined. The claimable count was zero.
+///
+/// This is a condition whose entire output is "go interrupt a worker", so a false fire is the
+/// cheapest possible way to teach a coordinator to ignore conditions.
+///
+/// Red: an idle claimless worker with one claimable bead is reported. Green: the same worker
+/// with a queue of beads it may not claim produces nothing, and `air status` says which count
+/// it means rather than leaving a reader to open the bead and find out.
+fn probe_idle_without_claim_counts_claimable_only() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention, render_for_probe};
+
+    let at = |ready: usize, claimable: usize| Snapshot {
+        at: "2026-08-29T12:30:00Z".into(),
+        workers: vec![crate::cmd::status::WorkerView {
+            worker: "gate".into(),
+            role: "worker".into(),
+            session: Some(crate::cmd::status::Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                changed_at: "2026-08-29T12:00:00Z".into(),
+                pid_alive: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(ready),
+        claimable_depth: Some(claimable),
+        ..Default::default()
+    };
+    let fires = |s: &Snapshot| {
+        attention(s, "2026-08-29T12:30:00Z", Thresholds::default())
+            .iter()
+            .any(|a| a.kind == "idle-without-claim")
+    };
+
+    let red = fires(&at(1, 1));
+    // The round-end state: a non-empty queue with nothing in it for this worker.
+    let green = !fires(&at(1, 0))
+        && !fires(&at(5, 0))
+        // ...and the count is not silently reinterpreted: the line names both.
+        && render_for_probe(&at(3, 1)).contains("ready: 3 (1 claimable; 2 owner-labelled")
+        // When they agree there is nothing to disambiguate and the line stays short.
+        && render_for_probe(&at(3, 3)).contains("ready: 3\n");
+    Probe {
+        name: "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
 /// observe a merge conflict.
 ///
@@ -2443,7 +2512,10 @@ fn probe_standstill() -> Probe {
             }),
             ..Default::default()
         }],
+        // air-uir: this probe is about the threshold/liveness, so the two counts agree
+        // here; the counting rule itself is probe_idle_without_claim_counts_claimable_only.
         ready_depth: Some(ready),
+        claimable_depth: Some(ready),
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
@@ -2519,7 +2591,10 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
             }),
             ..Default::default()
         }],
+        // air-uir: this probe is about the threshold/liveness, so the two counts agree
+        // here; the counting rule itself is probe_idle_without_claim_counts_claimable_only.
         ready_depth: Some(2),
+        claimable_depth: Some(2),
         ..Default::default()
     };
     let red = attention(&mk(Some(true)), now, Thresholds::default());
