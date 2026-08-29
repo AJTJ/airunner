@@ -85,6 +85,81 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // The ledger lane's probes, 2026-08-29. Each anchor was run by hand when the probe was
+    // written, and each names ONE branch: the change-only gate, the enumeration, the
+    // referenced-day protection, the join's file-and-order keys, the freshness window, the
+    // bookkeeping overlap, the push deny.
+    (
+        "status: an unchanged condition set writes one event line an hour, not one a tick",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "    if attention_only\n        && !ledger",
+            to: "    if false\n        && !ledger",
+            also_red: &[],
+        },
+    ),
+    (
+        "doctor: every table the ledger has is counted, including one added after this probe was written",
+        Mutation {
+            // Back to the seven names the list held, which is the old behaviour expressed in
+            // the new code path, so the mutant reaches exactly what the probe exercises.
+            file: "crates/cli/src/cmd/doctor.rs",
+            from: "AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            to: "AND name = 'verify_runs' ORDER BY name",
+            also_red: &[],
+        },
+    ),
+    (
+        "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
+        Mutation {
+            file: "crates/cli/src/cmd/gc.rs",
+            from: "} else if referenced.contains(day) {",
+            to: "} else if false && referenced.contains(day) {",
+            also_red: &[],
+        },
+    ),
+    (
+        "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        Mutation {
+            // Keep the session key, drop the file and the ordering: the join stops being a join
+            // without the guard disappearing, which is the wrong-path trap this avoids.
+            file: "crates/cli/src/cmd/audit.rs",
+            from: ".filter(|(a, s, p)| s == sid && p == path && a > at)",
+            to: ".filter(|(_a, s, _p)| s == sid)",
+            also_red: &[],
+        },
+    ),
+    (
+        "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: ".is_some_and(|age| age < max_age_min)",
+            to: ".is_some_and(|age| age < 0)",
+            also_red: &[],
+        },
+    ),
+    (
+        "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
+        Mutation {
+            // Restore the overlap this probe found for real: `reported` was bookkeeping AND the
+            // audit mechanism's trace, which is why `air gc` fired invisibly (air-8br).
+            file: "crates/cli/src/cmd/audit.rs",
+            from: "    \"released\",\n    \"stopped\",",
+            to: "    \"released\",\n    \"reported\",\n    \"stopped\",",
+            also_red: &[],
+        },
+    ),
+    (
+        "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
+        Mutation {
+            // Put the commit deny back: the probe's GREEN half is what falls, which is the half
+            // the owner's ruling changed (air-iy1).
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\"];",
+            to: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\", \"Bash(git commit *)\"];",
+            also_red: &[],
+        },
+    ),
     (
         "gate: verify-green-at-head",
         Mutation {
@@ -621,6 +696,7 @@ fn all_probes() -> Vec<Probe> {
         probe_peer_warning_effect_is_readable(),
         probe_poll_tick_pays_for_bd_rarely(),
         probe_registry_traces_are_unambiguous(),
+        probe_coordinator_may_commit_never_push(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -974,6 +1050,38 @@ fn probe_registry_traces_are_unambiguous() -> Probe {
         });
     Probe {
         name: "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-iy1: the coordinator's boundary is the remote, not main.
+///
+/// The incident: the coordinator wrote plan 0008, a decisions entry and a CLAUDE.md index row,
+/// could not commit them, and the owner committed by hand — the owner doing a chore the
+/// coordinator was in the middle of. `air land` already merges into main and is already the
+/// coordinator's, so the deny was never protecting main; it stopped the coordinator saving its
+/// own prose. Owner ruling, 2026-08-29.
+///
+/// Asserted on the ARGV the launcher builds, which is where the rule lives — the deny is passed
+/// to `claude --disallowed-tools` at launch. Note what this probe does NOT claim: a coordinator
+/// session already running keeps the flags it started with until it is relaunched against a
+/// rebuilt binary. "The rule is changed" and "that session can commit" are different claims.
+///
+/// Red: `git push` is still denied, for the coordinator and the worker both. Green: `git commit`
+/// is denied for neither role — a worker's commits are the whole point of a worktree, and the
+/// coordinator's own prose is its own to save.
+fn probe_coordinator_may_commit_never_push() -> Probe {
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
+    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
+
+    let red = denies(&coord, "Bash(git push *)") && denies(&worker, "Bash(git push *)");
+    let green = !denies(&coord, "Bash(git commit *)") && !denies(&worker, "Bash(git commit *)");
+    Probe {
+        name: "launch: neither role may push; neither is denied `git commit` (the boundary is the remote, not main)",
         red_fires: red,
         green_passes: green,
     }
