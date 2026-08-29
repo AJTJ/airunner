@@ -96,6 +96,7 @@ to **what Air records and what Air refuses**:
 | A digest must be newer than the claim, where `digest_dir` is set | Where digests live and what goes in one |
 | The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
 | `air handover` names what is missing | When in the loop to run it |
+| Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
 
 **[adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
 `bd update <id> -s awaiting_review` as the closing step. adopter's owner had ruled that step
@@ -108,6 +109,23 @@ Put the repo's own sequence in its CLAUDE.md (this repo keeps ai_runner's under 
 work flow"). The one refusal still covers both shapes: it matches `bd close` as well as
 `bd update -s closed` / `-s awaiting_review`, so a close-with-proof repo is gated exactly as a
 hand-over repo is.
+
+**[owner ruling 2026-08-29, air-97z] The same applies to landing, and it did not used to.**
+roles.md said hand-over was the repo's in as many words and then prescribed the landing command
+three lines later. **A repo with its own lander keeps it.** Air does not ask for it to be
+replaced, and nothing `air init` or `air install` writes names a landing command.
+
+The worked case is adopter's `make land`: 685 lines, hardened over four separate blockers, and
+carrying repo knowledge Air does not have and has no business acquiring — which generated files
+are safe to discard on a rewind, that their verify must run `SCOPE=full`, digest tiers, a bead
+index, a friction query, and a refusal when a branch adds no `docs/log.d/` entry. It does not
+call `air` at all, and their Makefile already calls `air land` "the other path". Replacing it
+with `air land` would trade four blockers' worth of hardening for uniformity nobody asked for.
+
+What Air keeps saying about landing names no command: it is the coordinator's and not a
+worker's (the worker deny list and the role check enforce that), a landing needs a recorded green
+at a head containing `main`, and Air records the landings it performs. `air land` is offered to a
+repo that has no lander, and offered is the whole of it.
 
 ### Find the repo's existing lease store, and collapse to one
 
@@ -177,7 +195,7 @@ their tree.
 | Heartbeat cron that wakes the coordinator | Delete it. `air coordinator` attaches the channel; conditions arrive when they hold | `air status --attention` is the same list on demand |
 | `make fleet` (live agents, overlap) | Alias to `air status` / `air holdings` | One source; no drift between scripts |
 | `make verify` run bare | `air record verify -- make verify` (also `fitness`, `docs-check`) | The gate needs the fact; Air flags suspicious (under 2 s, silent), changed-command, dirty-tree, and refuses backgrounded runs |
-| Generated-files exclusion list duplicated in `land.sh` and `fleet.sh` **[adopter]** | One file sourced by both until `air land` owns it | Drift |
+| Generated-files exclusion list duplicated in `land.sh` and `fleet.sh` **[adopter]** | One file sourced by both | Drift |
 | "Verify is complete" assumed **[adopter]** (jest silently skipped; a deleted generated `router.d.ts` silenced tsc) | Add a fitness check: verify invokes every test runner the repo has; land regenerates generated inputs before verify | Air records the exit honestly; completeness is the repo's |
 
 ## 4. What Air now does that the repo's rules used to say
@@ -190,7 +208,7 @@ their tree.
 | "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode |
 | "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
 | "Check on the fleet every N minutes" | Channel push: stuck, idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
-| "The owner merges every green branch at the end of the round" | `air land <bead>` / `air land --all` (coordinator): longest wait first, stopping at the first red (air-3pz) |
+| "The owner merges every green branch at the end of the round" | Landing is the coordinator's, and a branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
 | "Close the landed beads one by one" | `air close <id>… --reason "<why>"`: one `bd` process for the whole pass, and the matching claims released in one ledger transaction. `bd` costs ~1.4 s per process here whatever it is asked, so the count of processes IS the cost (air-869) |
 | "Do not set awaiting_review without green" (advisory) | Refused, not advised: worker launches set `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fixing command (air-i59) |
 | "Say which fleet a pane belongs to" | tmux sessions are `<project>-<worker>`: `tmux ls` is machine-wide, and with two fleets running it said nothing about which project a pane was (air-5lg) |
@@ -536,5 +554,6 @@ want back. Nothing here needs an uninstall path.
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
 `air record verify -- <cmd>` → `air handover` → `bd update -s awaiting_review`. Coordinator:
 reads `air status`, acts on channel events, triages `air inbox`, walks `air inbox --owner`
-with the owner, and lands with `air land <bead>` / `air land --all` (air-3pz; it was the repo's
-own `make land` before that). Upgrading a repo that already has Air: §5a.
+with the owner, and lands by whatever path this repo lands by — its own `make land`, or
+`air land <bead>` / `air land --all` where there is none (air-3pz, air-97z). Upgrading a repo
+that already has Air: §5a.
