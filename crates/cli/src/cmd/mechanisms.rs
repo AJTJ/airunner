@@ -76,6 +76,16 @@ pub struct Mechanism {
 ///
 /// Append when a mechanism is added; the audit reports a mechanism with `Removal::Unstated`
 /// as a defect, so an entry with nothing recorded is visible rather than silently absent.
+///
+/// **Deleted, so nobody re-adds them without evidence:**
+///
+/// - `gone-with-claim` (2026-08-20, removed 2026-08-22, air-s7c): zero firings in the audited
+///   window and never in any recorded day. A dead session holding a claim falls through to the
+///   ordinary session states, which do fire.
+/// - `cross-project-fence` (2026-08-22, removed 2026-08-29, air-9u6): zero firings ever.
+///
+/// `stuck` was proposed for deletion by air-dqw on zero firings and is NOT deleted. Its silence
+/// measures the fleet's permission mode, not the mechanism: see its row below.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -209,11 +219,26 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stuck",
         class: "attention",
-        what: "A session in the same state past the stuck threshold.",
+        what: "A session waiting on a permission prompt past the stuck threshold.",
         added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs",
+        source: "crates/cli/src/cmd/status.rs, the `\"stuck\"` arm",
         fires: Fires::Condition("stuck"),
-        removal: Removal::Unstated,
+        // Zero firings in every recorded day, and that number settles NOTHING in either
+        // direction (air-dqw, corrected by diligence's air-byw before the deletion shipped).
+        // The state is set only by `HookEvent::PermissionRequest`, which has fired 0 times in
+        // 39,071 event lines over 8 days — not because the hook is broken, but because the
+        // fleet runs in auto mode (`permissions.defaultMode: auto`,
+        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits
+        // on one. Every `PermissionDenied` event says "Blocked by classifier".
+        //
+        // Dormant, not dead: turn auto mode off and this fires immediately with no code change.
+        // A zero is evidence only when the subject occurred and the mechanism stayed silent.
+        //
+        // air-byw owns stating the revival condition on this row; this text is the placeholder
+        // that keeps the row honest until then.
+        removal: Removal::Judgement(
+            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the configuration and cannot settle it",
+        ),
     },
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered
     // DECISION was merely uncounted (air-8br); an unregistered CONDITION was invisible, because

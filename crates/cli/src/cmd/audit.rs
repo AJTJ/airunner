@@ -216,6 +216,29 @@ pub fn peer_effect(
     }
 }
 
+/// What the audit says about a mechanism with no recorded removal condition.
+pub const NO_CONDITION: &str = "no removal condition recorded";
+
+/// How a recorded removal condition is classified, and whether the ledger says it holds:
+/// `(removal_kind, condition_met, defect)`.
+///
+/// Pure and public so a probe can assert the classifier directly (air-dqw). The probe for this
+/// used to work by finding a real registry row that lacked a condition — first `review-waiting`,
+/// then `stuck` — and each time that row gained a condition or was deleted, the probe went
+/// silent on a registry change that was not a regression. Since the goal is that NO row lacks a
+/// condition, a probe that needs one is a probe that needs a defect to exist.
+pub fn removal_verdict(
+    removal: Removal,
+    evaluations: usize,
+) -> (&'static str, Option<bool>, Option<&'static str>) {
+    match removal {
+        Removal::Unstated => ("none", None, Some(NO_CONDITION)),
+        Removal::Judgement(_) => ("judgement", None, None),
+        // "Remove when it stops firing" is answered by the counter and nothing else.
+        Removal::ZeroFirings(_) => ("checkable", Some(evaluations == 0), None),
+    }
+}
+
 /// What one mechanism accumulated over the scan.
 #[derive(Default)]
 struct Acc {
@@ -551,12 +574,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 Fires::Decisions(_) => n,
                 Fires::Condition(_) => a.pushes,
             };
-            let (removal_kind, met) = match m.removal {
-                Removal::Unstated => ("none", None),
-                Removal::Judgement(_) => ("judgement", None),
-                // "Remove when it stops firing" is answered by the counter and nothing else.
-                Removal::ZeroFirings(_) => ("checkable", Some(n == 0)),
-            };
+            let (removal_kind, met, defect) = removal_verdict(m.removal, n);
             Row {
                 id: m.id,
                 class: m.class,
@@ -571,8 +589,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 removal: m.removal.text(),
                 removal_kind,
                 condition_met: met,
-                defect: matches!(m.removal, Removal::Unstated)
-                    .then_some("no removal condition recorded"),
+                defect,
             }
         })
         .collect();
@@ -990,9 +1007,15 @@ mod tests {
             .unwrap();
         assert_eq!((idle.evaluations, idle.condition_met), (0, Some(true)));
 
-        // A mechanism with nothing recorded is still reported as a defect (`stuck`, which
-        // the 2026-08-22 pass deliberately left out of scope).
-        assert!(a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some()));
+        // Nothing recorded IS a defect, asserted against the classifier. It used to be
+        // asserted by finding a registry row that lacked a condition — `review-waiting` until
+        // air-s7c, then `stuck` until air-dqw deleted it — and no row lacks one now, which is
+        // the goal. A test that needs a defect to exist is a test that resists the fix.
+        assert_eq!(
+            removal_verdict(Removal::Unstated, 0),
+            ("none", None, Some(NO_CONDITION))
+        );
+        assert!(a.rows.iter().all(|r| r.defect.is_none()));
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
