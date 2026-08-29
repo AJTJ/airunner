@@ -81,6 +81,10 @@ pub struct Snapshot {
     /// with whether the `air land` process that wrote it is still alive. "Is the land done"
     /// is answered from here, never from a process listing.
     pub landings_in_flight: Vec<LandingInFlight>,
+    /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
+    /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
+    /// red land leaves behind. The message at rewind time is not the only copy.
+    pub rewound_carried: Vec<RewoundCarried>,
     /// file -> workers holding it (only files with 2+ holders)
     pub overlaps: BTreeMap<String, Vec<String>>,
     pub errors: Vec<String>,
@@ -582,6 +586,93 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
             .map(|t| t.get(..8).unwrap_or(t).to_string())
             .unwrap_or_else(|| "-".into()),
     )
+}
+
+/// A rewound merge that is still sitting in somebody's worktree (air-ob0).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RewoundCarried {
+    /// The merge commit `air land` reset main away from.
+    pub merge_commit: String,
+    pub worker: String,
+    /// Workers whose branch HEAD still contains it.
+    pub carried_by: Vec<String>,
+    pub rewound_at: String,
+}
+
+/// Which worktrees' HEADs contain `sha`, by worker name. One `merge-base --is-ancestor` each,
+/// over the worktree list Air already enumerates (air-ob0).
+pub fn carrying(repo: &Path, sha: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, _) in git::worktrees(repo).unwrap_or_default() {
+        let Ok(head) = git::head(&path) else { continue };
+        if head == sha || git::is_ancestor(&path, sha, &head).unwrap_or(false) {
+            let name = air_ledger::paths::worker_name_for(&path).unwrap_or_else(|_| {
+                path.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Rewound landings whose merge is still carried by somebody (air-ob0), newest first.
+///
+/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// anyone who took it."* A worker who merged main during the armed window — the documented
+/// thing to do when main moves — keeps the rewound commits. That is a recorded green for a tree
+/// main will never have, with `air handover` passing and `air land` merging it back in.
+///
+/// So the window is not unverified code in main. It is unverified code that has already
+/// propagated, to exactly the workers following the rule.
+///
+/// Self-clearing, with no expiry to choose: a rewound merge that is back in main (it re-landed)
+/// or that nobody carries any more simply stops matching.
+pub fn rewound_carried(
+    repo: &Path,
+    ledger: &Ledger,
+    main_head: Option<&str>,
+) -> Vec<RewoundCarried> {
+    let mut out = Vec::new();
+    for l in ledger.landings().unwrap_or_default() {
+        if l.result != "rewound" {
+            continue;
+        }
+        let Some(merge) = l.merge_commit.as_deref().filter(|m| !m.is_empty()) else {
+            continue;
+        };
+        // Back in main means it landed on a later attempt: nothing to warn about.
+        if main_head.is_some_and(|h| git::is_ancestor(repo, merge, h).unwrap_or(false)) {
+            continue;
+        }
+        let carried_by = carrying(repo, merge);
+        if carried_by.is_empty() {
+            continue;
+        }
+        out.push(RewoundCarried {
+            merge_commit: merge.to_string(),
+            worker: l.worker.clone(),
+            carried_by,
+            rewound_at: l.finished_at.clone(),
+        });
+    }
+    out
+}
+
+/// What a rewind owes the worktrees that took the un-landed commits (air-ob0). Empty when
+/// nobody carries them, which is the ordinary case.
+pub fn rewind_propagation(merge: &str, carried_by: &[String]) -> Vec<String> {
+    if carried_by.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "the un-landed commits are already in {}: their branch contains {} and their recorded \
+         green is for a tree main will never have. Each must `git reset` or re-merge main and \
+         re-verify before handing over — `air handover` will pass on it as it stands.",
+        carried_by.join(", "),
+        merge.get(..8).unwrap_or(merge)
+    )]
 }
 
 /// Verifies running right now, oldest first, with dead pids pruned on the way out (air-4cr).
@@ -1115,6 +1206,7 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
         landings_in_flight: landings_in_flight(&ledger),
+        rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1269,6 +1361,12 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             "landing in flight: {}\n",
             landing_in_flight_line(f, &s.at)
         ));
+    }
+    // air-ob0: a rewind un-lands from main and cannot un-merge from whoever took it.
+    for r in &s.rewound_carried {
+        for line in rewind_propagation(&r.merge_commit, &r.carried_by) {
+            out.push_str(&format!("rewound and still carried: {line}\n"));
+        }
     }
     // Always rendered (air-e7q): what waits on whom.
     out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));

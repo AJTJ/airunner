@@ -567,15 +567,31 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     if exit_code != 0 {
         // Rewind: main goes back exactly where it was, and the branch is untouched.
         let _ = git::run(repo, &["reset", "--hard", &tip]);
-        record("rewound", Some(merge), Some(run.id), Some(cmd.join(" ")));
-        return Outcome::Rewound(format!(
+        // air-ob0: who still holds the un-landed commits. Asked AFTER the reset, so the main
+        // checkout — which contained the merge a moment ago and is the whole point of the
+        // reset — is not named as a carrier. The commit is unreferenced now but still
+        // reachable from any worktree HEAD that merged it, which is exactly the set wanted.
+        let carried_by = super::status::carrying(repo, &merge);
+        record(
+            "rewound",
+            Some(merge.clone()),
+            Some(run.id),
+            Some(cmd.join(" ")),
+        );
+        let mut why = format!(
             "verify exited {exit_code} on the merged result; main is back at {} and `{}` is \
              untouched. The branch is green alone and red merged: ask {} to `git merge main` and \
              re-verify.",
             tip.get(..8).unwrap_or(&tip),
             branch,
             batch.worker
-        ));
+        );
+        // A rollback un-lands from main and cannot un-merge from anyone who already took it.
+        // `air status` holds the same set afterwards, so this message is not the only copy.
+        for line in super::status::rewind_propagation(&merge, &carried_by) {
+            why.push_str(&format!("\n  {line}"));
+        }
+        return Outcome::Rewound(why);
     }
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
     // Layer 1, the part that is true under either closure model: read every bead's acceptance
