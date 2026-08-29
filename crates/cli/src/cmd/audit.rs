@@ -990,9 +990,24 @@ mod tests {
             .unwrap();
         assert_eq!((idle.evaluations, idle.condition_met), (0, Some(true)));
 
-        // A mechanism with nothing recorded is still reported as a defect (`stuck`, which
-        // the 2026-08-22 pass deliberately left out of scope).
-        assert!(a.rows.iter().any(|r| r.id == "stuck" && r.defect.is_some()));
+        // A mechanism with nothing recorded is reported as a defect. This used to name `stuck`
+        // as the live example; air-byw gave `stuck` a condition, and it was the last
+        // `Removal::Unstated`, so as of 2026-08-29 **every** mechanism records one and there is
+        // no real example left to point at.
+        //
+        // Asserting the mapping rather than a mechanism, because naming one was the defect
+        // air-jc0 is about: the test held a second copy of a fact the registry owns, and it
+        // failed the day someone did the very thing it was hoping for.
+        assert!(Removal::Unstated.text().is_empty());
+        assert!(
+            a.rows.iter().all(|r| r.defect.is_none()),
+            "every mechanism should now record a removal condition; defects: {:?}",
+            a.rows
+                .iter()
+                .filter(|r| r.defect.is_some())
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        );
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
