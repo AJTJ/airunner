@@ -387,6 +387,18 @@ pub fn registered_traces() -> std::collections::BTreeSet<String> {
 
 /// A condition firing names one subject per event, but one event can carry the same kind for
 /// several subjects. Count them all.
+/// The rule: a mechanism with nothing recorded is a defect, one with a condition is not.
+///
+/// air-byw pulled this out of the row builder so it can be tested WITHOUT a real mechanism that
+/// happens to be `Unstated`. Its probe had already chased that fact twice — it pointed at
+/// `review-waiting` until air-s7c gave that one a condition, then at `stuck` until this bead gave
+/// `stuck` one — and every mechanism now records a condition, so there is no third example to
+/// move to. A test that names the currently-unrecorded mechanism holds a second copy of a fact
+/// the registry owns, and fails on the day someone does the thing it was hoping for (air-jc0).
+pub fn defect_for(removal: Removal) -> Option<&'static str> {
+    matches!(removal, Removal::Unstated).then_some("no removal condition recorded")
+}
+
 fn subjects_in<'a>(m: &Mechanism, e: &'a Ev) -> Vec<&'a str> {
     match m.fires {
         Fires::Decisions(_) => fired(m, e).into_iter().collect(),
@@ -571,8 +583,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 removal: m.removal.text(),
                 removal_kind,
                 condition_met: met,
-                defect: matches!(m.removal, Removal::Unstated)
-                    .then_some("no removal condition recorded"),
+                defect: defect_for(m.removal),
             }
         })
         .collect();
