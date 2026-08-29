@@ -61,6 +61,7 @@ pub fn run(json: bool) -> i32 {
         probe_expired_cutoff_is_reported(),
         probe_close_releases_the_claim(),
         probe_handover_not_green_is_one_line_per_worker(),
+        probe_status_bd_budget_follows_the_measurement(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1613,6 +1614,33 @@ fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
             && one
                 .first()
                 .is_some_and(|a| a.detail.starts_with("fd-1 handed over 1 time(s)")),
+    }
+}
+
+/// air-p61: `air status`'s bd budget was a flat 2 s, chosen before anything measured bd. bd's
+/// measured p99 here is 1644 ms — 356 ms of headroom — and adopter's MEDIAN is 1760 ms,
+/// above the whole budget, so their status reconcile timed out on ordinary calls.
+///
+/// Red: at adopter's measured median the budget rises above it, instead of sitting under it.
+/// Green: it never exceeds the cap that keeps `air status` inside the MCP tool budget
+/// (air-19u), and a ledger with no measurement yet keeps the old floor.
+///
+/// No number here is a second copy of a rule: the two inputs are measurements from the two
+/// repos' event logs, and both assertions are relations (`>`, `<=`) rather than equalities
+/// against a constant, so moving the multiplier cannot silently silence this (air-jc0).
+fn probe_status_bd_budget_follows_the_measurement() -> Probe {
+    use crate::cmd::bd_latency::status_bd_budget;
+    let ms = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    // Measured medians: adopter 1760 ms over 260,601 calls; this repo 1430 ms over 495,892.
+    let theirs = ms(status_bd_budget(Some(1760)));
+    let ours = ms(status_bd_budget(Some(1430)));
+    let cold = ms(status_bd_budget(None));
+    // A pathological median must not push the budget into the channel's own budget.
+    let awful = ms(status_bd_budget(Some(60_000)));
+    Probe {
+        name: "status: the bd budget is derived from bd's measured cost, not a constant",
+        red_fires: theirs > 1760 && ours > 1430 && theirs > ours,
+        green_passes: cold == 2_000 && awful <= 8_000 && awful > ours,
     }
 }
 
