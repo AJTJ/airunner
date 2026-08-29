@@ -283,11 +283,16 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
 }
 
 /// Decisions that record what happened rather than a mechanism acting on someone: an event
-/// was observed, a check passed, a claim was written. Everything else is treated as a firing
+/// was observed, a check passed, a claim was written.
+///
+/// `reported` was here until air-8br and is deliberately gone. It was the decision word of a
+/// command that reports, and `air audit` had a registry row while `air gc` did not — so `gc`
+/// fired invisibly, suppressed as bookkeeping by a word another mechanism had claimed. A
+/// command that reports IS a mechanism Air ships; it declares itself like the rest. Everything else is treated as a firing
 /// and must have a registry row. Seeded from every decision word in the record on 2026-08-22;
 /// add to it when a new one is genuinely bookkeeping, which is a deliberate act rather than
 /// the default (air-0y9).
-const BOOKKEEPING: &[&str] = &[
+pub const BOOKKEEPING: &[&str] = &[
     "attention",
     "bd-refused",
     "captured",
@@ -303,6 +308,10 @@ const BOOKKEEPING: &[&str] = &[
     "journaled",
     "landed",
     "no-claim",
+    // `air land` with nothing landable: the report air-6u5 exists to guarantee, naming every
+    // branch it checked and why each was skipped. It acts on nobody and refuses nothing, so it
+    // is bookkeeping rather than a mechanism (air-8br).
+    "none-landable",
     "no-such-bead",
     "observed",
     "ok",
@@ -314,7 +323,6 @@ const BOOKKEEPING: &[&str] = &[
     "red",
     "registered",
     "released",
-    "reported",
     "stopped",
     "timeout",
     "triaged",
