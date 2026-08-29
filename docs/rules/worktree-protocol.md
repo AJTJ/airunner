@@ -133,10 +133,13 @@ round first, then blocking) refuses `awaiting_review`/close unless: a `verify_ru
 this worktree at HEAD with exit 0; HEAD contains current `main`; fitness/docs-check are green at
 HEAD; the bead is claimed by this actor (CAS). It prints which check failed and the fixing command
 (plan 0001 §4, §5). `air land` is the coordinator's port of `land.sh` (built 2026-08-22, air-3pz):
-refuse a worker, a worktree, a branch other than main, a dirty tracked tree, a branch that does not
-contain main, or a recorded green that is not at the branch head; then `--no-ff`, verify the merged
-tree, `git reset --hard` back to the pre-merge tip on red, and close the beads in one `bd` process
-with their claims released as `landed`. Every attempt is a `landings` row, refusals included.
+refuse a worker, a worktree, a branch other than main, a branch that does not contain main, or a
+recorded green that is not at the branch head. Since air-odv (2026-08-29) it then builds the
+landing commit off main with `git commit-tree` and fast-forwards main onto it: **main is never
+moved to a commit that has not been verified**, so there is no rewind, no `git reset --hard`, and
+no second verify — the branch contains main, so the landing commit's tree is the one the worker's
+green already describes. The dirty-tree refusal went with the reset that was its only reason.
+Every attempt is a `landings` row, refusals included.
 
 ## 7. Stop, and say so
 

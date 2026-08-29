@@ -139,17 +139,23 @@ enum Cmd {
         #[arg(long)]
         reason: String,
     },
-    /// Coordinator: merge a green hand-over into main, verify the merged result, and rewind
-    /// main if it goes red. The one allowed path onto main; it pushes nothing.
+    /// Coordinator: land a green branch on main. The one allowed path onto main; it pushes
+    /// nothing.
     ///
-    /// A branch is landable when it carries a recorded green at its head; the beads reported
-    /// are the ones its merge range (`main..<head>`) names in its commit messages, confirmed
-    /// against bd (`air status` lists them). Nothing is read from `awaiting_review`: the
-    /// worker closes its own bead with proof and never sets it (air-7kp).
+    /// **Main is never moved to a commit that has not been verified** (air-odv). The landing
+    /// commit is built off main with `git commit-tree` and main is fast-forwarded onto it, so
+    /// there is no window in which main holds unverified code and nothing to roll back. Because
+    /// the branch must contain main, that commit's tree is byte-identical to the one the
+    /// worker's recorded green describes, so the landing re-verifies nothing.
+    ///
+    /// A branch is landable when it contains main AND carries a recorded green at its head —
+    /// exactly what `air status` checks, since both call the same predicate (air-y3v). The
+    /// beads reported are the ones its merge range (`main..<head>`) names in its commit
+    /// messages, confirmed against bd. Nothing is read from `awaiting_review`: the worker
+    /// closes its own bead with proof and never sets it (air-7kp).
     ///
     /// One merge per branch, however many beads that branch carries; `--all` takes the oldest
-    /// branch first and stops at the first red. The repo's verify comes from
-    /// `.claude/air.json` `verify_command`, default `make verify`.
+    /// branch first and stops at the first refusal.
     ///
     /// It closes nothing. The worker closes its own bead with proof before the branch lands
     /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
