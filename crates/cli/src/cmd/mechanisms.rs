@@ -39,6 +39,14 @@ pub enum Fires {
 pub enum Removal {
     /// Nothing was recorded. `air audit` reports this as a defect rather than skipping it:
     /// a mechanism nobody wrote a removal condition for is the one that outlives its reason.
+    ///
+    /// air-byw: `stuck` was the last mechanism carrying this, so as of 2026-08-29 **every**
+    /// mechanism records a removal condition and the variant is unconstructed. Kept
+    /// deliberately, and the `allow` is the point rather than a workaround: without it the next
+    /// author with nothing to record must pick `Judgement` and invent text, which is exactly the
+    /// invention this file's header forbids. Deleting the variant would turn "I have no
+    /// condition for this" from a reported defect into an unsayable thing.
+    #[allow(dead_code)]
     Unstated,
     /// Recorded, but a person has to decide. The audit prints the text and says so; it does
     /// not pretend to evaluate it.
@@ -191,11 +199,27 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stuck",
         class: "attention",
-        what: "A session in the same state past the stuck threshold.",
+        what: "A session waiting on a permission prompt, past the stuck threshold.",
         added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs",
+        source: "crates/cli/src/cmd/status.rs; the state is set only by hook.rs PermissionRequest",
         fires: Fires::Condition("stuck"),
-        removal: Removal::Unstated,
+        // air-byw: this reads zero and the zero is not about the mechanism. Session state
+        // `stuck` is set in exactly ONE place — `HookEvent::PermissionRequest` — and
+        // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days.
+        //
+        // The hook is not broken and not misnamed: `PermissionRequest` ("permission prompt
+        // needed") is a real event in this harness and `install.rs` registers it correctly. It
+        // never arrives because THE FLEET RUNS IN AUTO MODE — `~/.claude/settings.json` carries
+        // `permissions.defaultMode: auto` and `skipAutoPermissionPrompt: true`, so no permission
+        // prompt is ever shown and nothing is ever waiting on one. The `hook.PermissionDenied`
+        // events say "Blocked by classifier": that classifier decides instead of asking.
+        //
+        // So the condition is DORMANT, not dead, and no firing count can settle its fate in
+        // either direction — the evidence is absent, not negative (air-txa). Turn auto mode off
+        // and it starts working with no code change.
+        removal: Removal::Judgement(
+            "decide it on whether a session waiting on a human is worth reporting at all, never on its firing count: it cannot fire while the fleet runs in auto mode, so a zero here measures the permission configuration and not this mechanism. Re-ask if auto mode is ever turned off, when the count becomes evidence for the first time",
+        ),
     },
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered
     // DECISION was merely uncounted (air-8br); an unregistered CONDITION was invisible, because
