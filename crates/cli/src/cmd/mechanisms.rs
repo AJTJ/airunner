@@ -83,17 +83,9 @@ pub struct Mechanism {
 ///   window and never in any recorded day. A dead session holding a claim falls through to the
 ///   ordinary session states, which do fire.
 /// - `cross-project-fence` (2026-08-22, removed 2026-08-29, air-9u6): zero firings ever.
-/// - `stuck` (2026-08-20 plan 0004, removed 2026-08-29, air-dqw): zero firings in any recorded
-///   day, including through the 2026-08-22 05:26-05:45 standstill it was written for and the
-///   six days main sat red (air-24e). It was also the only mechanism with no removal condition
-///   recorded, so it cost a defect line in every audit. **Why it never fired matters more than
-///   that it never fired**: its input never existed. The `stuck` session state is set only by
-///   the `PermissionRequest` hook, and `hook.PermissionRequest` appears zero times in 34,000+
-///   events over 8 days; the `sessions` table has only ever held `running` and `working`. So a
-///   longer or shorter threshold would have changed nothing. Do not replace it with a better
-///   `stuck`: the replacement is a coordinator heartbeat running `air status`, which is a poll
-///   and is honest about being one. If a wedged worker goes undetected WITH the heartbeat
-///   running, that incident earns a new mechanism and will have evidence behind it.
+///
+/// `stuck` was proposed for deletion by air-dqw on zero firings and is NOT deleted. Its silence
+/// measures the fleet's permission mode, not the mechanism: see its row below.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -222,6 +214,30 @@ pub const MECHANISMS: &[Mechanism] = &[
         // action" metric was cut from the audit.
         removal: Removal::Judgement(
             "a round shows change-only pushes that led to no owner or coordinator action",
+        ),
+    },
+    Mechanism {
+        id: "stuck",
+        class: "attention",
+        what: "A session waiting on a permission prompt past the stuck threshold.",
+        added: "2026-08-20 (plan 0004)",
+        source: "crates/cli/src/cmd/status.rs, the `\"stuck\"` arm",
+        fires: Fires::Condition("stuck"),
+        // Zero firings in every recorded day, and that number settles NOTHING in either
+        // direction (air-dqw, corrected by diligence's air-byw before the deletion shipped).
+        // The state is set only by `HookEvent::PermissionRequest`, which has fired 0 times in
+        // 39,071 event lines over 8 days — not because the hook is broken, but because the
+        // fleet runs in auto mode (`permissions.defaultMode: auto`,
+        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits
+        // on one. Every `PermissionDenied` event says "Blocked by classifier".
+        //
+        // Dormant, not dead: turn auto mode off and this fires immediately with no code change.
+        // A zero is evidence only when the subject occurred and the mechanism stayed silent.
+        //
+        // air-byw owns stating the revival condition on this row; this text is the placeholder
+        // that keeps the row honest until then.
+        removal: Removal::Judgement(
+            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the configuration and cannot settle it",
         ),
     },
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered

@@ -186,11 +186,11 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                     "experimental": {"claude/channel": {}}
                 },
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
-                // The list is the conditions that EXIST, checked against every `kind:` in
-                // `status::attention` rather than against memory. It named `stuck` until
-                // air-dqw deleted it. A surface describing something untrue is air-ha8's
-                // defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, review-waiting, landed-not-closed, owner-decision-waiting, lease-held-by-dead-session, lease-stale) as they arise."
+                // The list is the conditions that EXIST, checked against `status::kinds::ALL`
+                // rather than against memory. `review-waiting` left with air-okc. A surface
+                // describing something untrue is air-ha8's defect, and an MCP instructions
+                // string is a surface.
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, owner-decision-waiting, lease-held-by-dead-session, lease-stale) as they arise."
             }),
         ),
         "ping" => result(id, json!({})),
