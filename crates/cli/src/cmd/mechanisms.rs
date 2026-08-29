@@ -197,6 +197,92 @@ pub const MECHANISMS: &[Mechanism] = &[
         fires: Fires::Condition("stuck"),
         removal: Removal::Unstated,
     },
+    // air-sze: the five condition kinds that shipped with no row at all. An unregistered
+    // DECISION was merely uncounted (air-8br); an unregistered CONDITION was invisible, because
+    // the audit can only count kinds the registry already names. All five read zero over
+    // 38,130 event lines across eight days — counted from the raw log, since `air audit` by
+    // definition could not see them.
+    //
+    // Zero firings is not one verdict here. It means two different things, and the difference is
+    // the whole judgement:
+    Mechanism {
+        id: "gone-with-claim",
+        class: "attention",
+        what: "No live session, but the worker still holds a claim.",
+        added: "2026-08-20 (plan 0004); launch grace added 2026-08-29 (air-eiv)",
+        source: "crates/cli/src/cmd/status.rs, the `None if has_claim` arm",
+        fires: Fires::Condition("gone-with-claim"),
+        // KEPT, and the comment above it in status.rs was wrong rather than the code. It said
+        // this was "deleted on 2026-08-22 (air-s7c)" because "a dead session holding a claim
+        // now falls through to the ordinary session states below, which do fire". It never was
+        // deleted, and that reason cannot hold for this arm: it is the arm for a worker with NO
+        // session row, so there are no session states below to fall through to. A crashed
+        // worker holding a bead is exactly what nothing else reports.
+        removal: Removal::Judgement(
+            "a round in which a worker's session dies holding a claim and some other condition names it first; until then this is the only thing that would",
+        ),
+    },
+    Mechanism {
+        id: "idle-with-claim",
+        class: "attention",
+        what: "A worker idle past the threshold while holding a bead.",
+        added: "2026-08-20 (plan 0004)",
+        source: "crates/cli/src/cmd/status.rs, Thresholds::idle_with_claim_min",
+        fires: Fires::Condition("idle-with-claim"),
+        // KEPT on the wedge argument, not on its count. `stuck` has never fired either and
+        // records no removal condition, so with both of these gone nothing at all notices a
+        // worker that has stalled holding work — which is the gap the coordinator's 5-minute
+        // heartbeat was added to cover (air-arq). Delete the detector and the heartbeat is the
+        // only thing left looking.
+        removal: Removal::Judgement(
+            "the heartbeat or `stuck` catches a stalled worker holding a bead first, twice, so this is the second thing to notice rather than the only one",
+        ),
+    },
+    Mechanism {
+        id: "silent-with-claim",
+        class: "attention",
+        what: "No hook event for the threshold while holding a bead; the session may have died.",
+        added: "2026-08-20 (plan 0004)",
+        source: "crates/cli/src/cmd/status.rs, Thresholds::silent_with_claim_min",
+        fires: Fires::Condition("silent-with-claim"),
+        removal: Removal::Judgement(
+            "same as `idle-with-claim`: something else names a silent worker holding a bead first, twice",
+        ),
+    },
+    Mechanism {
+        id: "lease-held-by-dead-session",
+        class: "attention",
+        what: "A lease whose holder's process is gone or was reused.",
+        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
+        fires: Fires::Condition("lease-held-by-dead-session"),
+        // KEPT, and for a different reason from the three above: this one's zero is about
+        // USAGE, not about the mechanism. The `leases` table has zero rows in this repo because
+        // `air lease` is unused here. adopter uses it every round. Deleting on our zero is
+        // precisely the error the owner reversed on `air lease` itself (air-uae, 2026-08-29):
+        // a verdict from an absence in one repo is not a verdict about a mechanism.
+        removal: Removal::Judgement(
+            "a round in a repo that actually takes leases shows a dead holder going unnoticed or the condition firing on a healthy one; a zero in a repo with no leases says nothing",
+        ),
+    },
+    Mechanism {
+        id: "lease-stale",
+        class: "attention",
+        what: "A lease whose heartbeat has aged past the stale threshold.",
+        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
+        fires: Fires::Condition("lease-stale"),
+        // Same zero-is-about-usage argument, and it has a KNOWN defect that this row now makes
+        // visible: the condition is addressed to the lease's HOLDER and offers them
+        // `air lease break` on their own lease, though staleness is a signal for other agents
+        // and never for the holder. the adopter reported six firings in one day on healthy leases
+        // (their ad-m07x); the attribution half reproduces here, captured
+        // 01M17J9NSHXZBH56K7MVY7XAM8. Registered rather than deleted so the fix has somewhere
+        // to be recorded.
+        removal: Removal::Judgement(
+            "the attribution is fixed and a round in a lease-using repo shows it firing at someone who can act on it, or shows nobody acting on it at all",
+        ),
+    },
     Mechanism {
         id: "peer-warning",
         class: "warning",
