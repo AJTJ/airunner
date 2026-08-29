@@ -560,9 +560,19 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         for_minutes: age,
                         fingerprint: String::new(),
                     }),
+                    // "prompt them" needs somebody to prompt. `gather` already asks the OS
+                    // whether the session's process is alive; the condition never read the
+                    // answer, so the two longest-lived rows in this ledger were dead sessions
+                    // held open for 4 885 minutes each ("idle 4885 min, 2 beads ready; prompt
+                    // them", conditions 2026-08-22T21:50 -> 2026-08-29T15:54). A dead session
+                    // holding a claim still surfaces as `idle-with-claim`, which is air-s7c's
+                    // point and is untouched here: there the claim is what needs a person.
+                    // Removal: when a dead session is pruned on the pid alone, this is dead
+                    // code and goes with it.
                     "idle"
                         if !has_claim
                             && w.role == "worker"
+                            && sess.pid_alive != Some(false)
                             && s.ready_depth.is_some_and(|n| n > 0)
                             && age >= t.idle_noclaim_min =>
                     {
@@ -1583,6 +1593,33 @@ mod tests {
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
         s.ready_depth = None;
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+    }
+
+    /// air-d10. A dead session is not an idle worker: there is nobody to prompt, and the two
+    /// longest-lived rows in this repo's ledger were exactly this, open 4 885 minutes each.
+    #[test]
+    fn idle_without_claim_is_quiet_when_the_session_process_is_gone() {
+        let mk = |alive: Option<bool>| {
+            let mut w = worker("w", Some("idle"), T_30, vec![], Some(true));
+            let sess = w.session.as_mut().unwrap();
+            sess.pid = Some(1);
+            sess.pid_alive = alive;
+            Snapshot {
+                workers: vec![w],
+                ready_depth: Some(5),
+                ..Default::default()
+            }
+        };
+        // Alive, and unknown (no pid exported): both still fire.
+        for alive in [Some(true), None] {
+            let att = attention(&mk(alive), NOW, Thresholds::default());
+            assert_eq!(
+                att.iter().map(|a| a.kind).collect::<Vec<_>>(),
+                vec!["idle-without-claim"],
+                "{alive:?}"
+            );
+        }
+        assert!(attention(&mk(Some(false)), NOW, Thresholds::default()).is_empty());
     }
 
     #[test]
