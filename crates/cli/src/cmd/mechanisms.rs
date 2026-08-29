@@ -83,7 +83,16 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "`awaiting_review`/close needs a recorded green at HEAD that contains main.",
         added: "2026-08-22 (air-i59)",
         source: "docs/rules/roles.md, Worker section",
-        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse"), ("handover", "refuse")]),
+        // `hook.handover` is what the first slice called the same gate before hook events
+        // were dispatched by name (2026-08-18). It is not a second mechanism and never was, so
+        // it is a second entry point here rather than a row of its own — which is exactly what
+        // `Fires::Decisions` is for. Without it the audit reported Air's ONE refusal as a
+        // firing with no registry row (air-8br).
+        fires: Fires::Decisions(&[
+            ("hook.PreToolUse", "refuse"),
+            ("handover", "refuse"),
+            ("hook.handover", "refuse"),
+        ]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },
     Mechanism {
@@ -92,9 +101,14 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
         added: "2026-08-18 (plan 0001)",
         source: "docs/plans/0001-first-slice.md:143",
+        // `hook.handover` and `hook.stop` are the first slice's names for the same advisory
+        // gate (2026-08-18), kept as entry points so days recorded then still attribute
+        // (air-8br).
         fires: Fires::Decisions(&[
             ("hook.PreToolUse", "would-refuse"),
             ("handover", "would-refuse"),
+            ("hook.handover", "would-refuse"),
+            ("hook.stop", "would-refuse"),
         ]),
         // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
         // has set awaiting_review/close in this turn and evidence is missing (M1, after one
@@ -111,12 +125,28 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-e7q)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("review-waiting"),
-        // Recorded by the pass that kept it as a change-only push (air-s7c, owner
-        // 2026-08-22). It is a Judgement rather than a counter: whether a push led to an
-        // action is not something the ledger can see, which is why the "no downstream
-        // action" metric was cut from the audit.
-        removal: Removal::Judgement(
-            "a round shows change-only pushes that led to no owner or coordinator action",
+        // Restated 2026-08-29 (air-cmn), because the old condition could not be settled and
+        // the input had died underneath it.
+        //
+        // It was `Judgement`: "a round shows change-only pushes that led to no owner or
+        // coordinator action" (air-s7c, owner 2026-08-22). Nothing can ever answer that —
+        // whether a push led to an action is not something the ledger can see, which is why
+        // the "no downstream action" metric was cut from the audit in the first place. So it
+        // was a mechanism with a removal condition that could not fire.
+        //
+        // Meanwhile its input went away. This condition is computed from bd's
+        // `awaiting_review` list, and air-7o3 replaced hand-over with close-with-proof here:
+        // `awaiting_review` now survives only on beads that already carried it. `air status`
+        // has read "review: 0 waiting" ever since. The mechanism is not wrong, it is idle,
+        // and the honest test is whether its input still exists anywhere Air runs — adopter
+        // may still hand over, and `air` ships there too, so this is a count and not a
+        // deletion someone argues for.
+        //
+        // `ZeroFirings` makes that the test, so `air audit` answers it on every run instead
+        // of a person re-deciding it.
+        removal: Removal::ZeroFirings(
+            "a round passes with zero beads in awaiting_review, meaning close-with-proof has \
+             replaced hand-over everywhere Air runs and this condition has no input left",
         ),
     },
     Mechanism {
@@ -217,6 +247,15 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "stop-nudge",
         class: "nudge",
         what: "At WIP 0 with beads ready, the Stop hook names them once.",
+        // air-7q5 asked whether this is an auto-start, since starting a session must not start
+        // work. It is NOT, and it is left alone rather than gated. A Stop hook fires only after
+        // the model has produced a turn, and a worker launched with no `--task` is given no
+        // prompt at all (`worker_argv_tmux`; the roles prose arrives via
+        // `--append-system-prompt-file`, which is context, not a turn). So the session has
+        // already been triggered by the time this can fire, and gating it on "has been
+        // triggered" would be a mechanism for a state that is unreachable. Probe:
+        // "launch: a task is the prompt; no task means no prompt, so an untriggered worker
+        // never runs", which carries a declared mutation.
         added: "2026-08-22 (air-09i)",
         source: "crates/hooks/src/gate.rs, stop_nudge",
         fires: Fires::Decisions(&[("hook.Stop", "nudge"), ("hook.SubagentStop", "nudge")]),
@@ -235,6 +274,49 @@ pub const MECHANISMS: &[Mechanism] = &[
         // Both firings on 2026-08-22 were real collisions between two workers on one bead.
         removal: Removal::ZeroFirings(
             "a full round passes with zero claim refusals, meaning lane assignment alone keeps workers off each other's beads",
+        ),
+    },
+    Mechanism {
+        id: "gc",
+        class: "report",
+        what: "Names what is collectable from `.air/events/` under the stated retention, and \
+               removes it only when asked twice.",
+        added: "2026-08-29 (air-i7s)",
+        source: "crates/cli/src/cmd/gc.rs",
+        // Registered because air-8br found it firing invisibly: its `reported` decision was in
+        // the audit's bookkeeping list, a word `air audit` had a registry row for and this did
+        // not. A command that reports is a mechanism, and declares itself.
+        removal: Removal::Judgement(
+            "`events::append` bounds the stream itself, or nothing reads a day older than the window, at which point the window goes and this goes with it",
+        ),
+        fires: Fires::Decisions(&[("gc", "reported"), ("gc", "collected")]),
+    },
+    Mechanism {
+        id: "land-refusal",
+        class: "refusal",
+        what: "A landing is refused: not the coordinator, main dirty or moved off main, the \
+               branch does not contain main, or its head carries no recorded green.",
+        added: "2026-08-22 (air-3pz)",
+        source: "crates/cli/src/cmd/land.rs, may_land and the precondition checks",
+        fires: Fires::Decisions(&[("land", "refuse")]),
+        // Not ZeroFirings. A round with no land refusals means every landing was prepared
+        // correctly, which is the mechanism working, not the mechanism being unnecessary —
+        // the opposite reading from `peer-warning`, where a zero means the lanes did the job
+        // instead. What would retire this is main ceasing to be a thing only the coordinator
+        // writes to, which is a decision rather than a count.
+        removal: Removal::Judgement(
+            "main stops being a branch only the coordinator writes to, at which point the role half goes and the green-at-head half belongs to the gate",
+        ),
+    },
+    Mechanism {
+        id: "close-refusal",
+        class: "refusal",
+        what: "`air close` is the coordinator's; a worker asking for it is refused and told so.",
+        added: "2026-08-20 (decisions: the worker closes its own bead with bd, not with air close)",
+        source: "crates/cli/src/cmd/close.rs, may_close",
+        fires: Fires::Decisions(&[("close", "refuse")]),
+        removal: Removal::ZeroFirings(
+            "a round passes with zero close refusals, meaning no worker reaches for `air close` and the deny list alone covers it",
         ),
     },
     // The audit is not exempt from its own instrument: it carries a removal condition and

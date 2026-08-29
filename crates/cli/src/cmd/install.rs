@@ -572,7 +572,10 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(ROLES_MD, on_disk);
-        assert!(ROLES_MD.contains("Finishing a bead is not a stop."));
+        // air-7q5: run-to-completion is scoped to a session that HAS work; starting one is not
+        // being given any. Both halves are pinned, because dropping either reverses the rule.
+        assert!(ROLES_MD.contains("Once you have work, finishing a bead is not a stop."));
+        assert!(ROLES_MD.contains("Starting a session is not being given work."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
         assert!(ROLES_MD.contains("Landing is the coordinator's: `air land --all`"));
         // air-03w (owner, 2026-08-29): signalling on close is part of the worker role, and

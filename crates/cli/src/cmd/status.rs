@@ -97,6 +97,10 @@ pub struct Snapshot {
     /// Median cost of one `bd` process today, from the event log (air-869). None when
     /// nothing shelled out to bd today.
     pub bd_latency: Option<super::bd_latency::BdLatency>,
+    /// Where the bd-derived counts came from: `live`, `cache` (bd deliberately not called this
+    /// tick), or `stale` (bd was asked and did not answer). Said rather than guessed, because
+    /// "0 ready" from a cache and "0 ready" from bd are different facts (air-cmn).
+    pub bd_source: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -945,7 +949,41 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
 }
 
 /// Build the snapshot: one row per worktree (plus any worker known only from the ledger).
+/// Whether this gather may shell out to bd (air-cmn).
+///
+/// The channel poll ran a full `gather` every ~8 s, and every one of them called bd:
+/// `in_progress`, then `show` once per open claim, then `awaiting_review`, then `ready`. That
+/// came to about 5,700 bd calls and 2.3 hours a day waiting on bd, around the clock, to deliver
+/// roughly 45 pushes (0007 §3). Only `idle-without-claim` needs any of it, for `ready_depth`.
+///
+/// So the poll asks for `Cached`, and pays for bd on a cadence measured in minutes instead of
+/// seconds. Nothing new catches the fallback: `bd_cache` and the "answer from the cache" arms
+/// already existed for a slow bd (air-19u), and this arms the same path deliberately.
+#[derive(Debug, Clone, Copy)]
+pub enum BdUse {
+    /// Call bd under the usual short budget. A person asked, so give them today's answer.
+    Fresh,
+    /// Answer from `bd_cache` while the cached counts are younger than this many minutes; pay
+    /// for bd only when they are older.
+    CachedFor(i64),
+}
+
+/// Is the cached bd answer young enough to use? `false` when nothing is cached, so the first
+/// tick after a restart still pays once and fills the cache.
+pub fn cache_is_fresh(ledger: &air_ledger::Ledger, at: &str, max_age_min: i64) -> bool {
+    ledger
+        .bd_cache_get("ready_depth")
+        .ok()
+        .flatten()
+        .and_then(|(_, seen)| minutes_between(&seen, at))
+        .is_some_and(|age| age < max_age_min)
+}
+
 pub fn gather(repo: &Path) -> Result<Snapshot, String> {
+    gather_with(repo, BdUse::Fresh)
+}
+
+pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let t0 = std::time::Instant::now();
     let (ledger, _me) = open(repo)?;
     let at = now();
@@ -1058,7 +1096,19 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
         bd.timeout = std::time::Duration::from_secs(2);
     }
+    // `bd_try` skips every later call once this is set, and each call site already falls back
+    // to `bd_cache`. Setting it up front is how "do not call bd this tick" is expressed: one
+    // decision, no second code path to keep in step with the first.
     let mut bd_slow: Option<String> = None;
+    let mut bd_skipped = false;
+    if let BdUse::CachedFor(mins) = bd_use
+        && cache_is_fresh(&ledger, &at, mins)
+    {
+        bd_slow = Some(format!(
+            "bd not called: cached counts are under {mins} min old"
+        ));
+        bd_skipped = true;
+    }
     let in_progress: Option<std::collections::BTreeSet<String>> = bd_try(
         &bd,
         &mut bd_slow,
@@ -1205,7 +1255,12 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
             .and_then(|(v, _)| v.parse().ok()),
         None => None,
     };
-    if let Some(slow) = &bd_slow {
+    // A bd that did not answer is a fault and is reported. A bd we chose not to call is not,
+    // so it is named in `bd_source` instead of in `errors`: an alarm that fires on correct
+    // behaviour is the shape plan 0008 §3 is entirely about.
+    if let Some(slow) = &bd_slow
+        && !bd_skipped
+    {
         let seen = ledger
             .bd_cache_get("ready_depth")
             .ok()
@@ -1266,6 +1321,11 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
         // From the lines already on disk: this tick's own bd cost is logged after gather,
         // so it lands in the next reading.
         bd_latency: super::bd_latency::for_day(ledger.dir(), &super::today()),
+        bd_source: match (bd_skipped, bd_slow.is_some()) {
+            (true, _) => "cache",
+            (false, true) => "stale",
+            (false, false) => "live",
+        },
     })
 }
 
@@ -1467,10 +1527,17 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         ));
     }
     out.push_str(&format!(
-        "ready: {}\n",
+        "ready: {}{}\n",
         s.ready_depth
             .map(|n| n.to_string())
-            .unwrap_or_else(|| "? (bd did not answer)".into())
+            .unwrap_or_else(|| "? (bd did not answer)".into()),
+        // Which source, always: "0 ready" from a cache and "0 ready" from bd are different
+        // facts, and only one of them is today's (air-cmn).
+        match s.bd_source {
+            "cache" => " (cached; bd not called this tick)",
+            "stale" => " (stale; bd did not answer)",
+            _ => "",
+        }
     ));
     out.push_str(&format!(
         "inbox: {} open; owner queue: {} open\n",
