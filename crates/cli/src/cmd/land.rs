@@ -558,7 +558,8 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     code
 }
 
-/// Merge one branch, verify the merged result, and rewind on red.
+/// Land one branch: build the merge commit off main and fast-forward onto it. No verify
+/// runs here and there is nothing to rewind (air-odv).
 fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool) -> Outcome {
     let branch = branch_for(&batch.worker);
     let started_at = now();
