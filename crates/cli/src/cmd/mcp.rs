@@ -630,35 +630,35 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
     loop {
         // One bad tick (a panic in git parsing, a malformed row) must not end the thread:
         // the process lives as long as the coordinator session.
-        let tick =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                match status::gather(repo) {
-                    Ok(snap) => {
-                        let att = status::attention(&snap, &snap.at, thresholds);
-                        let opened = crate::cmd::open(repo).ok();
-                        if let Some((ledger, worker)) = opened.as_ref() {
-                            status::record_and_log(ledger, worker, &snap, &att, true);
-                        }
-                        for a in select_new(&mut pushed, &att) {
-                            record_push(opened.as_ref(), &snap.at, &a);
-                            out.send(&channel_event(&a));
-                        }
-                        for (kind, worker, text) in
-                            session_changes(&mut known_sessions, &snap.sessions)
-                        {
-                            out.send(&json!({
-                                "jsonrpc": "2.0",
-                                "method": "notifications/claude/channel",
-                                "params": {
-                                    "content": format!("[{kind}] {text}"),
-                                    "meta": {"kind": kind, "worker": worker}
-                                }
-                            }));
-                        }
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Ledger-only on an ordinary tick; bd at most once every 10 minutes
+            // (air-cmn). Only `idle-without-claim` needs bd at all, for `ready_depth`.
+            match status::gather_with(repo, status::BdUse::CachedFor(10)) {
+                Ok(snap) => {
+                    let att = status::attention(&snap, &snap.at, thresholds);
+                    let opened = crate::cmd::open(repo).ok();
+                    if let Some((ledger, worker)) = opened.as_ref() {
+                        status::record_and_log(ledger, worker, &snap, &att, true);
                     }
-                    Err(e) => eprintln!("air mcp: poll: {e}"),
+                    for a in select_new(&mut pushed, &att) {
+                        record_push(opened.as_ref(), &snap.at, &a);
+                        out.send(&channel_event(&a));
+                    }
+                    for (kind, worker, text) in session_changes(&mut known_sessions, &snap.sessions)
+                    {
+                        out.send(&json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/claude/channel",
+                            "params": {
+                                "content": format!("[{kind}] {text}"),
+                                "meta": {"kind": kind, "worker": worker}
+                            }
+                        }));
+                    }
                 }
-            }));
+                Err(e) => eprintln!("air mcp: poll: {e}"),
+            }
+        }));
         if tick.is_err() {
             eprintln!("air mcp: poll: tick panicked; continuing");
         }

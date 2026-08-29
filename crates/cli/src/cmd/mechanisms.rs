@@ -111,12 +111,28 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-e7q)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("review-waiting"),
-        // Recorded by the pass that kept it as a change-only push (air-s7c, owner
-        // 2026-08-22). It is a Judgement rather than a counter: whether a push led to an
-        // action is not something the ledger can see, which is why the "no downstream
-        // action" metric was cut from the audit.
-        removal: Removal::Judgement(
-            "a round shows change-only pushes that led to no owner or coordinator action",
+        // Restated 2026-08-29 (air-cmn), because the old condition could not be settled and
+        // the input had died underneath it.
+        //
+        // It was `Judgement`: "a round shows change-only pushes that led to no owner or
+        // coordinator action" (air-s7c, owner 2026-08-22). Nothing can ever answer that —
+        // whether a push led to an action is not something the ledger can see, which is why
+        // the "no downstream action" metric was cut from the audit in the first place. So it
+        // was a mechanism with a removal condition that could not fire.
+        //
+        // Meanwhile its input went away. This condition is computed from bd's
+        // `awaiting_review` list, and air-7o3 replaced hand-over with close-with-proof here:
+        // `awaiting_review` now survives only on beads that already carried it. `air status`
+        // has read "review: 0 waiting" ever since. The mechanism is not wrong, it is idle,
+        // and the honest test is whether its input still exists anywhere Air runs — adopter
+        // may still hand over, and `air` ships there too, so this is a count and not a
+        // deletion someone argues for.
+        //
+        // `ZeroFirings` makes that the test, so `air audit` answers it on every run instead
+        // of a person re-deciding it.
+        removal: Removal::ZeroFirings(
+            "a round passes with zero beads in awaiting_review, meaning close-with-proof has \
+             replaced hand-over everywhere Air runs and this condition has no input left",
         ),
     },
     Mechanism {
