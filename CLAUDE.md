@@ -114,10 +114,12 @@ of it and was stale by 14, air-jc0). Next (after round-one data): `next`, `peer`
 - **A session may act only on its own project. Talking to another one is fine.** Another
   project's worktrees, tmux sessions and workers are never ours to kill, restart, re-model or
   tidy; reading them and messaging them is encouraged, and the cross-project channel is how
-  three wrong claims were caught on 2026-08-22. `AIR_PROJECT` on both launchers; the PreToolUse
-  hook denies a `tmux` command naming another project's session, and `air --repo` outside this
-  checkout is refused (air-0lk, corrected by air-3oq). Other fleets run on this machine
-  (`~/projects/adopter`); the check is the rule, not this line.
+  three wrong claims were caught on 2026-08-22. `AIR_PROJECT` on both launchers records which
+  fleet a session belongs to, and `air --repo` outside this checkout is refused. The PreToolUse
+  denial of a `tmux` command naming another project's session (air-0lk, narrowed by air-3oq)
+  fired zero times ever and was deleted on 2026-08-29 (air-9u6), so on the tmux half this line
+  IS the rule rather than a description of a check. Other fleets run on this machine
+  (`~/projects/adopter`).
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).

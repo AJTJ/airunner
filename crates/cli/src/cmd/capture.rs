@@ -128,68 +128,55 @@ pub struct Resolution {
     pub note: Option<String>,
 }
 
-/// Map ids to `--bead`/`--drop` the way bd 1.2.2 maps `bd close`'s `--reason`: positionally,
-/// in the order the flags appear, with one value allowed to cover every id (`bd close
-/// --help`, read 2026-08-22). Pure, so the mapping is testable without a ledger (air-869).
-pub fn plan(ids: &[String], beads: &[String], drops: &[String]) -> Result<Vec<Resolution>, String> {
-    if ids.is_empty() {
-        return Err("name at least one capture".to_string());
+/// One capture, one resolution (air-zlq, 2026-08-29). Pure, so the mapping is testable
+/// without a ledger.
+///
+/// Batch mode was here: several ids mapped positionally to repeated `--bead`/`--drop`, with
+/// one `--drop` allowed to cover every id. It is gone, and the reason is measured rather than
+/// assumed.
+///
+/// The verification is the point of `air triage` — an id bd does not have must refuse the
+/// pass (air-76z) — and it runs under a 5 s probe budget. Air was never making serial bd calls
+/// for it: `show_all` is one `bd show a b c --json` process (`crates/bd/src/lib.rs:279`). The
+/// cost is inside bd, and it is per-id, not per-process. Measured here 2026-08-29:
+///
+/// | ids | `bd show … --json` |
+/// |---|---|
+/// | 1 | 1.6 s, 1.8 s |
+/// | 2 | 2.4 s, 5.7 s |
+/// | 5 | 9.6 s |
+/// | 26 | 27.9 s |
+///
+/// So the ceiling under the budget is about three ids, and batching saved the process — which
+/// air-869 measured at ~1.4 s and which was never the cost here. A batch that works for three
+/// of thirty-four is a feature whose successful case is indistinguishable from not having it.
+///
+/// If batching is ever wanted back, the thing to fix is bd's per-id cost, not Air's argv.
+pub fn plan(id: &str, bead: Option<&str>, drop: Option<&str>) -> Result<Resolution, String> {
+    match (bead, drop) {
+        (Some(_), Some(_)) => Err(
+            "give --bead <id> or --drop \"<why>\", not both: a capture is promoted or dropped"
+                .to_string(),
+        ),
+        (Some(b), None) => Ok(Resolution {
+            id: id.to_string(),
+            status: "promoted",
+            bead: Some(b.to_string()),
+            note: None,
+        }),
+        (None, Some(w)) => Ok(Resolution {
+            id: id.to_string(),
+            status: "dropped",
+            bead: None,
+            note: Some(w.to_string()),
+        }),
+        (None, None) => Err("give --bead <id> or --drop \"<why>\" for this capture".to_string()),
     }
-    let given = beads.len().saturating_add(drops.len());
-    if given == 0 {
-        return Err("give --bead <id> or --drop \"<why>\" for each capture".to_string());
-    }
-    // One --drop for many ids is a real pass ("all duplicates"); one --bead for many is not,
-    // because a bead belongs to one capture.
-    if given == 1 && ids.len() > 1 {
-        if beads.len() == 1 {
-            return Err(format!(
-                "{} captures but one --bead: a bead is one capture's, so repeat --bead once per capture",
-                ids.len()
-            ));
-        }
-        return Ok(ids
-            .iter()
-            .map(|id| Resolution {
-                id: id.clone(),
-                status: "dropped",
-                bead: None,
-                note: drops.first().cloned(),
-            })
-            .collect());
-    }
-    if given != ids.len() {
-        return Err(format!(
-            "{} capture(s) but {given} --bead/--drop value(s): they map positionally, so give one per capture",
-            ids.len()
-        ));
-    }
-    // Interleaving is lost by clap, so beads come first, then drops. Say so rather than
-    // silently pairing the wrong ones.
-    let mut out = Vec::with_capacity(ids.len());
-    for (i, id) in ids.iter().enumerate() {
-        let r = match beads.get(i) {
-            Some(b) => Resolution {
-                id: id.clone(),
-                status: "promoted",
-                bead: Some(b.clone()),
-                note: None,
-            },
-            None => Resolution {
-                id: id.clone(),
-                status: "dropped",
-                bead: None,
-                note: drops.get(i.saturating_sub(beads.len())).cloned(),
-            },
-        };
-        out.push(r);
-    }
-    Ok(out)
 }
 
 /// Beads the pass would point at that bd does not have. `Err` when bd could not answer at
 /// all: the record must not point at an unverified id, so that refuses the pass too
-/// (air-76z). One `bd show` process for every bead in the pass (air-869).
+/// (air-76z). One `bd show` process.
 fn unknown_beads(repo: &Path, plan: &[Resolution]) -> Result<Vec<String>, String> {
     let want: Vec<String> = plan.iter().filter_map(|r| r.bead.clone()).collect();
     if want.is_empty() {
@@ -219,21 +206,22 @@ pub fn missing_ids(want: &[String], known: &[air_bd::Issue]) -> Vec<String> {
         .collect()
 }
 
-/// Resolve one capture or a whole pass. Every capture in one ledger transaction and one
-/// event line: the post-round pass triaged a dozen one `air triage` at a time (air-869).
+/// Resolve one capture (air-zlq: one at a time, see [`plan`] for the measurement).
 ///
 /// A promotion is verified against bd first (air-76z): `air triage C --bead fd-placeholder`
 /// used to succeed before the bead existed, and refusing to touch a resolved capture left
 /// the record pointing at nothing with no way to fix it. Now an unknown bead is refused, and
 /// an already-triaged capture can be re-pointed, its old target named in the event line.
-pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], json: bool) -> i32 {
-    let plan = match plan(ids, beads, drops) {
-        Ok(p) => p,
+pub fn triage(repo: &Path, id: &str, bead: Option<&str>, drop: Option<&str>, json: bool) -> i32 {
+    let plan = match plan(id, bead, drop) {
+        Ok(p) => vec![p],
         Err(e) => {
             eprintln!("air triage: {e}");
             return 1;
         }
     };
+    let ids = &[id.to_string()];
+    let beads: Vec<String> = bead.into_iter().map(str::to_string).collect();
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -365,26 +353,16 @@ pub fn triage(repo: &Path, ids: &[String], beads: &[String], drops: &[String], j
 mod tests {
     use super::*;
 
-    fn v(xs: &[&str]) -> Vec<String> {
-        xs.iter().map(|s| s.to_string()).collect()
-    }
-
+    /// air-zlq: one capture, one resolution, and the two ways of giving neither or both are
+    /// refused rather than guessed at.
     #[test]
-    fn plan_maps_positionally_and_refuses_a_mismatch() {
-        let p = plan(&v(&["a", "b", "c"]), &v(&["fd-1", "fd-2"]), &v(&["dup"])).unwrap();
-        assert_eq!(p[0].bead.as_deref(), Some("fd-1"));
-        assert_eq!(p[1].bead.as_deref(), Some("fd-2"));
-        assert_eq!(
-            (p[2].status, p[2].note.as_deref()),
-            ("dropped", Some("dup"))
-        );
-        // One --drop covers every capture; one --bead cannot.
-        let all = plan(&v(&["a", "b"]), &[], &v(&["dup"])).unwrap();
-        assert_eq!(all.len(), 2);
-        assert!(all.iter().all(|r| r.status == "dropped"));
-        assert!(plan(&v(&["a", "b"]), &v(&["fd-1"]), &[]).is_err());
-        assert!(plan(&v(&["a", "b", "c"]), &v(&["fd-1", "fd-2"]), &[]).is_err());
-        assert!(plan(&v(&["a"]), &[], &[]).is_err());
-        assert!(plan(&[], &v(&["fd-1"]), &[]).is_err());
+    fn plan_resolves_one_capture_and_refuses_an_ambiguous_pass() {
+        let p = plan("c1", Some("fd-1"), None).unwrap();
+        assert_eq!((p.status, p.bead.as_deref()), ("promoted", Some("fd-1")));
+        let d = plan("c1", None, Some("dup")).unwrap();
+        assert_eq!((d.status, d.note.as_deref()), ("dropped", Some("dup")));
+        // Promoted or dropped, never both, and never neither.
+        assert!(plan("c1", Some("fd-1"), Some("dup")).is_err());
+        assert!(plan("c1", None, None).is_err());
     }
 }

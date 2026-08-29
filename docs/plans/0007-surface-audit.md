@@ -168,6 +168,32 @@ any of it — `idle-without-claim` reads `ready_depth` — plus `review-waiting`
 from bd's `awaiting_review` and is dead in this repo since close-with-proof. Everything else is
 ledger and git.
 
+### After air-cmn (2026-08-29): bd out of the poll path
+
+The poll now asks for `BdUse::CachedFor(10)` and answers from `bd_cache` while the cached counts
+are under ten minutes old. Nothing new catches the fallback: `bd_cache` and the "answer from the
+cache" arms already existed for a slow bd (air-19u), so this arms a tested path deliberately
+instead of adding a second one. `air status` says which source it used, because "0 ready" from a
+cache and "0 ready" from bd are different facts.
+
+**Measured before** (the table above, 2026-08-25 as the representative day): 7,667 ticks across
+3 pollers, 5,674 bd calls, 2.26 h waiting on bd, median `gather` 3,895 ms.
+
+**Projected after, with the arithmetic shown rather than a number asserted.** Each poller ticks
+about every 34 s (2,556 ticks per poller per day) and may now pay for bd once per 10 min, so 144
+of those 2,556 ticks pay: **5.6%**. Applying that to the measured before-figures gives roughly
+**320 bd calls and 7.6 minutes a day** waiting on bd, from 5,674 and 2.26 h.
+
+**This projection is not the measurement the bead asks for, and must not be read as one.** The
+real after-figure exists only once a coordinator has run this build for a day. Read it then, the
+same way the before-figure was read:
+
+    python3 - <<'EOF'   # difference bd_calls per (day, poller); never sum them
+    ...  see the method note below
+    EOF
+
+and replace this paragraph with the observed numbers.
+
 **Method note, because the number that is easy to get here is wrong.** `bd_calls` and `bd_ms` on
 an event line are `air_bd::stats::snapshot()`, which is cumulative for the life of the process
 (`crates/bd/src/lib.rs:52-64`). They must be differenced per (day, poller), never summed.

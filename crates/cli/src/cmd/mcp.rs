@@ -269,11 +269,11 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_triage",
-            description: "Resolve captures: promote each to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop). Every bead is checked against bd first and an id bd does not have is refused, so create the bead before triaging to it. A capture that was already triaged is re-pointed, which is how a wrong pointer gets corrected. Give arrays to triage a whole pass in one ledger transaction and one bd process; bead/drop map positionally to id, and a single drop covers every id.",
+            description: "Resolve ONE capture: promote it to a bead you have already created with `bd create --validate --estimate N` (give bead), or drop it with a reason (give drop). The bead is checked against bd first and an id bd does not have is refused, so create the bead before triaging to it. A capture that was already triaged is re-pointed, which is how a wrong pointer gets corrected. One capture per call: `bd show` costs about a second per id, so a batch of 26 took 27.9 s against a 5 s budget (air-zlq, measured 2026-08-29).",
             schema: json!({"type":"object","required":["id"],"properties":{
-                "id":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
-                "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
-                "drop":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}}}),
+                "id":{"type":"string"},
+                "bead":{"type":"string"},
+                "drop":{"type":"string"}}}),
         },
         Tool {
             name: "air_close",
@@ -399,23 +399,18 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
             ]);
         }
         "air_lease_status" => argv.extend(["lease".into(), "status".into()]),
+        // One capture per call (air-zlq): the batch it used to build could not finish
+        // verification inside the budget past about three ids.
         "air_triage" => {
-            let ids = list_arg(args, "id");
-            if ids.is_empty() {
+            let Some(id) = str_arg(args, "id") else {
                 return Err("id is required".into());
-            }
-            argv.push("triage".into());
-            argv.extend(ids);
-            let beads = list_arg(args, "bead");
-            let drops = list_arg(args, "drop");
-            if beads.is_empty() && drops.is_empty() {
-                return Err("give bead or drop".into());
-            }
-            for b in beads {
-                argv.extend(["--bead".into(), b]);
-            }
-            for d in drops {
-                argv.extend(["--drop".into(), d]);
+            };
+            argv.extend(["triage".into(), id.into()]);
+            match (str_arg(args, "bead"), str_arg(args, "drop")) {
+                (Some(_), Some(_)) => return Err("give bead or drop, not both".into()),
+                (Some(b), None) => argv.extend(["--bead".into(), b.into()]),
+                (None, Some(d)) => argv.extend(["--drop".into(), d.into()]),
+                (None, None) => return Err("give bead or drop".into()),
             }
         }
         "air_close" => {
@@ -630,35 +625,35 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
     loop {
         // One bad tick (a panic in git parsing, a malformed row) must not end the thread:
         // the process lives as long as the coordinator session.
-        let tick =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                match status::gather(repo) {
-                    Ok(snap) => {
-                        let att = status::attention(&snap, &snap.at, thresholds);
-                        let opened = crate::cmd::open(repo).ok();
-                        if let Some((ledger, worker)) = opened.as_ref() {
-                            status::record_and_log(ledger, worker, &snap, &att, true);
-                        }
-                        for a in select_new(&mut pushed, &att) {
-                            record_push(opened.as_ref(), &snap.at, &a);
-                            out.send(&channel_event(&a));
-                        }
-                        for (kind, worker, text) in
-                            session_changes(&mut known_sessions, &snap.sessions)
-                        {
-                            out.send(&json!({
-                                "jsonrpc": "2.0",
-                                "method": "notifications/claude/channel",
-                                "params": {
-                                    "content": format!("[{kind}] {text}"),
-                                    "meta": {"kind": kind, "worker": worker}
-                                }
-                            }));
-                        }
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Ledger-only on an ordinary tick; bd at most once every 10 minutes
+            // (air-cmn). Only `idle-without-claim` needs bd at all, for `ready_depth`.
+            match status::gather_with(repo, status::BdUse::CachedFor(10)) {
+                Ok(snap) => {
+                    let att = status::attention(&snap, &snap.at, thresholds);
+                    let opened = crate::cmd::open(repo).ok();
+                    if let Some((ledger, worker)) = opened.as_ref() {
+                        status::record_and_log(ledger, worker, &snap, &att, true);
                     }
-                    Err(e) => eprintln!("air mcp: poll: {e}"),
+                    for a in select_new(&mut pushed, &att) {
+                        record_push(opened.as_ref(), &snap.at, &a);
+                        out.send(&channel_event(&a));
+                    }
+                    for (kind, worker, text) in session_changes(&mut known_sessions, &snap.sessions)
+                    {
+                        out.send(&json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/claude/channel",
+                            "params": {
+                                "content": format!("[{kind}] {text}"),
+                                "meta": {"kind": kind, "worker": worker}
+                            }
+                        }));
+                    }
                 }
-            }));
+                Err(e) => eprintln!("air mcp: poll: {e}"),
+            }
+        }));
         if tick.is_err() {
             eprintln!("air mcp: poll: tick panicked; continuing");
         }
