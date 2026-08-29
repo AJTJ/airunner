@@ -208,6 +208,10 @@ enum Cmd {
         /// Initial task for the worker, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
+        /// Model to launch on, e.g. `claude-opus-5`. Omitted, the session inherits whatever the
+        /// harness gives it, and the ledger records what it actually got (air-air).
+        #[arg(long)]
+        model: Option<String>,
         /// Print the command instead of running it.
         #[arg(long)]
         print: bool,
@@ -217,6 +221,9 @@ enum Cmd {
     },
     /// Start the interactive coordinator session in the main checkout with the Air channel attached.
     Coordinator {
+        /// Model to launch on (air-air); inherited when omitted.
+        #[arg(long)]
+        model: Option<String>,
         #[arg(long)]
         print: bool,
         #[arg(last = true)]
@@ -271,6 +278,23 @@ enum Cmd {
         #[arg(long)]
         prove: bool,
     },
+}
+
+/// air-air: `--model <m>` becomes `--model <m>` in the passthrough, so `air worker --model x`
+/// and `air worker -- --model x` produce the same argv and neither can drift from the other.
+///
+/// It goes FIRST in `extra`, and that placement is load-bearing rather than cosmetic. `extra` is
+/// appended after `--disallowed-tools`, which is variadic: a bare value landing there is read as
+/// one more deny rule (air-2ct, where three workers sat at an empty prompt because the only flag
+/// terminating that list had been stripped). `--model` is a flag, so it terminates the deny list
+/// and anything the caller passed after it keeps its own meaning.
+fn with_model(model: Option<&str>, extra: &[String]) -> Vec<String> {
+    let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+        return extra.to_vec();
+    };
+    let mut v = vec!["--model".to_string(), m.to_string()];
+    v.extend(extra.iter().cloned());
+    v
 }
 
 /// `--repo` may not leave this checkout's repository (air-0lk). A worktree and its main
@@ -346,10 +370,22 @@ fn main() -> ExitCode {
             name,
             tmux,
             task,
+            model,
             print,
             extra,
-        } => cmd::launch::worker(&repo, name.as_deref(), &extra, tmux, task.as_deref(), print),
-        Cmd::Coordinator { print, extra } => cmd::launch::coordinator(&repo, &extra, print),
+        } => cmd::launch::worker(
+            &repo,
+            name.as_deref(),
+            &with_model(model.as_deref(), &extra),
+            tmux,
+            task.as_deref(),
+            print,
+        ),
+        Cmd::Coordinator {
+            model,
+            print,
+            extra,
+        } => cmd::launch::coordinator(&repo, &with_model(model.as_deref(), &extra), print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
