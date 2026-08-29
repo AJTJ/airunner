@@ -46,6 +46,7 @@ pub fn run(json: bool) -> i32 {
         probe_stop_nudge(),
         probe_nudge_names_only_claimable(),
         probe_standstill(),
+        probe_idle_without_claim_needs_a_live_session(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -1158,6 +1159,43 @@ fn probe_standstill() -> Probe {
             .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
             && red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
+    }
+}
+
+/// air-d10: `idle-without-claim` says "prompt them", so it needs somebody to prompt. Red: a
+/// live idle worker past the threshold with beads ready still fires. Green: the same row with
+/// the session's process gone is silent — the shape of the two longest-lived rows in this
+/// repo's ledger, open 4 885 minutes each.
+///
+/// The mutation that made it red: dropping `sess.pid_alive != Some(false)` from the arm in
+/// `status::attention` puts the dead-session case back and this probe's green half fails.
+fn probe_idle_without_claim_needs_a_live_session() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let mk = |alive: Option<bool>| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                detail: None,
+                changed_at: "2026-08-20T11:30:00Z".into(),
+                pid: Some(1),
+                pid_alive: alive,
+                project: String::new(),
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(2),
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let red = attention(&mk(Some(true)), now, Thresholds::default());
+    let green = attention(&mk(Some(false)), now, Thresholds::default());
+    Probe {
+        name: "attention: idle-without-claim fires for a live session, not a dead one",
+        red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
+        green_passes: !green.iter().any(|a| a.kind == "idle-without-claim"),
     }
 }
 
