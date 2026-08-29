@@ -735,6 +735,24 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
+                // `stuck` has never fired in any recorded day, and that is a fact about the
+                // FLEET'S CONFIGURATION rather than about this arm (air-dqw, corrected by
+                // diligence during air-byw before the deletion it nearly justified shipped).
+                //
+                // The state is set only by `HookEvent::PermissionRequest` (hook.rs:188), and
+                // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days.
+                // The hook is real and correctly registered. It never fires because the fleet
+                // runs in auto mode: `~/.claude/settings.json` has `permissions.defaultMode:
+                // auto` with `skipAutoPermissionPrompt: true` and an `autoMode` classifier, so
+                // no permission prompt is ever shown and nothing ever waits on one. Every
+                // `hook.PermissionDenied` event says "Blocked by classifier" — that classifier
+                // deciding instead of asking.
+                //
+                // So the silence is DORMANCY, not death: turn auto mode off and this works
+                // immediately, with no code change. A zero is evidence only when the subject
+                // occurred and the mechanism stayed silent; here the subject never occurred.
+                // Deleting on that silence and keeping on that silence rest on the same
+                // nothing, which is why air-dqw closed on the finding instead of the deletion.
                 match sess.state.as_str() {
                     "stuck" if age >= t.stuck_min => out.push(Attention {
                         worker: w.worker.clone(),
