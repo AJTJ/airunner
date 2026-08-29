@@ -272,6 +272,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "install: a repo at yesterday's surface is told what changed; a current one is told nothing",
+        Mutation {
+            // Nothing is ever new, which is the pre-air-6g1 world: install reports success and
+            // an adopting repo learns nothing. The green half legitimately still passes (an
+            // empty diff for a current repo is what it asserts), so only the red half falls —
+            // which is the point of naming one branch.
+            file: "crates/cli/src/cmd/install.rs",
+            from: "!known.iter().any(|k| k == c.id)",
+            to: "false",
+            also_red: &[],
+        },
+    ),
+    (
         "lease: a defect reaches the waiter, never the holder, and nobody waiting is silent",
         Mutation {
             // Address the condition to the holder again — the whole defect air-q9c fixed.
@@ -792,6 +805,7 @@ fn all_probes() -> Vec<Probe> {
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
         probe_lease_defect_reaches_the_waiter(),
+        probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -2765,6 +2779,53 @@ fn probe_lease_defect_reaches_the_waiter() -> Probe {
                     && x.detail.contains("yours to take now")
             }),
         green_passes: nobody.is_empty() && self_only.is_empty(),
+    }
+}
+
+/// air-njb: surface notices are the only thing that tells an adopting repo what an upgrade
+/// does to it, and the 2026-08-29 round changed more than any before it while adding one
+/// notice.
+///
+/// Red: a repo at YESTERDAY's surface is told, and specifically about the installer defect —
+/// a matcher installed before today was never updated by a re-run. Green: a repo already told
+/// about everything is told nothing. **The empty case is what makes the non-empty one mean
+/// something**: a diff that never goes quiet reports on every install and is ignored by the
+/// second week.
+///
+/// Yesterday's set is derived from each notice's own `since` date, not from a list of ids
+/// copied here — a copied list would stop being yesterday's the next time anyone appends
+/// (air-jc0).
+fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
+    use crate::cmd::install::{SURFACE, surface_diff};
+
+    const TODAY: &str = "2026-08-29";
+    let ids = |f: fn(&str) -> bool| -> Vec<String> {
+        SURFACE
+            .iter()
+            .filter(|c| f(c.since))
+            .map(|c| c.id.to_string())
+            .collect()
+    };
+    let yesterday = ids(|since| since < TODAY);
+    let everything = ids(|_| true);
+
+    let told = surface_diff(&yesterday);
+    let quiet = surface_diff(&everything);
+    // Every notice dated today, and nothing else, is what yesterday's repo has not seen.
+    let todays: Vec<&str> = SURFACE
+        .iter()
+        .filter(|c| c.since.starts_with(TODAY))
+        .map(|c| c.id)
+        .collect();
+    Probe {
+        name: "install: a repo at yesterday's surface is told what changed; a current one is told nothing",
+        red_fires: !todays.is_empty()
+            && told.len() == todays.len()
+            && todays.iter().all(|id| told.iter().any(|c| c.id == *id))
+            && told
+                .iter()
+                .any(|c| c.id == "install-refreshes-matcher" && c.silent_break),
+        green_passes: quiet.is_empty(),
     }
 }
 
