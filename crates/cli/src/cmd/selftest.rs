@@ -1389,9 +1389,13 @@ fn probe_audit_registry() -> Probe {
     // Red: a mechanism with nothing recorded IS reported as a defect. Asserted against the
     // classifier rather than against a registry row that happens to lack a condition — this
     // probe pointed at `review-waiting` until air-s7c gave that one a condition, then at
-    // `stuck` until air-dqw deleted it, and each time the probe went silent on a registry
-    // change that was not a regression. There is now no `Removal::Unstated` row left, which is
-    // the goal, so a probe that needs one would be a probe that needs a defect to exist.
+    // `stuck` until air-byw gave `stuck` one (air-dqw's deletion was reverted on that finding).
+    // Each time, the probe went silent on a registry change that was not a regression. There is
+    // now no `Removal::Unstated` row left, which is the goal, so a probe that needs one would be
+    // a probe that needs a defect to exist.
+    //
+    // Two lanes reached this same fix independently within the hour; this is main's version,
+    // which asserts the whole verdict tuple rather than only the defect string.
     let red = removal_verdict(Removal::Unstated, 0) == ("none", None, Some(NO_CONDITION))
         && a.rows.iter().all(|r| r.defect.is_none());
     // Green: a mechanism that does carry one is not a defect, and the counter works.
