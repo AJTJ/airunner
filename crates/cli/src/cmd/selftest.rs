@@ -25,6 +25,42 @@ use serde_json::Value;
 use crate::cmd::emit;
 use crate::cmd::hook::{handover_gate, is_handover_command};
 
+/// air-682: the edit that neutralises the rule a probe names, declared next to the probe so it
+/// can be RUN. adopter's standard, adopted over ours by owner ruling: a probe is evidence only
+/// once it has been seen failing with its rule neutralised, and the evidence is a revert, not an
+/// intention. `air selftest` claiming "a probe that matches nothing prints red" is weaker,
+/// because a vacuous probe also prints red for reasons of its own.
+///
+/// Three ways a revert demonstration misleads, all three of which `prove` reports separately:
+///
+/// 1. **A mutant that does not build.** adopter's first run scored 15 of 15 red; two were a
+///    syntax error, so the guard crashed and both probes went red for nothing. A mutation that
+///    fails to compile is reported BROKEN and never counted as evidence.
+/// 2. **A blanket mutant** (always-allow, always-deny) shows a probe is wired to the guard at
+///    all, not that it tests the right rule; a vacuous probe behaves exactly like a real one
+///    under it. So `from` names one branch, never a whole function or a top-level flag.
+/// 3. **A mutation that reaches the WRONG PATH.** Theirs hit an exception branch while the case
+///    under test reached a parse branch two lines below. It compiled, ran, neutralised nothing,
+///    and the probe was reported vacuous. "That is the costliest of the three, because the
+///    response to it is to go and fix a good probe." The guard against it is `also_red`: naming
+///    every probe expected to fall with this rule forces the author to know what the mutation
+///    actually reaches, and an unexpected survivor or casualty is reported rather than averaged
+///    away.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Mutation {
+    /// Repo-relative path of the file that OWNS the rule.
+    pub file: &'static str,
+    /// Exact text to replace. Must occur exactly once, or the mutation is BROKEN: an ambiguous
+    /// or missing anchor is the wrong-path failure waiting to happen.
+    pub from: &'static str,
+    /// The neutralised form.
+    pub to: &'static str,
+    /// Other probes that legitimately share this rule and are expected to go red with it. Every
+    /// probe not named here must stay GREEN, which is the assertion that separates a mutation
+    /// reaching one branch from one that took out the whole guard.
+    pub also_red: &'static [&'static str],
+}
+
 #[derive(Debug, Serialize)]
 pub struct Probe {
     pub name: &'static str,
@@ -38,8 +74,452 @@ impl Probe {
     }
 }
 
+/// The declared mutations, keyed by probe name. Kept beside the probes rather than on `Probe`
+/// so that adding one does not touch every probe literal in a file six lanes edit at once.
+///
+/// A key that matches no probe is a HARD FAILURE, never skipped: that is the case where a probe
+/// was renamed and its evidence quietly stopped applying to anything.
+///
+/// air-682 says to start with the hand-over gate, since that is Air's one refusal. Each anchor
+/// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
+/// whole guard.
+const MUTATIONS: &[(&str, Mutation)] = &[
+    (
+        "gate: verify-green-at-head",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "if !f.green_at_head {",
+            to: "if false {",
+            // The enforced-gate and close-with-proof probes drive the same refusal end to end.
+            also_red: &[
+                "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
+                "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
+            ],
+        },
+    ),
+    (
+        "gate: main-merged",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "if !f.main_is_ancestor {",
+            to: "if false {",
+            also_red: &[],
+        },
+    ),
+    (
+        "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
+        Mutation {
+            // Invert the blank-task test: a real task stops becoming the prompt, and a blank one
+            // starts. One branch, and the one this probe is about (air-7q5).
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "if let Some(t) = task.filter(|t| !t.trim().is_empty()) {",
+            to: "if let Some(t) = task.filter(|t| t.trim().is_empty()) {",
+            also_red: &["launch: --task reaches claude as the prompt"],
+        },
+    ),
+    (
+        "gate: claim required for the named bead",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "if !f.bead_claimed_by_worker {",
+            to: "if false {",
+            also_red: &[],
+        },
+    ),
+    (
+        "gate: a digest counts when it declares its bead; a different bead, a touch, or a name match do not",
+        Mutation {
+            // Not `fn declared_bead(` -> a rename: that does not build, and a mutation that
+            // does not build is failure mode 1, full marks and no information. This neutralises
+            // the ONE rule the probe's red case names — that a digest declaring a different
+            // bead is not this bead's digest — and leaves the cutoff and mtime paths alone.
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "Some(b) => beads.contains(&b),",
+            to: "Some(_) => true,",
+            also_red: &[],
+        },
+    ),
+    (
+        "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        Mutation {
+            // The rule: an in-flight row whose process is gone is not a run in flight. Keep
+            // the shape and neutralise only the liveness test, so the mutation cannot pass by
+            // taking out the whole prune (air-4cr).
+            file: "crates/ledger/src/verify.rs",
+            from: "if f.pid.is_none_or(&alive) {",
+            to: "if f.pid.is_none_or(|_| true) {",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: a landing says in-flight from the merge until it reports, a killed one says so with the rewind sha, and reporting retires the row",
+        Mutation {
+            // The rule: `in-flight` is the state that means "merged, outcome not yet
+            // recorded". One branch, and not the near-identical test in `landed_open` two
+            // functions below, which is a different rule about which landing decides a bead
+            // (air-bxe).
+            file: "crates/ledger/src/landings.rs",
+            from: ".filter(|l| l.result == \"in-flight\")",
+            to: ".filter(|l| l.result == \"landed\")",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: the role is where the process is, so --repo at the main checkout does not make a worker the coordinator",
+        Mutation {
+            // Exactly the pre-fix behaviour: decide on what `--repo` resolved to instead of on
+            // where the process runs. This is the defect air-29a found, so the probe is
+            // evidence only if it falls to it. `land: worker, dirty main, …` legitimately
+            // stays GREEN — its two cases have `where_i_am` and `where_i_pointed` agreeing, so
+            // this mutation does not reach them.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "if super::hook::role_for(here) == \"coordinator\" {",
+            to: "if super::hook::role_for(c.where_i_pointed) == \"coordinator\" {",
+            also_red: &[],
+        },
+    ),
+    (
+        "landable: a branch green with main merged pushes once per head, not while it sits",
+        Mutation {
+            // The rule: what makes a branch landable is its HEAD, so nothing else may enter
+            // the fingerprint. Putting the bead count back in is the exact regression — the
+            // branch re-pushes when a bead joins, which is not a change in whether it can land
+            // (air-03w, air-s7c).
+            file: "crates/cli/src/cmd/status.rs",
+            from: "fingerprint: format!(\"{worker}@{head}\"),",
+            to: "fingerprint: format!(\"{worker}@{head}/{}\", beads.len()),",
+            also_red: &[],
+        },
+    ),
+];
+
 pub fn run(json: bool) -> i32 {
-    let probes = vec![
+    let probes = all_probes();
+    let all_ok = probes.iter().all(Probe::ok);
+    emit(json, &probes, || {
+        let mut s = String::new();
+        for p in &probes {
+            s.push_str(&format!(
+                "{} {}: red {} / green {}\n",
+                if p.ok() { "PASS" } else { "FAIL" },
+                p.name,
+                if p.red_fires { "fires" } else { "SILENT" },
+                if p.green_passes { "passes" } else { "BLOCKED" },
+            ));
+        }
+        // air-682: the proven count rides on the ordinary run, so a probe added without a
+        // declared mutation is visible without anyone remembering to look for it.
+        s.push_str(&format!(
+            "{} probes, {} with a declared mutation (`air selftest --prove`)",
+            probes.len(),
+            MUTATIONS.len()
+        ));
+        s
+    });
+    if all_ok { 0 } else { 1 }
+}
+
+/// What running one declared mutation established. `Broken` is deliberately NOT a failure of the
+/// probe: a mutation that cannot be applied or cannot be built has demonstrated nothing about the
+/// probe either way, and reporting it as evidence is adopter's failure mode 1.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+enum Proof {
+    /// The probe went red with its rule neutralised, and every probe not named in `also_red`
+    /// stayed green.
+    Proven,
+    /// The mutation applied and built, and the probe stayed GREEN. The probe is vacuous, or the
+    /// mutation reached the wrong path.
+    Vacuous { detail: String },
+    /// The mutation could not be applied or did not build. No information about the probe.
+    Broken { detail: String },
+}
+
+#[derive(Debug, Serialize)]
+struct ProofRow {
+    probe: &'static str,
+    #[serde(flatten)]
+    proof: Proof,
+}
+
+/// air-682: run every declared mutation and report any probe that stays green.
+///
+/// Edits tracked files, so it refuses a dirty tree rather than risk restoring the wrong content,
+/// and restores with `git checkout --` after each mutation whatever the outcome.
+pub fn prove(repo: &Path, json: bool) -> i32 {
+    let baseline = all_probes();
+    let names: Vec<&str> = baseline.iter().map(|p| p.name).collect();
+    let mut rows: Vec<ProofRow> = Vec::new();
+
+    // A mutation naming no probe is a hard failure, never a skip: that is exactly the case
+    // where a probe was renamed and its evidence silently stopped applying to anything.
+    for (probe, m) in MUTATIONS {
+        if !names.contains(probe) {
+            rows.push(ProofRow {
+                probe,
+                proof: Proof::Broken {
+                    detail:
+                        "no probe by this name; it was renamed and its mutation was left behind"
+                            .to_string(),
+                },
+            });
+            continue;
+        }
+        for other in m.also_red {
+            if !names.contains(other) {
+                rows.push(ProofRow {
+                    probe,
+                    proof: Proof::Broken {
+                        detail: format!("also_red names no probe: {other}"),
+                    },
+                });
+            }
+        }
+    }
+    if rows.iter().any(|r| matches!(r.proof, Proof::Broken { .. })) {
+        return report(json, &rows, baseline.len());
+    }
+
+    if !git_clean(repo) {
+        eprintln!(
+            "air: selftest --prove edits tracked files and needs a clean tree; commit or set your work aside first"
+        );
+        return 2;
+    }
+
+    for (probe, m) in MUTATIONS {
+        let path = repo.join(m.file);
+        let Ok(original) = std::fs::read_to_string(&path) else {
+            rows.push(ProofRow {
+                probe,
+                proof: Proof::Broken {
+                    detail: format!("cannot read {}", m.file),
+                },
+            });
+            continue;
+        };
+        // Exactly once: an anchor that matches twice mutates a branch nobody chose, which is
+        // the wrong-path failure with extra steps.
+        let hits = original.matches(m.from).count();
+        if hits != 1 {
+            rows.push(ProofRow {
+                probe,
+                proof: Proof::Broken {
+                    detail: format!(
+                        "anchor occurs {hits} times in {}, expected exactly 1",
+                        m.file
+                    ),
+                },
+            });
+            continue;
+        }
+        if std::fs::write(&path, original.replacen(m.from, m.to, 1)).is_err() {
+            rows.push(ProofRow {
+                probe,
+                proof: Proof::Broken {
+                    detail: format!("cannot write {}", m.file),
+                },
+            });
+            continue;
+        }
+
+        let proof = match build_and_run(repo) {
+            Err(detail) => Proof::Broken { detail },
+            Ok(mutated) => judge(probe, m, &mutated),
+        };
+        restore(repo, m.file);
+        rows.push(ProofRow { probe, proof });
+    }
+    report(json, &rows, baseline.len())
+}
+
+fn report(json: bool, rows: &[ProofRow], total: usize) -> i32 {
+    let proven = rows.iter().filter(|r| r.proof == Proof::Proven).count();
+    let broken = rows
+        .iter()
+        .filter(|r| matches!(r.proof, Proof::Broken { .. }))
+        .count();
+    let vacuous = rows
+        .iter()
+        .filter(|r| matches!(r.proof, Proof::Vacuous { .. }))
+        .count();
+    emit(json, &rows, || {
+        let mut s = String::new();
+        for r in rows {
+            match &r.proof {
+                Proof::Proven => s.push_str(&format!("PROVEN  {}\n", r.probe)),
+                Proof::Vacuous { detail } => {
+                    s.push_str(&format!("VACUOUS {}\n        {detail}\n", r.probe));
+                }
+                Proof::Broken { detail } => {
+                    s.push_str(&format!("BROKEN  {}\n        {detail}\n", r.probe));
+                }
+            }
+        }
+        s.push_str(&format!(
+            "{proven} proven, {vacuous} vacuous, {broken} broken mutation(s); \
+             {} of {total} probes declare one",
+            MUTATIONS.len()
+        ));
+        s
+    });
+    // A broken mutation is not evidence and not a pass: it needs fixing before the suite means
+    // anything. A vacuous probe is the finding this command exists to surface.
+    if vacuous == 0 && broken == 0 { 0 } else { 1 }
+}
+
+/// Did the mutation put the named probe red and leave the rest alone?
+fn judge(probe: &str, m: &Mutation, mutated: &[Probe]) -> Proof {
+    let Some(target) = mutated.iter().find(|p| p.name == probe) else {
+        return Proof::Broken {
+            detail: "probe vanished from the mutated build".to_string(),
+        };
+    };
+    if target.ok() {
+        return Proof::Vacuous {
+            detail: "probe stayed green with its rule neutralised: it is vacuous, or the mutation reached the wrong path".to_string(),
+        };
+    }
+    // Everything not named must have survived. An unexpected casualty means the mutation took
+    // out more than the branch under test, which is how a blanket mutant passes for a real one.
+    let collateral: Vec<&str> = mutated
+        .iter()
+        .filter(|p| !p.ok() && p.name != probe && !m.also_red.contains(&p.name))
+        .map(|p| p.name)
+        .collect();
+    if !collateral.is_empty() {
+        return Proof::Vacuous {
+            detail: format!(
+                "probe went red, but so did {} probe(s) not declared in also_red, so the mutation is wider than the rule: {}",
+                collateral.len(),
+                collateral.join("; ")
+            ),
+        };
+    }
+    let survived: Vec<&&str> = m
+        .also_red
+        .iter()
+        .filter(|n| mutated.iter().any(|p| p.name == **n && p.ok()))
+        .collect();
+    if !survived.is_empty() {
+        return Proof::Vacuous {
+            detail: format!(
+                "also_red named {} probe(s) that stayed green",
+                survived.len()
+            ),
+        };
+    }
+    Proof::Proven
+}
+
+/// Build the mutated tree and run its own `selftest --json`. `Err` is a BROKEN mutation: a
+/// mutant that does not compile scores red for nothing.
+fn build_and_run(repo: &Path) -> Result<Vec<Probe>, String> {
+    let build = Command::new("cargo")
+        .args(["build", "-q", "-p", "air"])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("cargo build did not run: {e}"))?;
+    if !build.status.success() {
+        let err = String::from_utf8_lossy(&build.stderr);
+        return Err(format!(
+            "mutant does not build, so it is not evidence: {}",
+            err.lines()
+                .find(|l| l.contains("error"))
+                .unwrap_or("")
+                .trim()
+        ));
+    }
+    let out = Command::new("cargo")
+        .args(["run", "-q", "-p", "air", "--", "selftest", "--json"])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("mutated selftest did not run: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<Vec<ProbeOut>>(&text)
+        .map(|v| {
+            v.into_iter()
+                .map(|p| Probe {
+                    name: Box::leak(p.name.into_boxed_str()),
+                    red_fires: p.red_fires,
+                    green_passes: p.green_passes,
+                })
+                .collect()
+        })
+        .map_err(|e| format!("could not read the mutated selftest output: {e}"))
+}
+
+#[derive(serde::Deserialize)]
+struct ProbeOut {
+    name: String,
+    red_fires: bool,
+    green_passes: bool,
+}
+
+fn git_clean(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(repo)
+        .output()
+        .map(|o| o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+fn restore(repo: &Path, file: &str) {
+    let _ = Command::new("git")
+        .args(["checkout", "--", file])
+        .current_dir(repo)
+        .output();
+}
+
+/// air-7q5: starting a session must not start work. The owner drew the line at launch time, and
+/// the mechanism that holds it is that a worker launched with no `--task` gets NO PROMPT: the
+/// roles prose reaches it through `--append-system-prompt-file`, which is context rather than a
+/// turn, so an untriggered session never runs. Red: with a task, the task is the prompt and the
+/// session is triggered. Green: with no task, argv opens on a flag and carries no positional at
+/// all, so there is nothing for claude to answer.
+fn probe_no_task_no_prompt() -> Probe {
+    use crate::cmd::launch::{task_is_prompt, worker_argv_tmux};
+    let base = vec![
+        "--append-system-prompt-file".to_string(),
+        "/r/.air/roles.md".to_string(),
+        "--disallowed-tools".to_string(),
+        "Bash(git push *)".to_string(),
+    ];
+    let task = "work air-1";
+    let with = worker_argv_tmux(base.clone(), false, None, Some(task));
+    let without = worker_argv_tmux(base.clone(), false, None, None);
+    // A blank task is not a task: it must not become an empty prompt either.
+    let blank = worker_argv_tmux(base.clone(), false, None, Some("   "));
+    Probe {
+        name: "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
+        red_fires: with.first().is_some_and(|a| a == task) && task_is_prompt(&with, task),
+        green_passes: without == base
+            && blank == base
+            && without.first().is_some_and(|a| a.starts_with('-')),
+    }
+}
+
+/// air-uae: two lease stores that disagree deny work while reporting success. adopter's
+/// `make lease-take` wrote Air's ledger and their guard read `ad-leases/`, so `make api` was
+/// refused naming the command that had just succeeded. Neither side said where it was looking.
+/// Red: `air lease status` names its own store, with the path, on every run. Green: it names the
+/// directory it was actually given rather than a fixed string, so a target repo comparing it
+/// against its guard's path gets that repo's answer.
+fn probe_lease_store_is_named() -> Probe {
+    use crate::cmd::lease::store_line;
+    let line = store_line(Path::new("/r/.air"));
+    Probe {
+        name: "lease: `air lease status` names the store it writes, so a second one is visible",
+        red_fires: line.contains("lease store:") && line.contains("/r/.air/ledger.db"),
+        green_passes: !store_line(Path::new("/other/.air")).contains("/r/.air"),
+    }
+}
+
+fn all_probes() -> Vec<Probe> {
+    vec![
+        probe_lease_store_is_named(),
+        probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
         probe_handover_matcher(),
@@ -68,6 +548,9 @@ pub fn run(json: bool) -> i32 {
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
         probe_gc_keeps_what_it_must(),
+        probe_peer_warning_effect_is_readable(),
+        probe_poll_tick_pays_for_bd_rarely(),
+        probe_registry_traces_are_unambiguous(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -83,23 +566,7 @@ pub fn run(json: bool) -> i32 {
         probe_landing_state(),
         probe_land_role_is_where_you_are(),
         probe_landable_pushes_once_per_branch(),
-    ];
-    let all_ok = probes.iter().all(Probe::ok);
-    emit(json, &probes, || {
-        let mut s = String::new();
-        for p in &probes {
-            s.push_str(&format!(
-                "{} {}: red {} / green {}\n",
-                if p.ok() { "PASS" } else { "FAIL" },
-                p.name,
-                if p.red_fires { "fires" } else { "SILENT" },
-                if p.green_passes { "passes" } else { "BLOCKED" },
-            ));
-        }
-        s.push_str(&format!("{} probes", probes.len()));
-        s
-    });
-    if all_ok { 0 } else { 1 }
+    ]
 }
 
 /// air-s7c: `review-waiting` and `owner-decision-waiting` became change-only pushes. Red: the
@@ -305,6 +772,139 @@ fn probe_gc_keeps_what_it_must() -> Probe {
     Probe {
         name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
         red_fires: red && live,
+        green_passes: green,
+    }
+}
+
+/// air-1ra: whether a peer warning changed what the worker did is readable from the record.
+///
+/// `peer-warning` had 33 firings and no demonstrated effect in either direction, and the
+/// absence of recorded harm was partly because the effect was not recorded. It was: a `warn`
+/// line carries `session_id` and `path`, and so does every `journaled` line. No new recording
+/// was added for this.
+///
+/// Red: warn, then the session edits that file twice more, and it reads IGNORED. Green: warn,
+/// then only the edit already in flight, and it reads heeded — and edits by ANOTHER session,
+/// or to another file, do not count against it, which is the join being a join.
+fn probe_peer_warning_effect_is_readable() -> Probe {
+    use crate::cmd::audit::peer_effect;
+
+    let w = |at: &str, sid: &str, path: &str| {
+        (
+            at.to_string(),
+            "alpha".to_string(),
+            sid.to_string(),
+            path.to_string(),
+        )
+    };
+    let e = |at: &str, sid: &str, path: &str| (at.to_string(), sid.to_string(), path.to_string());
+
+    let warns = [w("10:00", "s1", "a.rs"), w("10:00", "s2", "b.rs")];
+    let edits = [
+        // s1 was warned about a.rs and kept going: the in-flight edit plus two more.
+        e("10:01", "s1", "a.rs"),
+        e("10:02", "s1", "a.rs"),
+        e("10:03", "s1", "a.rs"),
+        // s2 was warned about b.rs and stopped after the edit already in flight.
+        e("10:01", "s2", "b.rs"),
+        // Noise that must not count: another session in the same file, the same session in
+        // another file, and an edit BEFORE the warning.
+        e("10:05", "s9", "b.rs"),
+        e("10:05", "s2", "c.rs"),
+        e("09:00", "s2", "b.rs"),
+    ];
+
+    let p = peer_effect(&warns, &edits);
+    let row = |i: usize| p.warned.get(i);
+    let red = p.warnings == 2
+        && p.ignored == 1
+        && row(0).is_some_and(|r| r.edits_after == 3 && !r.heeded);
+    let green = p.heeded == 1
+        && row(1).is_some_and(|r| r.edits_after == 1 && r.heeded)
+        // Never guessed at: a conflict count nobody records is reported as unrecorded, not 0.
+        && p.conflicts_in_warned_files.is_none();
+    Probe {
+        name: "audit: a warned session that keeps editing the file reads IGNORED; one that stops reads heeded",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-cmn: an ordinary poll tick answers from the cache and never shells out to bd.
+///
+/// The poll ran a full `gather` every ~8 s and every one called bd — `in_progress`, then `show`
+/// once per open claim, then `awaiting_review`, then `ready`: about 5,700 bd calls and 2.3
+/// hours a day waiting on bd, to deliver ~45 pushes (0007 §3). air-djl proposed deleting the
+/// thread over the event volume, which air-5uz had already removed; the cost was here.
+///
+/// This asserts the DECISION, not a process count, because the fallback it arms is the
+/// already-tested slow-bd path: `cache_is_fresh` says whether this tick pays.
+///
+/// Red: with a cached answer a minute old and a 10-minute window, the tick uses the cache.
+/// Green: an answer older than the window, and an empty cache after a restart, both pay — so
+/// the counts cannot go stale forever and the first tick still fills the cache.
+fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
+    use crate::cmd::status::cache_is_fresh;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let now = "2026-08-29T12:00:00Z";
+
+        // Nothing cached: a restart must pay once rather than answer from nothing.
+        let empty_pays = !cache_is_fresh(&l, now, 10);
+
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:59:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = cache_is_fresh(&l, now, 10);
+
+        // The same value, an hour old: outside the window, so this tick pays.
+        l.bd_cache_put("ready_depth", "21", "2026-08-29T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let green = !cache_is_fresh(&l, now, 10) && empty_pays;
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-8br: no `command / decision` pair is claimed by two mechanisms, and the pairs the audit
+/// treats as bookkeeping are not also claimed as firings.
+///
+/// The registry is the audit's only map of what Air ships. Two rows claiming one trace would
+/// count every firing twice and split it across two removal conditions, and a trace that is
+/// both registered and bookkeeping would be attributed and suppressed at once. Neither is
+/// visible in the output: the numbers would simply be wrong, which is air-5uz's failure shape.
+///
+/// Red: every registered trace is claimed exactly once. Green: no registered trace is also in
+/// the bookkeeping list, and the registry is not empty — a check that passes on nothing is the
+/// anti-pattern this whole command exists against.
+fn probe_registry_traces_are_unambiguous() -> Probe {
+    use crate::cmd::audit::{BOOKKEEPING, registered_traces};
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+
+    let mut all: Vec<String> = Vec::new();
+    for m in MECHANISMS {
+        if let Fires::Decisions(traces) = m.fires {
+            all.extend(traces.iter().map(|(c, d)| format!("{c} / {d}")));
+        }
+    }
+    let distinct = registered_traces();
+    let red = !all.is_empty() && all.len() == distinct.len();
+
+    // A decision word cannot be both a mechanism firing and bookkeeping.
+    let green = !distinct.is_empty()
+        && !all.iter().any(|t| {
+            t.split(" / ")
+                .nth(1)
+                .is_some_and(|d| BOOKKEEPING.contains(&d))
+        });
+    Probe {
+        name: "audit: every registered trace is claimed by exactly one mechanism and none is also bookkeeping",
+        red_fires: red,
         green_passes: green,
     }
 }
