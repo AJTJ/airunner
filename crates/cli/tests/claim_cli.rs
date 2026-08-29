@@ -236,11 +236,15 @@ fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
     let first = v["claimed_at"].as_str().unwrap().to_string();
     assert_eq!(claims(&repo), vec![("fd-9".into(), "main".into(), None)]);
 
-    // A digest written now, after the first claim.
+    // A digest written now, after the first claim, declaring the bead it is about (air-agq).
     std::fs::create_dir_all(repo.join(".claude")).unwrap();
     std::fs::write(repo.join(".claude/air.json"), r#"{"digest_dir":"docs/d"}"#).unwrap();
     std::fs::create_dir_all(repo.join("docs/d")).unwrap();
-    std::fs::write(repo.join("docs/d/2026-main-fd-9.md"), "digest").unwrap();
+    std::fs::write(
+        repo.join("docs/d/2026-main-fd-9.md"),
+        "---\nbead: fd-9\n---\n\ndigest\n",
+    )
+    .unwrap();
 
     // Re-claim: bd already holds it by us; no bd write, the row keeps the first time.
     let (code, out, _) = run(&["--json", "claim", "fd-9"]);
@@ -686,6 +690,8 @@ fn digest_gate_is_configured_per_repo() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
+    // A held claim, so the gate has a bead for a digest to declare (air-agq).
+    assert_eq!(air(&repo, &bd, &["claim", "fd-3"]).0, 0);
     let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
     let v: serde_json::Value = serde_json::from_str(&o).unwrap();
     assert!(
@@ -713,7 +719,11 @@ fn digest_gate_is_configured_per_repo() {
         "{o}"
     );
     std::fs::create_dir_all(repo.join("docs/log.d")).unwrap();
-    std::fs::write(repo.join("docs/log.d/2026-08-21-main-round.md"), "digest").unwrap();
+    std::fs::write(
+        repo.join("docs/log.d/2026-08-21-main-round.md"),
+        "---\nbead: fd-3\n---\n\ndigest\n",
+    )
+    .unwrap();
     let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
     let v: serde_json::Value = serde_json::from_str(&o).unwrap();
     assert!(
@@ -836,14 +846,14 @@ fn owner_queue_lists_green_landings_with_their_commands() {
         ],
     );
 
-    // Claimed, worked, and committed with the bead in the message. That commit is the only
-    // thing attributing this branch to fd-1.
+    // Claimed, worked, and committed with a `Bead:` trailer. That commit is the only thing
+    // attributing this branch to fd-1.
     std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
     assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
     std::fs::write(repo.join("bd.in_progress"), "").unwrap();
     std::fs::write(alpha.join("work.txt"), "w\n").unwrap();
     g(&alpha, &["add", "work.txt"]);
-    g(&alpha, &["commit", "-q", "-m", "feat: the work (fd-1)"]);
+    g(&alpha, &["commit", "-q", "-m", &bead_trailer("fd-1")]);
     let head = g(&alpha, &["rev-parse", "HEAD"]);
 
     // Not green at that head yet: the worker's to fix, so the owner is told nothing.
@@ -908,7 +918,7 @@ fn a_branch_that_merged_main_is_still_landable_without_a_trailer() {
     assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
 
     // The branch point is now newer than the claim. It must still be landable.
-    let (code, out, err) = air(&main, &bd, &["--json", "land", "--all"]);
+    let (code, out, err) = air_env(&main, &bd, &["--json", "land", "--all"], pin);
     assert_eq!(code, 0, "{out}{err}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["ok"], true, "{out}");
@@ -1181,6 +1191,66 @@ fn close_with_proof(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
 /// the message is the fallback, and the fallback expires: see [`air_env`].
 fn bead_trailer(bead: &str) -> String {
     format!("feat: the work ({bead})\n\nBead: {bead}\n")
+}
+
+/// air-24e, the guard that would have caught this on the day rather than six days later.
+///
+/// Both fallbacks are pinned DEAD — every artefact this test writes is after the cutoff — and
+/// the ordinary claim / commit / green / close / land flow must still work. On 2026-08-22 this
+/// would have failed while the suite was green, which is the whole point: it makes the
+/// wall clock irrelevant to the suite's verdict instead of waiting for it to expire.
+///
+/// The pins come from the rules' own env overrides, so when `FALLBACK_BEFORE` and
+/// `FRONTMATTER_SINCE` are deleted, the variables go and this test goes with them. A pin
+/// written as a second copy of the date would outlive the rule and become the next stale
+/// number, which is the defect one level up from the one being fixed here.
+#[test]
+fn nothing_in_this_suite_leans_on_an_expired_fallback() {
+    let dead: &[(&str, &str)] = &[
+        ("AIR_BEAD_TRAILER_SINCE", "1970-01-01T00:00:00Z"),
+        ("AIR_DIGEST_FRONTMATTER_SINCE", "1970-01-01T00:00:00Z"),
+    ];
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+
+    // The digest gate on, so both dead fallbacks are in play at once.
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "digest_dir": "docs/d"}"#,
+    )
+    .unwrap();
+    // Committed: `air land` refuses a dirty main, and rightly.
+    git(&main, &["add", ".claude/air.json"]);
+    git(&main, &["commit", "-q", "-m", "chore: digest gate on"]);
+    git(&alpha, &["merge", "--no-edit", "-q", "main"]);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "fd-1"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    std::fs::create_dir_all(alpha.join("docs/d")).unwrap();
+    std::fs::write(
+        alpha.join("docs/d/2026-08-29-alpha-fd-1.md"),
+        "---\nbead: fd-1\n---\n\ndigest\n",
+    )
+    .unwrap();
+    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
+    git(&alpha, &["add", "done.txt", "docs/d"]);
+    git(&alpha, &["commit", "-q", "-m", &bead_trailer("fd-1")]);
+    assert_eq!(
+        air_env(&alpha, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+
+    // The gate passes with no fallback left to lean on: the digest declares its bead.
+    let (_, o, _) = air_env(&alpha, &bd, &["--json", "handover"], dead);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert_eq!(v["pass"], true, "{o}");
+
+    // And the branch is attributed by its trailer, not by prose.
+    let (code, out, err) = air_env(&main, &bd, &["--json", "land", "--all"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["landed"][0], "fd-1", "{out}");
 }
 
 /// The `## Acceptance Criteria` bd returns for every listed bead, as a JSON string literal
