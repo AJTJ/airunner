@@ -113,6 +113,67 @@ Event stream: `.air/events/YYYY-MM-DD.ndjson`, one line per hook invocation and 
 stamped with `bd_ms`/`bd_calls` when that command shelled out to bd. **About 3 MB per day** and
 nothing collects it; `gc` is still on the roadmap.
 
+### Daily growth, before and after air-5uz (measured 2026-08-29)
+
+Counted over every recorded day in `.air/events`, then replayed through the change-only rule the
+same way the code now applies it: a `status.attention` line is written when the condition SET
+differs from the last one written, and an empty set clears the emission row.
+
+| day | lines | bytes | of which `status.attention` | sets that actually changed | lines after | bytes after |
+|---|---|---|---|---|---|---|
+| 2026-08-22 | 8,691 | 3,084,158 | 2,912 | 60 | 5,839 | 1,648,176 |
+| 2026-08-23 | 7,624 | 3,417,881 | 7,573 | 1 | 52 | 12,562 |
+| 2026-08-24 | 6,176 | 2,708,804 | 6,015 | 1 | 162 | 38,965 |
+| 2026-08-25 | 8,242 | 3,588,236 | 7,667 | 1 | 576 | 139,109 |
+| 2026-08-26 | 2,279 | 1,025,385 | 2,276 | 1 | 4 | 1,160 |
+| 2026-08-29 | 1,165 | 364,939 | 441 | 1 | 725 | 204,110 |
+
+**Before**: 2.77 MB per active day (13.83 MB over the five days of 08-22 to 08-26).
+**After**: 0.37 MB per active day (1.84 MB over the same five). 87% less, and 78% fewer lines
+across the whole stream.
+
+The row worth reading twice is 2026-08-23: **7,573 lines carrying one distinct condition set all
+day**, 3.42 MB to say one thing. That is what `air audit` was counting as firings, and the reason
+`owner-decision-waiting` read as 1,685 against a single push. 2026-08-22 is the only day whose
+residue is large, and it is large because that day's remaining lines are hook traffic, which this
+change does not touch.
+
+**`air gc` took its window from the after figure** (air-i7s, 2026-08-29): 90 days, about 33 MB
+at 0.37 MB per active day. The same window against the pre-fix 2.77 MB would have been 250 MB.
+`air doctor` states the retention and what is collectable under it.
+
+### What the channel poll costs, re-measured after air-5uz (2026-08-29, for air-djl)
+
+air-5uz cut what the poll **writes**. It did not touch what the poll **runs**: every tick still
+calls `status::gather`, which shells out to bd. Both halves are countable from the log, because
+each line carries `inputs.duration_ms` and the process-cumulative `bd_calls`/`bd_ms`.
+
+| day | poll ticks | pollers | median gap | median `gather` | bd calls | time waiting on bd |
+|---|---|---|---|---|---|---|
+| 2026-08-22 | 2,912 | 5 | 7.6 s | 3,832 ms | 704 | 0.32 h |
+| 2026-08-23 | 7,573 | 3 | 8.2 s | 4,013 ms | 5,243 | 2.23 h |
+| 2026-08-24 | 6,015 | 3 | 8.8 s | 3,852 ms | 2,011 | 0.78 h |
+| 2026-08-25 | 7,667 | 3 | 8.6 s | 3,895 ms | 5,674 | 2.26 h |
+| 2026-08-26 | 2,276 | 3 | 7.4 s | 3,982 ms | 1,572 | 0.66 h |
+
+**The stated grounds for deleting the poll are gone, and a larger cost is in their place.**
+0008 item 3 says the poll "writes about 3 MB of events a day to convey 45 pushes". After air-5uz
+it writes 1 to 60 lines a day. What it actually costs is **~5,700 bd calls and ~2.3 hours of
+waiting on bd per day**, at a median `gather` of 3.9 s, running around the clock whether or not
+anyone is watching.
+
+Where the bd calls come from: `gather` calls `in_progress`, then `show` once **per open claim**,
+then `awaiting_review`, then `ready` (`status.rs:837-967`). Only one attention condition needs
+any of it — `idle-without-claim` reads `ready_depth` — plus `review-waiting`, which is derived
+from bd's `awaiting_review` and is dead in this repo since close-with-proof. Everything else is
+ledger and git.
+
+**Method note, because the number that is easy to get here is wrong.** `bd_calls` and `bd_ms` on
+an event line are `air_bd::stats::snapshot()`, which is cumulative for the life of the process
+(`crates/bd/src/lib.rs:52-64`). They must be differenced per (day, poller), never summed.
+Summing them gives 12.4 million bd calls for 2026-08-25, which is nonsense and reads exactly
+like a measurement. This is air-21c again, inside the bead that exists to fix air-21c.
+
 ## 4. Hook events (9)
 
 Installed into `.claude/settings.json` as `air hook` with a 5 s timeout, merged idempotently:
@@ -475,6 +536,12 @@ So the coordinator is not being spammed. What is true: the event stream carries 
 re-evaluations, nothing collects it, and `air audit`'s own counts are inflated by it to the point
 of being misleading about human-visible behaviour. The corrected recommendation in §10.2 is
 narrower than the one it replaces.
+
+**Fixed 2026-08-29 (air-5uz).** The poll now writes that line on change only, and the audit reports
+`evaluated` and `pushed` as separate columns because they are separate facts. A push is recorded
+where the hooks record theirs, in `hook_emissions`, and leaves a `channel.push` event line, so the
+push count comes from the push rather than from a re-reading of the evaluation. Growth before and
+after is in §3.
 
 This is the failure the `do-less` skill's raw-record rule exists for (air-21c): a derived number
 reads exactly like an observed one. It was caught here only because §9's probe list was read

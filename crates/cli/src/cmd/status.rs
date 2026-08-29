@@ -745,9 +745,19 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         for_minutes: age,
                         fingerprint: String::new(),
                     }),
+                    // "prompt them" needs somebody to prompt. `gather` already asks the OS
+                    // whether the session's process is alive; the condition never read the
+                    // answer, so the two longest-lived rows in this ledger were dead sessions
+                    // held open for 4 885 minutes each ("idle 4885 min, 2 beads ready; prompt
+                    // them", conditions 2026-08-22T21:50 -> 2026-08-29T15:54). A dead session
+                    // holding a claim still surfaces as `idle-with-claim`, which is air-s7c's
+                    // point and is untouched here: there the claim is what needs a person.
+                    // Removal: when a dead session is pruned on the pid alone, this is dead
+                    // code and goes with it.
                     "idle"
                         if !has_claim
                             && w.role == "worker"
+                            && sess.pid_alive != Some(false)
                             && s.ready_depth.is_some_and(|n| n > 0)
                             && age >= t.idle_noclaim_min =>
                     {
@@ -1241,8 +1251,31 @@ fn bd_try<T>(
     }
 }
 
+/// What has to change before the event log says the condition set again: the set itself,
+/// each entry with its own value. Age is deliberately not in it — keying on "oldest 40 min"
+/// then "oldest 50 min" rebuilds the repeat under a new name (air-s7c).
+pub fn conditions_fingerprint(att: &[Attention]) -> String {
+    let mut parts: Vec<String> = att
+        .iter()
+        .map(|a| format!("{}:{}:{}", a.kind, a.worker, a.fingerprint))
+        .collect();
+    parts.sort();
+    parts.join("|")
+}
+
 /// Conditions as rows (first-seen/cleared) and one event line that names every kind and
 /// worker, plus the queue depth (plan 0006 C1, C6). Shared by the CLI and the channel poll.
+///
+/// The poll path writes that line **on change only** (air-5uz). It evaluates every few
+/// seconds, so on 2026-08-25 it wrote 7,667 of the day's 8,242 event lines, and `air audit`
+/// read the total as firings: `owner-decision-waiting` showed 1,685 against one push all day,
+/// and a deletion was nearly proposed on that number. Nothing is lost by the silence — the
+/// `conditions` table already carries first-seen, last-seen and cleared for every condition,
+/// which is where a duration query belongs. The gate is `hook_emissions`, the same one the
+/// Stop and peer hooks use for "say it once".
+///
+/// A person running `air status` still gets one line per invocation: that path is one line a
+/// day, not 1,728, and an invocation is itself the fact being recorded.
 pub fn record_and_log(
     ledger: &air_ledger::Ledger,
     worker: &str,
@@ -1261,6 +1294,20 @@ pub fn record_and_log(
         .iter()
         .map(|a| format!("{}:{}", a.kind, a.worker))
         .collect();
+    // An unchanged set has nothing left to say. An empty fingerprint (no conditions) clears
+    // the row, so the next occurrence speaks again.
+    if attention_only
+        && !ledger
+            .emit_if_changed(
+                worker,
+                "status.conditions",
+                &conditions_fingerprint(att),
+                &snap.at,
+            )
+            .unwrap_or(true)
+    {
+        return;
+    }
     log_event(
         ledger,
         worker,
@@ -1791,6 +1838,33 @@ mod tests {
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
         s.ready_depth = None;
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
+    }
+
+    /// air-d10. A dead session is not an idle worker: there is nobody to prompt, and the two
+    /// longest-lived rows in this repo's ledger were exactly this, open 4 885 minutes each.
+    #[test]
+    fn idle_without_claim_is_quiet_when_the_session_process_is_gone() {
+        let mk = |alive: Option<bool>| {
+            let mut w = worker("w", Some("idle"), T_30, vec![], Some(true));
+            let sess = w.session.as_mut().unwrap();
+            sess.pid = Some(1);
+            sess.pid_alive = alive;
+            Snapshot {
+                workers: vec![w],
+                ready_depth: Some(5),
+                ..Default::default()
+            }
+        };
+        // Alive, and unknown (no pid exported): both still fire.
+        for alive in [Some(true), None] {
+            let att = attention(&mk(alive), NOW, Thresholds::default());
+            assert_eq!(
+                att.iter().map(|a| a.kind).collect::<Vec<_>>(),
+                vec!["idle-without-claim"],
+                "{alive:?}"
+            );
+        }
+        assert!(attention(&mk(Some(false)), NOW, Thresholds::default()).is_empty());
     }
 
     #[test]

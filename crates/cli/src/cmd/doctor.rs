@@ -49,15 +49,96 @@ pub fn bd_check(repo: &Path) -> BdCheck {
     }
 }
 
+/// A rule of Air's whose behaviour changes on a date, and whether that date has passed.
+///
+/// Two rules replaced a guess with a declaration and let the old artefacts age out
+/// ([`crate::cmd::attribution::FALLBACK_BEFORE`],
+/// [`crate::cmd::handover::FRONTMATTER_SINCE`]). Both dates passed on 2026-08-23 and nothing
+/// said so: seven tests in `claim_cli.rs` had been written inside the fallback window and
+/// silently fell outside it, main went red, and it stayed red for six days because a cutoff
+/// passing is not an event anything watches (air-24e).
+///
+/// This is a REPORT, never a refusal: a passed cutoff is not a fault, it is a fallback that is
+/// now dead and can be deleted along with whatever leans on it. Removal: when both fallbacks
+/// are gone and no dated rule is left, this goes with them.
+#[derive(Debug, Serialize)]
+pub struct DatedRule {
+    pub name: &'static str,
+    pub date: &'static str,
+    pub what: &'static str,
+    pub expired: bool,
+}
+
+/// The dated rules, read from the constants themselves rather than copied (`anti-brittleness`:
+/// a probe reads a rule's number from the rule).
+pub fn dated_rules(now: jiff::Timestamp) -> Vec<DatedRule> {
+    let mk = |name, date: &'static str, what| DatedRule {
+        name,
+        date,
+        what,
+        expired: date.parse::<jiff::Timestamp>().is_ok_and(|t| now >= t),
+    };
+    vec![
+        mk(
+            "attribution::FALLBACK_BEFORE",
+            crate::cmd::attribution::FALLBACK_BEFORE,
+            "a commit older than this may have its bead guessed from prose; newer commits need a `Bead:` trailer",
+        ),
+        mk(
+            "handover::FRONTMATTER_SINCE",
+            crate::cmd::handover::FRONTMATTER_SINCE,
+            "a digest older than this may be matched by filename and mtime; newer digests must declare `bead:`",
+        ),
+    ]
+}
+
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub bd: BdCheck,
+    /// Dated rules and whether their cutoff has passed (air-24e).
+    pub dated_rules: Vec<DatedRule>,
     pub air_dir: String,
     pub worker: String,
     pub ledger_bytes: u64,
     pub journal_mode: String,
     pub user_version: i64,
     pub rows: Vec<(String, i64)>,
+    /// The event stream's stated retention and what is collectable under it (air-i7s). Here
+    /// because a retention nobody can read is not a stated one.
+    pub events: crate::cmd::gc::Plan,
+}
+
+/// Row counts for every table the ledger actually has, asked of `sqlite_master` rather than
+/// of a list somebody typed (air-w0e).
+///
+/// The list version reported 7 of the 11 tables at schema v10: `hook_emissions`, `conditions`,
+/// `lease_wants` and `bd_cache` were invisible, which is how the zero-lease finding nearly
+/// went unnoticed. A check that enumerates from a hardcoded list stops covering what it claims
+/// the moment the thing it lists grows, and it does so silently, which is the worse half.
+/// Enumerating means the table the next migration adds appears the day it is added and nobody
+/// has to remember this file exists.
+///
+/// SQLite's own `sqlite_*` tables are left out: they are the engine's, not the ledger's.
+/// Removal: when nothing reads row counts, this goes with the command.
+pub fn table_rows(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
+    let names: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' \
+             AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .map(|t| {
+            // The name came from `sqlite_master`, so it is a table this database has; -1 says
+            // the count itself failed rather than pretending the table is empty.
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM \"{t}\""), [], |r| r.get(0))
+                .unwrap_or(-1);
+            (t, n)
+        })
+        .collect()
 }
 
 pub fn run(repo: &Path, json: bool) -> i32 {
@@ -78,30 +159,26 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         .conn()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(-1);
-    let mut rows = Vec::new();
-    for t in [
-        "verify_runs",
-        "edit_journal",
-        "claims",
-        "sessions",
-        "landings",
-        "captures",
-        "leases",
-    ] {
-        let n: i64 = ledger
-            .conn()
-            .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
-            .unwrap_or(-1);
-        rows.push((t.to_string(), n));
-    }
+    let rows = table_rows(ledger.conn());
     let report = Report {
         bd: bd_check(repo),
+        dated_rules: dated_rules(
+            crate::cmd::now()
+                .parse()
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH),
+        ),
         air_dir: ledger.dir().display().to_string(),
         worker,
         ledger_bytes,
         journal_mode,
         user_version,
         rows,
+        events: crate::cmd::gc::plan(
+            &crate::cmd::gc::event_days(ledger.dir()),
+            &crate::cmd::today(),
+            crate::cmd::gc::KEEP_DAYS,
+            &crate::cmd::gc::referenced_days(ledger.conn()),
+        ),
     };
     emit(json, &report, || {
         let mut s = format!(
@@ -115,6 +192,19 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         for (t, n) in &report.rows {
             s.push_str(&format!("  {t}: {n}\n"));
         }
+        let e = &report.events;
+        s.push_str(&format!(
+            "events: {} day(s), {} bytes; retention {} day(s), {} bytes collectable{}\n",
+            e.days.len(),
+            e.total_bytes,
+            e.keep_days,
+            e.collectable_bytes,
+            if e.collectable_bytes > 0 {
+                "; `air gc` to see what, `air gc --apply` to remove it"
+            } else {
+                ""
+            }
+        ));
         let b = &report.bd;
         s.push_str(&format!(
             "bd: {} (pinned {}): {}\n",
@@ -132,6 +222,19 @@ pub fn run(repo: &Path, json: bool) -> i32 {
                 "bd list --json: FAILED: {e}\n  a refused schema or a removed subcommand breaks every bd-reading gate; fix bd before installing Air\n"
             )),
             _ => {}
+        }
+        for r in &report.dated_rules {
+            if r.expired {
+                s.push_str(&format!(
+                    "dated rule {} ({}): EXPIRED — {}\n  the fallback is dead: delete it and anything still leaning on it\n",
+                    r.name, r.date, r.what
+                ));
+            } else {
+                s.push_str(&format!(
+                    "dated rule {} ({}): active — {}\n",
+                    r.name, r.date, r.what
+                ));
+            }
         }
         s.trim_end().to_string()
     });

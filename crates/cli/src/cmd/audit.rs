@@ -38,13 +38,20 @@ pub struct Row {
     pub what: &'static str,
     pub added: &'static str,
     pub source: &'static str,
-    /// Firings inside the window.
-    pub fires: usize,
-    /// Distinct subjects it fired about (a condition on two beads is two).
+    /// Times the mechanism was **evaluated to hold** inside the window. Not a count of
+    /// anything anyone was told: a condition that holds while the channel polls is
+    /// re-evaluated, and calling that a firing is what made `owner-decision-waiting` read as
+    /// 1,685 against a single push all day (air-5uz).
+    pub evaluations: usize,
+    /// Distinct subjects it held for (a condition on two beads is two).
     pub subjects: usize,
-    /// `fires - subjects`: firings that repeated a subject already reported.
+    /// `evaluations - subjects`: evaluations that repeated a subject already counted.
     pub repeats: usize,
-    /// Last time it fired in ANY recorded day, not just the window. `None` = never recorded.
+    /// Times it was actually **said to someone**: `channel.push` lines for a condition. For a
+    /// decision mechanism every recorded firing is itself the act (a hook that stayed silent
+    /// records a different decision word), so this equals `evaluations` there.
+    pub pushes: usize,
+    /// Last time it held in ANY recorded day, not just the window. `None` = never recorded.
     pub last_fired: Option<String>,
     pub removal: &'static str,
     /// `checkable` when the audit evaluated it; `judgement` when a person must; `none` when
@@ -103,11 +110,13 @@ pub struct Cost {
 /// What one mechanism accumulated over the scan.
 #[derive(Default)]
 struct Acc {
-    /// Firings inside the window.
-    fires: usize,
+    /// Evaluations inside the window.
+    evaluations: usize,
+    /// Pushes inside the window (`channel.push` lines).
+    pushes: usize,
     /// Distinct subjects inside the window.
     subjects: std::collections::BTreeSet<String>,
-    /// Last firing in ANY recorded day, so "never fired" means never.
+    /// Last trace in ANY recorded day, so "never fired" means never.
     last: Option<String>,
 }
 
@@ -308,6 +317,9 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             if in_window && e.decision == "pass" && e.command == "hook.PreToolUse" {
                 closes = closes.saturating_add(1);
             }
+            // A push carries the condition it pushed, so it attributes to the same
+            // mechanism; it must never also be counted as one more evaluation of it.
+            let is_push = e.command == "channel.push";
             let mut attributed = false;
             for (m, a) in MECHANISMS.iter().zip(acc.iter_mut()) {
                 let subs = subjects_in(m, &e);
@@ -318,9 +330,13 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 // `last_fired` spans every recorded day; the counts are the window only.
                 a.last = Some(e.at.clone());
                 if in_window {
-                    a.fires = a.fires.saturating_add(subs.len());
-                    for sub in subs {
-                        a.subjects.insert(sub.to_string());
+                    if is_push {
+                        a.pushes = a.pushes.saturating_add(subs.len());
+                    } else {
+                        a.evaluations = a.evaluations.saturating_add(subs.len());
+                        for sub in subs {
+                            a.subjects.insert(sub.to_string());
+                        }
                     }
                 }
             }
@@ -346,8 +362,15 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         .iter()
         .zip(acc.iter())
         .map(|(m, a)| {
-            let n = a.fires;
+            let n = a.evaluations;
             let subs = a.subjects.len();
+            // A decision mechanism acts when it fires: the hook spoke, the claim was refused.
+            // Suppressed occurrences record a different decision word (`warn-repeat`), so
+            // they never reach this count in the first place.
+            let pushes = match m.fires {
+                Fires::Decisions(_) => n,
+                Fires::Condition(_) => a.pushes,
+            };
             let (removal_kind, met) = match m.removal {
                 Removal::Unstated => ("none", None),
                 Removal::Judgement(_) => ("judgement", None),
@@ -360,9 +383,10 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 what: m.what,
                 added: m.added,
                 source: m.source,
-                fires: n,
+                evaluations: n,
                 subjects: subs,
                 repeats: n.saturating_sub(subs),
+                pushes,
                 last_fired: a.last.clone(),
                 removal: m.removal.text(),
                 removal_kind,
@@ -414,7 +438,9 @@ pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
 /// reconstruction of it.
 pub fn render(a: &Audit) -> String {
     let mut s = format!(
-        "mechanisms: {} registered; window from {} ({} day(s), {} event(s), {} ms)\n",
+        "mechanisms: {} registered; window from {} ({} day(s), {} event(s), {} ms)\n\
+         evaluated = times the condition was found to hold; pushed = times someone was \
+         actually told. They are not the same number and the gap is not a fault (air-5uz).\n",
         a.rows.len(),
         a.since,
         a.days_scanned,
@@ -423,8 +449,8 @@ pub fn render(a: &Audit) -> String {
     );
     for r in &a.rows {
         s.push_str(&format!(
-            "\n{} [{}]  fired {} in window over {} subject(s), {} repeat(s)\n",
-            r.id, r.class, r.fires, r.subjects, r.repeats
+            "\n{} [{}]  evaluated {} in window over {} subject(s), {} repeat(s); pushed {}\n",
+            r.id, r.class, r.evaluations, r.subjects, r.repeats, r.pushes
         ));
         s.push_str(&format!("  is: {}\n", r.what));
         s.push_str(&format!(
@@ -563,7 +589,7 @@ mod tests {
 
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
-        assert_eq!((rw.fires, rw.subjects, rw.repeats), (80, 2, 78));
+        assert_eq!((rw.evaluations, rw.subjects, rw.repeats), (80, 2, 78));
         // air-s7c recorded a condition for it, and it needs a person: whether a push led to
         // an action is not something the ledger can see.
         assert!(rw.defect.is_none());
@@ -571,7 +597,7 @@ mod tests {
 
         // A mechanism that never fired is in the output, not omitted.
         let nudge = a.rows.iter().find(|r| r.id == "stop-nudge").unwrap();
-        assert_eq!(nudge.fires, 0);
+        assert_eq!(nudge.evaluations, 0);
         assert!(nudge.last_fired.is_none());
         // A recorded "remove when it stops firing" condition is answered by the counter.
         let idle = a
@@ -579,7 +605,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "idle-without-claim")
             .unwrap();
-        assert_eq!((idle.fires, idle.condition_met), (0, Some(true)));
+        assert_eq!((idle.evaluations, idle.condition_met), (0, Some(true)));
 
         // A mechanism with nothing recorded is still reported as a defect (`stuck`, which
         // the 2026-08-22 pass deliberately left out of scope).
@@ -588,6 +614,52 @@ mod tests {
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
         assert!(text.contains("review-waiting"), "{text}");
+    }
+
+    /// air-5uz: a push and an evaluation are different facts and are counted apart. The
+    /// number that nearly got `owner-decision-waiting` deleted was 1,685 evaluations read as
+    /// 1,685 firings, against one push all day.
+    #[test]
+    fn a_push_is_counted_as_a_push_and_never_as_one_more_evaluation() {
+        let a = gather_from(
+            &[day(
+                "2026-08-22",
+                &[
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["owner-decision-waiting:owner"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:01Z","worker":"main","command":"channel.push","inputs":{"conditions":["owner-decision-waiting:owner"],"for_minutes":5},"decision":"pushed"}"#,
+                    r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["owner-decision-waiting:owner"]},"decision":"attention"}"#,
+                ],
+            )],
+            "2026-08-22",
+        );
+        let r = a
+            .rows
+            .iter()
+            .find(|r| r.id == "owner-decision-waiting")
+            .unwrap();
+        assert_eq!((r.evaluations, r.pushes), (2, 1));
+        // And the push does not read as a mechanism nobody registered.
+        assert!(a.unregistered.is_empty(), "{:?}", a.unregistered);
+        let text = render(&a);
+        assert!(text.contains("evaluated 2"), "{text}");
+        assert!(text.contains("pushed 1"), "{text}");
+    }
+
+    /// A decision mechanism acts when it fires, so the two counts agree there rather than
+    /// reporting a hook that spoke as never having reached anyone.
+    #[test]
+    fn a_decision_mechanism_pushes_every_time_it_fires() {
+        let a = gather_from(
+            &[day(
+                "2026-08-22",
+                &[
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"alpha","command":"hook.PreToolUse","inputs":{"path":"a.rs"},"decision":"warn"}"#,
+                ],
+            )],
+            "2026-08-22",
+        );
+        let r = a.rows.iter().find(|r| r.id == "peer-warning").unwrap();
+        assert_eq!((r.evaluations, r.pushes), (1, 1));
     }
 
     /// A landing in the window means the recorded condition no longer holds; `last_fired`
@@ -611,7 +683,7 @@ mod tests {
         ];
         let a = gather_from(&days, "2026-08-22");
         let rw = a.rows.iter().find(|r| r.id == "review-waiting").unwrap();
-        assert_eq!(rw.fires, 1);
+        assert_eq!(rw.evaluations, 1);
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
 
         // A window after every recorded day: no firings counted, but last_fired still sees
@@ -622,7 +694,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "review-waiting")
             .unwrap();
-        assert_eq!((rw.fires, rw.subjects), (0, 0));
+        assert_eq!((rw.evaluations, rw.subjects), (0, 0));
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
     }
 

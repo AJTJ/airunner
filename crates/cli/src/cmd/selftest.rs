@@ -1,6 +1,17 @@
 //! `air selftest`: red/green probes for every check, run against an in-memory ledger and a
 //! scratch git repo. A check that matches nothing prints RED (corpus: guards that pass on
 //! nothing are the anti-pattern). Exit 1 if any probe fails.
+//!
+//! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
+//! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
+//! expectation is computed from itself cannot rot. So derive the fixture from the threshold
+//! (`Thresholds::default().stuck_min`, `attribution::cutoff()`, `install::SURFACE`) rather than
+//! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
+//! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
+//! and see it go red on a mutant that COMPILES, then change the rule's number and see it stay
+//! green. A copied number passes the first and fails the second, which is adopter's ad-m8v1.
+//! The worst case is the number that moves on its own: a hard-coded date against fixtures built
+//! from the clock left main red for six days (air-24e).
 
 use std::path::Path;
 use std::process::Command;
@@ -46,11 +57,17 @@ pub fn run(json: bool) -> i32 {
         probe_stop_nudge(),
         probe_nudge_names_only_claimable(),
         probe_standstill(),
+        probe_idle_without_claim_needs_a_live_session(),
+        probe_expired_cutoff_is_reported(),
+        probe_close_releases_the_claim(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
         probe_change_only_push(),
+        probe_conditions_logged_on_change_only(),
+        probe_doctor_enumerates_tables(),
+        probe_gc_keeps_what_it_must(),
         probe_review_fact_survives(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
@@ -128,6 +145,164 @@ fn probe_change_only_push() -> Probe {
     Probe {
         name: "channel: an unchanged set pushes once however old it gets; a changed set pushes again",
         red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-5uz: the poll writes the condition set to the event log on change only.
+///
+/// The channel re-evaluates every few seconds. On 2026-08-25 that put 7,667 of the day's
+/// 8,242 event lines in the log, and `air audit` counted them as firings: 1,685 for
+/// `owner-decision-waiting`, which was sent once. A deletion was nearly proposed on that
+/// number. Nothing is lost by the silence, because the `conditions` table already carries
+/// first-seen, last-seen and cleared for every condition.
+///
+/// Red: sixty ticks of an unchanged set write ONE line, not sixty. Green: the set changing
+/// writes again, so the log still says when something happened.
+fn probe_conditions_logged_on_change_only() -> Probe {
+    use crate::cmd::status::{Attention, Snapshot, record_and_log};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let l = Ledger::open_in(&dir).map_err(|e| e.to_string())?;
+        let events = dir
+            .join("events")
+            .join(format!("{}.ndjson", crate::cmd::today()));
+        let lines = |p: &Path| {
+            std::fs::read_to_string(p)
+                .map(|t| t.lines().count())
+                .unwrap_or(0)
+        };
+        let waiting = |mins: i64| Attention {
+            worker: "owner".to_string(),
+            kind: "owner-decision-waiting",
+            detail: format!("4 waiting, oldest {mins} min"),
+            for_minutes: mins,
+            fingerprint: "depth:4".to_string(),
+        };
+
+        // An hour of polling with nothing changing but the clock.
+        for tick in 0..60 {
+            let snap = Snapshot {
+                at: format!("2026-08-25T10:{tick:02}:00Z"),
+                ..Default::default()
+            };
+            record_and_log(&l, "main", &snap, &[waiting(tick)], true);
+        }
+        let red = lines(&events) == 1;
+
+        // A fifth capture joins the owner queue: a real change, said again.
+        let snap = Snapshot {
+            at: "2026-08-25T11:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let changed = Attention {
+            fingerprint: "depth:5".to_string(),
+            ..waiting(61)
+        };
+        record_and_log(&l, "main", &snap, &[changed], true);
+        let green = lines(&events) == 2;
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: an unchanged condition set writes one event line an hour, not one a tick",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-w0e: `air doctor` counts every table the ledger has, asked of `sqlite_master`.
+///
+/// It used to walk a list somebody typed, and reported 7 of the 11 tables at schema v10:
+/// `hook_emissions`, `conditions`, `lease_wants` and `bd_cache` were invisible, which is how
+/// the zero-lease finding nearly went unnoticed. Currency, not presence.
+///
+/// Red: the four tables the list left out are all counted. Green: a table this probe invents,
+/// which no list anywhere could name, is counted too — so the next migration needs no edit
+/// here.
+fn probe_doctor_enumerates_tables() -> Probe {
+    use crate::cmd::doctor::table_rows;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let named = |rows: &[(String, i64)], t: &str| rows.iter().any(|(n, _)| n == t);
+
+        let rows = table_rows(l.conn());
+        let red = ["hook_emissions", "conditions", "lease_wants", "bd_cache"]
+            .iter()
+            .all(|t| named(&rows, t));
+
+        l.conn()
+            .execute_batch("CREATE TABLE a_table_no_list_could_name (x INTEGER)")
+            .map_err(|e| e.to_string())?;
+        let rows = table_rows(l.conn());
+        let green = rows
+            .iter()
+            .any(|(n, c)| n == "a_table_no_list_could_name" && *c == 0);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "doctor: every table the ledger has is counted, including one added after this probe was written",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-i7s: `air gc` keeps what it must and removes only what it may.
+///
+/// The stream is the only artefact that has caught the audit's own errors (0007 §11), so this
+/// probe is about the failure DIRECTION: a collector that errs must err toward keeping.
+///
+/// Red: an old day the ledger still points at is kept, and so is a day inside the window, and
+/// an unreadable clock keeps everything rather than collecting everything. Green: an old day
+/// nothing points at is the one thing collected, and its bytes are the reported total.
+fn probe_gc_keeps_what_it_must() -> Probe {
+    use crate::cmd::gc::{plan, referenced_days};
+
+    let days = [
+        ("2026-01-01".to_string(), 100u64), // old, unreferenced -> collect
+        ("2026-01-02".to_string(), 200u64), // old, but a landing sits in it -> keep
+        ("2026-08-29".to_string(), 400u64), // inside the window -> keep
+    ];
+    let referenced: std::collections::BTreeSet<String> =
+        std::iter::once("2026-01-02".to_string()).collect();
+
+    let p = plan(&days, "2026-08-29", 90, &referenced);
+    let kept = |i: usize| p.days.get(i).and_then(|d| d.kept);
+    let red = kept(1) == Some("the ledger still points at this day")
+        && kept(2) == Some("inside the retention window")
+        // A clock it cannot read keeps everything. The other direction deletes the record.
+        && plan(&days, "not-a-date", 90, &Default::default()).collectable_bytes == 0;
+
+    let green = kept(0).is_none()
+        && p.collectable_bytes == 100
+        && p.total_bytes == 700
+        // Nothing is removed by planning, and `applied` says so.
+        && !p.applied;
+
+    // And the referenced set is read from the ledger, not from a list: a landing written now
+    // protects its own day.
+    let live = (|| -> Result<bool, String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.conn()
+            .execute(
+                "INSERT INTO landings (id, worker, sha, result, attempt_no, started_at, finished_at) \
+                 VALUES ('x','alpha','deadbeef','landed',1,'2026-01-02T10:00:00Z','2026-01-02T10:05:00Z')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(referenced_days(l.conn()).contains("2026-01-02"))
+    })()
+    .unwrap_or(false);
+
+    Probe {
+        name: "gc: an old day the ledger points at is kept, an unreadable clock keeps everything, only an unreferenced old day is collected",
+        red_fires: red && live,
         green_passes: green,
     }
 }
@@ -337,7 +512,7 @@ fn probe_audit_registry() -> Probe {
         .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
         && a.rows
             .iter()
-            .any(|r| r.id == "review-waiting" && r.fires == 1 && r.last_fired.is_some());
+            .any(|r| r.id == "review-waiting" && r.evaluations == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
@@ -649,7 +824,7 @@ fn probe_audit_unregistered_firing() -> Probe {
             && a.unregistered.is_empty()
             && a.rows
                 .iter()
-                .any(|r| r.id == "claim-refusal" && r.fires == 1)
+                .any(|r| r.id == "claim-refusal" && r.evaluations == 1)
     };
     Probe {
         name: "audit: a firing with no registry row is a defect; a claimed pair counts as its mechanism",
@@ -1048,7 +1223,27 @@ fn probe_claim_cas() -> Probe {
     }
 }
 
+/// air-jc0: a timestamp `minutes` before `now`, for a fixture whose age is DERIVED from the
+/// threshold that owns it instead of copied next to it.
+///
+/// `None` when the arithmetic does not land on a real instant. Every call site treats that as
+/// a hard failure and goes red: a probe that cannot find its number must say so, never fall
+/// back to a guess that happens to pass.
+fn minutes_before(now: &str, minutes: i64) -> Option<String> {
+    let t: jiff::Timestamp = now.parse().ok()?;
+    let span = jiff::Span::new().try_minutes(minutes).ok()?;
+    Some(t.checked_sub(span).ok()?.to_string())
+}
+
 /// Attention conditions fire on a stale stuck session and stay quiet on a fresh one.
+///
+/// air-jc0: the two ages are read out of `stuck_min` rather than written beside it. adopter's
+/// ad-m8v1 is the reason — their log-cap probe asserted 45 against a cap the owner had raised to
+/// 100, so the probe failed ON THE RULE BEING CORRECT, and the fix was not a bigger number but
+/// reading the cap from the script that owns it. Their two controls, both run against this probe
+/// (digest 2026-08-29-diligence-air-jc0): with the `stuck` arm neutralised it goes red; with
+/// `stuck_min` moved 5 -> 90 it stays green and renames itself. Copying 60 and 1 passed the first
+/// control and failed the second.
 fn probe_attention() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
     let mk = |changed: &str| Snapshot {
@@ -1069,14 +1264,40 @@ fn probe_attention() -> Probe {
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
-    let red = attention(&mk("2026-08-20T11:00:00Z"), now, Thresholds::default());
-    let green = attention(&mk("2026-08-20T11:59:00Z"), now, Thresholds::default());
+    let t = Thresholds::default();
+    // One minute past the line and one minute short of it, wherever the line currently is.
+    let (Some(over), Some(under)) = (
+        t.stuck_min
+            .checked_add(1)
+            .and_then(|m| minutes_before(now, m)),
+        t.stuck_min
+            .checked_sub(1)
+            .and_then(|m| minutes_before(now, m)),
+    ) else {
+        return Probe {
+            name: "attention: stuck threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let red = attention(&mk(&over), now, Thresholds::default());
+    let green = attention(&mk(&under), now, Thresholds::default());
     Probe {
-        name: "attention: stale stuck session fires; fresh one is quiet",
+        name: STUCK_NAME.get_or_init(|| {
+            format!(
+                "attention: a stuck session fires at stuck_min={} min and is quiet under it",
+                t.stuck_min
+            )
+        }),
         red_fires: red.iter().any(|a| a.kind == "stuck"),
         green_passes: green.is_empty(),
     }
 }
+
+/// The probe name carries the threshold it read, so a changed rule RENAMES the probe instead of
+/// breaking it — adopter's second control made visible in the output.
+static STUCK_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STANDSTILL_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// air-e7q, the standstill: a green hand-over waiting on review, an idle worker with no
 /// claim and beads ready. Red: both conditions fire on those facts (the old `attention`
@@ -1106,27 +1327,187 @@ fn probe_standstill() -> Probe {
         ..Default::default()
     };
     let now = "2026-08-20T12:00:00Z";
+    let t = Thresholds::default();
+    // air-jc0: both ages come out of `idle_noclaim_min`, the threshold that decides this
+    // condition, so moving the rule moves the fixture with it.
+    let (Some(over), Some(under)) = (
+        t.idle_noclaim_min
+            .checked_add(1)
+            .and_then(|m| minutes_before(now, m)),
+        t.idle_noclaim_min
+            .checked_sub(1)
+            .and_then(|m| minutes_before(now, m)),
+    ) else {
+        return Probe {
+            name: "attention: idle-without-claim threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
     let red = attention(
-        &mk(
-            "2026-08-20T11:40:00Z",
-            vec![("fd-1".into(), "w".into(), 20)],
-            5,
-        ),
+        &mk(&over, vec![("fd-1".into(), "w".into(), 20)], 5),
         now,
         Thresholds::default(),
     );
-    let green = attention(
-        &mk("2026-08-20T11:59:00Z", vec![], 0),
-        now,
-        Thresholds::default(),
-    );
+    let green = attention(&mk(&under, vec![], 0), now, Thresholds::default());
     Probe {
-        name: "attention: review-waiting and idle-without-claim fire; landed and fresh is quiet",
+        name: STANDSTILL_NAME.get_or_init(|| {
+            format!(
+                "attention: review-waiting and idle-without-claim fire at idle_noclaim_min={} min; landed and fresh is quiet",
+                t.idle_noclaim_min
+            )
+        }),
         red_fires: red
             .iter()
             .any(|a| a.kind == "review-waiting" && a.worker == "fd-1")
             && red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: green.is_empty(),
+    }
+}
+
+/// air-d10: `idle-without-claim` says "prompt them", so it needs somebody to prompt. Red: a
+/// live idle worker past the threshold with beads ready still fires. Green: the same row with
+/// the session's process gone is silent — the shape of the two longest-lived rows in this
+/// repo's ledger, open 4 885 minutes each.
+///
+/// The mutation that made it red: dropping `sess.pid_alive != Some(false)` from the arm in
+/// `status::attention` puts the dead-session case back and this probe's green half fails.
+fn probe_idle_without_claim_needs_a_live_session() -> Probe {
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+    let now = "2026-08-20T12:00:00Z";
+    let t = Thresholds::default();
+    // air-jc0: the age is derived from `idle_noclaim_min`, not written beside it. As filed this
+    // probe held 30 min against a threshold of 5 — two copies with one owner, so raising the
+    // threshold past 30 would have taken the red side silent while the rule stayed correct.
+    let Some(over) = t
+        .idle_noclaim_min
+        .checked_add(1)
+        .and_then(|m| minutes_before(now, m))
+    else {
+        return Probe {
+            name: "attention: idle-without-claim threshold could not be read",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let mk = |alive: Option<bool>| Snapshot {
+        workers: vec![WorkerView {
+            worker: "w".into(),
+            role: "worker".into(),
+            session: Some(Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                detail: None,
+                changed_at: over.clone(),
+                pid: Some(1),
+                pid_alive: alive,
+                project: String::new(),
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(2),
+        ..Default::default()
+    };
+    let red = attention(&mk(Some(true)), now, Thresholds::default());
+    let green = attention(&mk(Some(false)), now, Thresholds::default());
+    Probe {
+        name: "attention: idle-without-claim fires for a live session, not a dead one",
+        red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
+        green_passes: !green.iter().any(|a| a.kind == "idle-without-claim"),
+    }
+}
+
+/// air-24e: a rule with a date in it goes quiet when the date passes. Both of Air's cutoffs
+/// passed on 2026-08-23, seven tests went red because their fixtures had been written inside
+/// the fallback window, and main stayed red six days because nothing watches a date. Red: a
+/// clock past the cutoff reports it EXPIRED. Green: a clock before it reports it active.
+///
+/// The mutation that made it red: hardcoding `expired: false` in `doctor::dated_rules` — the
+/// probe's red half then finds no expired rule.
+fn probe_expired_cutoff_is_reported() -> Probe {
+    use crate::cmd::doctor::dated_rules;
+    // Two clocks that need no date of their own, so this probe holds no copy of a rule's
+    // number: after every possible cutoff, and before every one Air will ever carry.
+    let after = dated_rules(jiff::Timestamp::MAX);
+    let before = dated_rules(jiff::Timestamp::UNIX_EPOCH);
+    Probe {
+        name: "doctor: a dated rule says so when its cutoff has passed",
+        red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
+        green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
+    }
+}
+
+/// air-8p4: a claim row survived `bd close`, so conditions kept firing on a bead that was
+/// closed and landed. Red: the row still open, `handover-not-green` fires on it — the state
+/// adopter's coordinator spent a setup window diagnosing. Green: the close releases the row
+/// and nothing fires; and `-s awaiting_review` does NOT release it, because a handed-over bead
+/// is still the worker's until it lands (air-3eu).
+///
+/// The mutation that made it red, seen: widening `closes_bead` to `handover_bead(cmd)`, so
+/// `-s awaiting_review` releases too — "red fires / green BLOCKED". The hook path that applies
+/// it is covered separately by `hook::tests::a_successful_close_releases_the_claim_and_awaiting_review_does_not`,
+/// whose mutation is deleting the arm from `dispatch`.
+fn probe_close_releases_the_claim() -> Probe {
+    use crate::cmd::hook::closes_bead;
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
+
+    const NOW: &str = "2026-08-20T12:00:00Z";
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w", &[], "2026-08-20T11:00:00Z")
+            .map_err(|e| e.to_string())?;
+        l.stamp_handover("fd-1", "w", "2026-08-20T11:50:00Z")
+            .map_err(|e| e.to_string())?;
+        // A live worker, recently seen, so the only thing that can speak is the claim.
+        let fires = |l: &Ledger| -> Result<Vec<&'static str>, String> {
+            let claims = l.open_claims().map_err(|e| e.to_string())?;
+            let s = Snapshot {
+                workers: vec![WorkerView {
+                    worker: "w".into(),
+                    role: "worker".into(),
+                    green_at_head: Some(false),
+                    claims,
+                    session: Some(Session {
+                        session_id: "s".into(),
+                        state: "working".into(),
+                        changed_at: "2026-08-20T11:59:00Z".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            Ok(attention(&s, NOW, Thresholds::default())
+                .iter()
+                .map(|a| a.kind)
+                .collect())
+        };
+        let before = fires(&l)?;
+        // Not an ending: a hand-over leaves the claim held.
+        let handover_keeps_it = closes_bead("bd update fd-1 -s awaiting_review").is_none();
+        // The close, as the PostToolUse arm applies it.
+        let bead = closes_bead("bd close fd-1 --reason done").ok_or("close not recognised")?;
+        let released = l
+            .release_claim(&bead, "w", "closed", "t2")
+            .map_err(|e| e.to_string())?;
+        let after = fires(&l)?;
+        // Threshold-independent on both sides: the claim on fd-1 is what speaks and what goes
+        // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
+        let still_held = l
+            .open_claims()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c.bead == "fd-1");
+        Ok((
+            before.contains(&"handover-not-green"),
+            handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
+        ))
+    })()
+    .unwrap_or((false, false));
+    Probe {
+        name: "claim: a closed bead stops alarming; awaiting_review still holds it",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
