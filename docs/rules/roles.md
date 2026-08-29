@@ -163,9 +163,11 @@ labelled `owner` is awaiting the owner and `air claim` refuses it to workers (th
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open).
 
-Not available to the coordinator, by deny rule: `git commit` and `git push` on main. Whatever
-path this repo lands by, Air pushes nothing — a landing it performs reaches main and stops there.
-**[Air enforces]**
+Not available to the coordinator, by deny rule: `git push`. **The boundary is the remote, not
+main.** The coordinator may commit and merge on main — its own prose is its own to save, and
+whatever path this repo lands by, Air pushes nothing: a landing it performs reaches main and
+stops there. Landing a *worker's* branch is still that path, not a hand merge.
+**[Air enforces: `git push`]**
 
 ## When refused
 
