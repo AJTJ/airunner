@@ -488,6 +488,24 @@ fn pre_tool_use(
             format!("{moved}; path outside repo"),
         ));
     }
+    // Agent-to-agent traffic: measured, never gated (air-q07). This is the cost the owner
+    // most wants minimised and the only one the ledger did not contain — alpha's transcript
+    // was the sole record that a worker had sent ~46,900 characters in a day, and a query
+    // over the event log answered zero. No threshold, no condition, no refusal: the
+    // cross-project fence was deleted for never firing (air-9u6), and counting a message is
+    // not a step back toward one.
+    //
+    // Removal: when the multi-agent question (plan 0008 §9) is answered, or when a round's
+    // numbers stop informing it.
+    if let Some((to, bytes)) = input.message_sent() {
+        return Ok(Dispatched::new(
+            HookOutcome::Allow { context: None },
+            "messaged",
+            format!("{moved}; {bytes} bytes to {to}"),
+        )
+        .inputs(serde_json::json!({"to": to, "bytes": bytes}))
+        .denominator("1 message"));
+    }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
         && is_handover_command(cmd)
@@ -1066,6 +1084,32 @@ mod tests {
             .iter()
             .any(|e| e["decision"] == "released" && e["inputs"]["bead"] == "fd-1");
         assert!(released, "the release must be on the event line");
+    }
+
+    /// air-q07: one message, one event line, a byte count, and no content.
+    #[test]
+    fn a_message_is_one_event_line_with_a_byte_count_and_no_content() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        fire(repo, serde_json::json!({"hook_event_name": "SessionStart"}));
+        let before = events(repo).len();
+        fire(
+            repo,
+            serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "SendMessage",
+            "tool_input": {"to": "main", "message": "the secret plan", "summary": "s"}}),
+        );
+        let ev = events(repo);
+        assert_eq!(ev.len(), before + 1, "one message is one line");
+        let last = ev.last().unwrap();
+        assert_eq!(last["decision"], "messaged");
+        assert_eq!(last["inputs"]["to"], "main");
+        assert_eq!(last["inputs"]["bytes"], 15);
+        // Never the content, on any field of the line.
+        assert!(
+            !last.to_string().contains("the secret plan"),
+            "the event log is not a transcript: {last}"
+        );
     }
 
     #[test]
