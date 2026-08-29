@@ -587,6 +587,13 @@ mod tests {
             !ROLES_MD.contains("Landing is the coordinator's: `air land"),
             "roles.md must not prescribe a landing command (air-97z)"
         );
+        // air-03w (owner, 2026-08-29): signalling on close is part of the worker role, and
+        // the `landable` condition is the failsafe under it. The binary and the prose are one
+        // file (`include_str!`), so this asserts on ROLES_MD and the equality above carries it
+        // to disk. It names a FACT Air records, never a landing command, so it stands beside
+        // air-97z's absence check above rather than against it.
+        assert!(ROLES_MD.contains("Signal the coordinator when you close a bead"));
+        assert!(ROLES_MD.contains("`landable` condition"));
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
         // air-8zu: roles.md states what Air records and refuses, never one repo's closing
