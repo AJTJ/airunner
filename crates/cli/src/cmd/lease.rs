@@ -316,6 +316,16 @@ pub fn beat(repo: &Path) -> i32 {
     }
 }
 
+/// air-uae: where Air keeps leases, printed on every `air lease status` whether or not any are
+/// held. A second store in the target repo is then visible in one command instead of inferred
+/// from a contradiction, which is how adopter's took two incidents to find.
+pub fn store_line(air_dir: &Path) -> String {
+    format!(
+        "lease store: {}/ledger.db (leases table)",
+        air_dir.display()
+    )
+}
+
 pub fn status(repo: &Path, json: bool) -> i32 {
     let (ledger, _worker) = match open(repo) {
         Ok(x) => x,
@@ -339,9 +349,16 @@ pub fn status(repo: &Path, json: bool) -> i32 {
             })
         })
         .collect();
+    // air-uae: name the store, always. the adopter ran two that disagreed — `air lease take`
+    // wrote the ledger while their PreToolUse guard read
+    // `$(git --git-common-dir)/ad-leases/<resource>/` — so `make api` was denied naming the
+    // command that had just succeeded (ad-3wnp, ad-gpj0). Neither side ever said where it was
+    // looking, so the disagreement had to be inferred from the contradiction. A second store is
+    // now visible in one command instead.
+    let store = store_line(ledger.dir());
     emit(json, &rows, || {
         if rows.is_empty() {
-            return "no leases held".to_string();
+            return format!("no leases held\n{store}");
         }
         rows.iter()
             .map(|r| {
@@ -363,6 +380,7 @@ pub fn status(repo: &Path, json: bool) -> i32 {
             })
             .collect::<Vec<_>>()
             .join("\n")
+            + &format!("\n{store}")
     });
     0
 }
