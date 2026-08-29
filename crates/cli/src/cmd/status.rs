@@ -18,6 +18,42 @@ use serde::Serialize;
 use crate::cmd::{emit, holdings, log_event, now, open};
 use crate::git;
 
+/// air-sze: every attention kind `attention()` can emit, in one place.
+///
+/// `attention()` constructs only from these constants, so a condition cannot reach the event log
+/// without appearing here, and a probe compares this set against the `Fires::Condition` rows in
+/// the mechanism registry. Five kinds shipped with no registry row until this bead
+/// (`gone-with-claim`, `idle-with-claim`, `silent-with-claim`, `lease-held-by-dead-session`,
+/// `lease-stale`): no removal condition, no fire count, and — unlike an unregistered decision —
+/// invisible to `air audit` entirely, because the audit could only count what the registry
+/// already named. An unregistered condition is not "uncounted", it is unseeable.
+pub mod kinds {
+    pub const IDLE_WITH_CLAIM: &str = "idle-with-claim";
+    pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
+    pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
+    pub const GONE_WITH_CLAIM: &str = "gone-with-claim";
+    pub const HANDOVER_NOT_GREEN: &str = "handover-not-green";
+    pub const LANDABLE: &str = "landable";
+    pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
+    pub const OWNER_DECISION_WAITING: &str = "owner-decision-waiting";
+    pub const LEASE_HELD_BY_DEAD_SESSION: &str = "lease-held-by-dead-session";
+    pub const LEASE_STALE: &str = "lease-stale";
+
+    /// The whole set, compared against the registry by `air selftest`.
+    pub const ALL: &[&str] = &[
+        IDLE_WITH_CLAIM,
+        IDLE_WITHOUT_CLAIM,
+        SILENT_WITH_CLAIM,
+        GONE_WITH_CLAIM,
+        HANDOVER_NOT_GREEN,
+        LANDABLE,
+        LANDED_NOT_CLOSED,
+        OWNER_DECISION_WAITING,
+        LEASE_HELD_BY_DEAD_SESSION,
+        LEASE_STALE,
+    ];
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Session {
     pub session_id: String,
@@ -63,11 +99,6 @@ pub struct Snapshot {
     pub oldest_owner_capture_at: Option<String>,
     /// Every lease, with the defect the CLI found (None = healthy).
     pub leases: Vec<(Lease, Option<String>)>,
-    /// Beads in `awaiting_review` per bd (None when bd could not answer). A measurement only:
-    /// there is no cap ("we set our goals and finish them", owner 2026-08-21).
-    pub awaiting_review: Option<Vec<String>>,
-    /// Review wait per open claim that has been handed over: (bead, worker, minutes).
-    pub review_waits: Vec<(String, String, i64)>,
     /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
     /// fact, never a bd status (air-ayp).
     pub landed_open: Vec<air_ledger::landings::LandedOpen>,
@@ -172,31 +203,10 @@ pub struct Attention {
     pub fingerprint: String,
 }
 
-/// The landing command for one bead, with the lead-in a bare condition line needs.
-pub fn land_hint(bead: &str) -> String {
-    format!("land it: {}", land_command(bead))
-}
-
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
 /// is `air land`: the coordinator's one allowed path onto main.
 pub fn land_command(bead: &str) -> String {
     format!("air land {bead}")
-}
-
-/// Who handed `bead` over and when, from the claim row, open or released. The claim row is the
-/// only source (an open-claims scan was why review waits were always empty, air-e7q); since
-/// air-3eu the row is usually still open, stamped by the reconcile, so `first_handover_at` is
-/// what the coalesce finds. `fallback` is used when there is no row at all.
-fn handover_of(ledger: &Ledger, bead: &str, fallback: &str) -> (String, String) {
-    ledger
-        .conn()
-        .query_row(
-            "SELECT worker, coalesce(first_handover_at, released_at, claimed_at) FROM claims \
-             WHERE bead=?1 ORDER BY claimed_at DESC LIMIT 1",
-            rusqlite::params![bead],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )
-        .unwrap_or_else(|_| ("?".to_string(), fallback.to_string()))
 }
 
 /// A green hand-over that only the owner can clear (air-6p5). The coordinator may not commit
@@ -221,33 +231,6 @@ pub struct Landing {
     pub acceptance: Vec<String>,
 }
 
-/// Pure: the landings a snapshot shows. A review wait whose worker has a recorded green at
-/// HEAD is the owner's to merge; one that is not green is the worker's to fix, and shows as
-/// `review-waiting` instead.
-pub fn landings(s: &Snapshot) -> Vec<Landing> {
-    let mut v: Vec<Landing> = s
-        .review_waits
-        .iter()
-        .filter_map(|(bead, worker, minutes)| {
-            let w = s.workers.iter().find(|w| &w.worker == worker)?;
-            if w.green_at_head != Some(true) {
-                return None;
-            }
-            Some(Landing {
-                bead: bead.clone(),
-                worker: worker.clone(),
-                head: w.head.clone()?,
-                minutes: *minutes,
-                command: land_command(bead),
-                // The snapshot has no descriptions; `landings_for` is the path that reads bd.
-                acceptance: Vec::new(),
-            })
-        })
-        .collect();
-    sort_by_wait(&mut v);
-    v
-}
-
 /// Longest wait first, the order `air land --all` uses, so what `air status` lists is the
 /// order it will land in (air-3pz).
 fn sort_by_wait(v: &mut [Landing]) {
@@ -261,9 +244,8 @@ fn sort_by_wait(v: &mut [Landing]) {
 /// "waiting on owner"; only decisions are. The bead list stays because it is what the
 /// coordinator relays when the owner asks what is outstanding (air-6p5).
 pub fn waiting_on_owner(s: &Snapshot) -> String {
-    let l = landings(s);
     let decisions = s.owner_queue_depth;
-    if l.is_empty() && decisions == 0 {
+    if decisions == 0 {
         return String::new();
     }
     let plural = |n: usize, word: &str| {
@@ -274,30 +256,6 @@ pub fn waiting_on_owner(s: &Snapshot) -> String {
         }
     };
     let mut out = String::new();
-    if !l.is_empty() {
-        let named = l
-            .iter()
-            .map(|x| {
-                format!(
-                    "{} {} from {}",
-                    x.bead,
-                    x.head.get(..8).unwrap_or(&x.head),
-                    x.worker
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        out.push_str(&format!(
-            "{} ready: `air land --all` ({named})\n",
-            plural(l.len(), "landing")
-        ));
-        for x in &l {
-            out.push_str(&format!(
-                "  {} ({} min): `{}`\n",
-                x.bead, x.minutes, x.command
-            ));
-        }
-    }
     if decisions > 0 {
         out.push_str(&format!(
             "waiting on owner: {}; `air inbox --owner`\n",
@@ -726,16 +684,13 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        // One ARM of `gone-with-claim` was deleted on 2026-08-22 (air-s7c): the one that
-        // fired when a session row existed but its process was dead. It fired zero times in
-        // the audited window. A dead session holding a claim now falls through to the ordinary
-        // session states below, which do fire.
-        //
-        // The kind itself is alive and is raised further down, for a claim held by a worker
-        // with NO session row at all past the launch grace. Said explicitly because this
-        // comment previously read as though the whole condition had gone, and on 2026-08-29 it
-        // led to `gone-with-claim` being struck from the MCP instructions string it belonged
-        // in (air-dqw).
+        // air-sze: `gone-with-claim` was NOT deleted, whatever the comment here used to say.
+        // It said air-s7c removed it on 2026-08-22 because "a dead session holding a claim now
+        // falls through to the ordinary session states below, which do fire". The arm below
+        // still emits it, and that reason could never have held for it: this is the branch for
+        // a worker with NO session row, so there are no session states below to fall through
+        // to. A crashed worker still holding a bead is what nothing else reports. It is now in
+        // the registry with a removal condition instead of being described as gone.
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
@@ -751,7 +706,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 match sess.state.as_str() {
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
-                        kind: "idle-with-claim",
+                        kind: kinds::IDLE_WITH_CLAIM,
                         detail: format!(
                             "idle {age} min holding {}; prompt them, or `air release` if abandoned",
                             beads()
@@ -777,7 +732,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     {
                         out.push(Attention {
                             worker: w.worker.clone(),
-                            kind: "idle-without-claim",
+                            kind: kinds::IDLE_WITHOUT_CLAIM,
                             detail: format!(
                                 "idle {age} min, {} beads ready; prompt them",
                                 s.ready_depth.unwrap_or(0)
@@ -789,7 +744,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
                         out.push(Attention {
                             worker: w.worker.clone(),
-                            kind: "silent-with-claim",
+                            kind: kinds::SILENT_WITH_CLAIM,
                             detail: format!(
                                 "no hook event for {age} min while holding {}; session may have died",
                                 beads()
@@ -817,7 +772,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 if age >= t.launch_grace_min {
                     out.push(Attention {
                         worker: w.worker.clone(),
-                        kind: "gone-with-claim",
+                        kind: kinds::GONE_WITH_CLAIM,
                         detail: format!(
                             "no live session but holds {}; restart `air worker {}` or release",
                             beads(),
@@ -874,7 +829,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         if let Some(detail) = detail {
             out.push(Attention {
                 worker: w.worker.clone(),
-                kind: "handover-not-green",
+                kind: kinds::HANDOVER_NOT_GREEN,
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
@@ -884,9 +839,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     for (l, defect) in &s.leases {
         let Some(d) = defect else { continue };
         let kind = if d.starts_with("dead") {
-            "lease-held-by-dead-session"
+            kinds::LEASE_HELD_BY_DEAD_SESSION
         } else {
-            "lease-stale"
+            kinds::LEASE_STALE
         };
         out.push(Attention {
             worker: l.worker.clone(),
@@ -897,28 +852,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             ),
             for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
             fingerprint: String::new(),
-        });
-    }
-    // A hand-over nobody was told about (air-e7q). Subject is the bead: once per bead.
-    for (bead, worker, mins) in &s.review_waits {
-        let head = s
-            .workers
-            .iter()
-            .find(|w| &w.worker == worker)
-            .and_then(|w| w.head.as_deref())
-            .map(|h| h.get(..8).unwrap_or(h))
-            .unwrap_or("?");
-        out.push(Attention {
-            worker: bead.clone(),
-            kind: "review-waiting",
-            detail: format!(
-                "{bead} handed over by {worker} {mins} min ago (head {head}); {}",
-                land_hint(bead)
-            ),
-            for_minutes: *mins,
-            // The bead being in the waiting set is the whole fact; who handed it over and
-            // from which head can change without the fact changing, and the age never counts.
-            fingerprint: format!("{bead}/{worker}"),
         });
     }
     // air-03w: a branch that is landable NOW. Since air-7o3 the worker closes its own bead with
@@ -946,7 +879,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         for (worker, (head, beads, minutes)) in by_worker {
             out.push(Attention {
                 worker: worker.to_string(),
-                kind: "landable",
+                kind: kinds::LANDABLE,
                 detail: format!(
                     "{worker} is green at {} with main merged, carrying {}; `air land --all`",
                     head.get(..8).unwrap_or(head),
@@ -964,7 +897,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         let (bead, why) = (&o.bead, &o.why);
         out.push(Attention {
             worker: bead.clone(),
-            kind: "landed-not-closed",
+            kind: kinds::LANDED_NOT_CLOSED,
             detail: format!(
                 "{bead} landed in {} with an acceptance clause this merge CONTRADICTS: {why}. \
                  The worker closes its own bead with proof, so read the bead: either reopen it \
@@ -979,7 +912,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     if let Some(oldest) = &s.oldest_owner_capture_at {
         out.push(Attention {
             worker: "owner".to_string(),
-            kind: "owner-decision-waiting",
+            kind: kinds::OWNER_DECISION_WAITING,
             detail: format!(
                 "{} decision(s) waiting for the owner, oldest {} min; `air inbox --owner`",
                 s.owner_queue_depth,
@@ -1242,42 +1175,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     }
 
     // Review queue from bd. Absent bd is reported, not fatal; slow bd answers from the cache.
-    let awaiting_review: Option<Vec<String>> =
-        match bd_try(&bd, &mut bd_slow, &mut errors, "awaiting_review", |b| {
-            air_bd::WorkLedger::by_status(b, "awaiting_review")
-        }) {
-            Some(v) => {
-                let ids: Vec<String> = v.into_iter().map(|i| i.id).collect();
-                let _ = ledger.bd_cache_put(
-                    "awaiting_review",
-                    &serde_json::to_string(&ids).unwrap_or_default(),
-                    &at,
-                );
-                Some(ids)
-            }
-            None if bd_slow.is_some() => ledger
-                .bd_cache_get("awaiting_review")
-                .ok()
-                .flatten()
-                .and_then(|(v, _)| serde_json::from_str(&v).ok()),
-            None => None,
-        };
-    // One row per bead bd holds in awaiting_review: who handed it over and how long ago, from
-    // the claim row, open or released. The claim row is the only source (an open-claims scan
-    // was why this was always empty, air-e7q); since air-3eu the row is usually still open,
-    // stamped by the reconcile above, so `first_handover_at` is what the coalesce finds.
-    let review_waits: Vec<(String, String, i64)> = awaiting_review
-        .iter()
-        .flatten()
-        .map(|bead| {
-            let (worker, since) = handover_of(&ledger, bead, &at);
-            (
-                bead.clone(),
-                worker,
-                minutes_between(&since, &at).unwrap_or(0),
-            )
-        })
-        .collect();
     if reconciled > 0 {
         errors.push(format!(
             "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
@@ -1345,8 +1242,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         owner_queue_depth: owner_q.len(),
         oldest_owner_capture_at: owner_q.first().map(|c| c.captured_at.clone()),
         leases,
-        awaiting_review,
-        review_waits,
         // A ledger read, so it survives an absent bd (air-ayp). A bead bd shows back in the
         // work queue has been dealt with: somebody reopened it. Deriving it from the claim row
         // instead is what made this silent under close-with-proof (air-dlw).
@@ -1581,14 +1476,6 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             out.push_str(&format!("rewound and still carried: {line}\n"));
         }
     }
-    // Always rendered (air-e7q): what waits on whom.
-    out.push_str(&format!("review: {} waiting\n", s.review_waits.len()));
-    for (bead, worker, mins) in &s.review_waits {
-        out.push_str(&format!(
-            "  {bead} by {worker}, {mins} min; {}\n",
-            land_hint(worker)
-        ));
-    }
     out.push_str(&format!(
         "ready: {}{}\n",
         s.ready_depth
@@ -1816,49 +1703,26 @@ mod tests {
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
     }
 
-    /// air-6p5: two green hand-overs waited on the owner and nothing said so. The line names
-    /// each bead, its sha, who handed it over, and the exact command; a quiet fleet is silent.
+    /// air-6p5 asked this line to name every landing waiting on the owner. Landings moved to
+    /// the coordinator (air-3pz, `air land --all`), and the list it printed was derived from
+    /// `review_waits`, which air-okc deleted with the `review-waiting` condition. What is left
+    /// is the half that was still true: decisions are the only thing that waits on the owner.
     #[test]
-    fn waiting_on_owner_names_every_landing_and_is_empty_when_nothing_waits() {
-        let mut green = worker("alpha", Some("working"), T_2, vec![], Some(true));
-        green.head = Some("8c190753abcdef".into());
-        let mut red = worker("beta", Some("working"), T_2, vec![], Some(false));
-        red.head = Some("deadbeefcafe".into());
+    fn waiting_on_owner_names_decisions_and_is_empty_when_nothing_waits() {
         let s = Snapshot {
-            workers: vec![green, red],
-            review_waits: vec![
-                ("air-i59".into(), "alpha".into(), 18),
-                // Handed over but not green at HEAD: the worker's to fix, not the owner's.
-                ("air-869".into(), "beta".into(), 2),
-            ],
             owner_queue_depth: 1,
             ..Default::default()
         };
-        let out = waiting_on_owner(&s);
-        assert!(
-            out.starts_with("1 landing ready: `air land --all` (air-i59 8c190753 from alpha)\n"),
-            "{out}"
+        assert_eq!(
+            waiting_on_owner(&s),
+            "waiting on owner: 1 decision; `air inbox --owner`\n"
         );
-        assert!(
-            out.contains("air-i59 (18 min): `air land air-i59`"),
-            "{out}"
-        );
-        assert!(
-            !out.contains("air-869"),
-            "not green is not a landing: {out}"
-        );
-        assert!(
-            out.contains("waiting on owner: 1 decision; `air inbox --owner`"),
-            "{out}"
-        );
-
-        // Nothing waiting: nothing printed, so a quiet fleet stays quiet.
-        let quiet = Snapshot {
-            workers: s.workers.clone(),
-            review_waits: vec![("air-869".into(), "beta".into(), 2)],
+        let two = Snapshot {
+            owner_queue_depth: 2,
             ..Default::default()
         };
-        assert_eq!(waiting_on_owner(&quiet), "");
+        assert!(waiting_on_owner(&two).contains("2 decisions"));
+        // A quiet fleet stays quiet.
         assert_eq!(waiting_on_owner(&Snapshot::default()), "");
     }
 
@@ -1947,39 +1811,27 @@ mod tests {
         );
     }
 
-    /// Reversed on 2026-08-22 (air-e7q): a hand-over nobody is told about is a condition,
-    /// once per bead; the depth of the queue is still only a measurement (no cap).
+    /// air-okc deleted the `review-waiting` condition that air-e7q added, its `review_waits`
+    /// input, the `awaiting_review` bd call that fed it, and the `review: N waiting` line.
+    /// It last fired 2026-08-22T19:31 and never again in five recorded days, because air-7o3
+    /// replaced hand-over with close-with-proof the same day and the state it reports stopped
+    /// existing. What is left is what `air status` still renders around it.
     #[test]
-    fn review_wait_is_a_condition_once_per_bead_and_depth_is_not() {
+    fn status_renders_ready_depth_and_claims_without_a_review_line() {
         let s = Snapshot {
             workers: vec![worker("w", Some("idle"), T_2, vec![], Some(true))],
-            awaiting_review: Some(vec!["a".into(); 22]),
-            review_waits: vec![("a".into(), "w".into(), 45), ("b".into(), "w".into(), 1)],
             ..Default::default()
         };
         let att = attention(&s, NOW, Thresholds::default());
-        let kinds: Vec<(&str, &str)> = att.iter().map(|a| (a.worker.as_str(), a.kind)).collect();
-        assert_eq!(kinds, [("a", "review-waiting"), ("b", "review-waiting")]);
-        assert!(
-            att[0]
-                .detail
-                .contains("handed over by w 45 min ago (head abc)")
-        );
-        assert!(att[0].detail.contains("land it:"));
-        assert_eq!(att[0].for_minutes, 45);
-        // Rendered, always: the count, one line per bead, ready depth, idle-no-claim.
         let text = render(&s, &att);
-        assert!(
-            text.contains("review: 2 waiting\n  a by w, 45 min; land it:"),
-            "{text}"
-        );
-        assert!(text.contains("ready: ? (bd did not answer)"));
-        assert!(text.contains("claims: -  idle, no claim"));
+        assert!(!text.contains("review:"), "the review line is gone: {text}");
+        assert!(text.contains("ready: ? (bd did not answer)"), "{text}");
+        assert!(text.contains("claims: -  idle, no claim"), "{text}");
         let none = Snapshot {
             ready_depth: Some(3),
             ..Default::default()
         };
-        assert!(render(&none, &[]).contains("review: 0 waiting\nready: 3\n"));
+        assert!(render(&none, &[]).contains("ready: 3\n"));
     }
 
     #[test]
@@ -2070,8 +1922,8 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                "lease-held-by-dead-session",
-                "lease-stale",
+                kinds::LEASE_HELD_BY_DEAD_SESSION,
+                kinds::LEASE_STALE,
                 "owner-decision-waiting"
             ]
         );
