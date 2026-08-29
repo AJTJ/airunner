@@ -134,6 +134,39 @@ fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32,
     )
 }
 
+/// `air hook` with a hook payload on stdin, the way Claude Code invokes it.
+fn air_hook(repo: &Path, bd: &Path, payload: serde_json::Value, enforce: bool) -> (i32, String) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(repo)
+        .arg("hook")
+        .env("AIR_BD_BIN", bd)
+        .env("FAKE_BD_DIR", repo)
+        .env("BEADS_ACTOR", "tester")
+        .env("AIR_ENFORCE", if enforce { "1" } else { "0" })
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut body = payload;
+    body["session_id"] = "s1".into();
+    body["cwd"] = repo.to_string_lossy().to_string().into();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
 fn claims(repo: &Path) -> Vec<(String, String, Option<String>)> {
     let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
     let mut st = conn
@@ -682,6 +715,53 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     assert!(o.contains("rule on ports"), "{o}");
     let (_, o) = run(&repo, &me, &["--json", "status", "--attention"]);
     assert!(o.contains("owner-decision-waiting"), "{o}");
+}
+
+/// air-eiv: `air handover` is documented as the way to find what is missing, and it used to
+/// increment the very counter `handover-not-green` reads. So the documented diagnostic raised
+/// the alarm, and the coordinator chased a worker who was following the docs.
+///
+/// N direct invocations produce no condition; one hook-path refusal produces one.
+#[test]
+fn air_handover_is_a_query_and_the_hook_path_is_the_attempt() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let alarms = || {
+        let (_, out, _) = air(&repo, &bd, &["--json", "status", "--attention"]);
+        eprintln!("ATTENTION: {out}");
+        let (_, c, _) = air(&repo, &bd, &["--json", "status"]);
+        let v: serde_json::Value = serde_json::from_str(&c).unwrap();
+        eprintln!(
+            "WORKERS: {}",
+            serde_json::to_string(&v["snapshot"]["workers"]).unwrap()
+        );
+        out.matches("handover-not-green").count()
+    };
+    // bd keeps holding fd-1 in_progress, so `air status`'s reconcile leaves the claim open and
+    // the only thing that can move the counter is a hand-over.
+    std::fs::write(repo.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "fd-1"]).0, 0);
+
+    // The diagnostic, run the documented number of times: still nothing to report.
+    for _ in 0..3 {
+        let (code, out, err) = air(&repo, &bd, &["handover", "--bead", "fd-1"]);
+        assert_eq!(code, 0, "{out}{err}");
+        assert!(out.contains("would refuse"), "{out}");
+    }
+    assert_eq!(alarms(), 0, "a query must not raise the alarm");
+
+    // The hook path: an actual `bd close`, refused because there is no green at HEAD. THAT is
+    // a hand-over attempt, and it is the one the coordinator should see.
+    let (code, err) = air_hook(
+        &repo,
+        &bd,
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": {"command": "bd close fd-1 --reason done"}}),
+        true,
+    );
+    assert_eq!(code, 2, "the gate must refuse: {err}");
+    assert_eq!(alarms(), 1, "the hook path must raise it exactly once");
 }
 
 /// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.
