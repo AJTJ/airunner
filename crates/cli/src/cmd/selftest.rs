@@ -63,6 +63,7 @@ pub fn run(json: bool) -> i32 {
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_close_with_proof_sequence(),
+        probe_verify_in_flight(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -1478,5 +1479,64 @@ fn probe_stop_nudge() -> Probe {
         name: "stop: nudge once when ready beads and no claim",
         red_fires: red,
         green_passes: once && then_pass,
+    }
+}
+
+/// air-4cr: a verify in flight is a fact `air status` shows and `air land` names.
+///
+/// The failure: adopter's coordinator invalidated three workers' verifies in one round by
+/// landing under them, with nothing to consult. A full verify is ~420 s there and the landing
+/// rate is faster, so their answer was a hand protocol (worker warns, coordinator holds).
+///
+/// Red: with one run in flight, `air status` prints a line naming the worker and `air land`
+/// warns. Green: with nothing running both are silent, and a run whose process died is not
+/// running — the reader prunes it rather than leaving a row nobody can clear.
+fn probe_verify_in_flight() -> Probe {
+    use crate::cmd::land::in_flight_warnings;
+    use crate::cmd::status::{Snapshot, render_for_probe};
+    use air_ledger::verify::InFlight;
+
+    let at = "2026-08-29T12:07:00Z";
+    let flight = |worker: &str, pid: Option<i64>| InFlight {
+        id: format!("id-{worker}"),
+        worker: worker.into(),
+        sha: "abcdef1234".into(),
+        kind: Kind::Verify,
+        command: "make verify".into(),
+        pid,
+        started_at: "2026-08-29T12:00:00Z".into(),
+    };
+    let snap = |flights: Vec<InFlight>| Snapshot {
+        at: at.into(),
+        verifies_in_flight: flights,
+        ..Default::default()
+    };
+
+    let shown = render_for_probe(&snap(vec![flight("alpha", Some(1))]));
+    let warned = in_flight_warnings(&[flight("alpha", Some(1))], at);
+    let red = shown.contains("verify in flight: alpha")
+        // Elapsed in seconds: rounding a just-started run to "0 min" is what makes it look
+        // ignorable, and 420 s is the number that decided this bead.
+        && shown.contains("420s")
+        && warned.len() == 1
+        && warned
+            .first()
+            .is_some_and(|w| w.contains("alpha") && w.contains("invalidates it"));
+
+    // A crashed `air record` leaves a row; the next reader clears it, so nothing accumulates.
+    let l = Ledger::open_in_memory().unwrap_or_else(|_| unreachable!("in-memory ledger"));
+    let _ = l.verify_started(&flight("beta", Some(424_242)));
+    let pruned = l.in_flight_pruned(|_| false).is_ok_and(|v| v.is_empty())
+        && l.verifies_in_flight().is_ok_and(|v| v.is_empty());
+
+    let green = render_for_probe(&snap(vec![]))
+        .lines()
+        .all(|x| !x.starts_with("verify in flight"))
+        && in_flight_warnings(&[], at).is_empty()
+        && pruned;
+    Probe {
+        name: "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        red_fires: red,
+        green_passes: green,
     }
 }
