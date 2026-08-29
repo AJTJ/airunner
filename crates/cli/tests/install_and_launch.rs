@@ -476,13 +476,17 @@ fn init_gates_then_builds_a_project_from_nothing() {
     // air-7q5: the run-to-completion sentence stays, now scoped to a session that HAS work.
     assert!(roles.contains("Once you have work, finishing a bead is not a stop."));
     assert!(roles.contains("Starting a session is not being given work."));
-    // air-eaw: the landing verify runs in the main checkout, where `.git` is a directory rather
-    // than a file, so a green branch can go red there and that is information, not a flake. The
-    // prose is embedded by include_str!, so this asserts it actually reaches a fresh init rather
-    // than only existing in docs/.
+    // air-odv: Air's landing does not re-verify and main never holds an unverified commit.
+    // This replaces air-eaw's "the landing verify is not a repeat of the worker's" — there is
+    // no landing verify. Both halves are pinned: the claim, and the ABSENCE of the old one,
+    // because a doc that still promised a second verify would promise a check nothing runs.
     assert!(
-        roles.contains("The landing verify is not a repeat of the worker's"),
+        roles.contains("Air's landing does not re-verify"),
         "{roles}"
+    );
+    assert!(
+        !roles.contains("The landing verify is not a repeat"),
+        "roles.md must not promise a landing verify that no longer runs (air-odv)"
     );
     // air-arq: the coordinator's failsafe when the channel is quiet.
     assert!(
