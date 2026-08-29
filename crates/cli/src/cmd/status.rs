@@ -28,6 +28,7 @@ use crate::git;
 /// invisible to `air audit` entirely, because the audit could only count what the registry
 /// already named. An unregistered condition is not "uncounted", it is unseeable.
 pub mod kinds {
+    pub const STUCK: &str = "stuck";
     pub const IDLE_WITH_CLAIM: &str = "idle-with-claim";
     pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
     pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
@@ -43,6 +44,7 @@ pub mod kinds {
 
     /// The whole set, compared against the registry by `air selftest`.
     pub const ALL: &[&str] = &[
+        STUCK,
         IDLE_WITH_CLAIM,
         IDLE_WITHOUT_CLAIM,
         SILENT_WITH_CLAIM,
@@ -143,6 +145,7 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thresholds {
+    pub stuck_min: i64,
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
@@ -155,6 +158,7 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
+            stuck_min: 5,
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             launch_grace_min: 3,
@@ -173,6 +177,7 @@ impl Thresholds {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
+        t.stuck_min = get("AIR_ATTENTION_STUCK_MIN", t.stuck_min);
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
@@ -730,16 +735,35 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
-                // `stuck` was deleted on 2026-08-29 (air-dqw). It fired zero times in any
-                // recorded day, including through the 2026-08-22 05:26-05:45 standstill it was
-                // written for and the six days main sat red. The reason it never fired is that
-                // its INPUT never existed: the state is set only by the `PermissionRequest`
-                // hook, and `hook.PermissionRequest` appears zero times in 34,000+ recorded
-                // events across 8 days, so the `sessions` table has only held `running` and
-                // `working`. A condition downstream of an event that never arrives cannot be
-                // repaired by a threshold. The session state itself stays, so that if
-                // `PermissionRequest` ever does arrive, `air status` shows it.
+                // `stuck` has never fired in any recorded day, and that is a fact about the
+                // FLEET'S CONFIGURATION rather than about this arm (air-dqw, corrected by
+                // diligence during air-byw before the deletion it nearly justified shipped).
+                //
+                // The state is set only by `HookEvent::PermissionRequest` (hook.rs:188), and
+                // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days.
+                // The hook is real and correctly registered. It never fires because the fleet
+                // runs in auto mode: `~/.claude/settings.json` has `permissions.defaultMode:
+                // auto` with `skipAutoPermissionPrompt: true` and an `autoMode` classifier, so
+                // no permission prompt is ever shown and nothing ever waits on one. Every
+                // `hook.PermissionDenied` event says "Blocked by classifier" — that classifier
+                // deciding instead of asking.
+                //
+                // So the silence is DORMANCY, not death: turn auto mode off and this works
+                // immediately, with no code change. A zero is evidence only when the subject
+                // occurred and the mechanism stayed silent; here the subject never occurred.
+                // Deleting on that silence and keeping on that silence rest on the same
+                // nothing, which is why air-dqw closed on the finding instead of the deletion.
                 match sess.state.as_str() {
+                    "stuck" if age >= t.stuck_min => out.push(Attention {
+                        worker: w.worker.clone(),
+                        kind: kinds::STUCK,
+                        detail: format!(
+                            "waiting on a permission prompt{} for {age} min; answer it in their terminal",
+                            sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
+                        ),
+                        for_minutes: age,
+                        fingerprint: String::new(),
+                    }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
                         kind: kinds::IDLE_WITH_CLAIM,
@@ -1751,8 +1775,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                // The worker named "stuck" stays in the fixture: its session state is still a
-                // state, and it must now raise NOTHING, which is the deletion (air-dqw).
+                ("stuck", "stuck"),
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
@@ -1762,6 +1785,7 @@ mod tests {
         assert_eq!(att[0].for_minutes, 30);
         // Tighten nothing, loosen everything: all time-based ones go quiet.
         let loose = Thresholds {
+            stuck_min: 60,
             idle_with_claim_min: 60,
             silent_with_claim_min: 60,
             launch_grace_min: 3,
