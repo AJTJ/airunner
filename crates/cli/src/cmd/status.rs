@@ -627,20 +627,55 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             }
             None => {}
         }
-        for c in &w.claims {
-            if c.handover_attempts > 0 && w.green_at_head == Some(false) {
-                let since = c.last_handover_at.as_deref().unwrap_or(now);
-                out.push(Attention {
-                    worker: w.worker.clone(),
-                    kind: "handover-not-green",
-                    detail: format!(
-                        "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
-                        c.bead, c.handover_attempts, since
-                    ),
-                    for_minutes: minutes_between(since, now).unwrap_or(0),
-                    fingerprint: String::new(),
-                });
-            }
+        // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
+        // every claim it holds is not-green for the SAME reason and the same fix; adopter's
+        // status printed eleven lines for one worker, which is one fact eleven times. The
+        // single-claim wording is unchanged, because that is the case that reads well already.
+        //
+        // Removal: when no worker ever holds two claims at once, this collapses nothing and
+        // the loop above can go back to pushing per claim.
+        let stuck: Vec<&Claim> = if w.green_at_head == Some(false) {
+            w.claims
+                .iter()
+                .filter(|c| c.handover_attempts > 0)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
+        // one, and the beads read in the order they have been waiting.
+        let oldest = stuck
+            .iter()
+            .filter_map(|c| c.last_handover_at.as_deref())
+            .min()
+            .unwrap_or(now);
+        let detail = match stuck.as_slice() {
+            [] => None,
+            [c] => Some(format!(
+                "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
+                c.bead,
+                c.handover_attempts,
+                c.last_handover_at.as_deref().unwrap_or(now)
+            )),
+            many => Some(format!(
+                "{} beads handed over without green verify at HEAD ({}); {} attempts in total; oldest {}",
+                many.len(),
+                many.iter()
+                    .map(|c| c.bead.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                many.iter().map(|c| c.handover_attempts).sum::<i64>(),
+                oldest
+            )),
+        };
+        if let Some(detail) = detail {
+            out.push(Attention {
+                worker: w.worker.clone(),
+                kind: "handover-not-green",
+                detail,
+                for_minutes: minutes_between(oldest, now).unwrap_or(0),
+                fingerprint: String::new(),
+            });
         }
     }
     for (l, defect) in &s.leases {
