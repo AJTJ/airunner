@@ -119,13 +119,17 @@ Incident: the 2026-08-22 05:26-05:45 standstill (air-arq), where the quiet chann
 coordinator remembering to look. Removed when `stuck` fires on a real wedge before the heartbeat
 catches it, twice. **[fact]**
 
-Landing is the coordinator's: `air land --all` merges every green branch into main,
-oldest first, verifies the merged result, and puts main back where it was on red (air-3pz). A
-branch is landable when it carries a recorded green at its head; the beads reported are the
-ones its commits name in a `Bead: <id>` trailer — no bead status is consulted, and prose is not
-read (air-7kp, air-4re). Put the trailer on every commit that does a bead's work; a commit
-without one is attributed to nothing. `air status` names what is ready. **[Air enforces: main checkout, on main, clean
-tracked tree, branch contains main, recorded green at the branch head]**
+**Landing is the coordinator's, not a worker's.** *How* a branch reaches main is the repo's own
+flow and lives in its CLAUDE.md, exactly as hand-over does: some repos have their own lander,
+some use Air's. Air names no landing command here (air-97z).
+
+What Air states either way: a branch is landable when it carries a **recorded green at a head
+that contains `main`**; the beads a landing carries are the ones its commits name in a
+`Bead: <id>` trailer, so put the trailer on every commit that does a bead's work — no bead status
+is consulted, prose is not read, and a commit without one is attributed to nothing (air-7kp,
+air-4re); and Air records every landing it performs. `air status` names what is ready.
+**[Air enforces, when the landing is Air's: main checkout, on main, clean tracked tree, branch
+contains main, recorded green at the branch head]**
 **The landing verify is not a repeat of the worker's: it runs in the main checkout, where the
 environment differs.** `.git` is a FILE in a worktree and a DIRECTORY in the main checkout, and
 anything reading its shape, `core.hooksPath`, or the cwd can differ between the two. adopter
@@ -134,8 +138,8 @@ reason, and in the main checkout it did not refuse, so the target RAN and wrote 
 landing verify. "Every other instrument failure that night was catchable by running the suite.
 This one was only catchable by running it somewhere else." A worker has exactly one environment,
 so a green branch going red on landing is information, not a flake. **[fact]**
-Merging is not closing, and `air land` closes nothing: the worker closes its own bead with
-proof (owner, 2026-08-22). The landing prints every bead beside its acceptance criteria and
+Merging is not closing, and a landing closes nothing: the worker closes its own bead with
+proof (owner, 2026-08-22). A landing Air performs prints every bead beside its acceptance criteria and
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause
 only by lookup (a recorded green at the landed sha, a path the merge changed) and reports the
 rest as unreadable rather than judging prose. A clause the merge CONTRADICTS is a wrong close,
@@ -153,8 +157,8 @@ labelled `owner` is awaiting the owner and `air claim` refuses it to workers (th
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open).
 
-Not available to the coordinator, by deny rule: `git commit` and `git push` on main. `air land`
-is the one allowed path onto main, and it pushes nothing.
+Not available to the coordinator, by deny rule: `git commit` and `git push` on main. Whatever
+path this repo lands by, Air pushes nothing — a landing it performs reaches main and stops there.
 **[Air enforces]**
 
 ## When refused
