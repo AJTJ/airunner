@@ -133,9 +133,17 @@ So, before the first `air lease take` in a target repo:
    `lock` in the name, and any PreToolUse or pre-commit guard that reads a path to decide whether
    a command may run. The guard is the one that matters: it is the half that refuses.
 2. **Pick one, and it is the one the guard reads.** A store nothing enforces is a record; the
-   store the guard reads is the lock. If Air's is to be it, the guard changes to
-   `air lease status --json`; if the repo's is to be it, `air lease` goes unused there and Air
-   records nothing about leases. Do not run both "until the migration is done".
+   store the guard reads is the lock. If the repo's is to be it, `air lease` goes unused there
+   and Air records nothing about leases — a fine outcome, not a loss. Do not run both "until the
+   migration is done".
+
+   **If Air's is to be it, count the readers before sizing the change.** It is not one call site.
+   adopter, correcting this section on 2026-08-29: their PreToolUse guard calls
+   `scripts/lease.sh check` rather than reading the directory itself, and `make reseed` and
+   `make seed-demo` refuse *independently inside their own targets*, because they write over HTTP
+   to a fixed port and would otherwise split a seed across two databases. So the migration is the
+   guard, the script it calls, and every target that refuses on its own. Grep for the lock path,
+   not for the guard.
 3. **Confirm from the tool, not from the diff.** `air lease status` names its own store on every
    run:
 
