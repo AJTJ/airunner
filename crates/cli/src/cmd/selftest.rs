@@ -82,6 +82,7 @@ pub fn run(json: bool) -> i32 {
         probe_verify_in_flight(),
         probe_landing_state(),
         probe_land_role_is_where_you_are(),
+        probe_landable_pushes_once_per_branch(),
     ];
     let all_ok = probes.iter().all(Probe::ok);
     emit(json, &probes, || {
@@ -970,6 +971,72 @@ fn probe_land_refusals() -> Probe {
         }) == Ok(false);
     Probe {
         name: "land: worker, dirty main, stale branch and a green off the head are all refused with a fix; a clean green passes",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-03w: a branch that goes green with main merged is a condition, pushed once.
+///
+/// Since air-7o3 the worker closes its own bead with proof and never sets `awaiting_review`,
+/// so `review-waiting`'s subject is a state this repo stopped using: nothing told the
+/// coordinator a branch was ready, and it learned by polling `air status`. The worker
+/// signalling on close is the intent (roles.md, owner 2026-08-29); this is the failsafe.
+///
+/// Red: a landable branch produces exactly one push, naming the beads and `air land --all`.
+/// Green: it does not repeat while it sits, however long — age is not a change (air-s7c) — and
+/// a moved head is a real change that pushes again.
+fn probe_landable_pushes_once_per_branch() -> Probe {
+    use crate::cmd::mcp::{Pushed, select_new};
+    use crate::cmd::status::{Landing, Snapshot, Thresholds, attention};
+
+    let snap = |head: &str, beads: &[&str], minutes: i64| Snapshot {
+        landable: beads
+            .iter()
+            .map(|b| Landing {
+                bead: (*b).to_string(),
+                worker: "alpha".into(),
+                head: head.to_string(),
+                minutes,
+                command: format!("air land {b}"),
+                acceptance: Vec::new(),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let at = |s: &Snapshot| attention(s, "2026-08-29T12:00:00Z", Thresholds::default());
+
+    let first = at(&snap("abcdef1234", &["air-1", "air-2"], 5));
+    let landable: Vec<_> = first.iter().filter(|a| a.kind == "landable").collect();
+    // One condition for the branch, however many beads it carries: one branch is one merge.
+    let red = landable.len() == 1
+        && landable.first().is_some_and(|a| {
+            a.worker == "alpha"
+                && a.detail.contains("air-1 air-2")
+                && a.detail.contains("air land --all")
+                && a.detail.contains("abcdef12")
+        });
+
+    let mut pushed = Pushed::new();
+    let pushed_first = select_new(
+        &mut pushed,
+        &at(&snap("abcdef1234", &["air-1", "air-2"], 5)),
+    );
+    // Still sitting there an hour later, and a bead count that changed without the head
+    // moving: neither is a new fact about whether the branch can land.
+    let sitting = select_new(
+        &mut pushed,
+        &at(&snap("abcdef1234", &["air-1", "air-2", "air-3"], 65)),
+    );
+    // The head moved: the worker committed and re-verified, so this is a different tree.
+    let moved = select_new(&mut pushed, &at(&snap("99999999aa", &["air-1"], 1)));
+    let green = pushed_first.iter().filter(|a| a.kind == "landable").count() == 1
+        && !sitting.iter().any(|a| a.kind == "landable")
+        && moved.iter().filter(|a| a.kind == "landable").count() == 1
+        // Nothing landable is silent.
+        && !at(&snap("x", &[], 0)).iter().any(|a| a.kind == "landable");
+    Probe {
+        name: "landable: a branch green with main merged pushes once per head, not while it sits",
         red_fires: red,
         green_passes: green,
     }
