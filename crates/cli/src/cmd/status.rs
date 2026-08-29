@@ -18,6 +18,44 @@ use serde::Serialize;
 use crate::cmd::{emit, holdings, log_event, now, open};
 use crate::git;
 
+/// air-sze: every attention kind `attention()` can emit, in one place.
+///
+/// `attention()` constructs only from these constants, so a condition cannot reach the event log
+/// without appearing here, and a probe compares this set against the `Fires::Condition` rows in
+/// the mechanism registry. Five kinds shipped with no registry row until this bead
+/// (`gone-with-claim`, `idle-with-claim`, `silent-with-claim`, `lease-held-by-dead-session`,
+/// `lease-stale`): no removal condition, no fire count, and — unlike an unregistered decision —
+/// invisible to `air audit` entirely, because the audit could only count what the registry
+/// already named. An unregistered condition is not "uncounted", it is unseeable.
+pub mod kinds {
+    pub const STUCK: &str = "stuck";
+    pub const IDLE_WITH_CLAIM: &str = "idle-with-claim";
+    pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
+    pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
+    pub const GONE_WITH_CLAIM: &str = "gone-with-claim";
+    pub const HANDOVER_NOT_GREEN: &str = "handover-not-green";
+    pub const LANDABLE: &str = "landable";
+    pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
+    pub const OWNER_DECISION_WAITING: &str = "owner-decision-waiting";
+    pub const LEASE_HELD_BY_DEAD_SESSION: &str = "lease-held-by-dead-session";
+    pub const LEASE_STALE: &str = "lease-stale";
+
+    /// The whole set, compared against the registry by `air selftest`.
+    pub const ALL: &[&str] = &[
+        STUCK,
+        IDLE_WITH_CLAIM,
+        IDLE_WITHOUT_CLAIM,
+        SILENT_WITH_CLAIM,
+        GONE_WITH_CLAIM,
+        HANDOVER_NOT_GREEN,
+        LANDABLE,
+        LANDED_NOT_CLOSED,
+        OWNER_DECISION_WAITING,
+        LEASE_HELD_BY_DEAD_SESSION,
+        LEASE_STALE,
+    ];
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Session {
     pub session_id: String,
@@ -651,17 +689,20 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        // `gone-with-claim` was deleted on 2026-08-22 (air-s7c): it fired zero times in the
-        // audited window and never in any recorded day since it was added on 2026-08-20. A
-        // mechanism that has never fired has never prevented anything. A dead session holding
-        // a claim now falls through to the ordinary session states below, which do fire.
+        // air-sze: `gone-with-claim` was NOT deleted, whatever the comment here used to say.
+        // It said air-s7c removed it on 2026-08-22 because "a dead session holding a claim now
+        // falls through to the ordinary session states below, which do fire". The arm below
+        // still emits it, and that reason could never have held for it: this is the branch for
+        // a worker with NO session row, so there are no session states below to fall through
+        // to. A crashed worker still holding a bead is what nothing else reports. It is now in
+        // the registry with a removal condition instead of being described as gone.
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
                 match sess.state.as_str() {
                     "stuck" if age >= t.stuck_min => out.push(Attention {
                         worker: w.worker.clone(),
-                        kind: "stuck",
+                        kind: kinds::STUCK,
                         detail: format!(
                             "waiting on a permission prompt{} for {age} min; answer it in their terminal",
                             sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
@@ -671,7 +712,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
-                        kind: "idle-with-claim",
+                        kind: kinds::IDLE_WITH_CLAIM,
                         detail: format!(
                             "idle {age} min holding {}; prompt them, or `air release` if abandoned",
                             beads()
@@ -697,7 +738,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     {
                         out.push(Attention {
                             worker: w.worker.clone(),
-                            kind: "idle-without-claim",
+                            kind: kinds::IDLE_WITHOUT_CLAIM,
                             detail: format!(
                                 "idle {age} min, {} beads ready; prompt them",
                                 s.ready_depth.unwrap_or(0)
@@ -709,7 +750,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
                         out.push(Attention {
                             worker: w.worker.clone(),
-                            kind: "silent-with-claim",
+                            kind: kinds::SILENT_WITH_CLAIM,
                             detail: format!(
                                 "no hook event for {age} min while holding {}; session may have died",
                                 beads()
@@ -737,7 +778,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 if age >= t.launch_grace_min {
                     out.push(Attention {
                         worker: w.worker.clone(),
-                        kind: "gone-with-claim",
+                        kind: kinds::GONE_WITH_CLAIM,
                         detail: format!(
                             "no live session but holds {}; restart `air worker {}` or release",
                             beads(),
@@ -794,7 +835,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         if let Some(detail) = detail {
             out.push(Attention {
                 worker: w.worker.clone(),
-                kind: "handover-not-green",
+                kind: kinds::HANDOVER_NOT_GREEN,
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
@@ -804,9 +845,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     for (l, defect) in &s.leases {
         let Some(d) = defect else { continue };
         let kind = if d.starts_with("dead") {
-            "lease-held-by-dead-session"
+            kinds::LEASE_HELD_BY_DEAD_SESSION
         } else {
-            "lease-stale"
+            kinds::LEASE_STALE
         };
         out.push(Attention {
             worker: l.worker.clone(),
@@ -844,7 +885,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         for (worker, (head, beads, minutes)) in by_worker {
             out.push(Attention {
                 worker: worker.to_string(),
-                kind: "landable",
+                kind: kinds::LANDABLE,
                 detail: format!(
                     "{worker} is green at {} with main merged, carrying {}; `air land --all`",
                     head.get(..8).unwrap_or(head),
@@ -862,7 +903,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         let (bead, why) = (&o.bead, &o.why);
         out.push(Attention {
             worker: bead.clone(),
-            kind: "landed-not-closed",
+            kind: kinds::LANDED_NOT_CLOSED,
             detail: format!(
                 "{bead} landed in {} with an acceptance clause this merge CONTRADICTS: {why}. \
                  The worker closes its own bead with proof, so read the bead: either reopen it \
@@ -877,7 +918,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     if let Some(oldest) = &s.oldest_owner_capture_at {
         out.push(Attention {
             worker: "owner".to_string(),
-            kind: "owner-decision-waiting",
+            kind: kinds::OWNER_DECISION_WAITING,
             detail: format!(
                 "{} decision(s) waiting for the owner, oldest {} min; `air inbox --owner`",
                 s.owner_queue_depth,
@@ -1887,8 +1928,8 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                "lease-held-by-dead-session",
-                "lease-stale",
+                kinds::LEASE_HELD_BY_DEAD_SESSION,
+                kinds::LEASE_STALE,
                 "owner-decision-waiting"
             ]
         );
