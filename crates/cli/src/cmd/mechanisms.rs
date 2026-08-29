@@ -300,7 +300,8 @@ pub const MECHANISMS: &[Mechanism] = &[
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-held-by-dead-session"),
         // KEPT, and for a different reason from the three above: this one's zero is about
-        // USAGE, not about the mechanism. The `leases` table has zero rows in this repo because
+        // USAGE, not about the mechanism. Addressed to the waiter rather than the holder
+        // since air-q9c, like `lease-stale` below. The `leases` table has zero rows in this repo because
         // `air lease` is unused here. adopter uses it every round. Deleting on our zero is
         // precisely the error the owner reversed on `air lease` itself (air-uae, 2026-08-29):
         // a verdict from an absence in one repo is not a verdict about a mechanism.
@@ -315,15 +316,17 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-stale"),
-        // Same zero-is-about-usage argument, and it has a KNOWN defect that this row now makes
-        // visible: the condition is addressed to the lease's HOLDER and offers them
-        // `air lease break` on their own lease, though staleness is a signal for other agents
-        // and never for the holder. the adopter reported six firings in one day on healthy leases
-        // (their ad-m07x); the attribution half reproduces here, captured
-        // 01M17J9NSHXZBH56K7MVY7XAM8. Registered rather than deleted so the fix has somewhere
-        // to be recorded.
+        // Same zero-is-about-usage argument. The KNOWN defect this row was registered to hold
+        // — the condition addressed to the lease's HOLDER, offering them `air lease break` on
+        // the lease they were using — is FIXED as of air-q9c: both lease conditions now name
+        // whoever is waiting in `lease_wants`, and a defect nobody is waiting on produces no
+        // condition at all. the adopter reported six firings in one day on healthy leases (their
+        // ad-m07x); the attribution half reproduced here, captured 01M17J9NSHXZBH56K7MVY7XAM8.
+        //
+        // So the first half of the recorded condition is discharged and the second is what is
+        // left to observe, which needs a repo that actually takes leases.
         removal: Removal::Judgement(
-            "the attribution is fixed and a round in a lease-using repo shows it firing at someone who can act on it, or shows nobody acting on it at all",
+            "attribution fixed (air-q9c); what is left is a round in a lease-using repo showing it firing at someone who can act on it, or showing nobody acting on it at all",
         ),
     },
     Mechanism {

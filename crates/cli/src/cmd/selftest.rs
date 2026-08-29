@@ -272,6 +272,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "lease: a defect reaches the waiter, never the holder, and nobody waiting is silent",
+        Mutation {
+            // Address the condition to the holder again — the whole defect air-q9c fixed.
+            // The condition still fires and still says the same thing; only the name on it
+            // changes, so this cannot pass by silencing the arm.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "worker: who.clone(),",
+            to: "worker: l.worker.clone(),",
+            also_red: &[],
+        },
+    ),
+    (
         "traffic: SendMessage reaches the hook and the audit sums it per worker",
         Mutation {
             // The matcher, which is the thing that made the count zero in the first place.
@@ -779,6 +791,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
+        probe_lease_defect_reaches_the_waiter(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -2696,6 +2709,62 @@ fn probe_agent_traffic_is_counted() -> Probe {
         red_fires: matcher_covers && parsed == Some(("main".to_string(), 11)),
         // No content anywhere: the parse returns a recipient and a length, never the text.
         green_passes: summed && !format!("{t:?}").contains("hello there"),
+    }
+}
+
+/// air-q9c: a lease defect is a signal for whoever WANTS the resource, and never for the
+/// holder — who knows they hold it and was being told to break the thing they were using.
+/// adopter saw six of those in a day while the simulator and API were genuinely running.
+///
+/// Red: a defective lease with someone waiting fires, addressed to the WAITER, and tells them
+/// the action is theirs. Green: the same defect with nobody waiting is silent (`lease take`
+/// takes a defective lease on its own, so there is nobody to tell), and so is one where the
+/// only name waiting is the holder's.
+fn probe_lease_defect_reaches_the_waiter() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention};
+    use air_ledger::leases::Lease;
+
+    let dead = || {
+        vec![(
+            Lease {
+                resource: "runtime".into(),
+                worker: "a".into(),
+                session_id: None,
+                pid: Some(1),
+                pid_started: None,
+                reason: "api".into(),
+                taken_at: "2026-08-20T11:00:00Z".into(),
+                heartbeat_at: "2026-08-20T11:00:00Z".into(),
+            },
+            Some("dead (pid 1 gone)".to_string()),
+        )]
+    };
+    let snap = |wants: &[(&str, &[&str])]| Snapshot {
+        leases: dead(),
+        lease_wants: wants
+            .iter()
+            .map(|(r, who)| {
+                (
+                    (*r).to_string(),
+                    who.iter().map(|w| (*w).to_string()).collect(),
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let now = "2026-08-20T12:00:00Z";
+    let waited = attention(&snap(&[("runtime", &["b"])]), now, Thresholds::default());
+    let nobody = attention(&snap(&[]), now, Thresholds::default());
+    let self_only = attention(&snap(&[("runtime", &["a"])]), now, Thresholds::default());
+    Probe {
+        name: "lease: a defect reaches the waiter, never the holder, and nobody waiting is silent",
+        red_fires: waited.len() == 1
+            && waited.first().is_some_and(|x| {
+                x.kind == "lease-held-by-dead-session"
+                    && x.worker == "b"
+                    && x.detail.contains("yours to take now")
+            }),
+        green_passes: nobody.is_empty() && self_only.is_empty(),
     }
 }
 
