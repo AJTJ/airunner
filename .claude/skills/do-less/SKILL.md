@@ -121,6 +121,21 @@ its own subject counting rather than an observation — the raw log had 29 fires
 subjects and zero repeats, and the mechanism proposed for deletion was working exactly as
 documented (air-s7c).
 
+## If it changes what an adopting repo sees, it needs a notice — and a notice needs a release
+
+Air is installed into other repos, so a mechanism you add or delete is a mechanism *they* get.
+Question 7, after the six above: **does this change what a target repo sees, does, or may do?**
+If yes it needs a row in `install::SURFACE`, and appending one **cuts a release**: a row in
+`install::RELEASES`, the same version in `Cargo.toml`, `make release`. `make verify` fails until
+they agree, so this is not something to remember — it is something to expect.
+
+Two failures behind it, both from 2026-08-29. A round changed more than any before it and added
+one notice, so an adopting repo would have learned almost none of it. And the surface version
+that guards against a downgrade could move on nobody's authority, which fails toward
+*permitting*: the refusal quietly stops noticing, and a stale binary shows a repo none of the
+notices telling it to upgrade. **Removed when** Air is no longer installed into a repo it is not
+built in.
+
 ## Phrasing in roles and prompts
 
 Say what is true and what is available; avoid "always", "never", "must" unless a refusal
