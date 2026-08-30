@@ -309,9 +309,11 @@ pub const SURFACE: &[SurfaceChange] = &[
                  If a matcher there is narrower than the one this version installs, it has \
                  been narrower since your first install and every widening since was a \
                  no-op that reported success. Re-run `air install --write` and diff the file. \
-                 One more trap on top of it: the installer is only as new as the binary, so \
-                 an old `air` cannot write a new matcher however many times you run it - \
-                 check `air --version` against the repo you built from first.",
+                 The trap underneath - that the installer is only as new as the binary, so an \
+                 old `air` cannot write a new matcher however many times you run it - is now \
+                 CHECKED rather than left to you: since air-w9d `air install` refuses to write \
+                 when this repo was last installed by a newer air, and names both builds. You \
+                 no longer have to compare versions by eye.",
     },
     SurfaceChange {
         id: "sendmessage-measured",
@@ -446,12 +448,19 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
 ];
 
+/// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
+pub const BUILD: &str = env!("AIR_BUILD");
+
 /// What `.air/installed.json` records, so the diff has a baseline.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Installed {
-    /// Informational: the `air --version` that last wrote this file.
+    /// The crate version that last wrote this file. It has been `0.0.1` in every build Air has
+    /// ever produced, so it cannot tell two binaries apart; `built_from` is the field that can.
     pub air_version: String,
+    /// The commit the binary that last wrote this file was built from (air-w9d). Empty on a
+    /// file written before this existed, which reads as "cannot tell" and never as a mismatch.
+    pub built_from: String,
     pub installed_at: String,
     /// Surface ids this repo has already been told about.
     pub surface: Vec<String>,
@@ -465,6 +474,31 @@ pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
         .collect()
 }
 
+/// The other direction: notice ids this repo was told about that the RUNNING binary has never
+/// heard of (air-w9d). Non-empty means the binary about to write is older than the one that
+/// last installed here — a downgrade.
+///
+/// Owner, 2026-08-29: *"only allow upgrades, not downgrades."* The forward diff above has
+/// always existed; nothing computed the reverse, so an older `air` would write over a newer
+/// repo's record and report success. That is the trap under all twelve upgrade notices: they
+/// are printed BY `air install`, so a stale binary shows an adopting repo none of them —
+/// including the one telling them to check their binary. The warning travelled through the
+/// channel that was broken.
+///
+/// Pure over (recorded, known) so the probe needs no repo and no git.
+pub fn downgrade<'a>(recorded: &'a [String], known: &[&str]) -> Vec<&'a str> {
+    recorded
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !known.contains(id))
+        .collect()
+}
+
+/// The ids this binary carries, for [`downgrade`].
+pub fn known_ids() -> Vec<&'static str> {
+    SURFACE.iter().map(|c| c.id).collect()
+}
+
 /// Read `.air/installed.json`. A missing or unreadable file means "told about nothing",
 /// which is the right answer for a repo installed before Air recorded this.
 pub fn read_installed(air_dir: &Path) -> Installed {
@@ -475,10 +509,20 @@ pub fn read_installed(air_dir: &Path) -> Installed {
 }
 
 fn write_installed(air_dir: &Path, at: &str) -> Result<(), String> {
+    // MERGE, never overwrite (air-w9d). Overwriting let a binary drop ids the repo had already
+    // been told about, so a single install by a stale `air` erased the record that the
+    // downgrade check reads — the check and the erasure were the same write.
+    let mut surface: Vec<String> = read_installed(air_dir).surface;
+    for c in SURFACE {
+        if !surface.iter().any(|k| k == c.id) {
+            surface.push(c.id.to_string());
+        }
+    }
     let v = Installed {
         air_version: env!("CARGO_PKG_VERSION").to_string(),
+        built_from: BUILD.to_string(),
         installed_at: at.to_string(),
-        surface: SURFACE.iter().map(|c| c.id.to_string()).collect(),
+        surface,
     };
     let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
     std::fs::write(air_dir.join("installed.json"), s + "\n")
@@ -557,6 +601,10 @@ struct Plan {
     /// Air's own surface changes this repo has not been told about (air-6g1). Empty on a
     /// first install: nothing has moved under a repo that never had Air.
     surface_diff: Vec<&'static SurfaceChange>,
+    /// Notice ids the repo was told about that this binary has never heard of: a downgrade.
+    stale: Vec<String>,
+    /// What the binary that last installed here was built from, for the refusal's message.
+    recorded_build: String,
     previously_installed: bool,
     written: bool,
 }
@@ -612,11 +660,17 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     // that, this is a first install and nothing has changed under anyone.
     let previously_installed = !plan_settings_changed(&before_settings, &after_settings)
         || air_dir.join("roles.md").exists();
+    let recorded = read_installed(&air_dir);
     let surface_diff = if previously_installed {
-        surface_diff(&read_installed(&air_dir).surface)
+        surface_diff(&recorded.surface)
     } else {
         Vec::new()
     };
+    // The reverse direction (air-w9d): ids this repo knows that this binary does not.
+    let stale: Vec<String> = downgrade(&recorded.surface, &known_ids())
+        .into_iter()
+        .map(str::to_string)
+        .collect();
 
     let mut plan = Plan {
         repo: repo.clone(),
@@ -631,11 +685,45 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         skills_dir: skills_dir.clone(),
         gitignore_has_air,
         surface_diff,
+        stale,
+        recorded_build: recorded.built_from.clone(),
         previously_installed,
         written: false,
     };
 
     if write {
+        // Upgrades only (owner, 2026-08-29). A binary that does not know what this repo has
+        // already been told is older than the one that last installed here, and writing would
+        // both under-report the upgrade and, before the merge above, erase the record of it.
+        if !plan.stale.is_empty() {
+            eprintln!(
+                "{}",
+                [
+                    "air install: refusing to write: this repo was installed by a NEWER air.".to_string(),
+                    format!(
+                        "  it knows {} notice(s) this binary does not: {}",
+                        plan.stale.len(),
+                        plan.stale.join(", ")
+                    ),
+                    format!(
+                        "  recorded build: {}",
+                        if plan.recorded_build.is_empty() {
+                            "not recorded (installed before air-w9d)"
+                        } else {
+                            &plan.recorded_build
+                        }
+                    ),
+                    format!("  this binary:    {BUILD}"),
+                    "  Air installs forward only. Either install the newer air (cargo install --path crates/cli, from a checkout that has those notices),".to_string(),
+                    format!(
+                        "  or, if those ids came from a branch that never landed, drop them from {}/installed.json.",
+                        air_dir.display()
+                    ),
+                ]
+                .join("\n")
+            );
+            return 2;
+        }
         if !binary_ok {
             eprintln!(
                 "air install: refusing to write: `air` on PATH is {} but this binary is {}. Install this binary on PATH first (cargo install --path crates/cli).",
@@ -723,6 +811,20 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         } else {
             "dry run; re-run with --write to apply.\n"
         });
+        if !plan.stale.is_empty() {
+            s.push_str(&format!(
+                "\nDOWNGRADE: this repo was installed by a newer air (build {}). It knows {} \
+                 notice(s) this binary does not ({}). `--write` will refuse: Air installs \
+                 forward only (air-w9d).\n",
+                if plan.recorded_build.is_empty() {
+                    "not recorded"
+                } else {
+                    &plan.recorded_build
+                },
+                plan.stale.len(),
+                plan.stale.join(", ")
+            ));
+        }
         s.push_str(&render_surface(&plan.surface_diff, plan.written));
         s
     });
