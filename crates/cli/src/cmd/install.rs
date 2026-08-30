@@ -477,28 +477,53 @@ pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
         .collect()
 }
 
-/// The surface's version. **Monotonic, and bumped whenever notices are appended.**
+/// Every release of Air, as `(crate version, surface version, notice count)`.
 ///
-/// Owner, 2026-08-29: *"only allow upgrades, not downgrades."* The first attempt at this
-/// compared notice-id SETS, and a set can say "different" but never "behind": a worker that
-/// installs from its own branch records an id that never lands, and a later binary built from
-/// main then looks older than the repo when it is not. A total order removes the question
-/// instead of asking someone to answer it.
+/// **This table is the line in the sand. Append one row per release; never edit a row.**
+///
+/// Owner, 2026-08-29: *"ensure that our whole process knows to bump the monotonic id every
+/// time we cut a release... enforce a good release system, so that we draw those lines in the
+/// sand more readily."*
+///
+/// Until that ruling Air had no release concept at all: `version = "0.0.1"` since the first
+/// commit, no tags, and `Installed.air_version` recording a string that could not tell two
+/// binaries apart while its own doc claimed it could. A surface version that moves on nobody's
+/// authority is the same defect one level up.
+///
+/// The three columns are checked against each other and against the crate by
+/// `install::tests::a_release_row_matches_the_crate_and_the_surface`, which runs in
+/// `make verify`. So:
+///
+/// * appending a surface notice **forces a release** — the count stops matching until a row
+///   is added;
+/// * bumping the crate version **forces a decision** about the surface version;
+/// * neither can drift from the other, because both read this table rather than each other.
+///
+/// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing — which
+/// is the one direction a guard must not fail in, and is why this is a test and not a comment.
+pub const RELEASES: &[(&str, u32, usize)] = &[
+    // The surface as it stood before 2026-08-29: nine notices, no release ever cut.
+    ("0.0.1", 1, 9),
+    // 2026-08-29: the twelve notices of air-njb, and the forward-only install of air-w9d.
+    ("0.1.0", 2, 21),
+];
+
+/// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
+/// it**. Bumped by cutting a release, never on its own.
 ///
 /// This follows the ledger's `user_version` precedent (11 -> 12) rather than inventing a
 /// scheme. The two jobs stay separate, which is the point:
 ///
-/// * the number answers **may I write** — immune to a branch-only id;
+/// * the number answers **may I write** — a total order, immune to a branch-only notice id;
 /// * the id set answers **what do I print** — [`surface_diff`], unchanged and good at it.
-pub const SURFACE_VERSION: u32 = 2;
-
-/// `(version, notice count at that version)`. Append a row when you bump `SURFACE_VERSION`.
 ///
-/// Without this, appending a notice and forgetting the bump fails toward PERMITTING: the
-/// refusal silently stops noticing a downgrade, which is the one direction a guard must not
-/// fail in. The test below makes forgetting loud instead.
-#[cfg(test)]
-const SURFACE_SIZES: &[(u32, usize)] = &[(1, 9), (2, 21)];
+/// A set was the first attempt and it cannot do the first job: a set says "different", never
+/// "behind", so a worker installing from its own branch would make a later main-built binary
+/// look older than the repo.
+pub const SURFACE_VERSION: u32 = match RELEASES.last() {
+    Some(&(_, v, _)) => v,
+    None => 0,
+};
 
 /// May a binary at `mine` write over a repo recorded at `theirs`? (air-w9d)
 ///
@@ -888,27 +913,41 @@ mod tests {
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
     }
 
-    /// air-w9d: appending a notice without bumping `SURFACE_VERSION` fails toward PERMITTING —
-    /// the refusal quietly stops noticing a downgrade, which is the one direction a guard must
-    /// not fail in. This makes forgetting loud at the moment the notice is added.
+    /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for
+    /// what a release IS here, and this is what makes it a line rather than a comment:
+    ///
+    /// * append a surface notice and the count stops matching, so a release is forced;
+    /// * bump the crate version and the last row stops matching, so the surface version has
+    ///   to be decided rather than drift.
+    ///
+    /// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing —
+    /// which is the one direction a guard must not fail in.
     #[test]
-    fn appending_a_notice_bumps_the_surface_version() {
-        let (version, count) = SURFACE_SIZES.last().copied().unwrap_or((0, 0));
+    fn a_release_row_matches_the_crate_and_the_surface() {
+        let (version, surface, count) = RELEASES.last().copied().unwrap_or(("", 0, 0));
+        assert_eq!(
+            version,
+            env!("CARGO_PKG_VERSION"),
+            "Cargo.toml is at {} but RELEASES' last row is {version}. Cutting a release means \
+             appending a row here; see CLAUDE.md \"Releases\".",
+            env!("CARGO_PKG_VERSION")
+        );
         assert_eq!(
             (SURFACE_VERSION, SURFACE.len()),
-            (version, count),
-            "SURFACE has {} notices at version {SURFACE_VERSION}, but SURFACE_SIZES' last row \
-             is ({version}, {count}). Appending a notice means bumping SURFACE_VERSION and \
-             adding a row here; a repo installed by the new binary must be refused by the old.",
+            (surface, count),
+            "SURFACE has {} notices at version {SURFACE_VERSION}, but RELEASES' last row says \
+             ({surface}, {count}). Appending a notice means cutting a release: add a row with \
+             the new crate version, the next surface version, and the new count.",
             SURFACE.len()
         );
-        // Monotonic by construction, so `may_install`'s comparison is a total order.
+        // Monotonic in both machine-read columns, so `may_install` compares a total order
+        // rather than an assumption, and no row may be edited to say less than the one before.
         assert!(
-            SURFACE_SIZES.windows(2).all(|w| match w {
-                [(v1, c1), (v2, c2)] => v2 > v1 && c2 >= c1,
+            RELEASES.windows(2).all(|w| match w {
+                [(_, v1, c1), (_, v2, c2)] => v2 >= v1 && c2 >= c1,
                 _ => true,
             }),
-            "SURFACE_SIZES must increase in both columns"
+            "RELEASES must never decrease: append rows, never edit them"
         );
     }
 
