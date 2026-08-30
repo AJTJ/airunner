@@ -272,6 +272,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "install: a binary below the repo's surface version is refused; equal, higher and unrecorded write",
+        Mutation {
+            // Allow every write: the pre-air-w9d world, where only the forward direction was
+            // computed and an older binary wrote over a newer record reporting success. The
+            // green half legitimately survives (it asserts writes ARE allowed), so only the
+            // red half falls, which is what naming one branch means.
+            file: "crates/cli/src/cmd/install.rs",
+            from: "theirs.is_none_or(|t| mine >= t)",
+            to: "theirs.is_none_or(|_| true)",
+            also_red: &[],
+        },
+    ),
+    (
         "install: a repo at yesterday's surface is told what changed; a current one is told nothing",
         Mutation {
             // Nothing is ever new, which is the pre-air-6g1 world: install reports success and
@@ -831,6 +844,7 @@ fn all_probes() -> Vec<Probe> {
         probe_agent_traffic_is_counted(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
+        probe_install_goes_forward_only(),
         probe_enforced_gate(),
         probe_batch_close(),
         probe_triage_bead_exists(),
@@ -2958,6 +2972,39 @@ fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
                 .iter()
                 .any(|c| c.id == "install-refreshes-matcher" && c.silent_break),
         green_passes: quiet.is_empty(),
+    }
+}
+
+/// air-w9d: `air install` goes forward only. Owner, 2026-08-29: *"only allow upgrades, not
+/// downgrades."*
+///
+/// The forward diff has always existed; nothing computed the reverse, so an older `air` wrote
+/// over a newer repo's record and reported success. That is the trap under all twelve upgrade
+/// notices — they are printed BY `air install`, so a stale binary shows an adopting repo none
+/// of them, including the one telling them to check their binary.
+///
+/// **Three directions, not two.** Red: a binary BELOW the recorded surface version is refused.
+/// Green: equal writes, higher writes, and a repo with no version recorded at all writes —
+/// that last one is every repo running Air today, adopter included, and refusing it would
+/// lock them all out. The silent cases are what make the refusal mean anything.
+///
+/// The first version of this compared notice-id SETS. A set says "different", never "behind",
+/// so a worker installing from its own branch made a later main-built binary look older than
+/// the repo. The version is a total order and the question does not arise.
+fn probe_install_goes_forward_only() -> Probe {
+    use crate::cmd::install::{SURFACE_VERSION, may_install};
+
+    let here = SURFACE_VERSION;
+    let older = here.saturating_sub(1);
+    let newer = here.saturating_add(1);
+    Probe {
+        name: "install: a binary below the repo's surface version is refused; equal, higher and unrecorded write",
+        // A real downgrade only exists once the version has moved at least once.
+        red_fires: here > 0 && !may_install(older, Some(here)),
+        green_passes: may_install(here, Some(here))
+            && may_install(newer, Some(here))
+            && may_install(here, None)
+            && may_install(older, None),
     }
 }
 

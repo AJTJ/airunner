@@ -309,9 +309,11 @@ pub const SURFACE: &[SurfaceChange] = &[
                  If a matcher there is narrower than the one this version installs, it has \
                  been narrower since your first install and every widening since was a \
                  no-op that reported success. Re-run `air install --write` and diff the file. \
-                 One more trap on top of it: the installer is only as new as the binary, so \
-                 an old `air` cannot write a new matcher however many times you run it - \
-                 check `air --version` against the repo you built from first.",
+                 The trap underneath - that the installer is only as new as the binary, so an \
+                 old `air` cannot write a new matcher however many times you run it - is now \
+                 CHECKED rather than left to you: since air-w9d `air install` refuses to write \
+                 when this repo was last installed by a newer air, and names both builds. You \
+                 no longer have to compare versions by eye.",
     },
     SurfaceChange {
         id: "sendmessage-measured",
@@ -446,15 +448,25 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
 ];
 
+/// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
+pub const BUILD: &str = env!("AIR_BUILD");
+
 /// What `.air/installed.json` records, so the diff has a baseline.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Installed {
-    /// Informational: the `air --version` that last wrote this file.
+    /// The crate version that last wrote this file. It has been `0.0.1` in every build Air has
+    /// ever produced, so it cannot tell two binaries apart; `built_from` is the field that can.
     pub air_version: String,
+    /// The commit the binary that last wrote this file was built from (air-w9d). Empty on a
+    /// file written before this existed, which reads as "cannot tell" and never as a mismatch.
+    pub built_from: String,
     pub installed_at: String,
-    /// Surface ids this repo has already been told about.
+    /// Surface ids this repo has already been told about. What to PRINT.
     pub surface: Vec<String>,
+    /// The monotonic surface version of the binary that last wrote this. What decides whether
+    /// a write is allowed. `None` on a file written before air-w9d, which allows the write.
+    pub surface_version: Option<u32>,
 }
 
 /// Changes this repo has not been told about yet. Pure, so the probe does not need a repo.
@@ -463,6 +475,38 @@ pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
         .iter()
         .filter(|c| !known.iter().any(|k| k == c.id))
         .collect()
+}
+
+/// The surface's version. **Monotonic, and bumped whenever notices are appended.**
+///
+/// Owner, 2026-08-29: *"only allow upgrades, not downgrades."* The first attempt at this
+/// compared notice-id SETS, and a set can say "different" but never "behind": a worker that
+/// installs from its own branch records an id that never lands, and a later binary built from
+/// main then looks older than the repo when it is not. A total order removes the question
+/// instead of asking someone to answer it.
+///
+/// This follows the ledger's `user_version` precedent (11 -> 12) rather than inventing a
+/// scheme. The two jobs stay separate, which is the point:
+///
+/// * the number answers **may I write** — immune to a branch-only id;
+/// * the id set answers **what do I print** — [`surface_diff`], unchanged and good at it.
+pub const SURFACE_VERSION: u32 = 2;
+
+/// `(version, notice count at that version)`. Append a row when you bump `SURFACE_VERSION`.
+///
+/// Without this, appending a notice and forgetting the bump fails toward PERMITTING: the
+/// refusal silently stops noticing a downgrade, which is the one direction a guard must not
+/// fail in. The test below makes forgetting loud instead.
+#[cfg(test)]
+const SURFACE_SIZES: &[(u32, usize)] = &[(1, 9), (2, 21)];
+
+/// May a binary at `mine` write over a repo recorded at `theirs`? (air-w9d)
+///
+/// `None` recorded means a repo installed before this existed: allowed, and deliberately so.
+/// The file already treats a missing record as "told about nothing", and refusing here would
+/// lock out every repo running Air today, adopter included.
+pub fn may_install(mine: u32, theirs: Option<u32>) -> bool {
+    theirs.is_none_or(|t| mine >= t)
 }
 
 /// Read `.air/installed.json`. A missing or unreadable file means "told about nothing",
@@ -475,10 +519,21 @@ pub fn read_installed(air_dir: &Path) -> Installed {
 }
 
 fn write_installed(air_dir: &Path, at: &str) -> Result<(), String> {
+    // MERGE, never overwrite (air-w9d). Overwriting let a binary drop ids the repo had already
+    // been told about, so a single install by a stale `air` erased the record that the
+    // downgrade check reads — the check and the erasure were the same write.
+    let mut surface: Vec<String> = read_installed(air_dir).surface;
+    for c in SURFACE {
+        if !surface.iter().any(|k| k == c.id) {
+            surface.push(c.id.to_string());
+        }
+    }
     let v = Installed {
         air_version: env!("CARGO_PKG_VERSION").to_string(),
+        built_from: BUILD.to_string(),
         installed_at: at.to_string(),
-        surface: SURFACE.iter().map(|c| c.id.to_string()).collect(),
+        surface,
+        surface_version: Some(SURFACE_VERSION),
     };
     let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
     std::fs::write(air_dir.join("installed.json"), s + "\n")
@@ -557,6 +612,12 @@ struct Plan {
     /// Air's own surface changes this repo has not been told about (air-6g1). Empty on a
     /// first install: nothing has moved under a repo that never had Air.
     surface_diff: Vec<&'static SurfaceChange>,
+    /// False when this binary's surface version is BELOW the one recorded here: a downgrade.
+    forward: bool,
+    /// The surface version recorded here, for the refusal's message.
+    recorded_version: Option<u32>,
+    /// What the binary that last installed here was built from, for the refusal's message.
+    recorded_build: String,
     previously_installed: bool,
     written: bool,
 }
@@ -612,11 +673,15 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     // that, this is a first install and nothing has changed under anyone.
     let previously_installed = !plan_settings_changed(&before_settings, &after_settings)
         || air_dir.join("roles.md").exists();
+    let recorded = read_installed(&air_dir);
     let surface_diff = if previously_installed {
-        surface_diff(&read_installed(&air_dir).surface)
+        surface_diff(&recorded.surface)
     } else {
         Vec::new()
     };
+    // May this binary write here at all? A total order, so a branch-only notice id cannot
+    // make a main-built binary look older than it is (air-w9d).
+    let forward = may_install(SURFACE_VERSION, recorded.surface_version);
 
     let mut plan = Plan {
         repo: repo.clone(),
@@ -631,11 +696,45 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         skills_dir: skills_dir.clone(),
         gitignore_has_air,
         surface_diff,
+        forward,
+        recorded_version: recorded.surface_version,
+        recorded_build: recorded.built_from.clone(),
         previously_installed,
         written: false,
     };
 
     if write {
+        // Upgrades only (owner, 2026-08-29). A binary whose surface version is below the one
+        // recorded here is older than the air that last installed, and writing would both
+        // under-report the upgrade and, before the merge in `write_installed`, erase the
+        // record of it.
+        if !plan.forward {
+            eprintln!(
+                "{}",
+                [
+                    "air install: refusing to write: this repo was installed by a NEWER air."
+                        .to_string(),
+                    format!(
+                        "  surface version here: {}   this binary: {SURFACE_VERSION}",
+                        plan.recorded_version
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "none".into())
+                    ),
+                    format!(
+                        "  build here: {}   this binary: {BUILD}",
+                        if plan.recorded_build.is_empty() {
+                            "not recorded (installed before air-w9d)"
+                        } else {
+                            &plan.recorded_build
+                        }
+                    ),
+                    "  Air installs forward only. Install the newer air and re-run: cargo install --path crates/cli, from a checkout at or above that surface version."
+                        .to_string(),
+                ]
+                .join("\n")
+            );
+            return 2;
+        }
         if !binary_ok {
             eprintln!(
                 "air install: refusing to write: `air` on PATH is {} but this binary is {}. Install this binary on PATH first (cargo install --path crates/cli).",
@@ -723,6 +822,15 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         } else {
             "dry run; re-run with --write to apply.\n"
         });
+        if !plan.forward {
+            s.push_str(&format!(
+                "\nDOWNGRADE: this repo is at surface version {}, this binary is at {SURFACE_VERSION}. \
+                 `--write` will refuse: Air installs forward only (air-w9d).\n",
+                plan.recorded_version
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "none".into())
+            ));
+        }
         s.push_str(&render_surface(&plan.surface_diff, plan.written));
         s
     });
@@ -778,6 +886,30 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+    }
+
+    /// air-w9d: appending a notice without bumping `SURFACE_VERSION` fails toward PERMITTING —
+    /// the refusal quietly stops noticing a downgrade, which is the one direction a guard must
+    /// not fail in. This makes forgetting loud at the moment the notice is added.
+    #[test]
+    fn appending_a_notice_bumps_the_surface_version() {
+        let (version, count) = SURFACE_SIZES.last().copied().unwrap_or((0, 0));
+        assert_eq!(
+            (SURFACE_VERSION, SURFACE.len()),
+            (version, count),
+            "SURFACE has {} notices at version {SURFACE_VERSION}, but SURFACE_SIZES' last row \
+             is ({version}, {count}). Appending a notice means bumping SURFACE_VERSION and \
+             adding a row here; a repo installed by the new binary must be refused by the old.",
+            SURFACE.len()
+        );
+        // Monotonic by construction, so `may_install`'s comparison is a total order.
+        assert!(
+            SURFACE_SIZES.windows(2).all(|w| match w {
+                [(v1, c1), (v2, c2)] => v2 > v1 && c2 >= c1,
+                _ => true,
+            }),
+            "SURFACE_SIZES must increase in both columns"
+        );
     }
 
     #[test]
