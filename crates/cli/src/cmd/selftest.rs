@@ -272,15 +272,15 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "install: a repo installed by a newer air is refused; same or behind is silent",
+        "install: a binary below the repo's surface version is refused; equal, higher and unrecorded write",
         Mutation {
-            // Make the reverse diff always empty: the pre-air-w9d world, where only the
-            // forward direction was computed and an older binary wrote over a newer record
-            // reporting success. The green half legitimately survives (empty is what it
-            // asserts), so only the red half falls.
+            // Allow every write: the pre-air-w9d world, where only the forward direction was
+            // computed and an older binary wrote over a newer record reporting success. The
+            // green half legitimately survives (it asserts writes ARE allowed), so only the
+            // red half falls, which is what naming one branch means.
             file: "crates/cli/src/cmd/install.rs",
-            from: ".filter(|id| !known.contains(id))",
-            to: ".filter(|_| false)",
+            from: "theirs.is_none_or(|t| mine >= t)",
+            to: "theirs.is_none_or(|_| true)",
             also_red: &[],
         },
     ),
@@ -2983,41 +2983,28 @@ fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
 /// notices — they are printed BY `air install`, so a stale binary shows an adopting repo none
 /// of them, including the one telling them to check their binary.
 ///
-/// Red: a repo whose record holds an id this binary has never heard of is a downgrade, and the
-/// id is named so the message can say which. Green: a repo at this binary's surface, a repo
-/// BEHIND it, and a repo with no record at all are all silent — an upgrade and a first install
-/// are not downgrades. **The silent cases are what make the refusal mean anything.**
+/// **Three directions, not two.** Red: a binary BELOW the recorded surface version is refused.
+/// Green: equal writes, higher writes, and a repo with no version recorded at all writes —
+/// that last one is every repo running Air today, adopter included, and refusing it would
+/// lock them all out. The silent cases are what make the refusal mean anything.
 ///
-/// No id is written here: both sides are derived from `known_ids()`, so the probe cannot drift
-/// from the list it is about (air-jc0).
+/// The first version of this compared notice-id SETS. A set says "different", never "behind",
+/// so a worker installing from its own branch made a later main-built binary look older than
+/// the repo. The version is a total order and the question does not arise.
 fn probe_install_goes_forward_only() -> Probe {
-    use crate::cmd::install::{downgrade, known_ids};
+    use crate::cmd::install::{SURFACE_VERSION, may_install};
 
-    let known = known_ids();
-    let mine: Vec<String> = known.iter().map(|s| (*s).to_string()).collect();
-    let Some((first, rest)) = mine.split_first() else {
-        return Probe {
-            name: "install: forward only — the surface list is empty",
-            red_fires: false,
-            green_passes: false,
-        };
-    };
-    // A record written by a NEWER air: everything this binary knows, plus one it does not.
-    let newer: Vec<String> = mine
-        .iter()
-        .cloned()
-        .chain(std::iter::once("a-notice-from-the-future".to_string()))
-        .collect();
-    let behind: Vec<String> = rest.to_vec();
-
-    let caught = downgrade(&newer, &known);
+    let here = SURFACE_VERSION;
+    let older = here.saturating_sub(1);
+    let newer = here.saturating_add(1);
     Probe {
-        name: "install: a repo installed by a newer air is refused; same or behind is silent",
-        red_fires: caught == vec!["a-notice-from-the-future"],
-        green_passes: downgrade(&mine, &known).is_empty()
-            && downgrade(&behind, &known).is_empty()
-            && downgrade(&[], &known).is_empty()
-            && !first.is_empty(),
+        name: "install: a binary below the repo's surface version is refused; equal, higher and unrecorded write",
+        // A real downgrade only exists once the version has moved at least once.
+        red_fires: here > 0 && !may_install(older, Some(here)),
+        green_passes: may_install(here, Some(here))
+            && may_install(newer, Some(here))
+            && may_install(here, None)
+            && may_install(older, None),
     }
 }
 
