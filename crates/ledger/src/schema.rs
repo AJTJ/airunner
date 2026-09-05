@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 12;
+pub const CURRENT_VERSION: i64 = 13;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -213,6 +213,27 @@ const V12: &str = r#"
 ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';
 "#;
 
+/// v13 (2026-09-05, air-srv): every `SendMessage`, content included. Owner ruling: "Let's record
+/// every message in a database then, if it is just a hook on SendMessage, then it's easy."
+/// Agents solve problems together over `SendMessage` and none of it reached the ledger unless
+/// someone captured it by hand. This reverses half of air-q07: the event line still carries
+/// recipient and byte count and never the text; the text lives here. `summary` is not stored:
+/// it is model text about the message, not the message. Only the send side is a tool call, so
+/// within one project this table is the whole conversation.
+const V13: &str = r#"
+CREATE TABLE IF NOT EXISTS messages (
+    at           TEXT NOT NULL,
+    session_id   TEXT NOT NULL,
+    from_worker  TEXT NOT NULL,
+    from_role    TEXT NOT NULL,
+    project      TEXT NOT NULL,
+    "to"         TEXT NOT NULL,
+    bytes        INTEGER NOT NULL,
+    content      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_at ON messages(at);
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -264,6 +285,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V12)?;
         conn.pragma_update(None, "user_version", 12)?;
     }
+    if version < 13 {
+        conn.execute_batch(V13)?;
+        conn.pragma_update(None, "user_version", 13)?;
+    }
     Ok(())
 }
 
@@ -284,12 +309,12 @@ mod tests {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants','verify_inflight')",
+                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants','verify_inflight','messages')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 9);
+        assert_eq!(n, 10);
     }
 
     /// air-air: v12 adds `sessions.model` by ALTER, so the case that matters is an EXISTING
