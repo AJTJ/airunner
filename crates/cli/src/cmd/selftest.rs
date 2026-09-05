@@ -2255,7 +2255,7 @@ fn probe_acceptance_unread_refuses() -> Probe {
     };
     let answered = acceptance_read(Ok(vec![Vec::new()]), &beads);
     let none = judge_clauses("ad-0vh3", Vec::new(), &ev);
-    let green = matches!(&answered, Ok(c) if c.len() == 1 && c[0].is_empty())
+    let green = matches!(&answered, Ok(c) if c.len() == 1 && c.first().is_some_and(Vec::is_empty))
         && none.why_open().contains("states no acceptance criteria")
         && !none.all_discharged()
         && !none.refuted();
