@@ -114,8 +114,32 @@ fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {
 
 fn timeout_msg(what: &str, bead: &str) -> String {
     format!(
-        "bd timed out during {what}; bd's state is unknown and nothing was written to the ledger: run `bd show {bead}` and re-run"
+        "bd timed out during {what}, twice (Air retried once). A timeout, not a refusal: bd's \
+         state is unknown and nothing was written to the ledger. Run `bd show {bead}` and \
+         re-run `air claim {bead}`"
     )
+}
+
+/// One more try on a TIMEOUT, and only on a timeout (air-gsj). A refusal or any other error
+/// is bd's answer and is returned as it came. Returns the result and whether a retry happened;
+/// `on_retry` runs between the two attempts so the caller can record the fact.
+///
+/// Why a retry and not a longer wait: the adopter measured bd's cost as a ~2 s floor PER
+/// INVOCATION with a contention tail — the calls that cross 5 s land at 11.8, 22.7, 27.1 and
+/// 44.2 s (air-bp0) — so any usable threshold is crossed by the same stalls, while a fresh
+/// process starts at the floor again. w1 retried a claim by hand three times on 2026-08-31 and
+/// another worker took the bead in between; the message read as a denial.
+pub fn retry_once<T>(
+    mut f: impl FnMut() -> air_bd::Result<T>,
+    on_retry: impl FnOnce(),
+) -> (air_bd::Result<T>, bool) {
+    match f() {
+        Err(BdError::Timeout(_)) => {
+            on_retry();
+            (f(), true)
+        }
+        r => (r, false),
+    }
 }
 
 /// Print, log, and return the exit code for one refusal or failure.
@@ -189,7 +213,21 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     let mut already_mine: Option<Option<String>> = None;
     // For the tmux window label (air-5lg); empty when bd could not answer.
     let mut title = String::new();
-    match bd.show(bead) {
+    let (shown, _) = retry_once(
+        || bd.show(bead),
+        || {
+            log_event(
+                &ledger,
+                &worker,
+                "claim",
+                &inputs(serde_json::json!({})),
+                "timeout-retry",
+                "bd timed out during show; retrying once",
+                "bd show",
+            );
+        },
+    );
+    match shown {
         Ok(Some(issue)) => {
             title.clone_from(&issue.title);
             if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
@@ -326,8 +364,28 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     // 3. bd: the atomic claim. The claim time is when it was issued, not when bd answered.
     let at = now();
     let mut decision = "claimed";
-    match bd.claim(bead, &actor) {
-        Ok(()) => {}
+    // air-gsj: one internal retry on a timeout. `--claim` is idempotent for the same actor,
+    // so a retry after a write that did land is a no-op there and an Ok here.
+    let (claimed, retried) = retry_once(
+        || bd.claim(bead, &actor),
+        || {
+            log_event(
+                &ledger,
+                &worker,
+                "claim",
+                &inputs(serde_json::json!({"actor": actor})),
+                "timeout-retry",
+                "bd timed out during --claim; retrying once (a fresh process starts at the floor)",
+                "bd exit",
+            );
+        },
+    );
+    match claimed {
+        Ok(()) => {
+            if retried {
+                decision = "claimed-retried";
+            }
+        }
         Err(BdError::Timeout(_)) => {
             // bd may have completed the write after we stopped waiting: reconcile before
             // saying anything about state, with a short separate probe, twice (under load
@@ -373,12 +431,14 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         return 1;
     }
     label_window(repo, &worker, bead, &title);
-    let msg = if decision == "claimed-late" {
-        format!(
+    let msg = match decision {
+        "claimed-late" => format!(
             "claimed {bead} as {worker} (actor {actor}) at {at} (bd was slow; reconciled by `bd show`)"
-        )
-    } else {
-        format!("claimed {bead} as {worker} (actor {actor}) at {at}")
+        ),
+        "claimed-retried" => format!(
+            "claimed {bead} as {worker} (actor {actor}) at {at} (bd timed out once; the retry landed)"
+        ),
+        _ => format!("claimed {bead} as {worker} (actor {actor}) at {at}"),
     };
     log_event(
         &ledger,
