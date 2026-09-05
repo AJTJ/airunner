@@ -591,8 +591,26 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     assert!(stdout.contains("attach -t zz-w"), "{stdout}");
     assert!(!stderr.contains("tcgetattr"), "{stderr}");
     let lines: Vec<&str> = argv.lines().collect();
-    // The task goes first (air-2ct: after the deny list it reads as one more deny rule).
-    assert_eq!(lines.first(), Some(&"hello there"), "{argv}");
+    // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule),
+    // and it names the task file rather than carrying the task (air-er0: the text in argv is
+    // what `pkill -f` matched on adopter, seven workers in a day).
+    let task_path = repo.join(".air").join("tasks").join("w.md");
+    assert_eq!(
+        lines.first().copied(),
+        Some(
+            format!(
+                "Your task is in {}. Read that file and carry it out.",
+                task_path.display()
+            )
+            .as_str()
+        ),
+        "{argv}"
+    );
+    assert!(!argv.contains("hello there"), "{argv}");
+    assert_eq!(
+        std::fs::read_to_string(&task_path).unwrap(),
+        "hello there\n"
+    );
     assert!(lines.iter().all(|l| !l.starts_with("--tmux")), "{argv}");
     assert_eq!(&lines[1..3], ["--worktree", "w"]);
 }
