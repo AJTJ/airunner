@@ -625,6 +625,49 @@ pub const SURFACE: &[SurfaceChange] = &[
                  the max `bd_calls` per command as that process's lifetime total. The bead's \
                  own 14.8-per-command figure was this artefact.",
     },
+    SurfaceChange {
+        id: "holdings-tense",
+        since: "2026-09-05 (air-v7o)",
+        headline: "`air holdings` tags name their tense: `uncommitted now, edited 3 min ago`, \
+                   `uncommitted now, no edit journaled` (build or test output, with `verify in \
+                   flight` when one is running), `journaled 6 h ago, clean now`. The report \
+                   carries `at`, and `air status`'s `overlap:` lines print the same tags.",
+        silent_break: true,
+        action: "A script matching the old `[uncommitted]` / `[journaled]` tokens, or reading \
+                 `overlaps` from `air status --json` as bare worker names, sees the new \
+                 strings. `air holdings --json` gained `at`, `last_edit` and \
+                 `verify_in_flight`. Read the tense: `uncommitted now` is true of `at` only; \
+                 `journaled` is history with its age.",
+    },
+    SurfaceChange {
+        id: "worktrees-are-airs",
+        since: "2026-09-05 (air-fdz)",
+        headline: "`air worker <name>` creates `.claude/worktrees/<name>` itself (branch \
+                   `worktree-<name>`) and copies the repo's `.worktreeinclude` files into it \
+                   before claude starts; `air worker <name> --remove` removes it, refusing \
+                   while it holds uncommitted work, a harness lock or a tmux session. claude \
+                   is still handed the worktree by name, so its isolation is unchanged.",
+        silent_break: false,
+        action: "Nothing to change in how you launch. Check `.worktreeinclude` still gives a \
+                 worktree that builds: Air matches its lines with git's own glob engine \
+                 (`git ls-files --ignored` over `:(glob)` pathspecs), the same files the \
+                 harness copied, but a negated line (`!x`) is reported and not honoured. A \
+                 relaunch re-copies, so a worktree gets the current `.env`. Remove lanes with \
+                 `air worker <name> --remove` rather than `rm -rf`; it names what is holding \
+                 the worktree and keeps the branch.",
+    },
+    SurfaceChange {
+        id: "install-reports-bd-prime",
+        since: "2026-09-05 (air-b5k)",
+        headline: "`air install` reports a `bd prime` hook left in `.claude/settings.json` \
+                   (`STALE HOOK: SessionStart runs `bd prime --hook-json`...`) on every run \
+                   until it is gone; the adoption doc no longer asks for a hand edit nobody \
+                   re-checks.",
+        silent_break: false,
+        action: "Run `air install` and read any STALE HOOK line: delete the entry it names. \
+                 The merge never removes another tool's hook, so the report is the only thing \
+                 that will keep saying it is there.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -714,6 +757,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: bd_calls per event, one show per reconcile, SubagentStop is not a Stop
     // (air-bp0).
     ("0.2.10", 14, 33),
+    // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
+    ("0.2.11", 15, 34),
+    // 2026-09-05: Air creates, fills and removes worker worktrees (air-fdz).
+    ("0.2.12", 16, 35),
+    // 2026-09-05: `air install` reports a stale `bd prime` hook (air-b5k).
+    ("0.2.13", 17, 36),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
@@ -845,6 +894,8 @@ struct Plan {
     /// Air's own surface changes this repo has not been told about (air-6g1). Empty on a
     /// first install: nothing has moved under a repo that never had Air.
     surface_diff: Vec<&'static SurfaceChange>,
+    /// Hook entries that contradict Air and that the merge leaves in place (air-b5k).
+    stale_hooks: Vec<StaleHook>,
     /// False when this binary's surface version is BELOW the one recorded here: a downgrade.
     forward: bool,
     /// The surface version recorded here, for the refusal's message.
@@ -853,6 +904,71 @@ struct Plan {
     recorded_build: String,
     previously_installed: bool,
     written: bool,
+}
+
+/// A hook entry in the repo's settings that contradicts Air and that `air install` will not
+/// remove (air-b5k). Reported on every install until it is gone, because a hand edit in an
+/// adoption walkthrough is the step that gets skipped or done wrong once and never revisited,
+/// and nothing else reports its state afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StaleHook {
+    pub event: String,
+    pub command: String,
+    pub why: &'static str,
+}
+
+/// Why a `bd prime` hook is stale under Air, in the voice of the surface notices.
+pub const BD_PRIME_WHY: &str = "`bd prime` injects a command reference telling agents to run \
+`bd update --claim` and `bd create`, both of which Air denies; agents get instructions that \
+contradict their deny list, and the failure looks like the agent being wrong. `air init` skips \
+it (`bd init --skip-agents --skip-hooks`); a repo that adopted Air with it in place keeps it, \
+because `air install` merges and never removes another tool's hook. Delete the entry.";
+
+/// Every hook command in `settings` that runs `bd prime`. Pure over the JSON, so the probe
+/// runs both directions without a repo. Only `bd prime` is stale today; a second stale
+/// command is a second arm here, not a second scan.
+pub fn stale_hooks(settings: &Value) -> Vec<StaleHook> {
+    let mut out = Vec::new();
+    let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
+        return out;
+    };
+    for (event, groups) in hooks {
+        for group in groups.as_array().into_iter().flatten() {
+            for h in group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(cmd) = h.get("command").and_then(Value::as_str) else {
+                    continue;
+                };
+                let mut words = cmd.split_whitespace();
+                let program = words.next().unwrap_or("");
+                let is_bd = program == "bd" || program.ends_with("/bd");
+                if is_bd && words.next() == Some("prime") {
+                    out.push(StaleHook {
+                        event: event.clone(),
+                        command: cmd.to_string(),
+                        why: BD_PRIME_WHY,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The stale-hook block of the install report; empty when there is nothing to say.
+pub fn render_stale(stale: &[StaleHook]) -> String {
+    let mut s = String::new();
+    for h in stale {
+        s.push_str(&format!(
+            "\nSTALE HOOK: {} runs `{}`, which contradicts Air\n        do: {}\n        since 2026-09-05 (air-b5k)\n",
+            h.event, h.command, h.why
+        ));
+    }
+    s
 }
 
 /// Would wiring the hooks change anything? False means Air is already installed here.
@@ -887,6 +1003,9 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         }
     };
     let after_settings = merge_hooks(before_settings.clone());
+    // What the merge leaves in place and should not (air-b5k). Read off the merged value so
+    // the report describes the file as it will be after `--write`.
+    let stale = stale_hooks(&after_settings);
     let before_mcp = match read_json(&mcp_path) {
         Ok(v) => v,
         Err(e) => {
@@ -929,6 +1048,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         skills_dir: skills_dir.clone(),
         gitignore_has_air,
         surface_diff,
+        stale_hooks: stale,
         forward,
         recorded_version: recorded.surface_version,
         recorded_build: recorded.built_from.clone(),
@@ -1065,6 +1185,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             ));
         }
         s.push_str(&render_surface(&plan.surface_diff, plan.written));
+        s.push_str(&render_stale(&plan.stale_hooks));
         s
     });
     0
@@ -1172,6 +1293,29 @@ mod tests {
             }),
             "RELEASES must never decrease: append rows, never edit them"
         );
+    }
+
+    /// air-b5k: the merge leaves a `bd prime` hook in place, so the report names it.
+    #[test]
+    fn a_bd_prime_hook_is_reported_and_air_hooks_are_not() {
+        let with = json!({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "bd prime --hook-json"}]}]}});
+        let after = merge_hooks(with);
+        let stale = stale_hooks(&after);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].event, "SessionStart");
+        assert_eq!(stale[0].command, "bd prime --hook-json");
+        let text = render_stale(&stale);
+        assert!(
+            text.contains("STALE HOOK: SessionStart runs `bd prime --hook-json`"),
+            "{text}"
+        );
+        assert!(text.contains("do: `bd prime` injects"), "{text}");
+        // Air's own hooks, and a bd hook that is not prime, are not stale.
+        let clean = merge_hooks(json!({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "bd ready --json"}]}]}}));
+        assert!(stale_hooks(&clean).is_empty());
+        assert_eq!(render_stale(&[]), "");
     }
 
     #[test]
