@@ -508,8 +508,10 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
                     batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
+                // The refuted clauses only (air-ppf): the print above already showed the
+                // unreadable ones with their own `?` marker.
                 for o in noted.iter().filter(|o| o.refuted) {
-                    lines.push(format!("  {} REFUTED: {}", o.bead, o.why));
+                    lines.push(format!("  {} REFUTED: {}", o.bead, o.contradicted));
                 }
                 landed.extend(batch.beads.clone());
                 held_open.extend(noted);
@@ -775,6 +777,7 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             bead: j.bead.clone(),
             why: j.why_open(),
             refuted: j.refuted(),
+            contradicted: j.why_contradicted(),
         })
         .collect();
     record_full(
