@@ -26,6 +26,38 @@ use serde_json::Value;
 use crate::cmd::emit;
 use crate::cmd::hook::{handover_gate, is_handover_command};
 
+/// The ONE way a probe spawns `air` (air-dws). Identity comes from the launcher's environment
+/// since air-75u (`AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_ENFORCE`), so a child that
+/// inherits the shell's copy answers for whoever is running the suite: the SubagentStop probe
+/// passed in every worker's worktree and failed in the coordinator's shell, which is where
+/// `make release` runs, and no v0.2.10 could be cut. Every probe that wants an identity sets
+/// it on the returned `Command` explicitly; none inherits one.
+///
+/// [`probe_every_air_spawn_pins_identity`] reads this file and fails if a raw
+/// `Command::new(exe)` appears anywhere else, so the class does not come back one probe at a
+/// time.
+fn air_command(exe: &Path, cwd: &Path) -> Command {
+    let mut c = Command::new(exe);
+    c.current_dir(cwd)
+        .env_remove("AIR_ROLE")
+        .env_remove("BEADS_ACTOR")
+        .env_remove("AIR_PROJECT")
+        .env_remove("AIR_ENFORCE");
+    c
+}
+
+/// How many raw `air` spawns a probe file holds beside the helper: lines building a
+/// `Command::new` on the current executable. Pure over the text so the probe can show a
+/// violation as well as the absence of one.
+fn raw_air_spawns(source: &str) -> usize {
+    source
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("let ") || l.starts_with("Command::new"))
+        .filter(|l| l.contains("Command::new(exe)") || l.contains("Command::new(&exe)"))
+        .count()
+}
+
 /// air-682: the edit that neutralises the rule a probe names, declared next to the probe so it
 /// can be RUN. adopter's standard, adopted over ours by owner ruling: a probe is evidence only
 /// once it has been seen failing with its rule neutralised, and the evidence is a revert, not an
@@ -1124,6 +1156,7 @@ fn all_probes() -> Vec<Probe> {
         probe_acceptance_unread_refuses(),
         probe_claim_retries_a_timeout_once(),
         probe_release_unassigns(),
+        probe_every_air_spawn_pins_identity(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -4706,8 +4739,7 @@ fn probe_worker_task_prompt() -> Probe {
         }
         let socket = format!("air-selftest-{}", new_id());
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = Command::new(exe)
-            .current_dir(&dir)
+        let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
@@ -4816,13 +4848,8 @@ fn probe_env_reaches_the_hook() -> Probe {
                 "session_id": "air-9dg-probe",
                 "cwd": wt.display().to_string(),
             });
-            let mut child = Command::new(&exe)
-                .current_dir(&wt)
+            let mut child = air_command(&exe, &wt)
                 .arg("hook")
-                .env_remove("AIR_ENFORCE")
-                .env_remove("AIR_ROLE")
-                .env_remove("AIR_PROJECT")
-                .env_remove("BEADS_ACTOR")
                 .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
@@ -4885,16 +4912,12 @@ fn probe_env_reaches_the_hook() -> Probe {
                 .map_err(|e| e.to_string())?;
         }
         let socket = format!("air-selftest-{}", new_id());
-        let out = Command::new(&exe)
-            .current_dir(&dir)
+        // Scrubbed by `air_command`, so the stub can only have the identity variables if the
+        // launcher delivered them.
+        let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
-            // Scrubbed, so the stub can only have them if the launcher delivered them.
-            .env_remove("AIR_ENFORCE")
-            .env_remove("AIR_ROLE")
-            .env_remove("AIR_PROJECT")
-            .env_remove("BEADS_ACTOR")
             .args(["worker", "w", "--task", "hi", "--", "--settings", theirs])
             .output()
             .map_err(|e| e.to_string())?;
@@ -5066,8 +5089,7 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         }
         drop(l);
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = Command::new(exe)
-            .current_dir(&dir)
+        let out = air_command(&exe, &dir)
             .env("AIR_BD_BIN", &script)
             .args(["--json", "status"])
             .output()
@@ -5108,6 +5130,26 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-dws: every probe that spawns `air` goes through [`air_command`], which strips the
+/// launcher's identity variables, so a probe's verdict does not depend on the shell it runs
+/// in. The SubagentStop probe inherited `AIR_ROLE=coordinator` from the coordinator's shell,
+/// took the coordinator path, and made `make release` red on main while every worker's
+/// worktree was green.
+///
+/// Red: a source with a raw `Command::new(exe)` beside the helper is counted as one. Green:
+/// this file holds exactly one, the helper's own.
+fn probe_every_air_spawn_pins_identity() -> Probe {
+    let here = include_str!("selftest.rs");
+    // Assembled in pieces so this line is not itself a raw spawn to the scan.
+    let raw = ["    let out = Command::new(", "&exe).arg(\"hook\");"].concat();
+    let with_a_raw_spawn = format!("{here}\n{raw}\n");
+    Probe {
+        name: "selftest: every probe that spawns air pins its identity through air_command; a raw spawn is caught",
+        red_fires: raw_air_spawns(&with_a_raw_spawn) == 2,
+        green_passes: raw_air_spawns(here) == 1,
     }
 }
 
@@ -5172,8 +5214,8 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
             if let (Some(t), Some(obj)) = (tool, input.as_object_mut()) {
                 obj.insert("tool_name".into(), serde_json::Value::String(t.to_string()));
             }
-            let mut child = Command::new(&exe)
-                .current_dir(&wt)
+            // Pinned identity (air-dws): a worker's worktree, no inherited role.
+            let mut child = air_command(&exe, &wt)
                 .arg("hook")
                 .env("AIR_BD_BIN", &script)
                 .stdin(std::process::Stdio::piped())
