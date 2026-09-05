@@ -183,6 +183,29 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
+        Mutation {
+            // The old denylist of one, exactly as it stood: only `in-flight` is skipped, so a
+            // refused row is read as a landing again. One branch, in the reader that was wrong.
+            file: "crates/ledger/src/landings.rs",
+            from: "            if !l.landed() {",
+            to: "            if l.result == \"in-flight\" {",
+            also_red: &[],
+        },
+    ),
+    (
+        "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
+        Mutation {
+            // Let a tree green count under the default key. That is the silent upgrade
+            // air-7wf refused to ship: adopter's citation gate would have started passing
+            // beads it never checked. One arm, and the one the probe's red half is about.
+            file: "crates/cli/src/cmd/green.rs",
+            from: "Some(GreenAt::Tree(_)) => self.key == Key::Tree,",
+            to: "Some(GreenAt::Tree(_)) => true,",
+            also_red: &[],
+        },
+    ),
+    (
         "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
         Mutation {
             // Invert the blank-task test: a real task stops becoming the prompt, and a blank one
@@ -435,6 +458,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/status.rs",
             from: "let (bead, why) = (&o.bead, &o.contradicted);",
             to: "let (bead, why) = (&o.bead, &o.why);",
+            also_red: &[],
+        },
+    ),
+    (
+        "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
+        Mutation {
+            // Every missing path counts as an untouched file again, which is exactly the
+            // pre-fix rule (air-dqa): the tree is never consulted. One closure, it compiles,
+            // and the two landed-not-closed probes name files that ARE in their tree, so they
+            // stay GREEN under it — which shows this reaches the resolution rule alone.
+            file: "crates/cli/src/cmd/acceptance.rs",
+            from: ".partition(|p| ev.tree.iter().any(|t| t == *p));",
+            to: ".partition(|_p| true);",
             also_red: &[],
         },
     ),
@@ -850,6 +886,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_main(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
+        probe_green_follows_the_tree_only_where_declared(),
         probe_git_ancestor(),
         probe_gate_claim(),
         probe_claim_cas(),
@@ -894,7 +931,9 @@ fn all_probes() -> Vec<Probe> {
         probe_project_is_taken_from_what_it_is_told(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_refused_landing_publishes_nothing(),
         probe_contradicts_names_only_the_refuted(),
+        probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -1522,6 +1561,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 duration_ms: None,
                 output_bytes: None,
                 dirty: false,
+                tree: None,
             })
             .map_err(|e| e.to_string())
         };
@@ -1637,9 +1677,15 @@ fn probe_landed_but_open() -> Probe {
     use air_ledger::landings::{Landing, OpenBead};
 
     let changed = vec!["docs/rules/roles.md".to_string()];
+    let tree = vec![
+        "docs/rules/roles.md".to_string(),
+        "docs/rules/writing.md".to_string(),
+        "docs/absent.md".to_string(),
+    ];
     let ev = Evidence {
         green_at_landed: true,
         changed: &changed,
+        tree: &tree,
     };
     // A clause the merge CONTRADICTS: the bead names a file it did not touch.
     let refutable = judge_clauses(
@@ -1669,7 +1715,7 @@ fn probe_landed_but_open() -> Probe {
             worker: "alpha".into(),
             sha: "aaa".into(),
             tip_sha: Some("bbb".into()),
-            result: "landed-open".into(),
+            result: "landed-refuted".into(),
             failing_step: None,
             verify_run_id: None,
             attempt_no: 1,
@@ -1741,6 +1787,85 @@ fn probe_landed_but_open() -> Probe {
     }
 }
 
+/// air-8zn: a REFUSED landing publishes no landed beads, and a successful one still publishes
+/// all of them. `landed_open` excluded only `in-flight` and treated every other result as a
+/// landing, so the second branch of an `air land --all` — refused for main-moved, as every
+/// branch after the first is — was read as the newest word on the five beads its row carried.
+///
+/// Red: a refused row carrying a refuted bead reports nothing, and a refused row NEWER than a
+/// real landing does not silence that landing's refutation. Green: the real landing reports
+/// every refuted bead it carries, which is what stops the fix becoming a silence.
+fn probe_refused_landing_publishes_nothing() -> Probe {
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let row = |id: &str, result: &str, at: &str, beads: &[&str], open: Vec<OpenBead>| Landing {
+        id: id.into(),
+        worker: "w4".into(),
+        sha: "823b2fd5".into(),
+        tip_sha: Some("99b10fa0".into()),
+        result: result.into(),
+        failing_step: (result == "refused").then(|| "check".to_string()),
+        verify_run_id: None,
+        attempt_no: 1,
+        beads: beads.iter().map(|b| b.to_string()).collect(),
+        open_beads: open,
+        merge_commit: (result != "refused").then(|| "ccc".to_string()),
+        pid: None,
+        started_at: at.into(),
+        finished_at: at.into(),
+    };
+    let refuted = |bead: &str| OpenBead {
+        bead: bead.into(),
+        why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+        refuted: true,
+        contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+    };
+    let five = ["ad-7p85", "ad-epo9", "ad-fsxg", "ad-lqhf", "ad-xeq3"];
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        // The live case: a refusal carrying five beads. Even with a refuted clause on the row
+        // it publishes nothing, because nothing landed.
+        l.record_landing(&row("r1", "refused", "t1", &five, vec![refuted("ad-7p85")]))
+            .map_err(|e| e.to_string())?;
+        let refused_publishes_nothing = l.landed_open().map_err(|e| e.to_string())?.is_empty();
+
+        // A real landing that refutes two of them reports both.
+        l.record_landing(&row(
+            "l1",
+            "landed-refuted",
+            "t2",
+            &five,
+            vec![refuted("ad-epo9"), refuted("ad-fsxg")],
+        ))
+        .map_err(|e| e.to_string())?;
+        let mut reported: Vec<String> = l
+            .landed_open()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|o| o.bead)
+            .collect();
+        reported.sort();
+        let landed_publishes_all = reported == ["ad-epo9", "ad-fsxg"];
+
+        // A newer refusal of the same branch (main moved under it) leaves both standing.
+        l.record_landing(&row("r2", "refused", "t3", &five, vec![]))
+            .map_err(|e| e.to_string())?;
+        let refusal_does_not_silence = l.landed_open().map_err(|e| e.to_string())?.len() == 2;
+        Ok((
+            refused_publishes_nothing && refusal_does_not_silence,
+            landed_publishes_all,
+        ))
+    })()
+    .unwrap_or((false, false));
+    let (red, green) = res;
+    Probe {
+        name: "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-ppf: the `landed-not-closed` sentence asserts a contradiction, so it may name only the
 /// clauses the merge contradicts. It used to render the row's whole `why`, which also carries
 /// every clause Air could not read, so "nothing Air can look up" appeared under a CONTRADICTS
@@ -1757,9 +1882,15 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     use air_ledger::landings::{Landing, OpenBead};
 
     let changed = vec!["docs/rules/roles.md".to_string()];
+    let tree = vec![
+        "docs/rules/roles.md".to_string(),
+        "docs/rules/writing.md".to_string(),
+        "docs/absent.md".to_string(),
+    ];
     let ev = Evidence {
         green_at_landed: true,
         changed: &changed,
+        tree: &tree,
     };
     let mixed = judge_clauses(
         "fd-1",
@@ -1836,6 +1967,53 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
         name: "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
         red_fires,
         green_passes,
+    }
+}
+
+/// air-dqa: a path Air read out of prose and got wrong must not become a confident false
+/// accusation. Three firings of `landed-not-closed`, zero true: adopter's clause wrote a
+/// possessive (`docs/reference/tooling.md`'s), the trim stopped at the `s`, the token matched
+/// nothing in a merge that had changed that very file, and Air reported CONTRADICTED.
+///
+/// Red: that clause, verbatim, against a merge that changed the file, is UNREADABLE with the
+/// token named, not refuted. Green: the ai_runner case, a clause naming an existing file the
+/// work correctly did not touch (the pin landed in install.rs, not install_and_launch.rs),
+/// stays REFUTED — the true fact, for a person to read — and the plainly written possessive
+/// clause discharges. The second is the true positive the first must not cost.
+fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
+    use crate::cmd::acceptance::{Evidence, Verdict, judge};
+
+    let tree = vec![
+        "docs/reference/tooling.md".to_string(),
+        "crates/cli/tests/install_and_launch.rs".to_string(),
+        "crates/cli/src/cmd/install.rs".to_string(),
+    ];
+    let adopter = Evidence {
+        green_at_landed: true,
+        changed: &["docs/reference/tooling.md".to_string()],
+        tree: &tree,
+    };
+    let possessive = "Air's own `docs/reference/tooling.md`'s section is updated.";
+    let red_fires = matches!(
+        judge(possessive, &adopter),
+        Verdict::Undecidable { how } if how.contains("cannot resolve") && how.contains("tooling.md`'s")
+    );
+
+    let ai_runner = Evidence {
+        changed: &["crates/cli/src/cmd/install.rs".to_string()],
+        ..adopter
+    };
+    let untouched_stays_refuted = matches!(
+        judge("Pin it in crates/cli/tests/install_and_launch.rs.", &ai_runner),
+        Verdict::Unevidenced { how }
+            if how == "the merge did not change crates/cli/tests/install_and_launch.rs"
+    );
+    let plain_discharges = judge("docs/reference/tooling.md is updated.", &adopter).discharged();
+
+    Probe {
+        name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
+        red_fires,
+        green_passes: untouched_stays_refuted && plain_discharges,
     }
 }
 
@@ -2490,6 +2668,7 @@ fn probe_enforced_gate() -> Probe {
             duration_ms: None,
             output_bytes: None,
             dirty: false,
+            tree: None,
         })
         .map_err(|e| e.to_string())?;
         let green = handover_gate(&l, "probe", &dir, cmd, true)?;
@@ -3244,6 +3423,7 @@ fn base_facts() -> GateFacts {
         worker: "probe".into(),
         head: "0123456789abcdef".into(),
         green_at_head: true,
+        tree_green: None,
         last_green_sha: None,
         main_is_ancestor: true,
         bead_claimed_by_worker: true,
@@ -3307,19 +3487,121 @@ fn probe_ledger_roundtrip() -> Probe {
             duration_ms: None,
             output_bytes: None,
             dirty: false,
+            tree: None,
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l
-            .is_green_at("probe", "abc", Kind::Verify)
-            .map_err(|e| e.to_string())?;
-        let red = !l
-            .is_green_at("probe", "zzz", Kind::Verify)
-            .map_err(|e| e.to_string())?;
+            .green_at("abc", None, Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_some();
+        let red = l
+            .green_at("zzz", None, Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none();
         Ok((red, green))
     })();
     let (red, green) = ok.unwrap_or((false, false));
     Probe {
         name: "ledger: verify_runs round-trip",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-7wf, both directions, on a real landing. A branch head is recorded green with its
+/// tree; `commit-tree` builds the landing commit off main from that tree, exactly as `air land`
+/// does (air-odv). Under `verify_key: tree` the landing reads green with no new verify. Under
+/// the default `commit` key it does not, and the display names the tree green it is declining.
+/// A commit over a tree nobody verified is not green under either key.
+fn probe_green_follows_the_tree_only_where_declared() -> Probe {
+    use crate::cmd::green::{Key, at_under, tree_of};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "main"])?;
+        let main = g(&["rev-parse", "HEAD"])?;
+        std::fs::write(dir.join("f"), "work").map_err(|e| e.to_string())?;
+        g(&["add", "f"])?;
+        g(&["commit", "-q", "-m", "branch work"])?;
+        let branch = g(&["rev-parse", "HEAD"])?;
+        let tree = tree_of(&dir, &branch).map_err(|e| e.to_string())?;
+        // The landing commit, built the way `air land` builds it: a new sha, the same tree.
+        let landing = g(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &main,
+            "-p",
+            &branch,
+            "-m",
+            "Land",
+        ])?;
+        // A commit over a tree nobody verified.
+        std::fs::write(dir.join("f"), "other").map_err(|e| e.to_string())?;
+        g(&["commit", "-q", "-am", "unverified"])?;
+        let unverified = g(&["rev-parse", "HEAD"])?;
+
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: branch.clone(),
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t".into(),
+            finished_at: "t".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: Some(tree.clone()),
+        })
+        .map_err(|e| e.to_string())?;
+
+        let under = |sha: &str, key: Key| at_under(&l, &dir, sha, Kind::Verify, key);
+        // Green: the landing reads green from its tree where the repo declares it, and the
+        // branch head reads green at its commit under either key.
+        let landed = under(&landing, Key::Tree)?;
+        let green = landed.holds()
+            && landed.line().starts_with("green (same tree as")
+            && under(&branch, Key::Commit)?.holds()
+            && under(&branch, Key::Tree)?.holds();
+        // Red: the same landing is NOT green by default, and says why; a tree nobody verified
+        // is not green under either key.
+        let declined = under(&landing, Key::Commit)?;
+        let red = !declined.holds()
+            && declined
+                .line()
+                .starts_with("not green (this exact tree is green at")
+            && !under(&unverified, Key::Tree)?.holds()
+            && !under(&unverified, Key::Commit)?.holds();
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         red_fires: red,
         green_passes: green,
     }
