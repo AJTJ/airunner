@@ -869,6 +869,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
+        probe_a_message_is_recorded_with_its_content(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -3060,6 +3061,67 @@ fn probe_agent_traffic_is_counted() -> Probe {
     }
 }
 
+/// air-srv (owner ruling 2026-09-05): every `SendMessage` is recorded, content included.
+/// Agents solve problems together over `SendMessage` and none of it reached the ledger unless
+/// someone captured it by hand. The event line is unchanged (recipient and bytes, air-q07);
+/// the text goes to the `messages` table.
+///
+/// Red: one `SendMessage` hook input produces exactly one `messages` row carrying the content,
+/// the recipient, and the sender the session row knows. Green: a second identical call
+/// produces a second row, not a dedupe, and `summary` is on neither.
+///
+/// The mutation that made it red, seen: `let content = "";` in `hook::record_message`, which
+/// is air-q07's content-free record put back. (Replacing the call in `pre_tool_use` with
+/// `Ok(())` reaches the hook unit test instead, and was seen red there.)
+fn probe_a_message_is_recorded_with_its_content() -> Probe {
+    use crate::cmd::hook::record_message;
+    use air_hooks::HookInput;
+
+    let Ok(ledger) = Ledger::open_in_memory() else {
+        return Probe {
+            name: "messages: a SendMessage is one ledger row with its content",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let session_row = ledger
+        .conn()
+        .execute(
+            "INSERT INTO sessions (session_id, worker, state, changed_at, started_at, role, project) \
+             VALUES ('s-msg','alpha','running','t','t','worker','air')",
+            [],
+        )
+        .is_ok();
+    let input = HookInput::parse(
+        r#"{"session_id":"s-msg","hook_event_name":"PreToolUse","tool_name":"SendMessage",
+            "tool_input":{"to":"main","message":"the plan is X","summary":"about X"}}"#,
+    )
+    .ok();
+    let first = input
+        .as_ref()
+        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+    let after_one = ledger.messages().unwrap_or_default();
+    let red_fires = session_row
+        && first
+        && matches!(after_one.as_slice(), [m]
+            if m.content == "the plan is X" && m.to == "main" && m.bytes == 13
+            && m.from_worker == "alpha" && m.from_role == "worker" && m.project == "air"
+            && m.session_id == "s-msg");
+    let second = input
+        .as_ref()
+        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+    let after_two = ledger.messages().unwrap_or_default();
+    let green_passes = second
+        && after_two.len() == 2
+        && after_two.iter().all(|m| m.content == "the plan is X")
+        && !format!("{after_two:?}").contains("about X");
+    Probe {
+        name: "messages: a SendMessage is one ledger row with its content",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// air-q9c: a lease defect is a signal for whoever WANTS the resource, and never for the
 /// holder — who knows they hold it and was being told to break the thing they were using.
 /// adopter saw six of those in a day while the simulator and API were genuinely running.
@@ -3128,7 +3190,10 @@ fn probe_lease_defect_reaches_the_waiter() -> Probe {
 ///
 /// Yesterday's set is derived from each notice's own `since` date, not from a list of ids
 /// copied here — a copied list would stop being yesterday's the next time anyone appends
-/// (air-jc0).
+/// (air-jc0). The anchor day is fixed at the incident, and what yesterday's repo is told is
+/// every notice dated ON OR AFTER it: the first version said "dated today" and went red the
+/// day air-srv appended a notice dated a week later (2026-09-05), which is the same drift one
+/// level up.
 fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
     use crate::cmd::install::{SURFACE, surface_diff};
 
@@ -3145,10 +3210,11 @@ fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
 
     let told = surface_diff(&yesterday);
     let quiet = surface_diff(&everything);
-    // Every notice dated today, and nothing else, is what yesterday's repo has not seen.
+    // Every notice dated today or later, and nothing else, is what yesterday's repo has not
+    // seen.
     let todays: Vec<&str> = SURFACE
         .iter()
-        .filter(|c| c.since.starts_with(TODAY))
+        .filter(|c| c.since >= TODAY)
         .map(|c| c.id)
         .collect();
     Probe {
