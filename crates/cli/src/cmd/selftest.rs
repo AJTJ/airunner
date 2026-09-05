@@ -1192,6 +1192,7 @@ fn all_probes() -> Vec<Probe> {
         probe_ready_split_names_epics_apart(),
         probe_holdings_tags_name_their_tense(),
         probe_install_reports_a_stale_bd_prime_hook(),
+        probe_batch_ready_is_a_fact_with_three_parts(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -4363,6 +4364,64 @@ fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
         && render_stale(&[]).is_empty();
     Probe {
         name: "install: a stale `bd prime` hook is reported with its fix; Air's hooks and other bd hooks are not",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// air-80x.3: the verify lane needs one fact, which branches to merge into the next batch,
+/// and it lived in messages; in adopter's 2026-08-29 round the batch never formed. The rule
+/// is three lookups: head contains main, no green at that head, a `Bead:` trailer names a
+/// bead the worker holds.
+///
+/// Red: a branch that merged main and committed a claimed bead is listed, on the status line
+/// with its beads. Green: the same branch with a green at its head is absent (it is landable,
+/// nothing to batch); a branch behind main is absent; a branch naming only an unclaimed bead
+/// is absent; and every absence carries the first fact it lacks.
+///
+/// The mutation that made it red, seen: `batch_ready_rule` dropping the `green_at_head` arm,
+/// which lists a landable branch for a batch it does not need.
+fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
+    use crate::cmd::status::{BatchFacts, Snapshot, batch_ready_rule, render_for_probe};
+
+    let base = BatchFacts {
+        worker: "alpha".into(),
+        head: "abcdef1234567890".into(),
+        contains_main: true,
+        green_at_head: false,
+        carried: vec!["fd-1".into(), "fd-9".into()],
+        held: vec!["fd-1".into()],
+    };
+    let ready = batch_ready_rule(&base);
+    let line = render_for_probe(&Snapshot {
+        batch_ready: ready.clone().into_iter().collect(),
+        ..Default::default()
+    });
+    let red_fires = ready
+        .as_ref()
+        .is_ok_and(|b| b.worker == "alpha" && b.beads == ["fd-1"])
+        && line.contains("batch-ready: alpha at abcdef12 (fd-1)\n");
+
+    let green = batch_ready_rule(&BatchFacts {
+        green_at_head: true,
+        ..base.clone()
+    });
+    let behind = batch_ready_rule(&BatchFacts {
+        contains_main: false,
+        ..base.clone()
+    });
+    let unclaimed = batch_ready_rule(&BatchFacts {
+        held: vec![],
+        ..base.clone()
+    });
+    let green_passes = green.as_ref().is_err_and(|n| n.check == "green-at-head")
+        && behind.as_ref().is_err_and(|n| n.check == "behind-main")
+        && unclaimed
+            .as_ref()
+            .is_err_and(|n| n.check == "no-claimed-bead" && n.detail.contains("fd-1 fd-9"))
+        && !render_for_probe(&Snapshot::default()).contains("batch-ready");
+    Probe {
+        name: "status: batch-ready is three facts (contains main, no green at head, a claimed bead named); a green or behind branch is absent with its reason",
         red_fires,
         green_passes,
     }
