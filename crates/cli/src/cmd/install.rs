@@ -505,6 +505,22 @@ pub const SURFACE: &[SurfaceChange] = &[
                  branch carries it. A script that greps the offered command for `air land \
                  <bead>` reads `air land --worker <name>` now.",
     },
+    SurfaceChange {
+        id: "owner-inbox-gone",
+        since: "2026-09-05 (air-uef)",
+        headline: "The owner inbox is gone: `air capture --for owner` is refused, `air inbox \
+                   --owner` and the `owner-decision-waiting` condition no longer exist. The \
+                   owner's queue is beads labelled `owner`, counted on the `ready:` line of \
+                   `air status`.",
+        silent_break: true,
+        action: "A rule or script that runs `air capture --for owner` now gets a refusal \
+                 (exit 2) naming the replacement; one that runs `air inbox --owner` gets a \
+                 clap error. Captures an older binary wrote for the owner are still there: \
+                 `air inbox` lists every open capture, so triage them on the next pass. The \
+                 coordinator triages EVERY capture into a bead or drops it with a reason, and \
+                 labels the bead `owner` (with its recommendation in the description) when the \
+                 decision is the owner's. `air://owner-queue` is gone from `air mcp`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -574,6 +590,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.1", 5, 24),
     // 2026-09-05: `air land --worker` names the branch (air-09b).
     ("0.2.2", 6, 25),
+    // 2026-09-05: the owner inbox goes (air-uef); the owner's queue is owner-labelled beads.
+    ("0.2.3", 7, 26),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
@@ -979,6 +997,21 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+        // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
+        assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
+        assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
+        assert!(
+            !ROLES_MD.contains("inbox --owner"),
+            "the owner inbox is gone (air-uef)"
+        );
+        assert!(
+            !ROLES_MD.contains("--for owner"),
+            "the owner audience is gone (air-uef)"
+        );
+        assert!(!ROLES_MD.contains("owner decision waiting"));
+        // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
+        assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
+        assert!(ROLES_MD.contains("reads the tree alone and not git history"));
     }
 
     /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for

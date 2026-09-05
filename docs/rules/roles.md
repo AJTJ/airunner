@@ -72,8 +72,9 @@ finish rather than guessing which of the two bit you. **[fact]**
 
 A closed bead stays closed; unfinished work is a new bead that references it (ask via
 `air capture`). Stop only for a genuine blocker or an owner-only decision; say so in one line
-with `air capture "<blocker>"` (or `--for owner`), then `air release <id> --reason <why>` or
-take unrelated work.
+with `air capture "<blocker>"`, then `air release <id> --reason <why>` or take unrelated
+work. A question only the owner can answer goes the same way: the coordinator files it as a
+bead labelled `owner` (air-uef).
 
 Facts available to you: `air holdings` (who is in which file), `air status`, `air lease status`,
 `air handover` (what is missing and the command that fixes it). A warning that a peer holds a
@@ -99,17 +100,21 @@ Two modes (owner, 2026-08-21). **Active:** every online worker has work: keep th
 full of claimable tasks (epics decomposed; the reading may be delegated, the filing and deciding
 are yours), set priority, add `blocks` edges for shared files. Never set `assignee` on an open
 bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
-flight. **Idle:** feed no one.
+flight. **Idle:** feed no one. Naming a bead at a worker reserves nothing: `air claim` is the
+reservation, and a bead named in a message and not claimed is still every worker's to take
+(adopter lost two that way, ad-xbr5; owner, 2026-09-05). **[fact]**
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
-acceptance, a resource conflict), through the owner queue.
+acceptance, a resource conflict), by filing a bead labelled `owner` with your recommendation in
+its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
+workers, and `air status` counts them on its `ready:` line.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
-landable branches, ready depth, leases, inbox depth), `air holdings`, the channel (stuck, idle or silent
-with a claim, idle without a claim, hand-over not green, landable branch, lease held by a dead
-session, owner decision waiting, session joined or left). **[fact]** Review waiting and owner
-decision waiting push only when the SET changes, not while it ages; the waits themselves are
-always in `air status` and `air inbox --owner` on demand (air-s7c, 2026-08-22). What each
-mechanism costs and the condition under which it goes: `air audit`.
+landable branches, ready depth with the owner-labelled count, leases, inbox depth),
+`air holdings`, the channel (stuck, idle or silent with a claim, idle without a claim, hand-over
+not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
+condition pushes only when the SET changes, not while it ages; the facts themselves are always
+in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
+under which it goes: `air audit`.
 
 Workers are reached with `SendMessage` to the session name `air status` shows; tmux panes are
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
@@ -139,7 +144,10 @@ recorded green at the branch head]**
 fast-forwarded onto it. Because the branch must contain main, that commit's tree is
 byte-identical to the one the worker recorded its green for, so there is nothing new to verify —
 and nothing to roll back, no armed window, and no `git reset --hard` on main. The clean-tree
-refusal went with the reset that was its only reason. **[fact]**
+refusal went with the reset that was its only reason. **[fact]** An identical tree is an
+identical verdict only when the repo's verify reads the tree alone and not git history; a
+verify that reads the log, the branch name or the reflog can pass on the branch and fail on
+main over the same bytes (adopter ad-ogoa; owner, 2026-09-05). **[fact]**
 
 The `.git` shape still differs between a worktree (a FILE) and the main checkout (a DIRECTORY),
 and anything reading it, `core.hooksPath`, or the cwd can differ between the two. That was a
@@ -161,9 +169,13 @@ Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage 
 Acceptance Criteria`; bug `## Steps to Reproduce` + `## Acceptance Criteria`; epic `## Success
 Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/types.go`
 `RequiredSections`, main, read 2026-08-22; air-8zz). **[fact]** Workers request beads this way,
-including friction beads; they never create them. Owner queue: `air inbox --owner`; a bead
-labelled `owner` is awaiting the owner and `air claim` refuses it to workers (the gate is
-`owner`, not `human`: `human` is presence, `owner` is authority; owner, 2026-08-22). Launch workers
+including friction beads; they never create them.
+Every capture is triaged into a bead or dropped with a reason; nothing a worker writes reaches
+the owner unfiltered (air-uef, owner 2026-09-05: two queues reached the owner, and the prose one
+carried no id, no acceptance and no recommendation). A bead the owner must decide is
+labelled `owner` with the coordinator's recommendation in its description; `air claim` refuses
+it to workers (the gate is `owner`, not `human`: `human` is presence, `owner` is authority;
+owner, 2026-08-22). Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open).
 

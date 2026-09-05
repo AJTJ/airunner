@@ -220,13 +220,13 @@ pub fn check(site: &Site, f: &Facts<'_>) -> Result<bool, String> {
 ///
 /// ## air-y3v: one predicate, or the two surfaces lie to each other
 ///
-/// `air status` and `air inbox --owner` used to decide landability themselves — a recorded
+/// `air status` and the owner inbox (gone since air-uef) used to decide landability themselves — a recorded
 /// green at the branch head, and nothing else — while `air land` also required the branch to
 /// contain main. Every land invalidates that second condition for every other branch, so the
 /// list went stale the instant a land succeeded and offered `air land <bead>` for branches
 /// that would be refused. The owner lost three land cycles to it in one hour on 2026-08-29:
 ///
-///     $ air inbox --owner
+///     $ <the owner inbox, gone since air-uef>
 ///       air-1ra  ede1b151  from ledger  (14 min)  air land air-1ra
 ///     $ air land air-1ra
 ///     ledger: refused: `worktree-ledger` does not contain main
@@ -268,8 +268,8 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
     }
 }
 
-/// What a branch behind main has to do before it can land. The command `air status` and
-/// `air inbox --owner` print instead of `air land` for such a branch (air-y3v), and the same
+/// What a branch behind main has to do before it can land. The command `air status` prints
+/// instead of `air land` for such a branch (air-y3v), and the same
 /// one `branch_check`'s refusal names, so the list and the refusal say the same thing.
 pub fn remerge_command() -> String {
     "git merge main && air record verify -- make verify".to_string()

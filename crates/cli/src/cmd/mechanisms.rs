@@ -209,21 +209,9 @@ pub const MECHANISMS: &[Mechanism] = &[
             "a full round passes with zero `handover-not-green` events (same condition as the gate it reports)",
         ),
     },
-    Mechanism {
-        id: "owner-decision-waiting",
-        class: "attention",
-        what: "Captures sit in the owner queue, with the age of the oldest.",
-        added: "2026-08-21 (plan 0006)",
-        source: "crates/cli/src/cmd/status.rs",
-        fires: Fires::Condition("owner-decision-waiting"),
-        // Recorded by the pass that kept it as a change-only push (air-s7c, owner
-        // 2026-08-22). It is a Judgement rather than a counter: whether a push led to an
-        // action is not something the ledger can see, which is why the "no downstream
-        // action" metric was cut from the audit.
-        removal: Removal::Judgement(
-            "a round shows change-only pushes that led to no owner or coordinator action",
-        ),
-    },
+    // `owner-decision-waiting` was here (plan 0006): captures sitting in the owner queue,
+    // with the age of the oldest. DELETED by air-uef (owner, 2026-09-05) with the queue it
+    // watched; the owner's queue is beads labelled `owner`, counted on the `ready:` line.
     Mechanism {
         id: "stuck",
         class: "attention",
