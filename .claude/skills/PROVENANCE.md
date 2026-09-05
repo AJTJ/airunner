@@ -2,7 +2,9 @@
 
 Append-only log of where each skill under `.claude/skills/` came from and how it was adapted.
 Source SHAs are `git -C <repo> rev-parse --short HEAD` at port time. Full detail lives in each
-skill's own `## Provenance` section.
+skill's own `## Provenance` section. Sources are written `<repo>/<path from that repo's root>`
+here and in every footer; where a checkout of `<repo>` sits on a machine is not part of the
+record (air-7dm: the footers used to carry the owner's home directory).
 
 | Skill | Source | Source HEAD | Ported | Class | Adaptations |
 |---|---|---|---|---|---|
