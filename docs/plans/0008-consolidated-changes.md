@@ -38,6 +38,23 @@ deny/env in settings; launch as `claude -w <name> --tmux --agent worker`. Keep t
 path, which has no first-party equivalent. A probe proves a launched worker still gets the deny
 list before the module is deleted.
 
+**Ruled 2026-09-05: does not happen (air-4t1).** Checked against the harness docs before any
+code moved, and the path above does not survive the check. `claude --agent <name>` *replaces*
+the default Claude Code system prompt entirely, "the same way `--system-prompt` does"
+(https://code.claude.com/docs/en/sub-agents, "Run the whole session as a subagent", accessed
+2026-09-05), so an agent file would strip a worker of the harness's own prompt rather than
+append the role to it. `permissions.deny` in the repo's `.claude/settings.json` applies to every
+session in the repo, coordinator and owner included; a per-role deny needs a per-role settings
+file that `air init` writes and `air install` upgrades in every adopting repo, which is more
+surface than a constant that arrives with the binary. And the probe the item asked for is
+answered by the docs for the flag already in use: "Deny rules block in every mode, including
+`bypassPermissions`" (https://code.claude.com/docs/en/permission-modes, accessed 2026-09-05),
+and `--disallowedTools` is the same rule engine as `permissions.deny` (permissions doc,
+"Settings precedence"). The launcher already is the harness flags: `--worktree`,
+`--append-system-prompt-file`, `--settings`, `--disallowed-tools`, `--tmux`. What remains of
+`launch.rs` is name allocation, `--print`, the detached start, and tests. See
+`docs/decisions.md` 2026-09-05.
+
 **3. The channel's poll thread goes.** It re-reads the ledger on a timer to deliver about 45
 pushes a day and writes ~3 MB of events doing it. **Path**: keep the conditions and
 `air status --attention` as the query; replace the timer with `SendMessage`'s
