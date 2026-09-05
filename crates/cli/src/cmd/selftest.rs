@@ -1091,6 +1091,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_superseding_branch_hands_over_by_its_trailer(),
         probe_ready_split_names_epics_apart(),
         probe_holdings_tags_name_their_tense(),
+        probe_install_reports_a_stale_bd_prime_hook(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -4123,6 +4124,42 @@ fn probe_channel_dedupe() -> Probe {
         name: "channel: new condition pushed once, repeat suppressed",
         red_fires: first,
         green_passes: quiet,
+    }
+}
+
+/// air-b5k: adopting-air.md step 5 told a repo to hand-edit a `bd prime --hook-json` hook
+/// out of `.claude/settings.json`, because `air install` merges and never removes it. A hand
+/// edit in an adoption walkthrough is the step that gets skipped once and never revisited, and
+/// nothing reported its state afterwards. The installer already reads that file.
+///
+/// Red: a settings file with the stale hook, after Air's merge, is reported with its event,
+/// its command, and what to do. Green: Air's own hooks and a bd hook that is not `prime`
+/// report nothing, so the line means something when it appears.
+///
+/// The mutation that made it red, seen: `stale_hooks` matching no command (`is_bd` forced
+/// false), which is the installer back to silent.
+fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
+    use crate::cmd::install::{merge_hooks, render_stale, stale_hooks};
+
+    let with = merge_hooks(serde_json::json!({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "bd prime --hook-json"}]}]}}));
+    let stale = stale_hooks(&with);
+    let text = render_stale(&stale);
+    let red_fires = stale.len() == 1
+        && stale
+            .first()
+            .is_some_and(|h| h.event == "SessionStart" && h.command == "bd prime --hook-json")
+        && text.contains("STALE HOOK: SessionStart runs `bd prime --hook-json`")
+        && text.contains("do: ");
+    let without = merge_hooks(serde_json::json!({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "bd ready --json"}]}]}}));
+    let green_passes = stale_hooks(&without).is_empty()
+        && stale_hooks(&merge_hooks(serde_json::json!({}))).is_empty()
+        && render_stale(&[]).is_empty();
+    Probe {
+        name: "install: a stale `bd prime` hook is reported with its fix; Air's hooks and other bd hooks are not",
+        red_fires,
+        green_passes,
     }
 }
 
