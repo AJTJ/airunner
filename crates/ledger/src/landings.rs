@@ -85,7 +85,11 @@ pub struct Landing {
     pub failing_step: Option<String>,
     pub verify_run_id: Option<String>,
     pub attempt_no: i64,
-    /// The beads this landing carried.
+    /// The beads this ATTEMPT covered, on every result including `refused` (air-8zn, decided
+    /// and kept). A refused row answers "which beads did this attempt carry", which is what
+    /// `attempt_no` counts and what a coordinator reads after a refusal. It is NOT a statement
+    /// that they are on main: every reader that wants landed beads selects on
+    /// [`Landing::landed`], positively, never by excluding one result.
     pub beads: Vec<String>,
     /// Of those, the ones it merged but did NOT close, each with why Air could not discharge
     /// the acceptance (air-ayp). Carried here, never as a bd status: bd's blocking predicate
@@ -103,6 +107,19 @@ pub struct Landing {
     /// When the row was last written. On an `in-flight` row this is the merge time, not an
     /// end: the row is deliberately not a claim that anything finished.
     pub finished_at: String,
+}
+
+impl Landing {
+    /// Did this attempt put its beads on main? `landed` and `landed-refuted` did; `in-flight`
+    /// has not yet; `refused` and `rewound` did not.
+    ///
+    /// air-8zn: `landed_open` used to exclude `in-flight` and treat every other result as a
+    /// landing, so a `refused` row — written with the branch's full bead list when main moved
+    /// under the second branch of an `air land --all` — was read as the newest word on five
+    /// beads. A denylist of one misses every result it did not name; this names what counts.
+    pub fn landed(&self) -> bool {
+        matches!(self.result.as_str(), "landed" | "landed-refuted")
+    }
 }
 
 impl Ledger {
@@ -198,10 +215,11 @@ impl Ledger {
         let mut decided: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         let rows = self.landings()?;
         for l in &rows {
-            // An in-flight landing has reached no verdict yet, so it decides nothing. Letting
-            // it count as the newest word on a bead would silence a standing refutation for
-            // however long the verify runs (air-bxe).
-            if l.result == "in-flight" {
+            // Only a row that actually landed decides anything (air-8zn). An in-flight one has
+            // reached no verdict yet, and a refused one touched nothing: letting either count
+            // as the newest word on a bead would silence a standing refutation (air-bxe), and
+            // a refusal is guaranteed for every branch after the first in `air land --all`.
+            if !l.landed() {
                 continue;
             }
             for bead in &l.beads {
@@ -398,6 +416,52 @@ mod tests {
         again.finished_at = "t9".into();
         l.record_landing(&again).unwrap();
         assert!(l.landed_open().unwrap().is_empty());
+    }
+
+    /// air-8zn: a refused attempt carries the branch's beads (kept on purpose: it says what the
+    /// attempt covered) and decides NOTHING about them. It neither reports its own open beads
+    /// nor silences an older landing's standing refutation. `rewound` is the same.
+    #[test]
+    fn a_refused_attempt_decides_nothing_about_the_beads_it_carried() {
+        let l = Ledger::open_in_memory().unwrap();
+        let refuted = OpenBead {
+            bead: "fd-1".into(),
+            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+            refuted: true,
+            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
+                .into(),
+        };
+        // A refusal carrying a refuted clause is not a landing, so nothing is reported.
+        let mut refused = row("1", "refused");
+        refused.open_beads = vec![refuted.clone()];
+        refused.merge_commit = None;
+        l.record_landing(&refused).unwrap();
+        assert!(l.landed_open().unwrap().is_empty());
+        assert!(!refused.landed());
+
+        // A real landing with the same refutation is reported.
+        let mut landed = row("2", "landed-refuted");
+        landed.open_beads = vec![refuted];
+        landed.finished_at = "t2".into();
+        l.record_landing(&landed).unwrap();
+        assert_eq!(l.landed_open().unwrap().len(), 1);
+        assert!(landed.landed());
+
+        // A NEWER refusal of the same branch (main moved under it) is not the newest word on
+        // fd-1: the refutation stands.
+        let mut later = row("3", "refused");
+        later.merge_commit = None;
+        later.finished_at = "t3".into();
+        l.record_landing(&later).unwrap();
+        assert_eq!(
+            l.landed_open().unwrap().len(),
+            1,
+            "a refusal must not clear it"
+        );
+        let mut rewound = row("4", "rewound");
+        rewound.finished_at = "t4".into();
+        l.record_landing(&rewound).unwrap();
+        assert_eq!(l.landed_open().unwrap().len(), 1, "nor a rewind");
     }
 
     /// air-ppf: a row written before `contradicted` existed carries only `why`, which is the

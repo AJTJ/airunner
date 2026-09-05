@@ -341,7 +341,9 @@ fn known_beads(
         .landings()
         .map_err(|e| format!("landings: {e}"))?
         .into_iter()
-        .filter(|l| l.result == "landed")
+        // air-8zn: positive on what landed. This filter was already positive but named one
+        // result, so a bead on a `landed-refuted` row still counted as unlanded here.
+        .filter(air_ledger::landings::Landing::landed)
         .flat_map(|l| l.beads)
         .collect();
     Ok(ids
