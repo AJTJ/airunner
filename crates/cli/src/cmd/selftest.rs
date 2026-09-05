@@ -166,10 +166,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.green_at_head {",
             to: "if false {",
-            // The enforced-gate and close-with-proof probes drive the same refusal end to end.
+            // The enforced-gate and close-with-proof probes drive the same refusal end to end,
+            // and so does the env-delivery probe, which runs the real hook (air-9dg).
             also_red: &[
                 "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
+                "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
             ],
         },
     ),
