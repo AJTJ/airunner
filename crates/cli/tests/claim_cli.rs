@@ -280,6 +280,9 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
         !err.contains("refused"),
         "a timeout is not a refusal: {err}"
     );
+    // air-gsj: it was retried once, the message says so, and it says what to do.
+    assert!(err.contains("retried once"), "{err}");
+    assert!(err.contains("re-run `air claim fd-9`"), "{err}");
     // Nothing in the ledger: the row is written only after a confirmed result.
     assert!(claims(&repo).is_empty(), "{:?}", claims(&repo));
     // And the event line carries `timeout`, so `air audit` can count how often it fires.
@@ -289,6 +292,80 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
         .collect::<String>();
     assert!(events.contains(r#""decision":"timeout""#), "{events}");
     assert!(!events.contains(r#""decision":"bd-refused""#), "{events}");
+    // air-gsj: exactly one retry between the two timeouts, never a third attempt.
+    assert_eq!(
+        events.matches(r#""decision":"timeout-retry""#).count(),
+        1,
+        "{events}"
+    );
+}
+
+/// air-gsj: bd hangs on the FIRST `--claim` and answers the second. `air claim` retries once
+/// internally, the claim lands, and the worker never retried by hand — which is when
+/// adopter's w1 lost ad-tjwx to a peer. The retry is recorded as `timeout-retry` and the
+/// outcome as `claimed-retried`, so `air audit` counts how often bd's tail bites.
+#[test]
+fn a_bd_timeout_on_claim_is_retried_once_and_the_retry_lands() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // The first `update` hangs past the timeout and writes nothing; every later call is the
+    // ordinary fake bd, whose `update` succeeds.
+    let flaky = repo.join("bd-hang-once");
+    std::fs::write(
+        &flaky,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) if [ ! -e {mark} ]; then : > {mark}; sleep 3; exit 0; fi; exec {bd} \"$@\";; *) exec {bd} \"$@\";; esac\n",
+            mark = repo.join("bd.hung-once").display(),
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&flaky, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _ = Command::new(&flaky)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["claim", "fd-9"])
+        .env("AIR_BD_BIN", &flaky)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("the retry landed"), "{text}");
+    // The ledger row is keyed by the worktree (`main` in a scratch repo); `tester` is the
+    // bd actor.
+    assert_eq!(
+        claims(&repo),
+        vec![("fd-9".to_string(), "main".to_string(), None)]
+    );
+    let events = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(events.contains(r#""decision":"timeout-retry""#), "{events}");
+    assert!(
+        events.contains(r#""decision":"claimed-retried""#),
+        "{events}"
+    );
+    assert!(!events.contains(r#""decision":"timeout""#), "{events}");
 }
 
 /// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
