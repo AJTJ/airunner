@@ -187,10 +187,10 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 },
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
                 // The list is the conditions that EXIST, checked against `status::kinds::ALL`
-                // rather than against memory. `review-waiting` left with air-okc. A surface
-                // describing something untrue is air-ha8's defect, and an MCP instructions
-                // string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, owner-decision-waiting, lease-held-by-dead-session, lease-stale) as they arise."
+                // rather than against memory. `review-waiting` left with air-okc,
+                // `owner-decision-waiting` with air-uef. A surface describing something
+                // untrue is air-ha8's defect, and an MCP instructions string is a surface.
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -300,12 +300,8 @@ fn resources() -> Vec<Value> {
     [
         ("air://status", "Fleet status snapshot (JSON)"),
         ("air://attention", "Current attention conditions (JSON array)"),
-        ("air://inbox", "Open captures (JSON: captures, landings)"),
+        ("air://inbox", "Open captures (JSON: captures)"),
         ("air://holdings", "File holdings across worktrees (JSON)"),
-        (
-            "air://owner-queue",
-            "What waits on the owner: decisions and green landings with their commands (JSON)",
-        ),
         ("air://leases", "Held resources with defects and waiters (JSON)"),
     ]
     .iter()
@@ -375,15 +371,9 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
         "air_capture" => {
             let text = str_arg(args, "text").ok_or("text is required")?;
             argv.extend(["capture".into(), text.into()]);
-            if let Some(a) = str_arg(args, "audience") {
-                argv.extend(["--for".into(), a.into()]);
-            }
         }
         "air_inbox" => {
             argv.push("inbox".into());
-            if args.get("owner").and_then(Value::as_bool) == Some(true) {
-                argv.push("--owner".into());
-            }
         }
         "air_lease_take" => {
             argv.extend([
@@ -444,7 +434,6 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
         "air://attention" => &["--json", "status", "--attention"],
         "air://inbox" => &["--json", "inbox"],
         "air://holdings" => &["--json", "holdings"],
-        "air://owner-queue" => &["--json", "inbox", "--owner"],
         "air://leases" => &["--json", "lease", "status"],
         _ => return Err(format!("unknown resource: {uri}")),
     };

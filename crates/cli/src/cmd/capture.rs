@@ -5,6 +5,13 @@
 //! required by the beads template, not here) and then links the capture with `--bead`.
 //! Air checks that bead exists before it writes the link, and lets a wrong link be
 //! corrected afterwards (air-76z).
+//!
+//! One inbox, one audience (air-uef; owner, 2026-09-05). `air capture --for owner` and
+//! `air inbox --owner` are gone: the owner's queue is beads labelled `owner`, which the
+//! coordinator files with its recommendation in the description, and `air claim` refuses to
+//! workers. Two queues reached the owner before, and the prose one carried no id, no
+//! acceptance and no recommendation: ten items sat six days in adopter's 2026-08-29 round,
+//! and here a capture sat a week for a bead that already existed and was already labelled.
 
 use std::path::Path;
 
@@ -12,15 +19,26 @@ use air_bd::{BdError, WorkLedger};
 
 use crate::cmd::{emit, log_event, now, open};
 
+/// What `--for owner` is told (air-uef). The flag survives only so this sentence can be
+/// said; removal: when a release has passed with no such refusal in any ledger, the flag
+/// goes and clap's own error is enough.
+pub const FOR_OWNER_REFUSAL: &str = "air capture: `--for owner` is gone (air-uef, owner ruling \
+2026-09-05). Capture the question plainly: air capture \"<text>\". The coordinator files it as \
+a bead labelled `owner`, with a recommendation, and those beads are the owner's queue.";
+
 pub fn capture(repo: &Path, text: &str, audience: &str, json: bool) -> i32 {
     let text = text.trim();
     if text.is_empty() {
         eprintln!("air capture: empty text");
         return 1;
     }
-    if !matches!(audience, "coordinator" | "owner") {
-        eprintln!("air capture: --for must be coordinator or owner");
-        return 1;
+    if audience != "coordinator" {
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": FOR_OWNER_REFUSAL}),
+            || FOR_OWNER_REFUSAL.to_string(),
+        );
+        return 2;
     }
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
@@ -32,7 +50,7 @@ pub fn capture(repo: &Path, text: &str, audience: &str, json: bool) -> i32 {
     let id = air_ledger::verify::new_id();
     let at = now();
     let session = std::env::var("CLAUDE_SESSION_ID").ok();
-    if let Err(e) = ledger.capture_for(&id, &worker, session.as_deref(), text, &at, audience) {
+    if let Err(e) = ledger.capture(&id, &worker, session.as_deref(), text, &at) {
         eprintln!("air capture: {e}");
         return 1;
     }
@@ -55,7 +73,7 @@ pub fn capture(repo: &Path, text: &str, audience: &str, json: bool) -> i32 {
     0
 }
 
-pub fn inbox(repo: &Path, owner: bool, json: bool) -> i32 {
+pub fn inbox(repo: &Path, json: bool) -> i32 {
     let (ledger, _worker) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -63,59 +81,27 @@ pub fn inbox(repo: &Path, owner: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    let audience = if owner { "owner" } else { "coordinator" };
-    let items = match ledger.inbox_for(audience) {
+    // Every open capture, whatever audience an older binary wrote it with (air-uef).
+    let items = match ledger.inbox() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air inbox: {e}");
             return 1;
         }
     };
-    // The owner's queue is decisions *and* landings: only the owner may merge to main today,
-    // and two green hand-overs waited on 2026-08-22 with nothing saying so (air-6p5). Derived
-    // from bd plus the ledger every time, never stored twice.
-    let landings = if owner {
-        super::status::landings_for(repo)
-    } else {
-        Vec::new()
-    };
-    emit(
-        json,
-        &serde_json::json!({"captures": items, "landings": landings}),
-        || {
-            let mut s = String::new();
-            if !landings.is_empty() {
-                s.push_str(&format!(
-                    "{} landing(s) waiting on the owner\n",
-                    landings.len()
-                ));
-                for l in &landings {
-                    s.push_str(&format!(
-                        "{}  {}  from {}  ({} min)  {}\n",
-                        l.bead,
-                        l.head.get(..8).unwrap_or(&l.head),
-                        l.worker,
-                        l.minutes,
-                        l.command
-                    ));
-                }
-            }
-            if items.is_empty() {
-                if s.is_empty() {
-                    return format!("{audience} queue empty");
-                }
-                return s;
-            }
-            s.push_str(&format!("{} open capture(s) for {audience}\n", items.len()));
-            for c in &items {
-                s.push_str(&format!(
-                    "{}  {}  {}  {}\n",
-                    c.id, c.captured_at, c.worker, c.text
-                ));
-            }
-            s
-        },
-    );
+    emit(json, &serde_json::json!({"captures": items}), || {
+        if items.is_empty() {
+            return "inbox empty".to_string();
+        }
+        let mut s = format!("{} open capture(s)\n", items.len());
+        for c in &items {
+            s.push_str(&format!(
+                "{}  {}  {}  {}\n",
+                c.id, c.captured_at, c.worker, c.text
+            ));
+        }
+        s
+    });
     0
 }
 

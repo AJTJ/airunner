@@ -1,6 +1,12 @@
 //! The capture inbox: one frictionless line from a worker, not `ready`, triaged by the
 //! coordinator before it becomes a bead (decisions 2026-08-18: workers capture, they do not
 //! file; 2026-08-20: `bd create` hard-denied for workers).
+//!
+//! One audience. The `audience` column stays (forward-only migrations) and is always
+//! `coordinator` since air-uef (owner, 2026-09-05): the owner's queue is beads labelled
+//! `owner`, filed by the coordinator with a recommendation, never worker prose. Rows an older
+//! binary wrote with `audience = 'owner'` are listed by [`Ledger::inbox`] like any other open
+//! capture, so nothing already captured is lost.
 
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -24,7 +30,7 @@ pub struct Capture {
     pub resolved_at: Option<String>,
     pub bead: Option<String>,
     pub note: Option<String>,
-    /// `coordinator` (default) or `owner` (the owner's decision queue; ruling E).
+    /// Always `coordinator` on a new row (air-uef). Older rows may still say `owner`.
     pub audience: String,
 }
 
@@ -55,21 +61,9 @@ impl Ledger {
         text: &str,
         at: &str,
     ) -> Result<()> {
-        self.capture_for(id, worker, session_id, text, at, "coordinator")
-    }
-
-    pub fn capture_for(
-        &self,
-        id: &str,
-        worker: &str,
-        session_id: Option<&str>,
-        text: &str,
-        at: &str,
-        audience: &str,
-    ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO captures (id, worker, session_id, text, captured_at, audience) VALUES (?1,?2,?3,?4,?5,?6)",
-            params![id, worker, session_id, text, at, audience],
+            "INSERT INTO captures (id, worker, session_id, text, captured_at, audience) VALUES (?1,?2,?3,?4,?5,'coordinator')",
+            params![id, worker, session_id, text, at],
         )?;
         Ok(())
     }
@@ -85,18 +79,14 @@ impl Ledger {
             .optional()?)
     }
 
-    /// Open captures for the coordinator, oldest first (the inbox).
+    /// Every open capture, oldest first (the inbox). Whatever audience a row was written
+    /// with: the coordinator triages all of them (air-uef).
     pub fn inbox(&self) -> Result<Vec<Capture>> {
-        self.inbox_for("coordinator")
-    }
-
-    /// Open captures for an audience (`coordinator` or `owner`), oldest first.
-    pub fn inbox_for(&self, audience: &str) -> Result<Vec<Capture>> {
         let mut st = self.conn.prepare(&format!(
-            "SELECT {COLS} FROM captures WHERE status='open' AND audience=?1 ORDER BY captured_at"
+            "SELECT {COLS} FROM captures WHERE status='open' ORDER BY captured_at"
         ))?;
         let v = st
-            .query_map(params![audience], row)?
+            .query_map([], row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(v)
     }

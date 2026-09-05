@@ -179,6 +179,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.main_is_ancestor {",
             to: "if false {",
+            also_red: &[
+                "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+            ],
+        },
+    ),
+    (
+        "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        Mutation {
+            // Never name the landing, which is the pre-fix wording exactly (air-4up): the
+            // refusal still fires and still names the fix, so `gate: main-merged` stays
+            // GREEN under it — which shows this reaches the wording and not the check.
+            file: "crates/hooks/src/gate.rs",
+            from: "if let Some(m) = f.main_moved.as_ref() {",
+            to: "if let Some(m) = f.main_moved.as_ref().filter(|_| false) {",
             also_red: &[],
         },
     ),
@@ -190,6 +204,32 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/ledger/src/landings.rs",
             from: "            if !l.landed() {",
             to: "            if l.result == \"in-flight\" {",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        Mutation {
+            // Back to filtering the branch's landings by the bead typed: the exact line
+            // adopter hit, in the one place the selection is expanded.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        .filter(|l| chosen.contains(l.worker.as_str()))",
+            to: "        .filter(|l| chosen.contains(l.worker.as_str()) && beads.contains(&l.bead))",
+            // The air-09b probe's green half asserts the same expansion for a single named
+            // bead (it used to assert the defect, `v.len() == 1`), so it falls with this too.
+            also_red: &[
+                "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+            ],
+        },
+    ),
+    (
+        "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
+        Mutation {
+            // Let killed rows back into every green/red/flaky query: the one clause that
+            // makes a kill no verdict, in the one place it is spelled.
+            file: "crates/ledger/src/verify.rs",
+            from: "const NOT_KILLED: &str = \"exit_code NOT IN (137, 143)\";",
+            to: "const NOT_KILLED: &str = \"1=1\";",
             also_red: &[],
         },
     ),
@@ -484,6 +524,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/acceptance.rs",
             from: ".partition(|p| ev.tree.iter().any(|t| t == *p));",
             to: ".partition(|_p| true);",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        Mutation {
+            // Never see a bead as ambiguous, which is the pre-fix rule exactly (air-09b): two
+            // landable carriers both go to the batch and the oldest lands first; a blocked
+            // carrier beside a landable one is refused as blocked. One comparison, it
+            // compiles, and the `--worker` path and the single-carrier paths are untouched by
+            // it, which is what shows it reaches the ambiguity rule alone.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        if carriers.len() > 1 {",
+            to: "        if carriers.len() > 99 {",
             also_red: &[],
         },
     ),
@@ -897,9 +951,11 @@ fn all_probes() -> Vec<Probe> {
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
+        probe_gate_names_the_landing_that_moved_main(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
+        probe_killed_is_no_verdict(),
         probe_git_ancestor(),
         probe_gate_claim(),
         probe_claim_cas(),
@@ -920,6 +976,7 @@ fn all_probes() -> Vec<Probe> {
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
         probe_a_message_is_recorded_with_its_content(),
+        probe_owner_queue_is_the_ready_line_not_a_condition(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -946,8 +1003,10 @@ fn all_probes() -> Vec<Probe> {
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_refused_landing_publishes_nothing(),
+        probe_land_by_bead_carries_the_whole_branch(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
+        probe_land_names_a_branch(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -975,12 +1034,12 @@ fn probe_change_only_push() -> Probe {
         for_minutes: mins,
         fingerprint: format!("{bead}/alpha"),
     };
-    let queue = |depth: usize, mins: i64| Attention {
-        worker: "owner".to_string(),
-        kind: "owner-decision-waiting",
-        detail: format!("{depth} waiting, oldest {mins} min"),
+    let queue = |attempts: usize, mins: i64| Attention {
+        worker: "beta".to_string(),
+        kind: "handover-not-green",
+        detail: format!("{attempts} attempt(s), oldest {mins} min"),
         for_minutes: mins,
-        fingerprint: format!("depth:{depth}"),
+        fingerprint: format!("attempts:{attempts}"),
     };
 
     let mut pushed = Pushed::new();
@@ -991,14 +1050,14 @@ fn probe_change_only_push() -> Probe {
     let same_again = select_new(&mut pushed, &[review("air-1", 40), queue(2, 40)]);
     let red = first.len() == 2 && same_again.is_empty();
 
-    // A bead joins the set, and the queue depth moves: both are real changes.
+    // A bead joins the set, and the attempt count moves: both are real changes.
     let changed = select_new(
         &mut pushed,
         &[review("air-1", 45), review("air-2", 1), queue(3, 45)],
     );
     let green = changed.len() == 2
         && changed.iter().any(|a| a.worker == "air-2")
-        && changed.iter().any(|a| a.worker == "owner")
+        && changed.iter().any(|a| a.worker == "beta")
         // ...and the unchanged bead did NOT ride along with them.
         && !changed.iter().any(|a| a.worker == "air-1");
     Probe {
@@ -1034,11 +1093,11 @@ fn probe_conditions_logged_on_change_only() -> Probe {
                 .unwrap_or(0)
         };
         let waiting = |mins: i64| Attention {
-            worker: "owner".to_string(),
-            kind: "owner-decision-waiting",
-            detail: format!("4 waiting, oldest {mins} min"),
+            worker: "beta".to_string(),
+            kind: "handover-not-green",
+            detail: format!("4 attempts, oldest {mins} min"),
             for_minutes: mins,
-            fingerprint: "depth:4".to_string(),
+            fingerprint: "attempts:4".to_string(),
         };
 
         // An hour of polling with nothing changing but the clock.
@@ -1051,13 +1110,13 @@ fn probe_conditions_logged_on_change_only() -> Probe {
         }
         let red = lines(&events) == 1;
 
-        // A fifth capture joins the owner queue: a real change, said again.
+        // A fifth attempt: a real change, said again.
         let snap = Snapshot {
             at: "2026-08-25T11:00:00Z".to_string(),
             ..Default::default()
         };
         let changed = Attention {
-            fingerprint: "depth:5".to_string(),
+            fingerprint: "attempts:5".to_string(),
             ..waiting(61)
         };
         record_and_log(&l, "main", &snap, &[changed], true);
@@ -2028,6 +2087,139 @@ fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
         name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
         red_fires,
         green_passes: untouched_stays_refuted && plain_discharges,
+    }
+}
+
+/// air-09b: a bead is a handle on a branch only while one branch carries it. adopter,
+/// 2026-08-30, twice: a bead carried by a batching lane and by the worker it batched. Named,
+/// `air land` took the oldest-waiting branch (the worker's), main moved, and the lane was
+/// refused; with the worker's branch blocked, the bead was refused outright.
+///
+/// Red, both observed cases: two landable carriers is refused naming each with `--worker`; a
+/// landable carrier beside a blocked one is refused the same way, with the landable one's
+/// command and the blocked one's fix, not silently resolved by state. Green: `--worker` lands
+/// that branch with every bead it carries; a bead on ONE blocked branch is still refused with
+/// that branch's fix; a bead on one landable branch still lands.
+fn probe_land_names_a_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str, minutes: i64, blocked: Option<&str>| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes,
+        command: match blocked {
+            None => format!("air land --worker {worker}"),
+            Some(_) => "git merge main && air record verify -- make verify".into(),
+        },
+        acceptance: Vec::new(),
+        blocked: blocked.map(String::from),
+    };
+    let none: Vec<String> = Vec::new();
+    let fd1 = vec!["fd-1".to_string()];
+    let fd2 = vec!["fd-2".to_string()];
+
+    // Case 1: alpha did fd-1 and has waited longest; lane batched it and carries fd-2 too.
+    let both_ready = vec![
+        landing("alpha", "fd-1", 30, None),
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case1 = matches!(
+        resolve(&fd1, &none, &both_ready, &[], &[]),
+        Err(m) if m.contains("--worker alpha") && m.contains("--worker lane")
+    );
+    // Case 2: alpha's branch is behind main now; lane can land.
+    let blocked = vec![landing("alpha", "fd-1", 30, Some("does not contain main"))];
+    let lane_ready = vec![
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case2 = matches!(
+        resolve(&fd1, &none, &lane_ready, &blocked, &[]),
+        Err(m) if m.contains("--worker lane") && m.contains("does not contain main")
+            && !m.contains("--worker alpha")
+    );
+
+    let selector = matches!(
+        resolve(&none, &["lane".to_string()], &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
+    );
+    let single_blocked = matches!(
+        resolve(&fd1, &none, &[], &blocked, &[]),
+        Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
+    );
+    // air-dnr: naming fd-2 selects lane's branch, which carries fd-1 too. This used to assert
+    // `v.len() == 1`, which was the defect written down as the expectation.
+    let single_ready = matches!(
+        resolve(&fd2, &none, &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
+    );
+
+    Probe {
+        name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        red_fires: case1 && case2,
+        green_passes: selector && single_blocked && single_ready,
+    }
+}
+
+/// air-dnr: `air land <bead>` records every bead the branch's merge range names, not the one
+/// typed. The merge is per branch; the argument selects the branch. adopter, 2026-08-30:
+/// `air land ad-ezn6` on a lane carrying five beads recorded one, and four landed with no
+/// acceptance check and no wrong-close detection.
+///
+/// Red: naming ONE bead on a branch carrying five selects all five, once each, and naming
+/// two of them still yields the five once. Green: a bead no branch names is still refused,
+/// and a bead on a different branch is not swept in.
+fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes: 5,
+        command: format!("air land --worker {worker}"),
+        acceptance: Vec::new(),
+        blocked: None,
+    };
+    let five = ["ad-7p85", "ad-epo9", "ad-fsxg", "ad-lqhf", "ad-xeq3"];
+    let mut ready: Vec<Landing> = five.iter().map(|b| landing("lane", b)).collect();
+    ready.push(landing("other", "ad-zzz"));
+    let none: Vec<String> = Vec::new();
+    fn beads_of(v: &[Landing]) -> Vec<&str> {
+        let mut b: Vec<&str> = v.iter().map(|l| l.bead.as_str()).collect();
+        b.sort_unstable();
+        b
+    }
+
+    let one = resolve(&["ad-fsxg".to_string()], &none, &ready, &[], &[]);
+    let all_five =
+        matches!(&one, Ok(v) if beads_of(v) == five && v.iter().all(|l| l.worker == "lane"));
+    let two = resolve(
+        &["ad-7p85".to_string(), "ad-xeq3".to_string()],
+        &none,
+        &ready,
+        &[],
+        &[],
+    );
+    let once_each = matches!(&two, Ok(v) if beads_of(v) == five);
+
+    let absent = matches!(
+        resolve(&["ad-nope".to_string()], &none, &ready, &[], &[]),
+        Err(m) if m.contains("no green branch names ad-nope")
+    );
+    let not_swept = matches!(
+        resolve(&["ad-zzz".to_string()], &none, &ready, &[], &[]),
+        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "other")
+    );
+
+    Probe {
+        name: "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        red_fires: all_five && once_each,
+        green_passes: absent && not_swept,
     }
 }
 
@@ -3259,6 +3451,41 @@ fn probe_a_message_is_recorded_with_its_content() -> Probe {
     }
 }
 
+/// air-uef (owner ruling 2026-09-05): the owner inbox is gone. Two queues reached the owner,
+/// worker prose with no id and no acceptance, and beads labelled `owner`; a capture sat a week
+/// for a bead that already existed and was already labelled. One queue now, and it is beads.
+///
+/// Red: a fleet with open owner-labelled beads and no captures reports the owner's count on
+/// the `ready:` line of `air status`, named as the owner's queue. Green: the same snapshot
+/// raises no condition at all, and `owner-decision-waiting` exists in neither the kind list
+/// nor the mechanism registry, so nothing can push it.
+///
+/// The mutation that made it red, seen: the ready line's differ-branch replaced by
+/// `String::new()`, which is the count silently gone.
+fn probe_owner_queue_is_the_ready_line_not_a_condition() -> Probe {
+    use crate::cmd::mechanisms::MECHANISMS;
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds, render_for_probe};
+
+    const NOW: &str = "2026-09-05T12:00:00Z";
+    let s = Snapshot {
+        at: NOW.to_string(),
+        ready_depth: Some(3),
+        claimable_depth: Some(1),
+        ..Default::default()
+    };
+    let text = render_for_probe(&s);
+    let red_fires = text.contains("ready: 3 (1 claimable; 2 owner-labelled: the owner's queue");
+    let gone = "owner-decision-waiting";
+    let green_passes = attention(&s, NOW, Thresholds::default()).is_empty()
+        && !kinds::ALL.contains(&gone)
+        && !MECHANISMS.iter().any(|m| m.id == gone);
+    Probe {
+        name: "status: the owner's queue is the owner-labelled count on the ready line, and no condition",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// air-q9c: a lease defect is a signal for whoever WANTS the resource, and never for the
 /// holder — who knows they hold it and was being told to break the thing they were using.
 /// adopter saw six of those in a day while the simulator and API were genuinely running.
@@ -3444,6 +3671,8 @@ fn base_facts() -> GateFacts {
         tree_green: None,
         last_green_sha: None,
         main_is_ancestor: true,
+        main_sha: "fedcba9876543210".into(),
+        main_moved: None,
         bead_claimed_by_worker: true,
         runs_at_head: (1, 0),
         digest_present: None,
@@ -3474,6 +3703,43 @@ fn probe_gate_main() -> Probe {
         name: "gate: main-merged",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-4up: eight refusals in one adopter round, all caused by a coordinator landing, every
+/// one worded as a defect in the worker's tree. Red: with a landing on record that HEAD does
+/// not contain, the refusal names it — the sha, how long ago, whose branch — and keeps the
+/// phrase adopter counts refusals by. Green: the fix is unchanged, and with no landing to
+/// name the gate still refuses and names main without inventing a cause.
+fn probe_gate_names_the_landing_that_moved_main() -> Probe {
+    use air_hooks::MainMove;
+
+    let mut f = base_facts();
+    f.main_is_ancestor = false;
+    f.main_moved = Some(MainMove {
+        merge_commit: "abcdef0123456".into(),
+        worker: "lane".into(),
+        at: "t".into(),
+        ago_secs: Some(40),
+    });
+    let v = handover_verdict(&f);
+    let red = v.block
+        && v.message
+            .contains("moved 40s ago to abcdef0 (landing from lane)")
+        && v.message.contains("main is not an ancestor of HEAD");
+    let fix_unchanged = v.missing.iter().any(|m| {
+        m.check == "main-merged" && m.fix == "git merge main && air record verify -- make verify"
+    });
+    let mut g = base_facts();
+    g.main_is_ancestor = false;
+    let plain = handover_verdict(&g);
+    Probe {
+        name: "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        red_fires: red,
+        green_passes: fix_unchanged
+            && plain.block
+            && !plain.message.contains("landing")
+            && plain.message.contains("main is at fedcba9"),
     }
 }
 
@@ -3521,6 +3787,79 @@ fn probe_ledger_roundtrip() -> Probe {
     let (red, green) = ok.unwrap_or((false, false));
     Probe {
         name: "ledger: verify_runs round-trip",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-ppm: a run killed by signal records no verdict, and a genuine exit-2 failure still
+/// records red. The second is what makes the first safe.
+///
+/// Red: `run_tee` on a child that dies by SIGTERM yields 143, not -1, and a 143 row at a sha
+/// is not the latest run there, not red, not one side of a flaky pair, and does not turn a
+/// green tree red. Green: an exit-2 row is red and does count toward flakiness beside a green.
+fn probe_killed_is_no_verdict() -> Probe {
+    use crate::cmd::record::run_tee;
+    use air_ledger::verify::{KILLED_EXITS, Verdict};
+
+    let dir = std::env::temp_dir();
+    // The real signal path: the child kills itself with TERM, and Air sees 128 + 15.
+    let signalled = run_tee("sh", &["-c".into(), "kill -TERM $$".into()], &dir)
+        .map(|(code, _)| code)
+        .unwrap_or(-1);
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let run = |sha: &str, exit: i32, at: &str| VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: exit,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: at.into(),
+            finished_at: at.into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: Some("T".into()),
+        };
+        l.record_verify(&run("aaa", 0, "t1"))
+            .map_err(|e| e.to_string())?;
+        l.record_verify(&run("aaa", signalled, "t2"))
+            .map_err(|e| e.to_string())?;
+        let killed_is_no_verdict = KILLED_EXITS.contains(&signalled)
+            && run("aaa", signalled, "t").verdict() == Verdict::Killed
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 0)
+            && l.green_at("bbb", Some("T"), Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some();
+        // A kill alone at a commit is nothing at all.
+        l.record_verify(&run("ccc", 137, "t3"))
+            .map_err(|e| e.to_string())?;
+        let alone = l
+            .latest_run_at_commit("ccc", Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none();
+        // A genuine failure is red, and flaky beside the green.
+        l.record_verify(&run("aaa", 2, "t4"))
+            .map_err(|e| e.to_string())?;
+        let exit_2_is_red = run("aaa", 2, "t").verdict() == Verdict::Red
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_none()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 1);
+        Ok((killed_is_no_verdict && alone, exit_2_is_red))
+    })()
+    .unwrap_or((false, false));
+    let (red, green) = res;
+    Probe {
+        name: "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
         red_fires: red,
         green_passes: green,
     }
