@@ -241,10 +241,27 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                 ),
             ),
         };
+        // air-yol: the fix above is right and following it created the next refusal.
+        // Committing the digest moves HEAD off the sha the green was recorded at, so the very
+        // next check refuses on verify-green-at-head (adopter ad-8m9b, two workers hit it
+        // independently on 2026-08-31). Say so HERE, where a worker is reading, and only when
+        // there is a green to invalidate: with no green at HEAD the order is already the
+        // standard one and the note would be the unconditional noise air-5wq was left open
+        // over.
+        let order_note = if f.green_at_head {
+            format!(
+                "\nthen commit it, `git merge main`, and run `air record verify -- make verify` \
+                 LAST: committing the digest moves HEAD off {}, where the green is recorded, \
+                 and the next check would refuse for a green that is no longer at HEAD",
+                short(&f.head)
+            )
+        } else {
+            String::new()
+        };
         missing.push(Missing {
             check: "digest-present",
             detail,
-            fix,
+            fix: format!("{fix}{order_note}"),
         });
     }
     let pass = missing.is_empty();
