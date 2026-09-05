@@ -260,8 +260,8 @@ impl Judged {
             .any(|(_, v)| matches!(v, Verdict::Unevidenced { .. }))
     }
 
-    /// One line naming every clause Air could not discharge, for the landings row and the
-    /// condition.
+    /// One line naming every clause Air could not discharge, refuted and unreadable alike, for
+    /// the landings row. Complete, so the record is; NOT what the condition says (air-ppf).
     pub fn why_open(&self) -> String {
         if self.clauses.is_empty() {
             return "the bead states no acceptance criteria, in the field or the description, \
@@ -280,6 +280,23 @@ impl Judged {
             }
         }
         parts.join("; ")
+    }
+
+    /// One line naming only the clauses the merge CONTRADICTS, for the sentence that says so
+    /// (air-ppf). `why_open` under a CONTRADICTS headline presented every unreadable clause as
+    /// a contradiction; on 2026-08-30 that read as two wrong closes that were sound.
+    pub fn why_contradicted(&self) -> String {
+        self.clauses
+            .iter()
+            .filter_map(|(text, v)| match v {
+                Verdict::Unevidenced { how } => {
+                    let short = text.chars().take(70).collect::<String>();
+                    Some(format!("\"{short}\": {how}"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -552,6 +569,34 @@ Something happened. See docs/rules/roles.md for the rule.
         let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
         assert!(refuted.refuted() && !refuted.all_discharged());
         assert!(!unreadable.refuted() && !unreadable.all_discharged());
+    }
+
+    /// air-ppf: the CONTRADICTS sentence names the refuted clause alone; the row's `why` keeps
+    /// the unreadable ones beside it.
+    #[test]
+    fn the_contradicted_line_omits_what_air_merely_could_not_read() {
+        let changed = vec!["docs/rules/roles.md".to_string()];
+        let ev = Evidence {
+            green_at_landed: true,
+            changed: &changed,
+        };
+        let j = judge_clauses(
+            "a",
+            vec![
+                "docs/absent.md says it.".into(),
+                "The owner rules on it.".into(),
+                "docs/rules/roles.md names the rule.".into(),
+            ],
+            &ev,
+        );
+        assert_eq!(
+            j.why_contradicted(),
+            "\"docs/absent.md says it.\": the merge did not change docs/absent.md"
+        );
+        assert!(j.why_open().contains("nothing Air can look up"));
+        assert!(j.why_open().contains("docs/absent.md"));
+        let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
+        assert_eq!(unreadable.why_contradicted(), "");
     }
 
     #[test]

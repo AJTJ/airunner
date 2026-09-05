@@ -1015,8 +1015,13 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
     // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
     // and says it again only when the reason changes.
+    //
+    // air-ppf: the sentence names `contradicted`, never `why`. `why` is the whole record,
+    // refuted and unreadable clauses together, and rendering it here put "nothing Air can
+    // look up" under a headline asserting a contradiction; two sound closes read as wrong
+    // ones on 2026-08-30. The unreadable clauses stay on the row and in the `air land` print.
     for o in &s.landed_open {
-        let (bead, why) = (&o.bead, &o.why);
+        let (bead, why) = (&o.bead, &o.contradicted);
         out.push(Attention {
             worker: bead.clone(),
             kind: kinds::LANDED_NOT_CLOSED,
