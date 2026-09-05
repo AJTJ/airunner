@@ -479,6 +479,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  the declaration nothing about the gate's strictness changed; the price is one \
                  re-verify per landed bead, which `air status` now names as such.",
     },
+    SurfaceChange {
+        id: "killed-is-no-verdict",
+        since: "2026-09-05 (air-ppm)",
+        headline: "A verify that exits 143 or 137 is recorded as KILLED, not red: it is no \
+                   verdict for that sha. A child that died by signal is recorded as 128+signal \
+                   rather than -1.",
+        silent_break: true,
+        action: "A run your harness killed at its timeout no longer reads as a red at HEAD, \
+                 no longer makes a green/kill pair read as flaky, and no longer tells the \
+                 worker \"the repo's test is the bug\". The exit code is still recorded and \
+                 `air record` still mirrors it, so a script gated on its exit sees what it \
+                 saw. Only 137 and 143 are read this way: when `make`'s CHILD is the process \
+                 signalled, make exits 2 and Air records a red, because 2 is a real failure's \
+                 code too and Air does not parse make's \"Terminated\" line to tell them \
+                 apart. A wrapper that knows a stage was signalled should exit 143 to say so \
+                 (adopter's run-logged.sh does).",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -544,6 +561,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: green keyed by commit not (worker, sha), tree key by declaration, schema
     // v14 (air-7wf).
     ("0.2.0", 4, 23),
+    // 2026-09-05: a signalled verify is no verdict (air-ppm).
+    ("0.2.1", 5, 24),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
