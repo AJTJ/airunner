@@ -102,15 +102,13 @@ enum Cmd {
     /// One line into the inbox. Workers capture; the coordinator triages. Never blocks you.
     Capture {
         text: String,
-        /// Audience: coordinator (default) or owner (the owner's decision queue).
-        #[arg(long = "for", default_value = "coordinator")]
+        /// Hidden since air-uef: `coordinator` is the only audience. `--for owner` is refused
+        /// with the replacement named; the owner's queue is beads labelled `owner`.
+        #[arg(long = "for", default_value = "coordinator", hide = true)]
         audience: String,
     },
-    /// Open captures, oldest first (coordinator). --owner shows the owner's decision queue.
-    Inbox {
-        #[arg(long)]
-        owner: bool,
-    },
+    /// Open captures, oldest first. The coordinator triages every one into a bead or drops it.
+    Inbox,
     /// Mutual exclusion for what two agents cannot share (ports, simulator, Docker, browser).
     Lease {
         #[command(subcommand)]
@@ -358,7 +356,7 @@ fn main() -> ExitCode {
             worker,
         } => cmd::claim::release(&repo, &bead, &reason, worker.as_deref(), cli.json),
         Cmd::Capture { text, audience } => cmd::capture::capture(&repo, &text, &audience, cli.json),
-        Cmd::Inbox { owner } => cmd::capture::inbox(&repo, owner, cli.json),
+        Cmd::Inbox => cmd::capture::inbox(&repo, cli.json),
         Cmd::Lease { op } => match op {
             LeaseOp::Take { resource, reason } => {
                 cmd::lease::take(&repo, &resource, &reason, cli.json)

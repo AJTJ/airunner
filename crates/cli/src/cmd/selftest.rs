@@ -179,6 +179,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.main_is_ancestor {",
             to: "if false {",
+            also_red: &[
+                "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+            ],
+        },
+    ),
+    (
+        "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        Mutation {
+            // Never name the landing, which is the pre-fix wording exactly (air-4up): the
+            // refusal still fires and still names the fix, so `gate: main-merged` stays
+            // GREEN under it — which shows this reaches the wording and not the check.
+            file: "crates/hooks/src/gate.rs",
+            from: "if let Some(m) = f.main_moved.as_ref() {",
+            to: "if let Some(m) = f.main_moved.as_ref().filter(|_| false) {",
             also_red: &[],
         },
     ),
@@ -924,6 +938,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
+        probe_gate_names_the_landing_that_moved_main(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
@@ -948,6 +963,7 @@ fn all_probes() -> Vec<Probe> {
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
         probe_a_message_is_recorded_with_its_content(),
+        probe_owner_queue_is_the_ready_line_not_a_condition(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -1004,12 +1020,12 @@ fn probe_change_only_push() -> Probe {
         for_minutes: mins,
         fingerprint: format!("{bead}/alpha"),
     };
-    let queue = |depth: usize, mins: i64| Attention {
-        worker: "owner".to_string(),
-        kind: "owner-decision-waiting",
-        detail: format!("{depth} waiting, oldest {mins} min"),
+    let queue = |attempts: usize, mins: i64| Attention {
+        worker: "beta".to_string(),
+        kind: "handover-not-green",
+        detail: format!("{attempts} attempt(s), oldest {mins} min"),
         for_minutes: mins,
-        fingerprint: format!("depth:{depth}"),
+        fingerprint: format!("attempts:{attempts}"),
     };
 
     let mut pushed = Pushed::new();
@@ -1020,14 +1036,14 @@ fn probe_change_only_push() -> Probe {
     let same_again = select_new(&mut pushed, &[review("air-1", 40), queue(2, 40)]);
     let red = first.len() == 2 && same_again.is_empty();
 
-    // A bead joins the set, and the queue depth moves: both are real changes.
+    // A bead joins the set, and the attempt count moves: both are real changes.
     let changed = select_new(
         &mut pushed,
         &[review("air-1", 45), review("air-2", 1), queue(3, 45)],
     );
     let green = changed.len() == 2
         && changed.iter().any(|a| a.worker == "air-2")
-        && changed.iter().any(|a| a.worker == "owner")
+        && changed.iter().any(|a| a.worker == "beta")
         // ...and the unchanged bead did NOT ride along with them.
         && !changed.iter().any(|a| a.worker == "air-1");
     Probe {
@@ -1063,11 +1079,11 @@ fn probe_conditions_logged_on_change_only() -> Probe {
                 .unwrap_or(0)
         };
         let waiting = |mins: i64| Attention {
-            worker: "owner".to_string(),
-            kind: "owner-decision-waiting",
-            detail: format!("4 waiting, oldest {mins} min"),
+            worker: "beta".to_string(),
+            kind: "handover-not-green",
+            detail: format!("4 attempts, oldest {mins} min"),
             for_minutes: mins,
-            fingerprint: "depth:4".to_string(),
+            fingerprint: "attempts:4".to_string(),
         };
 
         // An hour of polling with nothing changing but the clock.
@@ -1080,13 +1096,13 @@ fn probe_conditions_logged_on_change_only() -> Probe {
         }
         let red = lines(&events) == 1;
 
-        // A fifth capture joins the owner queue: a real change, said again.
+        // A fifth attempt: a real change, said again.
         let snap = Snapshot {
             at: "2026-08-25T11:00:00Z".to_string(),
             ..Default::default()
         };
         let changed = Attention {
-            fingerprint: "depth:5".to_string(),
+            fingerprint: "attempts:5".to_string(),
             ..waiting(61)
         };
         record_and_log(&l, "main", &snap, &[changed], true);
@@ -3417,6 +3433,41 @@ fn probe_a_message_is_recorded_with_its_content() -> Probe {
     }
 }
 
+/// air-uef (owner ruling 2026-09-05): the owner inbox is gone. Two queues reached the owner,
+/// worker prose with no id and no acceptance, and beads labelled `owner`; a capture sat a week
+/// for a bead that already existed and was already labelled. One queue now, and it is beads.
+///
+/// Red: a fleet with open owner-labelled beads and no captures reports the owner's count on
+/// the `ready:` line of `air status`, named as the owner's queue. Green: the same snapshot
+/// raises no condition at all, and `owner-decision-waiting` exists in neither the kind list
+/// nor the mechanism registry, so nothing can push it.
+///
+/// The mutation that made it red, seen: the ready line's differ-branch replaced by
+/// `String::new()`, which is the count silently gone.
+fn probe_owner_queue_is_the_ready_line_not_a_condition() -> Probe {
+    use crate::cmd::mechanisms::MECHANISMS;
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds, render_for_probe};
+
+    const NOW: &str = "2026-09-05T12:00:00Z";
+    let s = Snapshot {
+        at: NOW.to_string(),
+        ready_depth: Some(3),
+        claimable_depth: Some(1),
+        ..Default::default()
+    };
+    let text = render_for_probe(&s);
+    let red_fires = text.contains("ready: 3 (1 claimable; 2 owner-labelled: the owner's queue");
+    let gone = "owner-decision-waiting";
+    let green_passes = attention(&s, NOW, Thresholds::default()).is_empty()
+        && !kinds::ALL.contains(&gone)
+        && !MECHANISMS.iter().any(|m| m.id == gone);
+    Probe {
+        name: "status: the owner's queue is the owner-labelled count on the ready line, and no condition",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// air-q9c: a lease defect is a signal for whoever WANTS the resource, and never for the
 /// holder — who knows they hold it and was being told to break the thing they were using.
 /// adopter saw six of those in a day while the simulator and API were genuinely running.
@@ -3602,6 +3653,8 @@ fn base_facts() -> GateFacts {
         tree_green: None,
         last_green_sha: None,
         main_is_ancestor: true,
+        main_sha: "fedcba9876543210".into(),
+        main_moved: None,
         bead_claimed_by_worker: true,
         runs_at_head: (1, 0),
         digest_present: None,
@@ -3632,6 +3685,43 @@ fn probe_gate_main() -> Probe {
         name: "gate: main-merged",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-4up: eight refusals in one adopter round, all caused by a coordinator landing, every
+/// one worded as a defect in the worker's tree. Red: with a landing on record that HEAD does
+/// not contain, the refusal names it — the sha, how long ago, whose branch — and keeps the
+/// phrase adopter counts refusals by. Green: the fix is unchanged, and with no landing to
+/// name the gate still refuses and names main without inventing a cause.
+fn probe_gate_names_the_landing_that_moved_main() -> Probe {
+    use air_hooks::MainMove;
+
+    let mut f = base_facts();
+    f.main_is_ancestor = false;
+    f.main_moved = Some(MainMove {
+        merge_commit: "abcdef0123456".into(),
+        worker: "lane".into(),
+        at: "t".into(),
+        ago_secs: Some(40),
+    });
+    let v = handover_verdict(&f);
+    let red = v.block
+        && v.message
+            .contains("moved 40s ago to abcdef0 (landing from lane)")
+        && v.message.contains("main is not an ancestor of HEAD");
+    let fix_unchanged = v.missing.iter().any(|m| {
+        m.check == "main-merged" && m.fix == "git merge main && air record verify -- make verify"
+    });
+    let mut g = base_facts();
+    g.main_is_ancestor = false;
+    let plain = handover_verdict(&g);
+    Probe {
+        name: "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        red_fires: red,
+        green_passes: fix_unchanged
+            && plain.block
+            && !plain.message.contains("landing")
+            && plain.message.contains("main is at fedcba9"),
     }
 }
 

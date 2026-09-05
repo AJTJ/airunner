@@ -252,7 +252,7 @@ their tree.
 | Today | Change to | Why |
 |---|---|---|
 | `bd update <id> --claim` in worker rules | `air claim <id> [--files a,b]`; release with `air release <id> --reason …` | The launcher denies raw `--claim`; Air keeps the claim history bd does not |
-| `bd human <id>` (**[adopter]** CLAUDE.md tells agents to run it 4×) | Delete. It does not exist in bd 1.2.x; it prints help and no-ops | Replace with `air capture --for owner "<question>"`; the owner walks `air inbox --owner` |
+| `bd human <id>` (**[adopter]** CLAUDE.md tells agents to run it 4×) | Delete. It does not exist in bd 1.2.x; it prints help and no-ops | Replace with `air capture "<question>"`; the coordinator files a bead labelled `owner` with its recommendation, and those beads are the owner's queue (air-uef) |
 | `make note` / a tracked intake file (**[adopter]** `intake.jsonl` dirtied main and blocked `make land`) | `air capture "<one line>"` | `.air/` is gitignored; capture never touches a tracked file |
 | Workers file beads | Workers never run `bd create` (denied). Coordinator: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` | bd `--validate` refuses a task/feature without `## Acceptance Criteria`, a bug without that and `## Steps to Reproduce`, an epic without `## Success Criteria` (roles.md has the sourced list) |
 | Per-worktree `settings.local.json` env (`BEADS_ACTOR`, `CARGO_TARGET_DIR`) | Set nothing in files; `air worker <name>` passes `BEADS_ACTOR=<name>` and `AIR_ROLE` by flag. Add repo env the same way via `air worker <name> -- --settings '{"env":{…}}'` or put it in `.claude/air.json` (`worker_env`, when built) | **[adopter]** renamed worktrees kept old values: beads misattributed, `make test` built into another worktree's target dir, `make land` refused |
@@ -597,9 +597,9 @@ Three things to confirm:
   refused, naming the label. If it succeeds, step 7 is incomplete.
 - **The ready set is unchanged** except for beads you deliberately relabelled. Compare
   `make ready` against what you noted in check 2.
-- **The owner queue is not empty by accident.** `air inbox --owner` and, if any script reads
-  it, that script's output too. This is check 1 coming back to be confirmed rather than
-  assumed.
+- **The owner queue is not empty by accident.** The owner-labelled count on the `ready:` line
+  of `air status` and, if any script reads it, that script's output too. This is check 1
+  coming back to be confirmed rather than assumed.
 
 ### If it goes wrong
 
@@ -618,7 +618,7 @@ want back. Nothing here needs an uninstall path.
 `air coordinator` in the main terminal. `air worker <name>` per worktree terminal (re-enters an
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
 `air record verify -- <cmd>` → `air handover` → `bd update -s awaiting_review`. Coordinator:
-reads `air status`, acts on channel events, triages `air inbox`, walks `air inbox --owner`
-with the owner, and lands by whatever path this repo lands by — its own `make land`, or
+reads `air status`, acts on channel events, triages every `air inbox` capture into a bead
+(labelled `owner` when the decision is the owner's), and lands by whatever path this repo lands by — its own `make land`, or
 `air land <bead>` / `air land --all` where there is none (air-3pz, air-97z). Upgrading a repo
 that already has Air: §5a.
