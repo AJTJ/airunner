@@ -159,7 +159,10 @@ enum Cmd {
     /// branch only while exactly one branch carries it; a bead on two branches (a batching
     /// lane and the worker it batched, adopter 2026-08-30) is refused with every carrier and
     /// the `--worker` command for each, never resolved by ordering or by which one happens to
-    /// be landable. `--worker` lands that branch with every bead its merge range names.
+    /// be landable. `--worker` lands that branch with every bead its merge range names, and
+    /// so does naming a bead: the argument SELECTS the branch, it does not filter what the
+    /// merge carries or what the landing records (air-dnr). A bead no green branch names is
+    /// still refused.
     ///
     /// It closes nothing. The worker closes its own bead with proof before the branch lands
     /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
