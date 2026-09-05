@@ -422,7 +422,7 @@ fn capture_inbox_triage_round_trip() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("re-pointed from bead fd-7"), "{out}");
     let (_, out, _) = air(&repo, &bd, &["inbox"]);
-    assert_eq!(out.trim(), "coordinator queue empty");
+    assert_eq!(out.trim(), "inbox empty");
 }
 
 /// air-869: the incident was ten closes as ten `bd` processes at ~1.4 s each. Ten closes
@@ -702,7 +702,9 @@ fn owner_label_is_the_gate_and_human_is_not() {
     let (code, out, _) = air(&wt, &bd, &["claim", "fd-1"]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("is labelled `owner`"), "{out}");
-    assert!(out.contains("air capture --for owner"), "{out}");
+    // air-uef: the refusal no longer sends the worker to an owner inbox that does not exist.
+    assert!(out.contains("`air capture` the question"), "{out}");
+    assert!(!out.contains("--for owner"), "{out}");
 
     // `human` is presence, not authority: it does not stop a worker.
     says(&wt, r#"{"id":"fd-2","status":"open","labels":["human"]}"#);
@@ -791,15 +793,22 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     let v: serde_json::Value = serde_json::from_str(&o).unwrap();
     assert_eq!(v[0]["holder"], "wt-b");
 
-    // Owner queue: separate audience, separate attention condition.
-    let (c, _) = run(&wt, &me, &["capture", "--for", "owner", "rule on ports"]);
+    // air-uef: one queue. `--for owner` is refused naming the replacement; a plain capture
+    // lands in the one inbox; and no owner condition exists for the channel to push.
+    let (c, o) = run(&wt, &me, &["capture", "--for", "owner", "rule on ports"]);
+    assert_eq!(c, 2, "{o}");
+    assert!(
+        o.contains("air-uef") && o.contains("labelled `owner`"),
+        "{o}"
+    );
+    let (_, o) = run(&repo, &me, &["inbox"]);
+    assert!(o.contains("inbox empty"), "{o}");
+    let (c, _) = run(&wt, &me, &["capture", "rule on ports"]);
     assert_eq!(c, 0);
     let (_, o) = run(&repo, &me, &["inbox"]);
-    assert!(o.contains("coordinator queue empty"), "{o}");
-    let (_, o) = run(&repo, &me, &["inbox", "--owner"]);
     assert!(o.contains("rule on ports"), "{o}");
     let (_, o) = run(&repo, &me, &["--json", "status", "--attention"]);
-    assert!(o.contains("owner-decision-waiting"), "{o}");
+    assert!(!o.contains("owner-decision-waiting"), "{o}");
 }
 
 /// air-eiv: `air handover` is documented as the way to find what is missing, and it used to
@@ -969,14 +978,15 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
     assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
 }
 
-/// air-6p5: only the owner may merge to main today, so a green branch waits on them and
-/// nothing said so. `air inbox --owner` lists the landings with their exact commands next to
-/// the decisions, derived from git plus the ledger rather than stored twice.
+/// air-6p5: a green branch waited on a merge and nothing said so. `air status` lists the
+/// landable branches with their exact commands, derived from git plus the ledger rather than
+/// stored twice. (The owner inbox that also listed them went with air-uef; landing has been
+/// the coordinator's since air-3pz, so `air status` is the one surface.)
 ///
 /// air-7kp: the fixture is a worker BRANCH whose commit names the bead. A coordinator's own
 /// checkout is never a landing candidate — there is nothing to merge into main from main.
 #[test]
-fn owner_queue_lists_green_landings_with_their_commands() {
+fn status_lists_green_landings_with_their_commands() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
@@ -1021,28 +1031,30 @@ fn owner_queue_lists_green_landings_with_their_commands() {
     g(&alpha, &["commit", "-q", "-m", &bead_trailer("fd-1")]);
     let head = g(&alpha, &["rev-parse", "HEAD"]);
 
-    // Not green at that head yet: the worker's to fix, so the owner is told nothing.
-    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    // Not green at that head yet: the worker's to fix, so nothing is landable.
+    let landable = |out: &str| -> Vec<serde_json::Value> {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["snapshot"]["landable"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|l| l["bead"] == "fd-1" && l["blocked"].is_null())
+            .collect()
+    };
+    let (code, out, err) = air(&repo, &bd, &["--json", "status"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("owner queue empty"), "{out}");
+    assert!(landable(&out).is_empty(), "{out}");
 
     let (code, o, e) = air(&alpha, &bd, &["record", "verify", "--", "true"]);
     assert_eq!(code, 0, "{o}{e}");
-    let (code, out, err) = air(&repo, &bd, &["inbox", "--owner"]);
+    let (code, out, err) = air(&repo, &bd, &["--json", "status"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("1 landing(s) waiting on the owner"), "{out}");
-    assert!(
-        out.contains(head.get(..8).unwrap()) && out.contains("from alpha"),
-        "{out}"
-    );
-    assert!(out.contains("air land --worker alpha"), "{out}");
-
-    // And in JSON, next to the captures, so the channel reads one shape.
-    let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["landings"][0]["bead"], "fd-1", "{out}");
-    assert_eq!(v["landings"][0]["worker"], "alpha", "{out}");
-    assert!(v["captures"].as_array().unwrap().is_empty(), "{out}");
+    let l = landable(&out);
+    assert_eq!(l.len(), 1, "{out}");
+    assert_eq!(l[0]["worker"], "alpha", "{out}");
+    assert_eq!(l[0]["head"], head, "{out}");
+    assert_eq!(l[0]["command"], "air land --worker alpha", "{out}");
 }
 
 /// air-6u5: the adopter case end to end, with NO trailer anywhere.
@@ -1518,8 +1530,9 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
 /// air-y3v: after a land, the branches left behind read as needing a re-merge, and `air land`
 /// refuses them with the same reason the list gave.
 ///
-/// The incident (owner, 2026-08-29, third time in one hour): `air inbox --owner` listed a
-/// branch as landable and printed `air land <bead>` beside it; `air land` then refused the same
+/// The incident (owner, 2026-08-29, third time in one hour): the owner inbox (gone since
+/// air-uef) listed a branch as landable and printed `air land <bead>` beside it; `air land`
+/// then refused the same
 /// branch for not containing main. Two surfaces, one fact, different answers — the landable list
 /// checked only for a recorded green at the head. Every land invalidates the containment
 /// condition for every other branch, so the list went stale the instant a land succeeded.
@@ -1564,10 +1577,36 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     }
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
 
+    // The command `air status` offers for each branch (air-uef: the owner inbox that also
+    // listed them is gone; `air status` is the one surface).
+    let offered = |out: &str| -> std::collections::BTreeMap<String, String> {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["snapshot"]["landable"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|l| {
+                (
+                    l["bead"].as_str().unwrap().to_string(),
+                    l["command"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
     // Both offered with `air land` while both are actually landable.
-    let (_c, out, err) = air(&main, &bd, &["inbox", "--owner"]);
-    assert!(out.contains("air land --worker alpha"), "{out}{err}");
-    assert!(out.contains("air land --worker beta"), "{out}{err}");
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    let cmds = offered(&out);
+    assert_eq!(
+        cmds.get("fd-1").map(String::as_str),
+        Some("air land --worker alpha"),
+        "{out}{err}"
+    );
+    assert_eq!(
+        cmds.get("fd-2").map(String::as_str),
+        Some("air land --worker beta"),
+        "{out}{err}"
+    );
 
     // Land one. This moves main past beta's branch point.
     let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
@@ -1585,14 +1624,16 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     assert!(out.contains("git merge main && air record verify"), "{out}");
 
     // The incident: beta is still shown, because work IS waiting...
-    let (_c, out, err) = air(&main, &bd, &["inbox", "--owner"]);
-    assert!(out.contains("fd-2"), "still shown: {out}{err}");
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    let cmds = offered(&out);
+    let fd2 = cmds.get("fd-2").cloned().unwrap_or_default();
+    assert!(cmds.contains_key("fd-2"), "still shown: {out}{err}");
     // ...but never with the command that cannot work.
-    assert!(
-        !out.contains("air land --worker beta"),
+    assert_ne!(
+        fd2, "air land --worker beta",
         "must not offer a land it would refuse: {out}"
     );
-    assert!(out.contains("git merge main"), "{out}");
+    assert!(fd2.contains("git merge main"), "{out}");
 
     // `air status` says the same thing.
     let (_c, st, se) = air(&main, &bd, &["status"]);
@@ -1618,8 +1659,12 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     // Re-merge and re-verify, and it is landable again by both surfaces.
     git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
     assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
-    let (_c, out, _e) = air(&main, &bd, &["inbox", "--owner"]);
-    assert!(out.contains("air land --worker beta"), "{out}");
+    let (_c, out, _e) = air(&main, &bd, &["--json", "status"]);
+    assert_eq!(
+        offered(&out).get("fd-2").map(String::as_str),
+        Some("air land --worker beta"),
+        "{out}"
+    );
     let (code, out, err) = air(&main, &bd, &["land", "fd-2"]);
     assert_eq!(code, 0, "{out}{err}");
 }
@@ -1684,8 +1729,9 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
         "{out}{err}"
     );
     assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "nothing landed");
-    // The surfaces offer the branch form, one line per (branch, bead).
-    let (_c, st, _e) = air(&main, &bd, &["inbox", "--owner"]);
+    // The surface offers the branch form, one entry per (branch, bead). (`air status` is the
+    // one surface since the owner inbox went with air-uef.)
+    let (_c, st, _e) = air(&main, &bd, &["--json", "status"]);
     assert!(
         st.contains("air land --worker alpha") && st.contains("air land --worker beta"),
         "{st}"
