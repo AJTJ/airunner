@@ -209,7 +209,8 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
-    /// Start an interactive worker session: `claude --worktree <name>` with role prose, deny list, env.
+    /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
+    /// from `.worktreeinclude`), then `claude --worktree <name>` with role prose, deny list, env.
     ///
     /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
     /// Bash tool, `</dev/null`) it starts a detached tmux session named <project>-<name>
@@ -218,6 +219,10 @@ enum Cmd {
     Worker {
         /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
         name: Option<String>,
+        /// Remove the lane's worktree instead of launching. Refused, naming what holds it,
+        /// while it has uncommitted work, a harness lock, or a tmux session; the branch stays.
+        #[arg(long)]
+        remove: bool,
         /// Run in a tmux pane the owner can attach to (lets the coordinator launch workers).
         #[arg(long)]
         tmux: bool,
@@ -388,12 +393,16 @@ fn main() -> ExitCode {
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
         Cmd::Install { write } => cmd::install::run(&repo, write, cli.json),
         Cmd::Worker {
+            name, remove: true, ..
+        } => cmd::worktree::remove_cmd(&repo, name.as_deref()),
+        Cmd::Worker {
             name,
             tmux,
             task,
             model,
             print,
             extra,
+            ..
         } => cmd::launch::worker(
             &repo,
             name.as_deref(),
