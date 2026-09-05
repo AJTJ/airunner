@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 15;
+pub const CURRENT_VERSION: i64 = 16;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -246,12 +246,22 @@ ALTER TABLE verify_runs ADD COLUMN tree TEXT;
 CREATE INDEX IF NOT EXISTS verify_runs_tree ON verify_runs(tree, kind);
 "#;
 
-/// v15 (2026-09-05, air-1bm): the verifies a landing chose to destroy. `air land` refuses while
+/// v15 (2026-09-05, air-9dg): whether the session's hooks see `AIR_ENFORCE=1`. the adopter ran
+/// five hours believing close-with-proof was enforced while a second `--settings` had replaced
+/// the env block that carried it, and nothing either project reads said so. Written by the
+/// hook from ITS OWN environment on every session write, so it records what the gate actually
+/// runs with, not what a launcher meant to pass. NULL on rows from before this version, which
+/// `air status` reads as unknown and says nothing about; 0 on a worker is the finding.
+const V15: &str = r#"
+ALTER TABLE sessions ADD COLUMN enforce INTEGER;
+"#;
+
+/// v16 (2026-09-05, air-1bm): the verifies a landing chose to destroy. `air land` refuses while
 /// a verify is in flight and `--despite-inflight` lands anyway; the runs it ran over are kept
 /// on the row (JSON array of "<worker> at <sha> started <when>"), so "how often did the
 /// coordinator choose to destroy a run rather than wait" is a query over this table, which is
 /// the removal condition of the refusal. `[]` on every ordinary landing.
-const V15: &str = r#"
+const V16: &str = r#"
 ALTER TABLE landings ADD COLUMN despite_inflight TEXT;
 "#;
 
@@ -318,6 +328,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V15)?;
         conn.pragma_update(None, "user_version", 15)?;
     }
+    if version < 16 {
+        conn.execute_batch(V16)?;
+        conn.pragma_update(None, "user_version", 16)?;
+    }
     Ok(())
 }
 
@@ -382,10 +396,10 @@ mod tests {
         assert_eq!(v, CURRENT_VERSION);
     }
 
-    /// air-1bm: v15 adds `landings.despite_inflight` by ALTER; a row from before reads as no
+    /// air-1bm: v16 adds `landings.despite_inflight` by ALTER; a row from before reads as no
     /// override, never as an error.
     #[test]
-    fn v15_adds_despite_inflight_and_old_rows_read_as_no_override() {
+    fn v16_adds_despite_inflight_and_old_rows_read_as_no_override() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
         conn.execute(
@@ -394,10 +408,11 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.pragma_update(None, "user_version", 14).unwrap();
-        // v13 and v14 must exist for the migration to run over them; apply them as v14 would.
+        conn.pragma_update(None, "user_version", 15).unwrap();
+        // v13 to v15 must exist for the migration to run over them; apply them as v15 would.
         conn.execute_batch(V13).unwrap();
         conn.execute_batch(V14).unwrap();
+        conn.execute_batch(V15).unwrap();
 
         migrate(&conn).unwrap();
 

@@ -166,10 +166,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.green_at_head {",
             to: "if false {",
-            // The enforced-gate and close-with-proof probes drive the same refusal end to end.
+            // The enforced-gate and close-with-proof probes drive the same refusal end to end,
+            // and so does the env-delivery probe, which runs the real hook (air-9dg).
             also_red: &[
                 "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
+                "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
             ],
         },
     ),
@@ -302,6 +304,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/launch.rs",
             from: "Ok(p) => Some(task_prompt(&p)),",
             to: "Ok(_p) => Some(t.to_string()),",
+            also_red: &[],
+        },
+    ),
+    (
+        "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        Mutation {
+            // The launcher stops delivering enforcement: the stub's recorded environment
+            // carries AIR_ENFORCE=0, and the real hook run in it advises instead of refusing
+            // (air-9dg). The merged --settings blob regresses with it, so the probe cannot
+            // pass on the blob alone.
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "(\"AIR_ENFORCE\", \"1\"),",
+            to: "(\"AIR_ENFORCE\", \"0\"),",
             also_red: &[],
         },
     ),
@@ -1007,6 +1022,7 @@ fn all_probes() -> Vec<Probe> {
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
         probe_enforced_gate(),
+        probe_env_reaches_the_hook(),
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
@@ -2833,6 +2849,7 @@ fn probe_launch_no_tty() -> Probe {
         name,
         Path::new("/"),
         Some(&socket),
+        &[],
         "sh",
         &["-c".to_string(), "sleep 30".to_string()],
     );
@@ -3059,6 +3076,7 @@ fn probe_attention() -> Probe {
                 pid_alive: None,
                 project: String::new(),
                 model: String::new(),
+                enforce: None,
             }),
             ..Default::default()
         }],
@@ -3124,6 +3142,7 @@ fn probe_standstill() -> Probe {
                 pid_alive: None,
                 project: String::new(),
                 model: String::new(),
+                enforce: None,
             }),
             ..Default::default()
         }],
@@ -3203,6 +3222,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 pid_alive: alive,
                 project: String::new(),
                 model: String::new(),
+                enforce: None,
             }),
             ..Default::default()
         }],
@@ -4221,6 +4241,213 @@ fn probe_worker_task_prompt() -> Probe {
     .unwrap_or(false);
     Probe {
         name: "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-9dg: Air's env has to reach the HOOK, because that is where the one refusal runs.
+/// adopter's workers carried two `--settings`; the second replaced the first, `AIR_ENFORCE`
+/// never reached a hook, and `bd close` without a green was ADVISED and executed for five
+/// hours. `probe_enforced_gate` sets the env directly and so never exercised delivery.
+///
+/// Red: the old shape. Two `--settings` on the line, the env the session runs with is the
+/// second's alone, and the real `air hook` run in that env ALLOWS `bd close` on a claimed bead
+/// with no green at HEAD (exit 0: advisory). Green: `air worker --task … -- --settings '{…}'`
+/// launched against a stub `claude` that records its argv and its environment. The argv
+/// carries ONE `--settings`, merged (theirs kept, AIR_ENFORCE=1 on top); the environment the
+/// stub ran in carries AIR_ENFORCE=1 and BEADS_ACTOR by `tmux new-session -e`, with the
+/// launcher's own inherited values scrubbed so only delivery can put them there; and the real
+/// `air hook`, run in exactly that recorded environment in a worktree holding a claim and no
+/// green, REFUSES the close (exit 2) naming `air record verify`.
+fn probe_env_reaches_the_hook() -> Probe {
+    use crate::cmd::launch::worker_argv;
+    let theirs = r#"{"remoteControlAtStartup":false}"#;
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        // A linked worktree, so the hook's worker is `w` with the worker role and its HEAD
+        // contains main; the only thing missing for a close is the green.
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ])?;
+        let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+        l.record_claim("fd-1", "w", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        drop(l);
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let hook = |env: &[(String, String)]| -> Result<(i32, String), String> {
+            use std::io::Write;
+            let input = serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "bd close fd-1 --reason done"},
+                "session_id": "air-9dg-probe",
+                "cwd": wt.display().to_string(),
+            });
+            let mut child = Command::new(&exe)
+                .current_dir(&wt)
+                .arg("hook")
+                .env_remove("AIR_ENFORCE")
+                .env_remove("AIR_ROLE")
+                .env_remove("AIR_PROJECT")
+                .env_remove("BEADS_ACTOR")
+                .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            let out = child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok((
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ))
+        };
+        let env_of = |blob: &str| -> Vec<(String, String)> {
+            serde_json::from_str::<serde_json::Value>(blob)
+                .ok()
+                .and_then(|v| v.get("env").and_then(|e| e.as_object()).cloned())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // RED: two --settings, the second wins, and the hook in that env lets the close by.
+        let mut old = worker_argv("w", "air", std::path::Path::new("/r/roles.md"), &[]);
+        old.extend(["--settings".to_string(), theirs.to_string()]);
+        let last = old
+            .iter()
+            .rposition(|a| a == "--settings")
+            .and_then(|i| old.get(i.saturating_add(1)))
+            .cloned()
+            .unwrap_or_default();
+        let last_env = env_of(&last);
+        let (code, _) = hook(&last_env)?;
+        let red = !last_env.iter().any(|(k, _)| k == "AIR_ENFORCE") && code == 0;
+
+        // GREEN: launch for real against a stub that records argv and env.
+        let stub = dir.join("claude-stub");
+        let argv_file = dir.join("argv");
+        let env_file = dir.join("env");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\0' \"$@\" > {a}.tmp && mv {a}.tmp {a}\nenv > {e}.tmp && mv {e}.tmp {e}\n",
+                a = argv_file.display(),
+                e = env_file.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let socket = format!("air-selftest-{}", new_id());
+        let out = Command::new(&exe)
+            .current_dir(&dir)
+            .env("AIR_CLAUDE_BIN", &stub)
+            .env("AIR_TMUX_SOCKET", &socket)
+            .env_remove("AIR_TMUX_MODE")
+            // Scrubbed, so the stub can only have them if the launcher delivered them.
+            .env_remove("AIR_ENFORCE")
+            .env_remove("AIR_ROLE")
+            .env_remove("AIR_PROJECT")
+            .env_remove("BEADS_ACTOR")
+            .args(["worker", "w", "--task", "hi", "--", "--settings", theirs])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let mut got = None;
+        for _ in 0..1000 {
+            if let (Ok(a), Ok(e)) = (
+                std::fs::read(&argv_file),
+                std::fs::read_to_string(&env_file),
+            ) {
+                got = Some((a, e));
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = Command::new("tmux")
+            .args(["-L", &socket, "kill-server"])
+            .output();
+        if !out.status.success() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(String::from_utf8_lossy(&out.stderr).to_string());
+        }
+        let Some((raw_argv, raw_env)) = got else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err("stub never ran".into());
+        };
+        let argv: Vec<String> = String::from_utf8_lossy(&raw_argv)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        let blobs: Vec<&String> = argv
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--settings")
+            .filter_map(|(i, _)| argv.get(i.saturating_add(1)))
+            .collect();
+        let merged = blobs.len() == 1
+            && blobs
+                .first()
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                .is_some_and(|v| {
+                    v.get("remoteControlAtStartup") == Some(&serde_json::Value::Bool(false))
+                        && v.pointer("/env/AIR_ENFORCE").and_then(|x| x.as_str()) == Some("1")
+                });
+        let recorded: Vec<(String, String)> = raw_env
+            .lines()
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let delivered = recorded.iter().any(|(k, v)| k == "AIR_ENFORCE" && v == "1")
+            && recorded.iter().any(|(k, v)| k == "BEADS_ACTOR" && v == "w");
+        let (code, err) = hook(&recorded)?;
+        let _ = std::fs::remove_dir_all(&dir);
+        let refused = code == 2 && err.contains("air record verify");
+        Ok((red, merged && delivered && refused))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
         red_fires: red,
         green_passes: green,
     }
