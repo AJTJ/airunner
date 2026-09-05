@@ -411,6 +411,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        Mutation {
+            // Render the row's whole `why` again, which is exactly the pre-fix line (air-ppf):
+            // every unreadable clause back under the CONTRADICTS headline. One binding, it
+            // compiles, and `landed_open` still filters on `refuted`, so the only-unreadable
+            // half stays silent under it — which shows the mutation reaches the rendering rule
+            // and not the ledger's filter beside it.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "let (bead, why) = (&o.bead, &o.contradicted);",
+            to: "let (bead, why) = (&o.bead, &o.why);",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -866,6 +880,7 @@ fn all_probes() -> Vec<Probe> {
         probe_project_is_taken_from_what_it_is_told(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_contradicts_names_only_the_refuted(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -1649,6 +1664,7 @@ fn probe_landed_but_open() -> Probe {
                 bead: "fd-2".into(),
                 why: refutable.why_open(),
                 refuted: true,
+                contradicted: refutable.why_contradicted(),
             }],
             merge_commit: Some("ccc".into()),
             pid: None,
@@ -1687,6 +1703,7 @@ fn probe_landed_but_open() -> Probe {
                 bead: "fd-2".into(),
                 why: "a clause Air cannot read".into(),
                 refuted: false,
+                contradicted: String::new(),
             }],
             merge_commit: Some("eee".into()),
             pid: None,
@@ -1707,6 +1724,104 @@ fn probe_landed_but_open() -> Probe {
             && !unreadable.refuted()
             && !unreadable.all_discharged()
             && cleared,
+    }
+}
+
+/// air-ppf: the `landed-not-closed` sentence asserts a contradiction, so it may name only the
+/// clauses the merge contradicts. It used to render the row's whole `why`, which also carries
+/// every clause Air could not read, so "nothing Air can look up" appeared under a CONTRADICTS
+/// headline and two sound closes (air-03w, air-97z) each cost a round trip on 2026-08-30.
+///
+/// Red: a bead with one refuted clause and two unreadable ones is reported naming the refuted
+/// clause and neither of the others. Green: a bead with only unreadable clauses produces no
+/// CONTRADICTS claim at all, and the row still keeps both halves. The first is what makes the
+/// second believable: a message that only ever names what it can refute can be read at face
+/// value.
+fn probe_contradicts_names_only_the_refuted() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let changed = vec!["docs/rules/roles.md".to_string()];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+    };
+    let mixed = judge_clauses(
+        "fd-1",
+        vec![
+            "docs/absent.md says it.".into(),
+            "The owner rules on the counter-argument.".into(),
+            "Docs are updated.".into(),
+        ],
+        &ev,
+    );
+    let unreadable_only = judge_clauses("fd-2", vec!["The owner rules on it.".into()], &ev);
+    let as_row = |j: &crate::cmd::acceptance::Judged| OpenBead {
+        bead: j.bead.clone(),
+        why: j.why_open(),
+        refuted: j.refuted(),
+        contradicted: j.why_contradicted(),
+    };
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "aaa".into(),
+            tip_sha: Some("bbb".into()),
+            result: "landed-refuted".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 1,
+            beads: vec!["fd-1".into(), "fd-2".into()],
+            open_beads: vec![as_row(&mixed), as_row(&unreadable_only)],
+            merge_commit: Some("ccc".into()),
+            pid: None,
+            started_at: "t0".into(),
+            finished_at: "t1".into(),
+        })
+        .map_err(|e| e.to_string())?;
+        let snap = Snapshot {
+            landed_open: l.landed_open().map_err(|e| e.to_string())?,
+            ..Default::default()
+        };
+        let att = attention(&snap, "2026-09-05T00:00:00Z", Thresholds::default());
+        let landed: Vec<_> = att
+            .iter()
+            .filter(|a| a.kind == kinds::LANDED_NOT_CLOSED)
+            .collect();
+        let names_the_refuted_alone = landed.len() == 1
+            && landed.first().is_some_and(|a| {
+                a.worker == "fd-1"
+                    && a.detail
+                        .contains("CONTRADICTS: \"docs/absent.md says it.\"")
+                    && !a.detail.contains("nothing Air can look up")
+                    && !a.detail.contains("owner rules")
+                    && !a.detail.contains("Docs are updated")
+            });
+        let row_keeps_both = l
+            .landings()
+            .map_err(|e| e.to_string())?
+            .first()
+            .and_then(|r| r.open_beads.iter().find(|o| o.bead == "fd-1").cloned())
+            .is_some_and(|o| {
+                o.why.contains("nothing Air can look up") && o.why.contains("docs/absent.md")
+            });
+        let unreadable_is_silent = !landed.iter().any(|a| a.worker == "fd-2");
+        Ok((
+            names_the_refuted_alone,
+            unreadable_is_silent && row_keeps_both,
+        ))
+    })()
+    .unwrap_or((false, false));
+    let (red_fires, green_passes) = res;
+
+    Probe {
+        name: "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        red_fires,
+        green_passes,
     }
 }
 
