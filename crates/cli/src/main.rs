@@ -180,6 +180,11 @@ enum Cmd {
         /// Land every green branch, oldest first, stopping at the first red.
         #[arg(long)]
         all: bool,
+        /// Land even though a verify is in flight, destroying it (air-1bm). Refused
+        /// otherwise, naming each run and its pid. Every override is recorded on the landings
+        /// row and the event line: that count is the refusal's removal condition.
+        #[arg(long = "despite-inflight")]
+        despite_inflight: bool,
     },
     /// The coordinator's one screen: workers, sessions, claims, green, overlaps, inbox.
     Status {
@@ -372,7 +377,12 @@ fn main() -> ExitCode {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }
         Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
-        Cmd::Land { bead, worker, all } => cmd::land::run(&repo, &bead, &worker, all, cli.json),
+        Cmd::Land {
+            bead,
+            worker,
+            all,
+            despite_inflight,
+        } => cmd::land::run(&repo, &bead, &worker, all, despite_inflight, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),

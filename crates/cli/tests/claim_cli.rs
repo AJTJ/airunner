@@ -987,6 +987,112 @@ fn handover_names_the_held_bead_and_skips_the_digest_with_no_claim() {
     );
 }
 
+/// air-60x (adopter ad-pml7, 2026-08-31), end to end. Worker A claims fd-1, does the work
+/// with a `Bead: fd-1` trailer, and releases it as landed. Worker B then builds a better fix
+/// for the same defect on its own branch, carrying fd-1 by trailer and holding no claim on it.
+/// `air handover fd-1` from B used to refuse with "not claimed by B, run `air claim fd-1`",
+/// while `air land` would have taken the branch on its own criterion. Now the trailer is the
+/// path, the refusal (before green) never offers `air claim`, and once green with main merged
+/// the hand-over passes. The digest check looks for fd-1 too, because that is the work carried.
+#[test]
+fn a_superseding_branch_hands_over_by_its_trailer() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let beta = main.parent().unwrap().join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let beta = beta.canonicalize().unwrap();
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "digest_dir": "docs/log.d"}"#,
+    )
+    .unwrap();
+    git(&main, &["commit", "-q", "-am", "chore: digest dir"]);
+
+    // A: claimed, worked, released as landed. The claim is gone; the bead is A's history.
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("fd-1")],
+    );
+    assert_eq!(
+        air(&alpha, &bd, &["release", "fd-1", "--reason", "landed"]).0,
+        0
+    );
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+
+    // B: a better instrument for the same defect, carrying fd-1 by trailer, no claim on it.
+    std::fs::write(beta.join("better.txt"), "measured, not rounded\n").unwrap();
+    git(&beta, &["add", "better.txt"]);
+    git(&beta, &["commit", "-q", "-m", &bead_trailer("fd-1")]);
+    let missing = |o: &str| -> Vec<serde_json::Value> {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["missing"].as_array().cloned().unwrap_or_default()
+    };
+
+    // Before merging main and recording a green: refused on those, never on the claim, and
+    // nothing offers `air claim fd-1`. The digest check names fd-1, the carried bead.
+    let (_, o, _) = air(&beta, &bd, &["--json", "handover", "--bead", "fd-1"]);
+    let m = missing(&o);
+    assert!(!m.iter().any(|m| m["check"] == "claim"), "{o}");
+    assert!(
+        m.iter().any(|m| m["check"] == "verify-green-at-head"),
+        "{o}"
+    );
+    assert!(
+        m.iter().any(|m| m["check"] == "digest-present"
+            && m["detail"].as_str().unwrap().contains("bead: fd-1")),
+        "{o}"
+    );
+    assert!(!o.contains("air claim"), "{o}");
+    assert!(!o.contains("<bead>"), "{o}");
+
+    // With no bead named the same branch is checked for the same carried bead.
+    let (_, o, _) = air(&beta, &bd, &["--json", "handover"]);
+    assert!(
+        missing(&o).iter().any(|m| m["check"] == "digest-present"
+            && m["detail"].as_str().unwrap().contains("bead: fd-1")),
+        "{o}"
+    );
+
+    // Digest, main merged, green: handable, by name and unnamed.
+    std::fs::create_dir_all(beta.join("docs/log.d")).unwrap();
+    std::fs::write(
+        beta.join("docs/log.d/2026-08-31-beta-fd-1.md"),
+        "---\nbead: fd-1\n---\n\nthe better instrument\n",
+    )
+    .unwrap();
+    git(&beta, &["add", "docs/log.d"]);
+    git(&beta, &["commit", "-q", "-m", &bead_trailer("fd-1")]);
+    git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, o, e) = air(&beta, &bd, &["--json", "handover", "--bead", "fd-1"]);
+    assert_eq!(code, 0, "{o}{e}");
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert_eq!(v["pass"], true, "{o}");
+    let (_, o, _) = air(&beta, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert_eq!(v["pass"], true, "{o}");
+
+    // A bead the branch neither carries nor B claims is still refused, with the trailer as
+    // the fix.
+    let (code, o, _) = air(&beta, &bd, &["--json", "handover", "--bead", "fd-9"]);
+    assert_eq!(code, 0, "advisory: {o}");
+    let m = missing(&o);
+    assert!(m.iter().any(|m| m["check"] == "claim"), "{o}");
+    assert!(o.contains("Bead: fd-9") && !o.contains("air claim"), "{o}");
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
@@ -1533,14 +1639,15 @@ fn acceptance(main: &Path, criteria: &str) {
 /// landing mentioned.
 ///
 /// air-odv removed the long window: main is fast-forwarded onto an already-green commit, so
-/// there is no minutes-long verify with a rollback armed. **A window remains and it is the one
-/// that produced their incident**: after the fast-forward, `air land` fetches acceptance from
-/// bd (~1.4 s per bead) before recording the outcome. A kill there leaves main moved and no
-/// outcome written, which is exactly what `| head` did to them.
+/// there is no minutes-long verify with a rollback armed. The window that produced their
+/// incident was the acceptance fetch from bd (~1.4 s per bead) AFTER the fast-forward and
+/// before the outcome was recorded; air-bh4 moved that fetch BEFORE the merge, so bd not
+/// answering refuses with main untouched and the post-merge window holds no bd call at all.
 ///
-/// So the observation is taken from inside THAT window: the bd stub snapshots `.air/` when it
-/// is asked for acceptance. Asserting on the ledger after `air land` returns could not tell
-/// "written before main moved" from "written at exit", which is the whole of the bead.
+/// The bd stub still snapshots `.air/` when it is asked for acceptance, and that snapshot is
+/// now the proof of air-bh4's ordering: at the moment bd is consulted, no landings row exists
+/// and nothing has moved. The in-flight write still precedes `merge --ff-only` in
+/// `land_one` (air-bxe), which the row's `tip_sha` and `merge_commit` show afterwards.
 #[test]
 fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -1566,27 +1673,28 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
     let head = git(&main, &["rev-parse", "HEAD"]);
     assert_ne!(head, before);
 
-    // What the ledger said while main was already moved and no outcome was recorded.
+    // What the ledger said when bd was asked for acceptance: nothing yet, because that read
+    // now happens before any row is written and before main moves (air-bh4).
     let seen = rusqlite::Connection::open(main.join("seen_air/ledger.db")).unwrap();
-    let mid: Option<(String, String, String, i64)> = seen
-        .query_row(
-            "SELECT result, merge_commit, tip_sha, pid FROM landings",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .ok();
-    assert!(
-        mid.is_some(),
-        "a landings row must exist BEFORE the outcome is known, not only after it"
+    let mid: i64 = seen
+        .query_row("SELECT count(*) FROM landings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        mid, 0,
+        "acceptance is read before the landing row exists and before main moves"
     );
-    let (result, merge, tip, pid) = mid.unwrap();
-    assert_eq!(result, "in-flight");
-    assert_eq!(merge, head, "and it names the commit main was moved onto");
+
+    // Afterwards ONE row carries the outcome, naming the commit main was moved onto, the sha
+    // it was at before, and the process that did it: one attempt, not two.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (merge, tip, pid): (String, String, i64) = conn
+        .query_row("SELECT merge_commit, tip_sha, pid FROM landings", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(merge, head, "it names the commit main was moved onto");
     assert_eq!(tip, before, "with the sha main was at before");
     assert!(pid > 0, "and the process to ask about, so nobody greps");
-
-    // Afterwards it is the SAME row carrying the outcome: one attempt, not two.
-    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let rows: Vec<(String, i64)> = conn
         .prepare("SELECT result, attempt_no FROM landings")
         .unwrap()
