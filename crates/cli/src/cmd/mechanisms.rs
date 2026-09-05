@@ -409,6 +409,37 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "land-in-flight-refusal",
+        class: "refusal",
+        what: "`air land` refuses while any verify is in flight, naming each run and its pid; \
+               landing would move main and destroy every one of them.",
+        added: "2026-09-05 (air-1bm; the warning it replaces was air-4cr, 2026-08-29)",
+        source: "crates/cli/src/cmd/land.rs, in_flight_refusal",
+        fires: Fires::Decisions(&[("land", "refuse-in-flight")]),
+        // adopter ad-fthq: the warning fired, was read, and the landing went ahead anyway,
+        // 1,199 s of destroyed verify in two incidents plus six more runs invalidated. Two
+        // ways to retire it, both counts: overrides at zero (below) mean it is only ever
+        // waited out and could be a plain wait; refusals at zero while verifies and landings
+        // overlap mean the coordinator waits without being told.
+        removal: Removal::ZeroFirings(
+            "a full round with zero `--despite-inflight` overrides, or a round with zero refusals while landings and verifies overlap, both measured from the landings and verify_inflight tables",
+        ),
+    },
+    Mechanism {
+        id: "land-in-flight-override",
+        class: "report",
+        what: "`air land --despite-inflight` landed over a verify in flight; the runs destroyed \
+               are on the landings row (`despite_inflight`).",
+        added: "2026-09-05 (air-1bm)",
+        source: "crates/cli/src/cmd/land.rs, run",
+        fires: Fires::Decisions(&[("land", "despite-inflight")]),
+        // The override IS the measurement for the refusal above: this row exists so `air
+        // audit` counts it rather than someone grepping for it.
+        removal: Removal::ZeroFirings(
+            "goes with `land-in-flight-refusal`: a round with zero overrides retires both",
+        ),
+    },
+    Mechanism {
         id: "close-refusal",
         class: "refusal",
         what: "`air close` is the coordinator's; a worker asking for it is refused and told so.",
