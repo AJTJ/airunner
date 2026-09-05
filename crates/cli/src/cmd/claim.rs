@@ -197,7 +197,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             }
             if worker != "main" && issue.labels.iter().any(|l| l == OWNER_LABEL) {
                 let msg = format!(
-                    "refused: {bead} is labelled `{OWNER_LABEL}` (awaiting the owner); not a worker's to claim. Ask in the owner queue: air capture --for owner \"...\""
+                    "refused: {bead} is labelled `{OWNER_LABEL}` (awaiting the owner); not a worker's to claim. Take other work; if it needs a decision, `air capture` the question and the coordinator files it."
                 );
                 return fail(
                     &ledger,

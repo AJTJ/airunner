@@ -1039,17 +1039,18 @@ mod tests {
     }
 
     /// air-5uz: a push and an evaluation are different facts and are counted apart. The
-    /// number that nearly got `owner-decision-waiting` deleted was 1,685 evaluations read as
-    /// 1,685 firings, against one push all day.
+    /// number that nearly got the owner-queue condition deleted was 1,685 evaluations read as
+    /// 1,685 firings, against one push all day. (That condition later went with its queue,
+    /// air-uef; the fixture is a live one.)
     #[test]
     fn a_push_is_counted_as_a_push_and_never_as_one_more_evaluation() {
         let a = gather_from(
             &[day(
                 "2026-08-22",
                 &[
-                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["owner-decision-waiting:owner"]},"decision":"attention"}"#,
-                    r#"{"at":"2026-08-22T01:00:01Z","worker":"main","command":"channel.push","inputs":{"conditions":["owner-decision-waiting:owner"],"for_minutes":5},"decision":"pushed"}"#,
-                    r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["owner-decision-waiting:owner"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:01Z","worker":"main","command":"channel.push","inputs":{"conditions":["handover-not-green:beta"],"for_minutes":5},"decision":"pushed"}"#,
+                    r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
                 ],
             )],
             "2026-08-22",
@@ -1057,7 +1058,7 @@ mod tests {
         let r = a
             .rows
             .iter()
-            .find(|r| r.id == "owner-decision-waiting")
+            .find(|r| r.id == "handover-not-green")
             .unwrap();
         assert_eq!((r.evaluations, r.pushes), (2, 1));
         // And the push does not read as a mechanism nobody registered.
