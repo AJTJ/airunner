@@ -1270,6 +1270,35 @@ fn holdings_tags_say_when_and_tell_dirt_from_an_edit() {
     assert!(v["files"]["src.rs"][0]["last_edit"].is_string(), "{out}");
 }
 
+/// air-b5k, end to end: a repo whose settings carry adopter's `SessionStart -> bd prime
+/// --hook-json` is told by a dry-run `air install`, with the fix; one without it is told
+/// nothing about hooks.
+#[test]
+fn install_reports_a_stale_bd_prime_hook() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/settings.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bd prime --hook-json"}]}]}}"#,
+    )
+    .unwrap();
+    let (code, out, err) = air(&repo, &bd, &["install"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("STALE HOOK: SessionStart runs `bd prime --hook-json`"),
+        "{out}"
+    );
+    assert!(out.contains("do: `bd prime` injects"), "{out}");
+    assert!(out.contains("Delete the entry"), "{out}");
+
+    std::fs::write(repo.join(".claude/settings.json"), "{}").unwrap();
+    let (code, out, err) = air(&repo, &bd, &["install"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains("STALE HOOK"), "{out}");
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
