@@ -183,6 +183,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
+        Mutation {
+            // Let a tree green count under the default key. That is the silent upgrade
+            // air-7wf refused to ship: adopter's citation gate would have started passing
+            // beads it never checked. One arm, and the one the probe's red half is about.
+            file: "crates/cli/src/cmd/green.rs",
+            from: "Some(GreenAt::Tree(_)) => self.key == Key::Tree,",
+            to: "Some(GreenAt::Tree(_)) => true,",
+            also_red: &[],
+        },
+    ),
+    (
         "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
         Mutation {
             // Invert the blank-task test: a real task stops becoming the prompt, and a blank one
@@ -823,6 +835,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_main(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
+        probe_green_follows_the_tree_only_where_declared(),
         probe_git_ancestor(),
         probe_gate_claim(),
         probe_claim_cas(),
@@ -1493,6 +1506,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 duration_ms: None,
                 output_bytes: None,
                 dirty: false,
+                tree: None,
             })
             .map_err(|e| e.to_string())
         };
@@ -2361,6 +2375,7 @@ fn probe_enforced_gate() -> Probe {
             duration_ms: None,
             output_bytes: None,
             dirty: false,
+            tree: None,
         })
         .map_err(|e| e.to_string())?;
         let green = handover_gate(&l, "probe", &dir, cmd, true)?;
@@ -3050,6 +3065,7 @@ fn base_facts() -> GateFacts {
         worker: "probe".into(),
         head: "0123456789abcdef".into(),
         green_at_head: true,
+        tree_green: None,
         last_green_sha: None,
         main_is_ancestor: true,
         bead_claimed_by_worker: true,
@@ -3113,19 +3129,121 @@ fn probe_ledger_roundtrip() -> Probe {
             duration_ms: None,
             output_bytes: None,
             dirty: false,
+            tree: None,
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l
-            .is_green_at("probe", "abc", Kind::Verify)
-            .map_err(|e| e.to_string())?;
-        let red = !l
-            .is_green_at("probe", "zzz", Kind::Verify)
-            .map_err(|e| e.to_string())?;
+            .green_at("abc", None, Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_some();
+        let red = l
+            .green_at("zzz", None, Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none();
         Ok((red, green))
     })();
     let (red, green) = ok.unwrap_or((false, false));
     Probe {
         name: "ledger: verify_runs round-trip",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-7wf, both directions, on a real landing. A branch head is recorded green with its
+/// tree; `commit-tree` builds the landing commit off main from that tree, exactly as `air land`
+/// does (air-odv). Under `verify_key: tree` the landing reads green with no new verify. Under
+/// the default `commit` key it does not, and the display names the tree green it is declining.
+/// A commit over a tree nobody verified is not green under either key.
+fn probe_green_follows_the_tree_only_where_declared() -> Probe {
+    use crate::cmd::green::{Key, at_under, tree_of};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "main"])?;
+        let main = g(&["rev-parse", "HEAD"])?;
+        std::fs::write(dir.join("f"), "work").map_err(|e| e.to_string())?;
+        g(&["add", "f"])?;
+        g(&["commit", "-q", "-m", "branch work"])?;
+        let branch = g(&["rev-parse", "HEAD"])?;
+        let tree = tree_of(&dir, &branch).map_err(|e| e.to_string())?;
+        // The landing commit, built the way `air land` builds it: a new sha, the same tree.
+        let landing = g(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &main,
+            "-p",
+            &branch,
+            "-m",
+            "Land",
+        ])?;
+        // A commit over a tree nobody verified.
+        std::fs::write(dir.join("f"), "other").map_err(|e| e.to_string())?;
+        g(&["commit", "-q", "-am", "unverified"])?;
+        let unverified = g(&["rev-parse", "HEAD"])?;
+
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: branch.clone(),
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t".into(),
+            finished_at: "t".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: Some(tree.clone()),
+        })
+        .map_err(|e| e.to_string())?;
+
+        let under = |sha: &str, key: Key| at_under(&l, &dir, sha, Kind::Verify, key);
+        // Green: the landing reads green from its tree where the repo declares it, and the
+        // branch head reads green at its commit under either key.
+        let landed = under(&landing, Key::Tree)?;
+        let green = landed.holds()
+            && landed.line().starts_with("green (same tree as")
+            && under(&branch, Key::Commit)?.holds()
+            && under(&branch, Key::Tree)?.holds();
+        // Red: the same landing is NOT green by default, and says why; a tree nobody verified
+        // is not green under either key.
+        let declined = under(&landing, Key::Commit)?;
+        let red = !declined.holds()
+            && declined
+                .line()
+                .starts_with("not green (this exact tree is green at")
+            && !under(&unverified, Key::Tree)?.holds()
+            && !under(&unverified, Key::Commit)?.holds();
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         red_fires: red,
         green_passes: green,
     }
