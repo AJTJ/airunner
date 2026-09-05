@@ -1681,14 +1681,15 @@ fn acceptance(main: &Path, criteria: &str) {
 /// landing mentioned.
 ///
 /// air-odv removed the long window: main is fast-forwarded onto an already-green commit, so
-/// there is no minutes-long verify with a rollback armed. **A window remains and it is the one
-/// that produced their incident**: after the fast-forward, `air land` fetches acceptance from
-/// bd (~1.4 s per bead) before recording the outcome. A kill there leaves main moved and no
-/// outcome written, which is exactly what `| head` did to them.
+/// there is no minutes-long verify with a rollback armed. The window that produced their
+/// incident was the acceptance fetch from bd (~1.4 s per bead) AFTER the fast-forward and
+/// before the outcome was recorded; air-bh4 moved that fetch BEFORE the merge, so bd not
+/// answering refuses with main untouched and the post-merge window holds no bd call at all.
 ///
-/// So the observation is taken from inside THAT window: the bd stub snapshots `.air/` when it
-/// is asked for acceptance. Asserting on the ledger after `air land` returns could not tell
-/// "written before main moved" from "written at exit", which is the whole of the bead.
+/// The bd stub still snapshots `.air/` when it is asked for acceptance, and that snapshot is
+/// now the proof of air-bh4's ordering: at the moment bd is consulted, no landings row exists
+/// and nothing has moved. The in-flight write still precedes `merge --ff-only` in
+/// `land_one` (air-bxe), which the row's `tip_sha` and `merge_commit` show afterwards.
 #[test]
 fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -1714,27 +1715,28 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
     let head = git(&main, &["rev-parse", "HEAD"]);
     assert_ne!(head, before);
 
-    // What the ledger said while main was already moved and no outcome was recorded.
+    // What the ledger said when bd was asked for acceptance: nothing yet, because that read
+    // now happens before any row is written and before main moves (air-bh4).
     let seen = rusqlite::Connection::open(main.join("seen_air/ledger.db")).unwrap();
-    let mid: Option<(String, String, String, i64)> = seen
-        .query_row(
-            "SELECT result, merge_commit, tip_sha, pid FROM landings",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .ok();
-    assert!(
-        mid.is_some(),
-        "a landings row must exist BEFORE the outcome is known, not only after it"
+    let mid: i64 = seen
+        .query_row("SELECT count(*) FROM landings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        mid, 0,
+        "acceptance is read before the landing row exists and before main moves"
     );
-    let (result, merge, tip, pid) = mid.unwrap();
-    assert_eq!(result, "in-flight");
-    assert_eq!(merge, head, "and it names the commit main was moved onto");
+
+    // Afterwards ONE row carries the outcome, naming the commit main was moved onto, the sha
+    // it was at before, and the process that did it: one attempt, not two.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (merge, tip, pid): (String, String, i64) = conn
+        .query_row("SELECT merge_commit, tip_sha, pid FROM landings", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(merge, head, "it names the commit main was moved onto");
     assert_eq!(tip, before, "with the sha main was at before");
     assert!(pid > 0, "and the process to ask about, so nobody greps");
-
-    // Afterwards it is the SAME row carrying the outcome: one attempt, not two.
-    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let rows: Vec<(String, i64)> = conn
         .prepare("SELECT result, attempt_no FROM landings")
         .unwrap()
