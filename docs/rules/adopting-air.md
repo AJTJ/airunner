@@ -564,7 +564,7 @@ and keeps printing on every install until the entry is gone (air-b5k). the adopt
 one hook, `SessionStart → bd prime --hook-json` (`adopter-as-built.md:50`). `air install
 --write` **merges**, so it adds Air's hooks alongside that one and leaves it in place; it will
 not remove another tool's hook. Delete the entry the report names. Only on an installer older
-than 0.2.12, which does not report it, fall back to `grep -n "bd prime" .claude/settings.json`.
+than 0.2.13, which does not report it, fall back to `grep -n "bd prime" .claude/settings.json`.
 
 *Skipping it:* `bd prime` injects a command reference telling agents to run `bd update --claim`
 and `bd create`, both of which Air denies. Agents get instructions that contradict their deny

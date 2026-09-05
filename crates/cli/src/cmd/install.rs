@@ -640,6 +640,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  `journaled` is history with its age.",
     },
     SurfaceChange {
+        id: "worktrees-are-airs",
+        since: "2026-09-05 (air-fdz)",
+        headline: "`air worker <name>` creates `.claude/worktrees/<name>` itself (branch \
+                   `worktree-<name>`) and copies the repo's `.worktreeinclude` files into it \
+                   before claude starts; `air worker <name> --remove` removes it, refusing \
+                   while it holds uncommitted work, a harness lock or a tmux session. claude \
+                   is still handed the worktree by name, so its isolation is unchanged.",
+        silent_break: false,
+        action: "Nothing to change in how you launch. Check `.worktreeinclude` still gives a \
+                 worktree that builds: Air matches its lines with git's own glob engine \
+                 (`git ls-files --ignored` over `:(glob)` pathspecs), the same files the \
+                 harness copied, but a negated line (`!x`) is reported and not honoured. A \
+                 relaunch re-copies, so a worktree gets the current `.env`. Remove lanes with \
+                 `air worker <name> --remove` rather than `rm -rf`; it names what is holding \
+                 the worktree and keeps the branch.",
+    },
+    SurfaceChange {
         id: "install-reports-bd-prime",
         since: "2026-09-05 (air-b5k)",
         headline: "`air install` reports a `bd prime` hook left in `.claude/settings.json` \
@@ -742,8 +759,10 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.10", 14, 33),
     // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
     ("0.2.11", 15, 34),
-    // 2026-09-05: `air install` reports a stale `bd prime` hook (air-b5k).
+    // 2026-09-05: Air creates, fills and removes worker worktrees (air-fdz).
     ("0.2.12", 16, 35),
+    // 2026-09-05: `air install` reports a stale `bd prime` hook (air-b5k).
+    ("0.2.13", 17, 36),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
