@@ -1057,6 +1057,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_names_the_held_bead_and_skips_with_none(),
         probe_a_superseding_branch_hands_over_by_its_trailer(),
         probe_ready_split_names_epics_apart(),
+        probe_holdings_tags_name_their_tense(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -3006,6 +3007,60 @@ fn probe_ready_split_names_epics_apart() -> Probe {
         && all == bds;
     Probe {
         name: "status: the ready line names epics apart from claimable work; a set of only epics and owner beads is zero claimable, and the split is exactly bd's set",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// air-v7o (adopter, 2026-08-30): `uncommitted` and `journaled` printed identically and
+/// neither said when. w1 nearly released a bead over an `uncommitted` that was nine minutes of
+/// regenerated fixtures during w3's full verify and had evaporated by the time they checked;
+/// w3 had earlier nearly stood down over a `journaled` for work landed hours before. The tag
+/// answered "dirty right now?" to a reader who needed "is another agent working here?".
+///
+/// Red: a file made dirty by a verify and never edited by a tool reads as unjournaled dirt
+/// with the verify named, and once clean it is no holding at all (nothing journaled, nothing
+/// dirty: no tag). Green: a genuine concurrent edit still reads as one, with its age, so the
+/// fix is not a silence; and a remembered edit says how old it is and that the tree is clean.
+///
+/// The mutation that made it red, seen: `tags` printing `uncommitted` for both the journaled
+/// and the unjournaled case, which is the old output.
+fn probe_holdings_tags_name_their_tense() -> Probe {
+    use crate::cmd::holdings::{Holding, tags};
+
+    let now = "2026-08-30T21:15:00Z";
+    let dirt = Holding {
+        worker: "w3".into(),
+        uncommitted: true,
+        verify_in_flight: true,
+        ..Default::default()
+    };
+    let cleaned = Holding {
+        worker: "w3".into(),
+        ..Default::default()
+    };
+    let red_fires = tags(&dirt, now).contains("no edit journaled")
+        && tags(&dirt, now).contains("verify in flight")
+        && !tags(&dirt, now).contains("edited")
+        && tags(&cleaned, now).is_empty();
+
+    let edit = Holding {
+        worker: "w1".into(),
+        uncommitted: true,
+        journaled: true,
+        last_edit: Some("2026-08-30T21:12:00Z".into()),
+        ..Default::default()
+    };
+    let remembered = Holding {
+        worker: "w1".into(),
+        journaled: true,
+        last_edit: Some("2026-08-30T15:00:00Z".into()),
+        ..Default::default()
+    };
+    let green_passes = tags(&edit, now) == "uncommitted now, edited 3 min ago"
+        && tags(&remembered, now) == "journaled 6 h ago, clean now";
+    Probe {
+        name: "holdings: every tag names its tense; build dirt is not an edit, a cleaned file is no holding, a live edit still is",
         red_fires,
         green_passes,
     }
