@@ -194,6 +194,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
+        Mutation {
+            // Let killed rows back into every green/red/flaky query: the one clause that
+            // makes a kill no verdict, in the one place it is spelled.
+            file: "crates/ledger/src/verify.rs",
+            from: "const NOT_KILLED: &str = \"exit_code NOT IN (137, 143)\";",
+            to: "const NOT_KILLED: &str = \"1=1\";",
+            also_red: &[],
+        },
+    ),
+    (
         "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         Mutation {
             // Let a tree green count under the default key. That is the silent upgrade
@@ -874,6 +885,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
+        probe_killed_is_no_verdict(),
         probe_git_ancestor(),
         probe_gate_claim(),
         probe_claim_cas(),
@@ -3490,6 +3502,79 @@ fn probe_ledger_roundtrip() -> Probe {
     let (red, green) = ok.unwrap_or((false, false));
     Probe {
         name: "ledger: verify_runs round-trip",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-ppm: a run killed by signal records no verdict, and a genuine exit-2 failure still
+/// records red. The second is what makes the first safe.
+///
+/// Red: `run_tee` on a child that dies by SIGTERM yields 143, not -1, and a 143 row at a sha
+/// is not the latest run there, not red, not one side of a flaky pair, and does not turn a
+/// green tree red. Green: an exit-2 row is red and does count toward flakiness beside a green.
+fn probe_killed_is_no_verdict() -> Probe {
+    use crate::cmd::record::run_tee;
+    use air_ledger::verify::{KILLED_EXITS, Verdict};
+
+    let dir = std::env::temp_dir();
+    // The real signal path: the child kills itself with TERM, and Air sees 128 + 15.
+    let signalled = run_tee("sh", &["-c".into(), "kill -TERM $$".into()], &dir)
+        .map(|(code, _)| code)
+        .unwrap_or(-1);
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let run = |sha: &str, exit: i32, at: &str| VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: exit,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: at.into(),
+            finished_at: at.into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: Some("T".into()),
+        };
+        l.record_verify(&run("aaa", 0, "t1"))
+            .map_err(|e| e.to_string())?;
+        l.record_verify(&run("aaa", signalled, "t2"))
+            .map_err(|e| e.to_string())?;
+        let killed_is_no_verdict = KILLED_EXITS.contains(&signalled)
+            && run("aaa", signalled, "t").verdict() == Verdict::Killed
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 0)
+            && l.green_at("bbb", Some("T"), Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some();
+        // A kill alone at a commit is nothing at all.
+        l.record_verify(&run("ccc", 137, "t3"))
+            .map_err(|e| e.to_string())?;
+        let alone = l
+            .latest_run_at_commit("ccc", Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none();
+        // A genuine failure is red, and flaky beside the green.
+        l.record_verify(&run("aaa", 2, "t4"))
+            .map_err(|e| e.to_string())?;
+        let exit_2_is_red = run("aaa", 2, "t").verdict() == Verdict::Red
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_none()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 1);
+        Ok((killed_is_no_verdict && alone, exit_2_is_red))
+    })()
+    .unwrap_or((false, false));
+    let (red, green) = res;
+    Probe {
+        name: "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
         red_fires: red,
         green_passes: green,
     }

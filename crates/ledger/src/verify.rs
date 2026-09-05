@@ -57,13 +57,51 @@ pub struct VerifyRun {
     pub dirty: bool,
     /// The tree id of `sha` (v13, air-7wf), so a green can be found again from a different
     /// commit over the same content: the landing commit `air land` builds is exactly that.
-    /// `None` for rows written before v13, which never match a tree lookup.
+    /// `None` for rows written before v14, which never match a tree lookup.
     pub tree: Option<String>,
+}
+
+/// Exit codes that mean the run was KILLED rather than that it failed (air-ppm): 128 + SIGKILL
+/// and 128 + SIGTERM, which is what `make` exits with when it is the process signalled, what
+/// a wrapper that declares a kill emits (adopter's `run-logged.sh`, ad-drud), and what
+/// `air record` itself records when its child died by that signal. Nothing in a normal verify
+/// exits either. A child of make that was signalled makes make exit 2, which is
+/// indistinguishable from a real failure by exit code alone; Air does not parse make's
+/// "Terminated" line to find out (that is a fact taken from text somebody chose), so the
+/// declared path is the wrapper's, and 143 is what it declares.
+pub const KILLED_EXITS: [i32; 2] = [137, 143];
+
+/// The SQL half of [`KILLED_EXITS`], for every query that decides green, red or flaky. A killed
+/// run is no verdict: it is never green, never red, never one side of a flaky pair.
+const NOT_KILLED: &str = "exit_code NOT IN (137, 143)";
+
+/// What one run says about its sha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Verdict {
+    Green,
+    Red,
+    /// The process was signalled before it could decide. Not evidence either way.
+    Killed,
 }
 
 impl VerifyRun {
     pub fn is_green(&self) -> bool {
         self.exit_code == 0
+    }
+
+    pub fn is_killed(&self) -> bool {
+        KILLED_EXITS.contains(&self.exit_code)
+    }
+
+    pub fn verdict(&self) -> Verdict {
+        if self.is_green() {
+            Verdict::Green
+        } else if self.is_killed() {
+            Verdict::Killed
+        } else {
+            Verdict::Red
+        }
     }
 }
 
@@ -146,8 +184,10 @@ impl Ledger {
     /// a verify that reads history, and only at the commit is the disagreement unambiguous.
     pub fn runs_at(&self, sha: &str, kind: Kind) -> Result<(i64, i64)> {
         Ok(self.conn().query_row(
-            "SELECT sum(exit_code = 0), sum(exit_code <> 0) FROM verify_runs \
-             WHERE sha=?1 AND kind=?2",
+            &format!(
+                "SELECT sum(exit_code = 0), sum(exit_code <> 0) FROM verify_runs \
+                 WHERE sha=?1 AND kind=?2 AND {NOT_KILLED}"
+            ),
             params![sha, kind.as_str()],
             |r| {
                 Ok((
@@ -183,9 +223,12 @@ impl Ledger {
         let row = self
             .conn()
             .query_row(
-                "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
-                 FROM verify_runs WHERE sha=?1 AND kind=?2 ORDER BY finished_at DESC LIMIT 1",
+                &format!(
+                    "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
+                     started_at, finished_at, log_path, command, duration_ms, output_bytes, \
+                     dirty, tree FROM verify_runs WHERE sha=?1 AND kind=?2 AND {NOT_KILLED} \
+                     ORDER BY finished_at DESC LIMIT 1"
+                ),
                 params![sha, kind.as_str()],
                 row_to_run,
             )
@@ -194,14 +237,17 @@ impl Ledger {
     }
 
     /// The most recent run of `kind` over `tree`, at any commit, by any worker. Rows from
-    /// before v13 have no tree and are never returned.
+    /// before v14 have no tree and are never returned.
     pub fn latest_run_at_tree(&self, tree: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         let row = self
             .conn()
             .query_row(
-                "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
-                 FROM verify_runs WHERE tree=?1 AND kind=?2 ORDER BY finished_at DESC LIMIT 1",
+                &format!(
+                    "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
+                     started_at, finished_at, log_path, command, duration_ms, output_bytes, \
+                     dirty, tree FROM verify_runs WHERE tree=?1 AND kind=?2 AND {NOT_KILLED} \
+                     ORDER BY finished_at DESC LIMIT 1"
+                ),
                 params![tree, kind.as_str()],
                 row_to_run,
             )
@@ -522,6 +568,43 @@ mod tests {
         );
         // The prune is a write: the dead row is gone for the next reader too.
         assert_eq!(ledger.verifies_in_flight().unwrap().len(), 2);
+    }
+
+    /// air-ppm: a run that exited 143 or 137 was killed, not failed. It is no verdict: not
+    /// green, not the latest run at its commit or tree, and not one side of a flaky pair. A
+    /// genuine exit 2 is still red, which is what makes the first safe.
+    #[rstest]
+    fn a_killed_run_is_no_verdict_and_an_exit_2_is_still_red(ledger: Ledger) {
+        ledger
+            .record_verify(&run_over("w1", "aaa", "T", 0, "t1"))
+            .unwrap();
+        ledger
+            .record_verify(&run_over("w1", "aaa", "T", 143, "t2"))
+            .unwrap();
+        assert_eq!(run("w", "aaa", 143, "t").verdict(), Verdict::Killed);
+        assert_eq!(run("w", "aaa", 137, "t").verdict(), Verdict::Killed);
+        // The kill after the green did not turn the commit red, nor the tree.
+        assert!(is_green_at(&ledger, "aaa"));
+        assert!(matches!(
+            ledger.green_at("bbb", Some("T"), Kind::Verify).unwrap(),
+            Some(GreenAt::Tree(_))
+        ));
+        // Not flaky: one green, zero red.
+        assert_eq!(ledger.runs_at("aaa", Kind::Verify).unwrap(), (1, 0));
+        // A kill at a commit with no other run decides nothing.
+        ledger.record_verify(&run("w1", "ccc", 137, "t3")).unwrap();
+        assert!(
+            ledger
+                .latest_run_at_commit("ccc", Kind::Verify)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!is_green_at(&ledger, "ccc"));
+        // A genuine failure is still red, and still flaky beside a green.
+        ledger.record_verify(&run("w1", "aaa", 2, "t4")).unwrap();
+        assert_eq!(run("w", "aaa", 2, "t").verdict(), Verdict::Red);
+        assert!(!is_green_at(&ledger, "aaa"));
+        assert_eq!(ledger.runs_at("aaa", Kind::Verify).unwrap(), (1, 1));
     }
 
     #[rstest]
