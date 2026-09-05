@@ -698,6 +698,7 @@ mod tests {
             pid_alive: None,
             project: String::new(),
             model: String::new(),
+            enforce: None,
         };
         let mut known = None;
         let a = vec![("main".to_string(), "coordinator".to_string(), sess("aaaa"))];
