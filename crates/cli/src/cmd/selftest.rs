@@ -474,6 +474,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        Mutation {
+            // Never see a bead as ambiguous, which is the pre-fix rule exactly (air-09b): two
+            // landable carriers both go to the batch and the oldest lands first; a blocked
+            // carrier beside a landable one is refused as blocked. One comparison, it
+            // compiles, and the `--worker` path and the single-carrier paths are untouched by
+            // it, which is what shows it reaches the ambiguity rule alone.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        if carriers.len() > 1 {",
+            to: "        if carriers.len() > 99 {",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -935,6 +949,7 @@ fn all_probes() -> Vec<Probe> {
         probe_refused_landing_publishes_nothing(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
+        probe_land_names_a_branch(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -2015,6 +2030,78 @@ fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
         name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
         red_fires,
         green_passes: untouched_stays_refuted && plain_discharges,
+    }
+}
+
+/// air-09b: a bead is a handle on a branch only while one branch carries it. adopter,
+/// 2026-08-30, twice: a bead carried by a batching lane and by the worker it batched. Named,
+/// `air land` took the oldest-waiting branch (the worker's), main moved, and the lane was
+/// refused; with the worker's branch blocked, the bead was refused outright.
+///
+/// Red, both observed cases: two landable carriers is refused naming each with `--worker`; a
+/// landable carrier beside a blocked one is refused the same way, with the landable one's
+/// command and the blocked one's fix, not silently resolved by state. Green: `--worker` lands
+/// that branch with every bead it carries; a bead on ONE blocked branch is still refused with
+/// that branch's fix; a bead on one landable branch still lands.
+fn probe_land_names_a_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str, minutes: i64, blocked: Option<&str>| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes,
+        command: match blocked {
+            None => format!("air land --worker {worker}"),
+            Some(_) => "git merge main && air record verify -- make verify".into(),
+        },
+        acceptance: Vec::new(),
+        blocked: blocked.map(String::from),
+    };
+    let none: Vec<String> = Vec::new();
+    let fd1 = vec!["fd-1".to_string()];
+    let fd2 = vec!["fd-2".to_string()];
+
+    // Case 1: alpha did fd-1 and has waited longest; lane batched it and carries fd-2 too.
+    let both_ready = vec![
+        landing("alpha", "fd-1", 30, None),
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case1 = matches!(
+        resolve(&fd1, &none, &both_ready, &[], &[]),
+        Err(m) if m.contains("--worker alpha") && m.contains("--worker lane")
+    );
+    // Case 2: alpha's branch is behind main now; lane can land.
+    let blocked = vec![landing("alpha", "fd-1", 30, Some("does not contain main"))];
+    let lane_ready = vec![
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case2 = matches!(
+        resolve(&fd1, &none, &lane_ready, &blocked, &[]),
+        Err(m) if m.contains("--worker lane") && m.contains("does not contain main")
+            && !m.contains("--worker alpha")
+    );
+
+    let selector = matches!(
+        resolve(&none, &["lane".to_string()], &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
+    );
+    let single_blocked = matches!(
+        resolve(&fd1, &none, &[], &blocked, &[]),
+        Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
+    );
+    let single_ready = matches!(
+        resolve(&fd2, &none, &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "lane")
+    );
+
+    Probe {
+        name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        red_fires: case1 && case2,
+        green_passes: selector && single_blocked && single_ready,
     }
 }
 
