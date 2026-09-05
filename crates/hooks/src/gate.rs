@@ -31,12 +31,20 @@ pub struct GateFacts {
     pub main_moved: Option<MainMove>,
     /// The bead being handed over is claimed by this worker in the ledger.
     pub bead_claimed_by_worker: bool,
+    /// The bead NAMED to the gate: `--bead` on the CLI, or the id in the `bd` command on the
+    /// hook path. `None` when nothing was named.
     pub bead: Option<String>,
+    /// Every bead this worker holds an open claim on, from the ledger (air-xbl). This is what
+    /// `air status` prints under `claims:`, and it is what a refusal names when no bead was
+    /// named: the id was already computed for the digest lookup and then thrown away, so
+    /// the fixing command printed a literal placeholder a worker could not run.
+    pub held_beads: Vec<String>,
     /// (green, red) runs recorded at HEAD; disagreement is reported as flakiness.
     pub runs_at_head: (i64, i64),
     /// Digest check (owner ruling D, 2026-08-21): `None` when the repo configures no digest
-    /// directory (check not applicable); `Some(false)` when no digest file for this worker is
-    /// newer than the claim.
+    /// directory, or when there is no bead to declare (no bead named and no claim held,
+    /// air-xbl: a batching lane that merges other workers' green work holds nothing and hands
+    /// over); `Some(false)` when no digest declares a bead this worker is handing over.
     pub digest_present: Option<bool>,
     /// Where digests live (for the fixing message).
     pub digest_dir: Option<String>,
@@ -144,27 +152,74 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             fix: "git merge main && air record verify -- make verify".to_string(),
         });
     }
+    // air-xbl: the ids a refusal names. The named bead first; else every bead the worker
+    // holds. Never a placeholder: the printed fix is the one line in the flow a worker
+    // copies verbatim, and adopter's w3 was handed `air claim <bead>` while holding one.
+    let beads = beads_to_name(f);
     if !f.bead_claimed_by_worker {
-        let bead = f.bead.as_deref().unwrap_or("<bead>");
+        let (detail, fix) = match beads.as_slice() {
+            [bead] => (
+                format!("{bead} is not claimed by {}", f.worker),
+                format!("air claim {bead}"),
+            ),
+            [] => (
+                format!("no bead is claimed by {}", f.worker),
+                "air claim the bead you are handing over".to_string(),
+            ),
+            many => (
+                format!("none of {} is claimed by {}", many.join(", "), f.worker),
+                format!("air claim {}", many.join(" ")),
+            ),
+        };
         missing.push(Missing {
             check: "claim",
-            detail: format!("{bead} is not claimed by {}", f.worker),
-            fix: format!("air claim {bead}"),
+            detail,
+            fix,
         });
     }
     if f.digest_present == Some(false) {
         let dir = f.digest_dir.as_deref().unwrap_or("docs/log.d");
-        let bead = f.bead.as_deref().unwrap_or("<bead>");
+        // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
+        // Saying "write a digest" was true of the old filename guess and would leave a
+        // worker with a written digest and a gate that still refuses.
+        let (detail, fix) = match beads.as_slice() {
+            [bead] => (
+                format!("no digest in {dir} declaring `bead: {bead}`"),
+                format!(
+                    "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
+                    f.worker
+                ),
+            ),
+            // Unreachable from `handover::facts`, which skips the check when there is no
+            // bead to declare; a caller that sets the fact by hand still gets no placeholder.
+            [] => (
+                format!(
+                    "no digest in {dir}, and no bead to declare: {} holds no claim and none was named",
+                    f.worker
+                ),
+                "air claim the bead first, then write its digest with `bead:` front matter"
+                    .to_string(),
+            ),
+            many => (
+                format!(
+                    "no digest in {dir} declaring any of {}",
+                    many.iter()
+                        .map(|b| format!("`bead: {b}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                format!(
+                    "write {dir}/<date>-{}-<one of {}>.md opening with front matter naming that bead:\n---\nbead: {}\n---",
+                    f.worker,
+                    many.join("|"),
+                    many.join("|")
+                ),
+            ),
+        };
         missing.push(Missing {
             check: "digest-present",
-            // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
-            // Saying "write a digest" was true of the old filename guess and would leave a
-            // worker with a written digest and a gate that still refuses.
-            detail: format!("no digest in {dir} declaring `bead: {bead}`"),
-            fix: format!(
-                "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
-                f.worker
-            ),
+            detail,
+            fix,
         });
     }
     let pass = missing.is_empty();
@@ -203,6 +258,15 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
 
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
+}
+
+/// The ids a refusal may name: the bead named to the gate, else every bead the worker holds
+/// (air-xbl). Empty only when neither exists.
+fn beads_to_name(f: &GateFacts) -> Vec<String> {
+    match &f.bead {
+        Some(b) => vec![b.clone()],
+        None => f.held_beads.clone(),
+    }
 }
 
 /// ", containing main <sha>", or nothing when main's sha could not be read.
@@ -245,8 +309,57 @@ mod tests {
             digest_present: None,
             digest_dir: None,
             bead: Some("ad-o5fi".into()),
+            held_beads: vec!["ad-o5fi".into()],
             advisory: false,
         }
+    }
+
+    /// air-xbl: adopter's w3 held exactly one claim, had not written its digest, and was
+    /// handed `bead: <bead>` to copy. The id was in the ledger and `air status` printed it;
+    /// the refusal did not. With no bead named, the held beads are what the message names.
+    #[test]
+    fn a_refusal_names_the_held_bead_when_none_was_named() {
+        let mut f = facts();
+        f.bead = None;
+        f.held_beads = vec!["ad-251z".into()];
+        f.digest_present = Some(false);
+        f.digest_dir = Some("docs/log.d".into());
+        let v = handover_verdict(&f);
+        let d = &v.missing[0];
+        assert_eq!(d.check, "digest-present");
+        assert!(d.detail.contains("bead: ad-251z"), "{}", d.detail);
+        assert!(d.fix.contains("bead: ad-251z"), "{}", d.fix);
+        assert!(!v.message.contains("<bead>"), "{}", v.message);
+
+        // Several held: every id is named and none is invented.
+        f.held_beads = vec!["fd-1".into(), "fd-2".into()];
+        let v = handover_verdict(&f);
+        assert!(
+            v.message.contains("fd-1") && v.message.contains("fd-2"),
+            "{}",
+            v.message
+        );
+        assert!(!v.message.contains("<bead>"), "{}", v.message);
+
+        // None held and none named: still no placeholder posing as a command.
+        f.held_beads = vec![];
+        f.bead_claimed_by_worker = false;
+        let v = handover_verdict(&f);
+        assert!(!v.message.contains("<bead>"), "{}", v.message);
+        assert!(v.message.contains("holds no claim"), "{}", v.message);
+    }
+
+    /// The named bead wins over the held ones: on the hook path the id in the `bd` command is
+    /// the bead being handed over, whatever else the worker holds.
+    #[test]
+    fn a_named_bead_is_what_the_refusal_names() {
+        let mut f = facts();
+        f.bead = Some("ad-named".into());
+        f.held_beads = vec!["ad-other".into()];
+        f.bead_claimed_by_worker = false;
+        let v = handover_verdict(&f);
+        assert_eq!(v.missing[0].fix, "air claim ad-named");
+        assert!(!v.message.contains("ad-other"), "{}", v.message);
     }
 
     #[test]
