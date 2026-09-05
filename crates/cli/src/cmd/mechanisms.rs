@@ -358,7 +358,9 @@ pub const MECHANISMS: &[Mechanism] = &[
         // never runs", which carries a declared mutation.
         added: "2026-08-22 (air-09i)",
         source: "crates/hooks/src/gate.rs, stop_nudge",
-        fires: Fires::Decisions(&[("hook.Stop", "nudge"), ("hook.SubagentStop", "nudge")]),
+        // `hook.SubagentStop` was a trace here until air-bp0: a subagent stopping is not the
+        // worker stopping, and the nudge (with its `bd ready` confirm) no longer runs there.
+        fires: Fires::Decisions(&[("hook.Stop", "nudge")]),
         removal: Removal::Judgement(
             "a round shows nudges that led to a claim <= nudges ignored, or workers claim the next bead unprompted in > 90% of hand-overs",
         ),
@@ -437,6 +439,22 @@ pub const MECHANISMS: &[Mechanism] = &[
         // audit` counts it rather than someone grepping for it.
         removal: Removal::ZeroFirings(
             "goes with `land-in-flight-refusal`: a round with zero overrides retires both",
+        ),
+    },
+    Mechanism {
+        id: "claim-retry",
+        class: "report",
+        what: "`air claim` retries bd once, and only on a timeout; a refusal is bd's answer and \
+               is never retried.",
+        added: "2026-09-05 (air-gsj)",
+        source: "crates/cli/src/cmd/claim.rs, retry_once",
+        fires: Fires::Decisions(&[("claim", "timeout-retry")]),
+        // adopter w1 retried a claim by hand three times on 2026-08-31 and lost the bead to
+        // a peer between retries; the message read as a denial. A fresh bd process starts at
+        // the ~2 s floor again while any usable timeout is crossed by the same stalls
+        // (air-bp0), which is why this is a retry and not a longer wait.
+        removal: Removal::ZeroFirings(
+            "a round passes with zero `timeout-retry` events, meaning bd no longer times out under load and air-bp0's reduction did the job",
         ),
     },
     Mechanism {
