@@ -740,9 +740,17 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
     let changed = git::run(repo, &["diff", "--name-only", &format!("{tip}..{merge}")])
         .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
         .unwrap_or_default();
+    // air-dqa: every file at the landed commit, so a path-like token that is no file is
+    // reported as unreadable rather than as a file the merge failed to touch. One git call
+    // per landing. If it fails the list is empty and every missing path reads as unresolvable,
+    // which is the safe direction: silence over a false accusation.
+    let tree = git::run(repo, &["ls-tree", "-r", "--name-only", &merge])
+        .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
     let ev = acceptance::Evidence {
         green_at_landed: true, // the run above, recorded at `merge`
         changed: &changed,
+        tree: &tree,
     };
     // The acceptance text is fetched HERE, for this branch's beads only: `bd show` costs
     // ~1.4 s per id, which is fine beside a full verify and ruinous on every `air status`
