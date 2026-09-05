@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 15;
+pub const CURRENT_VERSION: i64 = 16;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -256,6 +256,15 @@ const V15: &str = r#"
 ALTER TABLE sessions ADD COLUMN enforce INTEGER;
 "#;
 
+/// v16 (2026-09-05, air-1bm): the verifies a landing chose to destroy. `air land` refuses while
+/// a verify is in flight and `--despite-inflight` lands anyway; the runs it ran over are kept
+/// on the row (JSON array of "<worker> at <sha> started <when>"), so "how often did the
+/// coordinator choose to destroy a run rather than wait" is a query over this table, which is
+/// the removal condition of the refusal. `[]` on every ordinary landing.
+const V16: &str = r#"
+ALTER TABLE landings ADD COLUMN despite_inflight TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -319,6 +328,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V15)?;
         conn.pragma_update(None, "user_version", 15)?;
     }
+    if version < 16 {
+        conn.execute_batch(V16)?;
+        conn.pragma_update(None, "user_version", 16)?;
+    }
     Ok(())
 }
 
@@ -381,6 +394,36 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, CURRENT_VERSION);
+    }
+
+    /// air-1bm: v16 adds `landings.despite_inflight` by ALTER; a row from before reads as no
+    /// override, never as an error.
+    #[test]
+    fn v16_adds_despite_inflight_and_old_rows_read_as_no_override() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.execute(
+            "INSERT INTO landings (id, worker, sha, result, started_at, finished_at) \
+             VALUES ('L1','w','aaa','landed','t','t')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 15).unwrap();
+        // v13 to v15 must exist for the migration to run over them; apply them as v15 would.
+        conn.execute_batch(V13).unwrap();
+        conn.execute_batch(V14).unwrap();
+        conn.execute_batch(V15).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let v: Option<String> = conn
+            .query_row(
+                "SELECT despite_inflight FROM landings WHERE id='L1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, None);
     }
 
     /// air-7wf: v14 adds `verify_runs.tree` by ALTER. A run recorded before it has no tree, and

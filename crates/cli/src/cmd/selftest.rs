@@ -234,6 +234,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "verify: a run in flight is named by status and refused by land with its pid and the override; nothing running is silent and a dead pid clears",
+        Mutation {
+            // Back to never refusing: the one branch that turns a live in-flight run into a
+            // refusal (air-1bm). The status line and the prune are untouched, so only the
+            // refusal half of the red case falls.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "    if flights.is_empty() {\n        return None;\n    }",
+            to: "    if true {\n        return None;\n    }",
+            also_red: &[],
+        },
+    ),
+    (
         "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
         Mutation {
             // Back to filtering the branch's landings by the bead typed: the exact line
@@ -246,6 +258,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[
                 "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
             ],
+        },
+    ),
+    (
+        "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
+        Mutation {
+            // The old arm: a bd error becomes one empty clause list per bead, which the
+            // judge reads as "states no acceptance criteria". Exactly the row adopter got.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        Ok(c) => Ok(c),\n        Err(e) => Err(format!(",
+            to: "        Ok(c) => Ok(c),\n        Err(_) => Ok(vec![Vec::new(); beads.len()]),\n        #[allow(unreachable_patterns)]\n        Err(e) => Err(format!(",
+            also_red: &[],
         },
     ),
     (
@@ -435,7 +458,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        "verify: a run in flight is named by status and refused by land with its pid and the override; nothing running is silent and a dead pid clears",
         Mutation {
             // The rule: an in-flight row whose process is gone is not a run in flight. Keep
             // the shape and neutralise only the liveness test, so the mutation cannot pass by
@@ -1034,6 +1057,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landed_but_open(),
         probe_refused_landing_publishes_nothing(),
         probe_land_by_bead_carries_the_whole_branch(),
+        probe_acceptance_unread_refuses(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -1814,6 +1838,7 @@ fn probe_landed_but_open() -> Probe {
     let res = (|| -> Result<(bool, bool), String> {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_landing(&Landing {
+            despite_inflight: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -1853,6 +1878,7 @@ fn probe_landed_but_open() -> Probe {
 
         // It clears when a LATER landing of the same bead stops refuting it.
         l.record_landing(&Landing {
+            despite_inflight: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "ddd".into(),
@@ -1902,6 +1928,7 @@ fn probe_refused_landing_publishes_nothing() -> Probe {
     use air_ledger::landings::{Landing, OpenBead};
 
     let row = |id: &str, result: &str, at: &str, beads: &[&str], open: Vec<OpenBead>| Landing {
+        despite_inflight: vec![],
         id: id.into(),
         worker: "w4".into(),
         sha: "823b2fd5".into(),
@@ -2015,6 +2042,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     let res = (|| -> Result<(bool, bool), String> {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_landing(&Landing {
+            despite_inflight: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -2191,6 +2219,51 @@ fn probe_land_names_a_branch() -> Probe {
         name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
         red_fires: case1 && case2,
         green_passes: selector && single_blocked && single_ready,
+    }
+}
+
+/// air-bh4: bd not answering about a bead's acceptance REFUSES the landing before anything
+/// moves; it does not become an empty clause list. The row for a timed-out landing used to say
+/// "the bead states no acceptance criteria ... so Air read nothing to check" about a bead with
+/// four criteria Air never read (adopter ad-0vh3), and the wrong-close check read that row as
+/// a clean result.
+///
+/// Red: a bd error yields a refusal naming bd, the beads, and "Nothing was changed", and it
+/// does not contain the no-criteria sentence. Green: a bead that genuinely states none still
+/// judges as "states no acceptance criteria" — the two are different artefacts (a refusal
+/// string versus a landed row's `why`), which is what the bead asks for.
+fn probe_acceptance_unread_refuses() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use crate::cmd::land::acceptance_read;
+
+    let beads = vec!["ad-0vh3".to_string()];
+    let refused = acceptance_read(
+        Err("bd show for ad-0vh3: timed out after 10s".into()),
+        &beads,
+    );
+    let red = matches!(&refused, Err(m) if m.starts_with("refused:")
+        && m.contains("bd did not answer for ad-0vh3")
+        && m.contains("Nothing was changed")
+        && !m.contains("no acceptance criteria"));
+
+    let changed: Vec<String> = Vec::new();
+    let tree: Vec<String> = Vec::new();
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+        tree: &tree,
+    };
+    let answered = acceptance_read(Ok(vec![Vec::new()]), &beads);
+    let none = judge_clauses("ad-0vh3", Vec::new(), &ev);
+    let green = matches!(&answered, Ok(c) if c.len() == 1 && c.first().is_some_and(Vec::is_empty))
+        && none.why_open().contains("states no acceptance criteria")
+        && !none.all_discharged()
+        && !none.refuted();
+
+    Probe {
+        name: "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
@@ -4571,10 +4644,12 @@ fn probe_stop_nudge() -> Probe {
 /// rate is faster, so their answer was a hand protocol (worker warns, coordinator holds).
 ///
 /// Red: with one run in flight, `air status` prints a line naming the worker and `air land`
-/// warns. Green: with nothing running both are silent, and a run whose process died is not
-/// running — the reader prunes it rather than leaving a row nobody can clear.
+/// REFUSES, naming the run, its pid, the fix and the recorded override (air-1bm; it used to
+/// warn and land, and adopter lost 1,199 s of verify to that). Green: with nothing running
+/// both are silent, and a run whose process died is not running — the reader prunes it rather
+/// than leaving a row nobody can clear.
 fn probe_verify_in_flight() -> Probe {
-    use crate::cmd::land::in_flight_warnings;
+    use crate::cmd::land::in_flight_refusal;
     use crate::cmd::status::{Snapshot, render_for_probe};
     use air_ledger::verify::InFlight;
 
@@ -4595,15 +4670,19 @@ fn probe_verify_in_flight() -> Probe {
     };
 
     let shown = render_for_probe(&snap(vec![flight("alpha", Some(1))]));
-    let warned = in_flight_warnings(&[flight("alpha", Some(1))], at);
+    let refused = in_flight_refusal(&[flight("alpha", Some(1))], at);
     let red = shown.contains("verify in flight: alpha")
         // Elapsed in seconds: rounding a just-started run to "0 min" is what makes it look
         // ignorable, and 420 s is the number that decided this bead.
         && shown.contains("420s")
-        && warned.len() == 1
-        && warned
-            .first()
-            .is_some_and(|w| w.contains("alpha") && w.contains("invalidates it"));
+        && refused.as_deref().is_some_and(|m| {
+            m.starts_with("refused:")
+                && m.contains("alpha")
+                && m.contains("420s")
+                && m.contains("(pid 1)")
+                && m.contains("kill <pid>")
+                && m.contains("--despite-inflight")
+        });
 
     // A crashed `air record` leaves a row; the next reader clears it, so nothing accumulates.
     let pruned = (|| -> Result<bool, String> {
@@ -4619,10 +4698,10 @@ fn probe_verify_in_flight() -> Probe {
     let green = render_for_probe(&snap(vec![]))
         .lines()
         .all(|x| !x.starts_with("verify in flight"))
-        && in_flight_warnings(&[], at).is_empty()
+        && in_flight_refusal(&[], at).is_none()
         && pruned;
     Probe {
-        name: "verify: a run in flight is named by status and warned about by land; nothing running is silent and a dead pid clears",
+        name: "verify: a run in flight is named by status and refused by land with its pid and the override; nothing running is silent and a dead pid clears",
         red_fires: red,
         green_passes: green,
     }
@@ -4647,6 +4726,7 @@ fn probe_landing_state() -> Probe {
 
     let at = "2026-08-29T12:02:00Z";
     let row = |result: &str| Landing {
+        despite_inflight: vec![],
         id: "L1".into(),
         worker: "alpha".into(),
         sha: "branchhead".into(),

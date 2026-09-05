@@ -138,7 +138,9 @@ that contains `main`**; the beads a landing carries are the ones its commits nam
 is consulted, prose is not read, and a commit without one is attributed to nothing (air-7kp,
 air-4re); and Air records every landing it performs. `air status` names what is ready.
 **[Air enforces, when the landing is Air's: main checkout, on main, branch contains main,
-recorded green at the branch head]**
+recorded green at the branch head, and no verify in flight anywhere in the fleet — a landing
+moves `main` and destroys every run in progress; `air land --despite-inflight` lands anyway and
+the runs it destroyed are recorded on the landing (air-1bm)]**
 **Air's landing does not re-verify, and main never holds a commit that has not been verified**
 (air-odv, 2026-08-29). The landing commit is built off main with `git commit-tree` and main is
 fast-forwarded onto it. Because the branch must contain main, that commit's tree is
