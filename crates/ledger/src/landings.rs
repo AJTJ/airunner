@@ -490,7 +490,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].despite_inflight, r.despite_inflight);
         // An ordinary landing carries none, which is the count the removal condition reads.
-        l.record_landing(&row("2", "landed")).unwrap();
+        let mut plain = row("2", "landed");
+        plain.finished_at = "t9".into();
+        l.record_landing(&plain).unwrap();
         assert!(l.landings().unwrap()[0].despite_inflight.is_empty());
     }
 
