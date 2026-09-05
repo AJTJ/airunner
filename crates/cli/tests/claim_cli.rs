@@ -85,7 +85,11 @@ case "$1" in
        # printf, not echo: /bin/sh's echo expands the \n inside the JSON description.
        printf '%s\n' "[$out]"; exit 0;;
   ready) echo "[]"; exit 0;;
-  update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
+  update) [ -e "$d/bd.fail" ] && exit 1
+          # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
+          # issue `show` answers from, so a later claim by another actor sees what bd would.
+          case "$*" in *"-s open -a"*) printf '%s' "{\"id\":\"$2\",\"status\":\"open\",\"assignee\":\"\",\"labels\":[]}" > "$d/bd.issue.json";; esac
+          exit 0;;
   *) exit 0;;
 esac
 "#,
@@ -210,8 +214,9 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["release", "fd-1", "--reason", "abandoned"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    // air-0kk: one process, status and assignee together (the trailing `-a ""` logs as `-a`).
     assert!(
-        log.lines().any(|l| l.trim() == "update fd-1 -s open"),
+        log.lines().any(|l| l.trim() == "update fd-1 -s open -a"),
         "{log}"
     );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
@@ -1393,6 +1398,55 @@ fn nothing_landable_names_every_branch_and_its_fix() {
         !v["skipped"][0]["fix"].as_str().unwrap().is_empty(),
         "{out}"
     );
+}
+
+/// air-0kk: worker A claims and releases; worker B claims. Before the fix B was refused by
+/// Air's own rule (a pencilled assignee blocks every other `--claim` in bd 1.2.x), because
+/// the release reopened the bead and left A pencilled in. adopter's ad-tdv8 and this repo's
+/// air-an9 both sat in `bd ready` in that state.
+#[test]
+fn a_released_bead_is_claimable_by_another_worker() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let as_actor = |actor: &str, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
+            .env("BEADS_ACTOR", actor)
+            .env_remove("AIR_ROLE")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (code, text) = as_actor("alpha", &["claim", "fd-1"]);
+    assert_eq!(code, 0, "{text}");
+    // bd holds it in_progress by alpha (the stub's `update --claim` writes no state).
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"in_progress","assignee":"alpha","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, text) = as_actor("alpha", &["release", "fd-1", "--reason", "reassigned"]);
+    assert_eq!(code, 0, "{text}");
+    // The stub mirrored the one write a release makes: open, assignee cleared.
+    let issue = std::fs::read_to_string(repo.join("bd.issue.json")).unwrap();
+    assert!(issue.contains(r#""assignee":"""#), "{issue}");
+    // Another actor can claim it now. This was refused before air-0kk.
+    let (code, text) = as_actor("beta", &["claim", "fd-1"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!text.contains("pencilled assignee"), "{text}");
 }
 
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so

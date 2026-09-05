@@ -285,6 +285,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "release: reopening a bead clears its assignee in the same bd process, so anyone can claim it",
+        Mutation {
+            // Back to reopening alone: the exact write that left ad-tdv8 and air-an9
+            // unclaimable.
+            file: "crates/bd/src/lib.rs",
+            from: "    [\"update\", id, \"-s\", \"open\", \"-a\", \"\"]",
+            to: "    [\"update\", id, \"-s\", \"open\"]",
+            also_red: &[],
+        },
+    ),
+    (
         "claim: a bd timeout is retried once and a refusal never is; two timeouts stop at two attempts",
         Mutation {
             // No retry at all: the timeout is returned as it came. The refusal half and the
@@ -1096,6 +1107,7 @@ fn all_probes() -> Vec<Probe> {
         probe_land_by_bead_carries_the_whole_branch(),
         probe_acceptance_unread_refuses(),
         probe_claim_retries_a_timeout_once(),
+        probe_release_unassigns(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -2260,6 +2272,34 @@ fn probe_land_names_a_branch() -> Probe {
     }
 }
 
+/// air-0kk: a release reopens AND unassigns in one bd process. Reopening alone left the
+/// assignee pencilled in, which in bd 1.2.x blocks every other worker's `--claim`: the bead
+/// sat in `bd ready` claimable by nobody but the worker that had released it (adopter
+/// ad-tdv8; air-an9 here after gate's session was gone).
+///
+/// Red: the release argv clears the assignee in the same process that sets the status.
+/// Green: a plain status write still leaves the assignee alone (a close keeps its closer),
+/// and the id is in the right place.
+fn probe_release_unassigns() -> Probe {
+    use air_bd::reopen_argv;
+
+    let argv = reopen_argv("fd-1");
+    let has = |a: &str, b: &str| {
+        argv.windows(2)
+            .any(|w| matches!(w, [x, y] if x == a && y == b))
+    };
+    let red = argv.first().is_some_and(|c| c == "update")
+        && argv.get(1).is_some_and(|id| id == "fd-1")
+        && has("-s", "open")
+        && has("-a", "");
+    let green = argv.len() == 6 && argv.iter().filter(|a| *a == "-a").count() == 1;
+    Probe {
+        name: "release: reopening a bead clears its assignee in the same bd process, so anyone can claim it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-gsj: `air claim` retries bd exactly once, and only on a timeout. adopter's w1 retried
 /// a claim by hand three times and another worker took the bead in between; the message read
 /// as a denial. A fresh process starts at bd's ~2 s floor while any usable timeout is crossed
@@ -2281,11 +2321,11 @@ fn probe_claim_retries_a_timeout_once() -> Probe {
     };
 
     // Timeout, then an answer.
-    let mut calls = 0;
+    let mut calls: u32 = 0;
     let mut noted = false;
     let (r, retried) = retry_once(
         || {
-            calls += 1;
+            calls = calls.saturating_add(1);
             if calls == 1 { Err(timeout()) } else { Ok(42) }
         },
         || noted = true,
@@ -2293,20 +2333,20 @@ fn probe_claim_retries_a_timeout_once() -> Probe {
     let red = matches!(r, Ok(42)) && retried && calls == 2 && noted;
 
     // A refusal: bd answered, so no retry.
-    let mut calls = 0;
+    let mut calls: u32 = 0;
     let (r, retried) = retry_once(
         || {
-            calls += 1;
+            calls = calls.saturating_add(1);
             Err::<i32, _>(refusal())
         },
         || {},
     );
     let refusal_not_retried = matches!(r, Err(BdError::Failed { .. })) && !retried && calls == 1;
     // Two timeouts: two attempts, then the timeout is reported.
-    let mut calls = 0;
+    let mut calls: u32 = 0;
     let (r, retried) = retry_once(
         || {
-            calls += 1;
+            calls = calls.saturating_add(1);
             Err::<i32, _>(timeout())
         },
         || {},

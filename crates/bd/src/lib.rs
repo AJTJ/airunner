@@ -111,6 +111,10 @@ pub trait WorkLedger {
     /// CAS *before* calling this.
     fn claim(&self, id: &str, actor: &str) -> Result<()>;
     fn set_status(&self, id: &str, status: &str) -> Result<()>;
+    /// `bd update <id> -s open -a ""`: back to open AND unassigned, in one process (air-0kk).
+    /// In bd 1.2.x a pencilled assignee blocks every other worker's `--claim`, so a release
+    /// that only reopened left the bead claimable by nobody but the worker that released it.
+    fn reopen_unassigned(&self, id: &str) -> Result<()>;
     fn comment(&self, id: &str, text: &str) -> Result<()>;
     /// `bd close <id> <id> … --reason <r>`: every id in ONE bd process. bd 1.2.2 documents
     /// `bd close [id...]` with "one --reason for all IDs" (`bd close --help`, read
@@ -121,6 +125,16 @@ pub trait WorkLedger {
 
 /// The argv for a batched close: one process, every id, one reason. Pure so the count of
 /// processes is checkable without running bd (`air selftest`).
+/// The one bd process a release makes (air-0kk): status back to open and the assignee
+/// cleared together, so the two cannot be left half-applied and a released bead is claimable
+/// by anyone. Pure, so `air selftest` can read it.
+pub fn reopen_argv(id: &str) -> Vec<String> {
+    ["update", id, "-s", "open", "-a", ""]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
 pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
     let mut v: Vec<String> = vec!["close".to_string()];
     v.extend(ids.iter().cloned());
@@ -290,6 +304,12 @@ impl WorkLedger for BdCli {
 
     fn set_status(&self, id: &str, status: &str) -> Result<()> {
         self.run(&["update", id, "-s", status]).map(|_| ())
+    }
+
+    fn reopen_unassigned(&self, id: &str) -> Result<()> {
+        let argv = reopen_argv(id);
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        self.run(&args).map(|_| ())
     }
 
     fn comment(&self, id: &str, text: &str) -> Result<()> {
