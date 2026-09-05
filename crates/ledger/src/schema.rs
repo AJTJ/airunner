@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 13;
+pub const CURRENT_VERSION: i64 = 14;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -234,6 +234,18 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_at ON messages(at);
 "#;
 
+/// v14 (2026-09-05, air-7wf): the tree a verify run verified, beside the commit. `air land`
+/// builds the landing commit from the branch's tree (air-odv), so every landing is a NEW sha
+/// over a tree that already carries a green, and main read "not green" after all three
+/// landings on 2026-08-30. Recorded at write time rather than resolved at read time: it is a
+/// fact about the run, it survives the commit becoming unreachable, and it keeps a git
+/// shell-out off the gate's hot path. NULL on rows written before this version, which reads as
+/// "tree unknown" and never matches.
+const V14: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN tree TEXT;
+CREATE INDEX IF NOT EXISTS verify_runs_tree ON verify_runs(tree, kind);
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -288,6 +300,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 13 {
         conn.execute_batch(V13)?;
         conn.pragma_update(None, "user_version", 13)?;
+    }
+    if version < 14 {
+        conn.execute_batch(V14)?;
+        conn.pragma_update(None, "user_version", 14)?;
     }
     Ok(())
 }
@@ -351,5 +367,38 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, CURRENT_VERSION);
+    }
+
+    /// air-7wf: v14 adds `verify_runs.tree` by ALTER. A run recorded before it has no tree, and
+    /// a tree lookup must not match it: NULL is "unknown", never "any".
+    #[test]
+    fn v14_adds_a_tree_column_that_old_rows_leave_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V13).unwrap();
+        conn.execute(
+            "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
+             finished_at) VALUES ('r1','w','aaa','verify',0,'record','t','t')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 13).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let tree: Option<String> = conn
+            .query_row("SELECT tree FROM verify_runs WHERE id='r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(tree, None);
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM verify_runs WHERE tree = 'anything'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

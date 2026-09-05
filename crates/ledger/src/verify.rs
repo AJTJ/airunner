@@ -55,6 +55,10 @@ pub struct VerifyRun {
     /// The worktree had uncommitted changes when the run was recorded: the exit describes
     /// the tree, not HEAD.
     pub dirty: bool,
+    /// The tree id of `sha` (v13, air-7wf), so a green can be found again from a different
+    /// commit over the same content: the landing commit `air land` builds is exactly that.
+    /// `None` for rows written before v13, which never match a tree lookup.
+    pub tree: Option<String>,
 }
 
 impl VerifyRun {
@@ -63,10 +67,33 @@ impl VerifyRun {
     }
 }
 
+/// Where the green that stands for a commit was found (air-7wf).
+///
+/// The ledger reports the fact; whether a `Tree` green COUNTS is the caller's policy, because
+/// it depends on a property of the target repo's verify that the ledger cannot see (see
+/// `cmd::green` in the CLI). A commit-level verdict is always the more specific fact, so a
+/// run at the commit itself, green or red, is never overridden by one at its tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "at", rename_all = "kebab-case")]
+pub enum GreenAt {
+    /// A green run recorded at this exact commit, by whichever worker.
+    Commit(VerifyRun),
+    /// No run at this commit, but a green run at another commit with the identical tree.
+    Tree(VerifyRun),
+}
+
+impl GreenAt {
+    pub fn run(&self) -> &VerifyRun {
+        match self {
+            GreenAt::Commit(r) | GreenAt::Tree(r) => r,
+        }
+    }
+}
+
 /// A verify that has STARTED and not yet exited (air-4cr, plan 0008 item 13).
 ///
 /// Kept in its own table rather than as a half-written `verify_runs` row on purpose: the
-/// green-evidence queries (`is_green_at`, `runs_at`, `latest_run`) decide the hand-over gate
+/// green-evidence queries (`green_at`, `runs_at`, `latest_run_at_commit`) decide the hand-over gate
 /// and must never see a row whose exit code does not exist yet. This table holds no verdict,
 /// only "someone is mid-verify, since T, as pid P".
 ///
@@ -90,8 +117,8 @@ impl Ledger {
     pub fn record_verify(&self, run: &VerifyRun) -> Result<()> {
         self.conn().execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, failing_step, \
-             started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+             started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty, tree) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 run.id,
                 run.worker,
@@ -107,18 +134,21 @@ impl Ledger {
                 run.duration_ms,
                 run.output_bytes,
                 run.dirty,
+                run.tree,
             ],
         )?;
         Ok(())
     }
 
-    /// (green, red) counts of `kind` for (`worker`, `sha`): disagreement at one sha is
-    /// flakiness made visible (adopter adoption log §9, ad-jklh).
-    pub fn runs_at(&self, worker: &str, sha: &str, kind: Kind) -> Result<(i64, i64)> {
+    /// (green, red) counts of `kind` at `sha`, every worker: disagreement at one sha is
+    /// flakiness made visible (adopter adoption log §9, ad-jklh). Counted at the commit,
+    /// not the tree (air-7wf): two commits over one tree that disagree could be flakiness OR
+    /// a verify that reads history, and only at the commit is the disagreement unambiguous.
+    pub fn runs_at(&self, sha: &str, kind: Kind) -> Result<(i64, i64)> {
         Ok(self.conn().query_row(
             "SELECT sum(exit_code = 0), sum(exit_code <> 0) FROM verify_runs \
-             WHERE worker=?1 AND sha=?2 AND kind=?3",
-            params![worker, sha, kind.as_str()],
+             WHERE sha=?1 AND kind=?2",
+            params![sha, kind.as_str()],
             |r| {
                 Ok((
                     r.get::<_, Option<i64>>(0)?.unwrap_or(0),
@@ -134,23 +164,45 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs \
-                 WHERE worker=?1 AND kind=?2 ORDER BY started_at DESC LIMIT 1",
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 FROM verify_runs WHERE worker=?1 AND kind=?2 ORDER BY started_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
                 row_to_run,
             )
             .optional()?)
     }
 
-    /// The most recent run of `kind` for (`worker`, `sha`), if any.
-    pub fn latest_run(&self, worker: &str, sha: &str, kind: Kind) -> Result<Option<VerifyRun>> {
+    /// The most recent run of `kind` at `sha`, by whichever worker ran it (air-7wf).
+    ///
+    /// The worker used to be part of the key. It said WHERE a run happened, never WHAT was
+    /// verified — a sha is its content and its history — and the only recorded cross-worktree
+    /// difference (`.git` file versus directory, 2026-08-23) is a test that reads where it
+    /// runs, which roles.md already rules is a defect to fix rather than a reason to verify
+    /// twice. Who ran it stays on the row; it is the audit trail, not the key.
+    pub fn latest_run_at_commit(&self, sha: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         let row = self
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs WHERE worker=?1 AND sha=?2 AND kind=?3 \
-                 ORDER BY finished_at DESC LIMIT 1",
-                params![worker, sha, kind.as_str()],
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 FROM verify_runs WHERE sha=?1 AND kind=?2 ORDER BY finished_at DESC LIMIT 1",
+                params![sha, kind.as_str()],
+                row_to_run,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// The most recent run of `kind` over `tree`, at any commit, by any worker. Rows from
+    /// before v13 have no tree and are never returned.
+    pub fn latest_run_at_tree(&self, tree: &str, kind: Kind) -> Result<Option<VerifyRun>> {
+        let row = self
+            .conn()
+            .query_row(
+                "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 FROM verify_runs WHERE tree=?1 AND kind=?2 ORDER BY finished_at DESC LIMIT 1",
+                params![tree, kind.as_str()],
                 row_to_run,
             )
             .optional()?;
@@ -163,7 +215,8 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
                  ORDER BY finished_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
                 row_to_run,
@@ -172,11 +225,22 @@ impl Ledger {
         Ok(row)
     }
 
-    /// Is there a green run of `kind` recorded for exactly (`worker`, `sha`)?
-    pub fn is_green_at(&self, worker: &str, sha: &str, kind: Kind) -> Result<bool> {
+    /// The green that stands for `sha`, whose tree is `tree` when the caller knows it.
+    ///
+    /// The commit is consulted first and its latest verdict is final: a red at the commit is
+    /// "not green" whatever the tree says, and a green at the commit is `Commit`. Only a commit
+    /// with NO run falls through to the tree. `None` when neither has a green.
+    pub fn green_at(&self, sha: &str, tree: Option<&str>, kind: Kind) -> Result<Option<GreenAt>> {
+        if let Some(run) = self.latest_run_at_commit(sha, kind)? {
+            return Ok(run.is_green().then_some(GreenAt::Commit(run)));
+        }
+        let Some(tree) = tree else {
+            return Ok(None);
+        };
         Ok(self
-            .latest_run(worker, sha, kind)?
-            .is_some_and(|r| r.is_green()))
+            .latest_run_at_tree(tree, kind)?
+            .filter(VerifyRun::is_green)
+            .map(GreenAt::Tree))
     }
 
     /// Record that a verify has started. Paired with `verify_finished` on every exit path.
@@ -264,6 +328,7 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<VerifyRun> {
         duration_ms: r.get(11)?,
         output_bytes: r.get(12)?,
         dirty: r.get::<_, i64>(13)? != 0,
+        tree: r.get(14)?,
     })
 }
 
@@ -300,26 +365,43 @@ mod tests {
             duration_ms: None,
             output_bytes: None,
             dirty: false,
+            tree: None,
         }
     }
 
-    #[rstest]
-    fn runs_at_counts_disagreement(ledger: Ledger) {
-        ledger.record_verify(&run("w", "s1", 0, "t1")).unwrap();
-        ledger.record_verify(&run("w", "s1", 1, "t2")).unwrap();
-        ledger.record_verify(&run("w", "s1", 0, "t3")).unwrap();
-        assert_eq!(ledger.runs_at("w", "s1", Kind::Verify).unwrap(), (2, 1));
-        assert_eq!(ledger.runs_at("w", "none", Kind::Verify).unwrap(), (0, 0));
+    fn run_over(worker: &str, sha: &str, tree: &str, exit: i32, at: &str) -> VerifyRun {
+        VerifyRun {
+            tree: Some(tree.into()),
+            ..run(worker, sha, exit, at)
+        }
+    }
+
+    fn is_green_at(ledger: &Ledger, sha: &str) -> bool {
+        ledger.green_at(sha, None, Kind::Verify).unwrap().is_some()
     }
 
     #[rstest]
-    fn green_at_requires_exact_sha(ledger: Ledger) {
+    fn runs_at_counts_disagreement_across_workers(ledger: Ledger) {
+        ledger.record_verify(&run("w", "s1", 0, "t1")).unwrap();
+        ledger.record_verify(&run("w", "s1", 1, "t2")).unwrap();
+        // air-7wf: a second worker's verdict at the same sha is a verdict about the same
+        // commit, so it counts in the same tally.
+        ledger.record_verify(&run("v", "s1", 0, "t3")).unwrap();
+        assert_eq!(ledger.runs_at("s1", Kind::Verify).unwrap(), (2, 1));
+        assert_eq!(ledger.runs_at("none", Kind::Verify).unwrap(), (0, 0));
+    }
+
+    /// air-7wf: the key is the sha, not (worker, sha). A green by w1 at `aaa` is a green at
+    /// `aaa`; it says nothing about `bbb`.
+    #[rstest]
+    fn green_at_requires_exact_sha_and_any_worker_counts(ledger: Ledger) {
         ledger
             .record_verify(&run("w1", "aaa", 0, "2026-08-18T10:00:00Z"))
             .unwrap();
-        assert!(ledger.is_green_at("w1", "aaa", Kind::Verify).unwrap());
-        assert!(!ledger.is_green_at("w1", "bbb", Kind::Verify).unwrap());
-        assert!(!ledger.is_green_at("w2", "aaa", Kind::Verify).unwrap());
+        assert!(is_green_at(&ledger, "aaa"));
+        assert!(!is_green_at(&ledger, "bbb"));
+        let g = ledger.green_at("aaa", None, Kind::Verify).unwrap().unwrap();
+        assert!(matches!(&g, GreenAt::Commit(r) if r.worker == "w1"));
     }
 
     #[rstest]
@@ -328,10 +410,47 @@ mod tests {
             .record_verify(&run("w1", "aaa", 0, "2026-08-18T10:00:00Z"))
             .unwrap();
         ledger
-            .record_verify(&run("w1", "aaa", 1, "2026-08-18T10:05:00Z"))
+            .record_verify(&run("w2", "aaa", 1, "2026-08-18T10:05:00Z"))
             .unwrap();
-        // A later red run at the same sha means "not green now".
-        assert!(!ledger.is_green_at("w1", "aaa", Kind::Verify).unwrap());
+        // A later red run at the same sha means "not green now", whoever ran it.
+        assert!(!is_green_at(&ledger, "aaa"));
+    }
+
+    /// air-7wf: a landing commit is a new sha over a verified tree. With the tree known, the
+    /// green is found; a tree nobody verified is not; and a verdict AT the commit, even a red
+    /// one, is never overridden by the tree's.
+    #[rstest]
+    fn a_green_follows_the_tree_only_when_the_commit_has_no_verdict(ledger: Ledger) {
+        ledger
+            .record_verify(&run_over("w1", "branch", "T", 0, "t1"))
+            .unwrap();
+        let landing = ledger.green_at("landing", Some("T"), Kind::Verify).unwrap();
+        assert!(matches!(&landing, Some(GreenAt::Tree(r)) if r.sha == "branch"));
+        // No run over this tree at all.
+        assert!(
+            ledger
+                .green_at("other", Some("U"), Kind::Verify)
+                .unwrap()
+                .is_none()
+        );
+        // The commit's own red verdict stands over the tree's green.
+        ledger
+            .record_verify(&run_over("w2", "landing", "T", 1, "t2"))
+            .unwrap();
+        assert!(
+            ledger
+                .green_at("landing", Some("T"), Kind::Verify)
+                .unwrap()
+                .is_none()
+        );
+        // A pre-v13 row has no tree and never matches one.
+        ledger.record_verify(&run("w1", "old", 0, "t0")).unwrap();
+        assert!(
+            ledger
+                .latest_run_at_tree("old", Kind::Verify)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[rstest]
@@ -367,15 +486,12 @@ mod tests {
             .verify_started(&flight("r1", "alpha", Some(1)))
             .unwrap();
         assert_eq!(ledger.verifies_in_flight().unwrap().len(), 1);
-        // It is not a verdict: nothing about "alpha at aaa" has been decided yet.
-        assert!(!ledger.is_green_at("alpha", "aaa", Kind::Verify).unwrap());
-        assert_eq!(
-            ledger.runs_at("alpha", "aaa", Kind::Verify).unwrap(),
-            (0, 0)
-        );
+        // It is not a verdict: nothing about "aaa" has been decided yet.
+        assert!(!is_green_at(&ledger, "aaa"));
+        assert_eq!(ledger.runs_at("aaa", Kind::Verify).unwrap(), (0, 0));
         assert!(
             ledger
-                .latest_run("alpha", "aaa", Kind::Verify)
+                .latest_run_at_commit("aaa", Kind::Verify)
                 .unwrap()
                 .is_none()
         );
@@ -383,7 +499,7 @@ mod tests {
         ledger.record_verify(&run("alpha", "aaa", 0, "t1")).unwrap();
         ledger.verify_finished("r1").unwrap();
         assert!(ledger.verifies_in_flight().unwrap().is_empty());
-        assert!(ledger.is_green_at("alpha", "aaa", Kind::Verify).unwrap());
+        assert!(is_green_at(&ledger, "aaa"));
     }
 
     /// air-4cr: a crashed `air record` leaves a row, and the next reader clears it. The row
