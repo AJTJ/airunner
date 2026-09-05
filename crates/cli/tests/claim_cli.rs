@@ -126,6 +126,7 @@ fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32,
         .env("AIR_BD_BIN", bd)
         .env("FAKE_BD_DIR", repo)
         .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
         .current_dir(repo);
     for (k, v) in env {
         cmd.env(k, v);
@@ -148,6 +149,7 @@ fn air_hook(repo: &Path, bd: &Path, payload: serde_json::Value, enforce: bool) -
         .env("AIR_BD_BIN", bd)
         .env("FAKE_BD_DIR", repo)
         .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
         .env("AIR_ENFORCE", if enforce { "1" } else { "0" })
         .current_dir(repo)
         .stdin(std::process::Stdio::piped())
@@ -257,6 +259,7 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
         .env("FAKE_BD_DIR", &repo)
         .env("AIR_BD_TIMEOUT_MS", "1000")
         .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -329,6 +332,7 @@ fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
             .env("FAKE_BD_DIR", &repo)
             .env("AIR_BD_TIMEOUT_MS", "1500")
             .env("BEADS_ACTOR", "tester")
+            .env_remove("AIR_ROLE")
             .current_dir(&repo)
             .output()
             .unwrap();
@@ -658,6 +662,7 @@ fn triage_refuses_when_bd_does_not_answer() {
         .env("FAKE_BD_DIR", &repo)
         .env("AIR_BD_PROBE_TIMEOUT_MS", "1000")
         .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -945,6 +950,7 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         .env("AIR_BD_BIN", &slow)
         .env("AIR_BD_TIMEOUT_MS", "500")
         .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -1167,6 +1173,7 @@ fn claim_labels_the_tmux_window_and_release_clears_it() {
             .env("AIR_BD_BIN", &bd)
             .env("FAKE_BD_DIR", &repo)
             .env("BEADS_ACTOR", "tester")
+            .env_remove("AIR_ROLE")
             .env("AIR_TMUX_SOCKET", &socket)
             .current_dir(&repo)
             .output()
@@ -1797,6 +1804,106 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
         assert_eq!(code, 2, "{out}{err}");
         assert!(out.contains(&format!("worktree-{w}")), "{out}{err}");
     }
+}
+
+/// air-75u: adopter ad-fv4z end to end. The coordinator's shell sits in alpha's worktree
+/// when its turn ends, so the Stop hook's `cwd` is alpha's. With the launcher's `AIR_ROLE`
+/// the session is still main: no hand-over check, and the session row is main's. Without it
+/// (a session Air did not launch) the checkout decides, and the advisory at least says whose
+/// tree it is about.
+#[test]
+fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
+    use std::io::Write;
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    // alpha holds a claim and is not green, so a worker's Stop would speak.
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("more.txt"), "x\n").unwrap();
+    git(&alpha, &["add", "more.txt"]);
+    git(&alpha, &["commit", "-q", "-m", "wip"]);
+
+    let stop = |session: &str, env: &[(&str, &str)]| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+        cmd.arg("--repo")
+            .arg(&main)
+            .arg("hook")
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &main)
+            .env_remove("AIR_ROLE")
+            .env_remove("BEADS_ACTOR")
+            .current_dir(&main)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let body = serde_json::json!({
+            "session_id": session, "hook_event_name": "Stop",
+            "cwd": alpha.to_string_lossy(), "stop_hook_active": false,
+        });
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(body.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let stop_events = || -> Vec<serde_json::Value> {
+        let mut lines = Vec::new();
+        for e in std::fs::read_dir(main.join(".air/events")).unwrap() {
+            let text = std::fs::read_to_string(e.unwrap().path()).unwrap();
+            lines.extend(
+                text.lines()
+                    .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+                    .filter(|v| v["command"] == "hook.Stop"),
+            );
+        }
+        lines
+    };
+
+    // Launched as the coordinator: no hand-over check, whatever the shell's directory, and
+    // the session row is main's.
+    let out = stop("coord", &[("AIR_ROLE", "coordinator")]);
+    assert!(!out.contains("handover"), "{out}");
+    let ev = stop_events();
+    let last = ev.last().unwrap();
+    assert_eq!(last["worker"], "main", "{last}");
+    assert!(
+        last["reason"]
+            .as_str()
+            .unwrap()
+            .contains("coordinator: no hand-over check"),
+        "{last}"
+    );
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let who: String = conn
+        .query_row(
+            "SELECT worker FROM sessions WHERE session_id='coord'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(who, "main");
+
+    // Not launched by Air: the checkout decides, and the advisory says whose tree it is.
+    let out = stop("bare", &[]);
+    assert!(out.contains("handover would refuse for alpha at"), "{out}");
+    let ev = stop_events();
+    assert_eq!(
+        ev.last().unwrap()["worker"],
+        "alpha",
+        "{}",
+        ev.last().unwrap()
+    );
 }
 
 /// air-ob0, narrowed by air-odv: a rewound merge that a worktree still carries is still named.
