@@ -199,6 +199,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
+        Mutation {
+            // The ok line without the main it was true of: the pre-fix line exactly
+            // (air-5wq). One argument; the refusal side is untouched, so the green half
+            // and `gate: main-merged` stay GREEN, which shows this reaches the ok line alone.
+            file: "crates/hooks/src/gate.rs",
+            from: "containing_main(&f.main_sha)",
+            to: "containing_main(\"\")",
+            also_red: &[],
+        },
+    ),
+    (
         "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
         Mutation {
             // The old denylist of one, exactly as it stood: only `in-flight` is skipped, so a
@@ -954,6 +966,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_verify(),
         probe_gate_main(),
         probe_gate_names_the_landing_that_moved_main(),
+        probe_handover_ok_names_the_main_it_checked(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
@@ -979,6 +992,7 @@ fn all_probes() -> Vec<Probe> {
         probe_agent_traffic_is_counted(),
         probe_a_message_is_recorded_with_its_content(),
         probe_owner_queue_is_the_ready_line_not_a_condition(),
+        probe_handover_names_the_held_bead_and_skips_with_none(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -2723,6 +2737,50 @@ fn probe_project_is_taken_from_what_it_is_told() -> Probe {
     }
 }
 
+/// air-xbl (adopter, 2026-08-30/31): two symptoms of one root. With no claim and no bead
+/// named, the digest check built an empty bead list, matched nothing, and refused every
+/// hand-over from a claimless lane; and with a claim held, the refusal printed a literal
+/// `<bead>` because the held id was computed for the lookup and discarded before the message.
+/// `air handover`'s printed fix is the one line a worker copies verbatim.
+///
+/// Red: with one claim held and no bead named, the refusal names that id in both the detail
+/// and the fix, the same id `air status` prints under `claims:` (the back-to-back check
+/// adopter's w3 asked for), and never a placeholder. Green: a worker with no claim and no
+/// bead named has no digest check at all (nothing to declare), while a worker that holds a
+/// claim or names a bead still has one, so the fix is not a hole.
+///
+/// The mutation that made it red, seen: `beads_to_name` returning `vec![]` for the unnamed
+/// case, which is the id thrown away again.
+fn probe_handover_names_the_held_bead_and_skips_with_none() -> Probe {
+    use crate::cmd::handover::digest_beads;
+
+    let held = vec!["ad-251z".to_string()];
+    let mut f = base_facts();
+    f.held_beads = held.clone();
+    f.digest_present = Some(false);
+    f.digest_dir = Some("docs/log.d".into());
+    let v = handover_verdict(&f);
+    let names_it = v.missing.iter().any(|m| {
+        m.check == "digest-present"
+            && m.detail.contains("bead: ad-251z")
+            && m.fix.contains("bead: ad-251z")
+    });
+    // What `air status` prints under `claims:` is the ledger's open claims for the worker,
+    // which is exactly `held_beads`; the message names the same id in the same state.
+    let same_as_status = held.iter().all(|b| v.message.contains(b.as_str()));
+    let red_fires = names_it && same_as_status && !v.message.contains("<bead>");
+
+    let skipped_without = digest_beads(None, &[]).is_none();
+    let kept_with_claim = digest_beads(None, &held) == Some(held.clone());
+    let kept_with_name = digest_beads(Some("fd-9"), &[]) == Some(vec!["fd-9".to_string()]);
+    let named_wins = digest_beads(Some("fd-9"), &held) == Some(vec!["fd-9".to_string()]);
+    Probe {
+        name: "handover: a refusal names the bead the worker holds, never a placeholder; no claim and no bead means no digest check",
+        red_fires,
+        green_passes: skipped_without && kept_with_claim && kept_with_name && named_wins,
+    }
+}
+
 /// Check 5 (ruling D): digest configured but absent → missing `digest-present`; not
 /// configured → not applicable.
 fn probe_gate_digest() -> Probe {
@@ -3680,6 +3738,7 @@ fn base_facts() -> GateFacts {
         digest_present: None,
         digest_dir: None,
         bead: None,
+        held_beads: vec![],
         advisory: false,
     }
 }
@@ -3742,6 +3801,30 @@ fn probe_gate_names_the_landing_that_moved_main() -> Probe {
             && plain.block
             && !plain.message.contains("landing")
             && plain.message.contains("main is at fedcba9"),
+    }
+}
+
+/// air-5wq: `handover ok: w2 at 3c39883` reads as a clearance and is a snapshot. adopter
+/// measured 88 refusals in four days within 120 s of that worker's own ok line. Red: the ok
+/// line names the main it checked against. Green: after main moves, the refusal names the new
+/// main and not the old one, so the pair reads as main having moved; an unreadable main is
+/// omitted rather than rendered empty.
+fn probe_handover_ok_names_the_main_it_checked() -> Probe {
+    let ok = handover_verdict(&base_facts());
+    let red = ok.pass && ok.message.ends_with(", containing main fedcba9");
+    let mut moved = base_facts();
+    moved.main_is_ancestor = false;
+    moved.main_sha = "1111111222222".into();
+    let refused = handover_verdict(&moved);
+    let mut unknown = base_facts();
+    unknown.main_sha = String::new();
+    Probe {
+        name: "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
+        red_fires: red,
+        green_passes: refused.block
+            && refused.message.contains("main is at 1111111")
+            && !refused.message.contains("fedcba9")
+            && handover_verdict(&unknown).message == "handover ok: probe at 0123456",
     }
 }
 
