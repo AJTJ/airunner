@@ -75,6 +75,9 @@ pub struct Session {
     /// Empty until the transcript has its first assistant message; never guessed from settings,
     /// because a session with no `--model` inherits whatever the harness gives it.
     pub model: String,
+    /// air-9dg: did this session's hooks see `AIR_ENFORCE=1`? Written by the hook from its
+    /// own environment, so it is what the gate ran with. `None` on rows from before v15.
+    pub enforce: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1134,7 +1137,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         let mut st = ledger
             .conn()
             .prepare(
-                "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model \
+                "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, enforce \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1152,6 +1155,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         pid_alive: None,
                         project: r.get(7)?,
                         model: r.get(8)?,
+                        enforce: r.get::<_, Option<i64>>(9)?.map(|v| v == 1),
                     },
                 ))
             })
@@ -1569,7 +1573,15 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 } else {
                     x.model.clone()
                 };
-                format!("{} since {} [{model}]", x.state, x.changed_at)
+                // air-9dg: a worker whose hooks do not see AIR_ENFORCE=1 has the one refusal
+                // switched off, and until this line nothing said so. Only `Some(false)` on a
+                // worker speaks: a pre-v15 row is unknown and the coordinator never enforces.
+                let unenforced = if w.role == "worker" && x.enforce == Some(false) {
+                    " UNENFORCED (hooks do not see AIR_ENFORCE=1; relaunch via air worker)"
+                } else {
+                    ""
+                };
+                format!("{} since {} [{model}]{unenforced}", x.state, x.changed_at)
             })
             .unwrap_or_else(|| "no session".to_string());
         let green = match (w.green_at_head, w.green_detail.as_deref()) {
@@ -1797,6 +1809,7 @@ mod tests {
                 pid_alive: None,
                 project: String::new(),
                 model: String::new(),
+                enforce: None,
             }),
             head: Some("abc".into()),
             green_at_head: green,
