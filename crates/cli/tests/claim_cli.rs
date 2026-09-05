@@ -910,6 +910,78 @@ fn digest_gate_is_configured_per_repo() {
     );
 }
 
+/// air-xbl (adopter, 2026-08-30/31). Two symptoms, one root, both end to end.
+///
+/// A worktree holding NO claim, in a repo with `digest_dir` configured, used to be refused on
+/// `digest-present` unconditionally, with a fix naming a literal `<bead>`: adopter's
+/// batching lane (claims nothing, merges other workers' green shas, verifies once) could not
+/// hand over at all. And a worker holding exactly one claim with no digest yet was handed the
+/// same placeholder, because the held id was computed for the lookup and thrown away before
+/// the message. The back-to-back check adopter's w3 asked for: `air status` naming the claim
+/// and `air handover` naming the same id, in the same state.
+#[test]
+fn handover_names_the_held_bead_and_skips_the_digest_with_no_claim() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"digest_dir":"docs/log.d"}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo.join("docs/log.d")).unwrap();
+    // A digest is even there, declaring some bead; it is not what decides this.
+    std::fs::write(
+        repo.join("docs/log.d/2026-08-30-main-x.md"),
+        "---\nbead: fd-x\n---\n\ndigest\n",
+    )
+    .unwrap();
+    let missing = |o: &str| -> Vec<serde_json::Value> {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["missing"].as_array().cloned().unwrap_or_default()
+    };
+
+    // No claim, no bead named: the digest check is skipped, and nothing prints `<bead>`.
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    assert!(
+        !missing(&o).iter().any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
+    assert!(!o.contains("<bead>"), "{o}");
+
+    // One claim held, no digest for it: refused, and the refusal names the held id in both
+    // the detail and the fix, the same id `air status` prints.
+    std::fs::write(repo.join("bd.in_progress"), "ad-251z\n").unwrap();
+    assert_eq!(air(&repo, &bd, &["claim", "ad-251z"]).0, 0);
+    let (_, st, _) = air(&repo, &bd, &["status"]);
+    assert!(st.contains("claims: ad-251z"), "{st}");
+    let (code, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    let m = missing(&o);
+    let d = m.iter().find(|m| m["check"] == "digest-present");
+    assert!(d.is_some(), "{o}");
+    let d = d.unwrap();
+    assert!(
+        d["detail"].as_str().unwrap().contains("bead: ad-251z"),
+        "{o}"
+    );
+    assert!(d["fix"].as_str().unwrap().contains("bead: ad-251z"), "{o}");
+    assert!(!o.contains("<bead>"), "{o}");
+    assert_eq!(code, 0, "advisory outside the hook path: {o}");
+
+    // The digest declaring it satisfies the check; the one for fd-x never did.
+    std::fs::write(
+        repo.join("docs/log.d/2026-08-30-main-ad-251z.md"),
+        "---\nbead: ad-251z\n---\n\ndigest\n",
+    )
+    .unwrap();
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    assert!(
+        !missing(&o).iter().any(|m| m["check"] == "digest-present"),
+        "{o}"
+    );
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
