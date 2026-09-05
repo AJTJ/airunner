@@ -986,8 +986,14 @@ mod tests {
         // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
         assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
         assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
-        assert!(!ROLES_MD.contains("inbox --owner"), "the owner inbox is gone (air-uef)");
-        assert!(!ROLES_MD.contains("--for owner"), "the owner audience is gone (air-uef)");
+        assert!(
+            !ROLES_MD.contains("inbox --owner"),
+            "the owner inbox is gone (air-uef)"
+        );
+        assert!(
+            !ROLES_MD.contains("--for owner"),
+            "the owner audience is gone (air-uef)"
+        );
         assert!(!ROLES_MD.contains("owner decision waiting"));
         // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
         assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
