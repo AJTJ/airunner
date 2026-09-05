@@ -480,6 +480,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  re-verify per landed bead, which `air status` now names as such.",
     },
     SurfaceChange {
+        id: "killed-is-no-verdict",
+        since: "2026-09-05 (air-ppm)",
+        headline: "A verify that exits 143 or 137 is recorded as KILLED, not red: it is no \
+                   verdict for that sha. A child that died by signal is recorded as 128+signal \
+                   rather than -1.",
+        silent_break: true,
+        action: "A run your harness killed at its timeout no longer reads as a red at HEAD, \
+                 no longer makes a green/kill pair read as flaky, and no longer tells the \
+                 worker \"the repo's test is the bug\". The exit code is still recorded and \
+                 `air record` still mirrors it, so a script gated on its exit sees what it \
+                 saw. Only 137 and 143 are read this way: when `make`'s CHILD is the process \
+                 signalled, make exits 2 and Air records a red, because 2 is a real failure's \
+                 code too and Air does not parse make's \"Terminated\" line to tell them \
+                 apart. A wrapper that knows a stage was signalled should exit 143 to say so \
+                 (adopter's run-logged.sh does).",
+    },
+    SurfaceChange {
         id: "task-by-file",
         since: "2026-09-05 (air-er0)",
         headline: "`air worker --task` writes the task to `<main>/.air/tasks/<name>.md`; the \
@@ -592,6 +609,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.2", 6, 25),
     // 2026-09-05: the owner inbox goes (air-uef); the owner's queue is owner-labelled beads.
     ("0.2.3", 7, 26),
+    // 2026-09-05: a signalled verify is no verdict (air-ppm).
+    ("0.2.4", 8, 27),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
