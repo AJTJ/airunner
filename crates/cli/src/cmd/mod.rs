@@ -71,7 +71,10 @@ pub fn log_event<T: serde::Serialize>(
     denominator: &str,
 ) {
     let at = now();
-    let (bd_ms, bd_calls) = air_bd::stats::snapshot();
+    // This event's own share, not the process's running total: `air mcp` emits one line per
+    // poll tick for the life of the server, and the total restamped on each of them summed
+    // to numbers no fleet ever made (air-bp0).
+    let (bd_ms, bd_calls) = air_bd::stats::take();
     let ev = air_ledger::events::Event {
         at: &at,
         worker,
