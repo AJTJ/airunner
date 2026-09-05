@@ -498,13 +498,17 @@ fn pre_tool_use(
     // Removal: when the multi-agent question (plan 0008 §9) is answered, or when a round's
     // numbers stop informing it.
     if let Some((to, bytes)) = input.message_sent() {
-        return Ok(Dispatched::new(
-            HookOutcome::Allow { context: None },
-            "messaged",
-            format!("{moved}; {bytes} bytes to {to}"),
-        )
-        .inputs(serde_json::json!({"to": to, "bytes": bytes}))
-        .denominator("1 message"));
+        // The content goes to the `messages` table, never to the event line (air-srv). Fail
+        // open: a failed insert is named on the line and the message still goes.
+        let reason = match record_message(ledger, worker, input) {
+            Ok(()) => format!("{moved}; {bytes} bytes to {to}"),
+            Err(e) => format!("{moved}; {bytes} bytes to {to}; not recorded: {e}"),
+        };
+        return Ok(
+            Dispatched::new(HookOutcome::Allow { context: None }, "messaged", reason)
+                .inputs(serde_json::json!({"to": to, "bytes": bytes}))
+                .denominator("1 message"),
+        );
     }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
@@ -518,6 +522,47 @@ fn pre_tool_use(
         "observed",
         moved,
     ))
+}
+
+/// One `SendMessage` becomes one `messages` row, content included (air-srv; owner ruling
+/// 2026-09-05). Sender, role and project come from the session row, which `pre_tool_use` has
+/// just upserted; the fallbacks are what that row would have been written from. Every call is
+/// one row: a repeated identical send is two messages, not a dedupe. Pure over the ledger, so
+/// `air selftest` runs it red and green on an in-memory ledger.
+///
+/// Removal: when the harness persists agent-to-agent messages somewhere the ledger can read,
+/// or when the multi-agent question (plan 0008 §9) is answered against the fleet.
+pub fn record_message(ledger: &Ledger, worker: &str, input: &HookInput) -> Result<(), String> {
+    let Some((to, bytes)) = input.message_sent() else {
+        return Ok(());
+    };
+    let content = input.message_text().unwrap_or("");
+    let (from_worker, from_role, project): (String, String, String) = ledger
+        .conn()
+        .query_row(
+            "SELECT worker, role, project FROM sessions WHERE session_id=?1",
+            params![input.session_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap_or_else(|_| {
+            (
+                worker.to_string(),
+                role_for(worker).to_string(),
+                project_for(Path::new(input.cwd.as_deref().unwrap_or("."))),
+            )
+        });
+    ledger
+        .record_message(&air_ledger::messages::Message {
+            at: now(),
+            session_id: input.session_id.clone(),
+            from_worker,
+            from_role,
+            project,
+            to,
+            bytes: i64::try_from(bytes).unwrap_or(i64::MAX),
+            content: content.to_string(),
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// The hand-over gate for one `bd` status write (air-i59). `enforce` (worker launches set
@@ -1148,6 +1193,17 @@ mod tests {
             !last.to_string().contains("the secret plan"),
             "the event log is not a transcript: {last}"
         );
+        // air-srv: the content is in the ledger's `messages` table, with the sender the
+        // session row knows, and the reason on the line says nothing went wrong.
+        assert!(!last["reason"].as_str().unwrap().contains("not recorded"));
+        let ledger = air_ledger::Ledger::open_in(&repo.join(".air")).unwrap();
+        let rows = ledger.messages().unwrap();
+        assert_eq!(rows.len(), 1, "one send is one row");
+        assert_eq!(rows[0].content, "the secret plan");
+        assert_eq!(rows[0].to, "main");
+        assert_eq!(rows[0].bytes, 15);
+        assert_eq!(rows[0].session_id, "s1");
+        assert_eq!(rows[0].from_role, super::role_for(&rows[0].from_worker));
     }
 
     #[test]

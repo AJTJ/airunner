@@ -424,6 +424,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        Mutation {
+            // Render the row's whole `why` again, which is exactly the pre-fix line (air-ppf):
+            // every unreadable clause back under the CONTRADICTS headline. One binding, it
+            // compiles, and `landed_open` still filters on `refuted`, so the only-unreadable
+            // half stays silent under it — which shows the mutation reaches the rendering rule
+            // and not the ledger's filter beside it.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "let (bead, why) = (&o.bead, &o.contradicted);",
+            to: "let (bead, why) = (&o.bead, &o.why);",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -855,6 +869,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
+        probe_a_message_is_recorded_with_its_content(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -879,6 +894,7 @@ fn all_probes() -> Vec<Probe> {
         probe_project_is_taken_from_what_it_is_told(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_contradicts_names_only_the_refuted(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -1662,6 +1678,7 @@ fn probe_landed_but_open() -> Probe {
                 bead: "fd-2".into(),
                 why: refutable.why_open(),
                 refuted: true,
+                contradicted: refutable.why_contradicted(),
             }],
             merge_commit: Some("ccc".into()),
             pid: None,
@@ -1700,6 +1717,7 @@ fn probe_landed_but_open() -> Probe {
                 bead: "fd-2".into(),
                 why: "a clause Air cannot read".into(),
                 refuted: false,
+                contradicted: String::new(),
             }],
             merge_commit: Some("eee".into()),
             pid: None,
@@ -1720,6 +1738,104 @@ fn probe_landed_but_open() -> Probe {
             && !unreadable.refuted()
             && !unreadable.all_discharged()
             && cleared,
+    }
+}
+
+/// air-ppf: the `landed-not-closed` sentence asserts a contradiction, so it may name only the
+/// clauses the merge contradicts. It used to render the row's whole `why`, which also carries
+/// every clause Air could not read, so "nothing Air can look up" appeared under a CONTRADICTS
+/// headline and two sound closes (air-03w, air-97z) each cost a round trip on 2026-08-30.
+///
+/// Red: a bead with one refuted clause and two unreadable ones is reported naming the refuted
+/// clause and neither of the others. Green: a bead with only unreadable clauses produces no
+/// CONTRADICTS claim at all, and the row still keeps both halves. The first is what makes the
+/// second believable: a message that only ever names what it can refute can be read at face
+/// value.
+fn probe_contradicts_names_only_the_refuted() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let changed = vec!["docs/rules/roles.md".to_string()];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+    };
+    let mixed = judge_clauses(
+        "fd-1",
+        vec![
+            "docs/absent.md says it.".into(),
+            "The owner rules on the counter-argument.".into(),
+            "Docs are updated.".into(),
+        ],
+        &ev,
+    );
+    let unreadable_only = judge_clauses("fd-2", vec!["The owner rules on it.".into()], &ev);
+    let as_row = |j: &crate::cmd::acceptance::Judged| OpenBead {
+        bead: j.bead.clone(),
+        why: j.why_open(),
+        refuted: j.refuted(),
+        contradicted: j.why_contradicted(),
+    };
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&Landing {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "aaa".into(),
+            tip_sha: Some("bbb".into()),
+            result: "landed-refuted".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 1,
+            beads: vec!["fd-1".into(), "fd-2".into()],
+            open_beads: vec![as_row(&mixed), as_row(&unreadable_only)],
+            merge_commit: Some("ccc".into()),
+            pid: None,
+            started_at: "t0".into(),
+            finished_at: "t1".into(),
+        })
+        .map_err(|e| e.to_string())?;
+        let snap = Snapshot {
+            landed_open: l.landed_open().map_err(|e| e.to_string())?,
+            ..Default::default()
+        };
+        let att = attention(&snap, "2026-09-05T00:00:00Z", Thresholds::default());
+        let landed: Vec<_> = att
+            .iter()
+            .filter(|a| a.kind == kinds::LANDED_NOT_CLOSED)
+            .collect();
+        let names_the_refuted_alone = landed.len() == 1
+            && landed.first().is_some_and(|a| {
+                a.worker == "fd-1"
+                    && a.detail
+                        .contains("CONTRADICTS: \"docs/absent.md says it.\"")
+                    && !a.detail.contains("nothing Air can look up")
+                    && !a.detail.contains("owner rules")
+                    && !a.detail.contains("Docs are updated")
+            });
+        let row_keeps_both = l
+            .landings()
+            .map_err(|e| e.to_string())?
+            .first()
+            .and_then(|r| r.open_beads.iter().find(|o| o.bead == "fd-1").cloned())
+            .is_some_and(|o| {
+                o.why.contains("nothing Air can look up") && o.why.contains("docs/absent.md")
+            });
+        let unreadable_is_silent = !landed.iter().any(|a| a.worker == "fd-2");
+        Ok((
+            names_the_refuted_alone,
+            unreadable_is_silent && row_keeps_both,
+        ))
+    })()
+    .unwrap_or((false, false));
+    let (red_fires, green_passes) = res;
+
+    Probe {
+        name: "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        red_fires,
+        green_passes,
     }
 }
 
@@ -2885,6 +3001,67 @@ fn probe_agent_traffic_is_counted() -> Probe {
     }
 }
 
+/// air-srv (owner ruling 2026-09-05): every `SendMessage` is recorded, content included.
+/// Agents solve problems together over `SendMessage` and none of it reached the ledger unless
+/// someone captured it by hand. The event line is unchanged (recipient and bytes, air-q07);
+/// the text goes to the `messages` table.
+///
+/// Red: one `SendMessage` hook input produces exactly one `messages` row carrying the content,
+/// the recipient, and the sender the session row knows. Green: a second identical call
+/// produces a second row, not a dedupe, and `summary` is on neither.
+///
+/// The mutation that made it red, seen: `let content = "";` in `hook::record_message`, which
+/// is air-q07's content-free record put back. (Replacing the call in `pre_tool_use` with
+/// `Ok(())` reaches the hook unit test instead, and was seen red there.)
+fn probe_a_message_is_recorded_with_its_content() -> Probe {
+    use crate::cmd::hook::record_message;
+    use air_hooks::HookInput;
+
+    let Ok(ledger) = Ledger::open_in_memory() else {
+        return Probe {
+            name: "messages: a SendMessage is one ledger row with its content",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let session_row = ledger
+        .conn()
+        .execute(
+            "INSERT INTO sessions (session_id, worker, state, changed_at, started_at, role, project) \
+             VALUES ('s-msg','alpha','running','t','t','worker','air')",
+            [],
+        )
+        .is_ok();
+    let input = HookInput::parse(
+        r#"{"session_id":"s-msg","hook_event_name":"PreToolUse","tool_name":"SendMessage",
+            "tool_input":{"to":"main","message":"the plan is X","summary":"about X"}}"#,
+    )
+    .ok();
+    let first = input
+        .as_ref()
+        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+    let after_one = ledger.messages().unwrap_or_default();
+    let red_fires = session_row
+        && first
+        && matches!(after_one.as_slice(), [m]
+            if m.content == "the plan is X" && m.to == "main" && m.bytes == 13
+            && m.from_worker == "alpha" && m.from_role == "worker" && m.project == "air"
+            && m.session_id == "s-msg");
+    let second = input
+        .as_ref()
+        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+    let after_two = ledger.messages().unwrap_or_default();
+    let green_passes = second
+        && after_two.len() == 2
+        && after_two.iter().all(|m| m.content == "the plan is X")
+        && !format!("{after_two:?}").contains("about X");
+    Probe {
+        name: "messages: a SendMessage is one ledger row with its content",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// air-q9c: a lease defect is a signal for whoever WANTS the resource, and never for the
 /// holder — who knows they hold it and was being told to break the thing they were using.
 /// adopter saw six of those in a day while the simulator and API were genuinely running.
@@ -2953,47 +3130,41 @@ fn probe_lease_defect_reaches_the_waiter() -> Probe {
 ///
 /// Yesterday's set is derived from each notice's own `since` date, not from a list of ids
 /// copied here — a copied list would stop being yesterday's the next time anyone appends
-/// (air-jc0).
+/// (air-jc0). The anchor day is fixed at the incident, and what yesterday's repo is told is
+/// every notice dated ON OR AFTER it: the first version said "dated today" and went red the
+/// day air-srv appended a notice dated a week later (2026-09-05), which is the same drift one
+/// level up.
 fn probe_yesterdays_repo_is_told_and_a_current_one_is_not() -> Probe {
     use crate::cmd::install::{SURFACE, surface_diff};
 
-    // "Today" is the latest day on the list, derived rather than written: as a constant this
-    // probe went red the first time a notice was appended on a later day (air-er0,
-    // 2026-09-05), which is the dated-cutoff class air-24e is about.
-    let today: &str = SURFACE
-        .iter()
-        .map(|c| c.since.get(..10).unwrap_or(c.since))
-        .max()
-        .unwrap_or("");
-    let ids = |f: &dyn Fn(&str) -> bool| -> Vec<String> {
+    const TODAY: &str = "2026-08-29";
+    let ids = |f: fn(&str) -> bool| -> Vec<String> {
         SURFACE
             .iter()
             .filter(|c| f(c.since))
             .map(|c| c.id.to_string())
             .collect()
     };
-    let yesterday = ids(&|since| since < today);
-    let everything = ids(&|_| true);
+    let yesterday = ids(|since| since < TODAY);
+    let everything = ids(|_| true);
 
     let told = surface_diff(&yesterday);
     let quiet = surface_diff(&everything);
-    // Every notice dated today, and nothing else, is what yesterday's repo has not seen.
+    // Every notice dated today or later, and nothing else, is what yesterday's repo has not
+    // seen.
     let todays: Vec<&str> = SURFACE
         .iter()
-        .filter(|c| c.since.starts_with(today))
+        .filter(|c| c.since >= TODAY)
         .map(|c| c.id)
         .collect();
-    // And a silent break is carried as one: the 2026-08-29 installer notice, seen from a repo
-    // that predates it.
-    let silent_carried = surface_diff(&ids(&|since| since < "2026-08-29"))
-        .iter()
-        .any(|c| c.id == "install-refreshes-matcher" && c.silent_break);
     Probe {
         name: "install: a repo at yesterday's surface is told what changed; a current one is told nothing",
         red_fires: !todays.is_empty()
             && told.len() == todays.len()
             && todays.iter().all(|id| told.iter().any(|c| c.id == *id))
-            && silent_carried,
+            && told
+                .iter()
+                .any(|c| c.id == "install-refreshes-matcher" && c.silent_break),
         green_passes: quiet.is_empty(),
     }
 }

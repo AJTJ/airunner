@@ -17,8 +17,14 @@ pub struct LandedOpen {
     /// The worker whose branch carried it.
     pub worker: String,
     pub merge_commit: String,
-    /// The acceptance clause Air could not point at evidence for.
+    /// Every clause Air could not discharge: the refuted ones AND the ones it could not read.
+    /// The complete record, for the row and `--json`; not what the condition says.
     pub why: String,
+    /// Only the clauses the merge CONTRADICTS (air-ppf). This is what the `landed-not-closed`
+    /// sentence names: the message used to render `why` under a headline asserting a
+    /// contradiction, so every unreadable clause was presented as one, and two sound closes
+    /// (air-03w, air-97z) each cost the coordinator a round trip on 2026-08-30.
+    pub contradicted: String,
     pub landed_at: String,
 }
 
@@ -26,12 +32,37 @@ pub struct LandedOpen {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenBead {
     pub bead: String,
+    /// Every clause Air could not discharge, refuted or unreadable, so the record is complete.
     pub why: String,
     /// True when at least one clause is not merely unreadable but CONTRADICTED by what the
     /// merge contains — a bead naming a file the merge did not touch. That is a wrong close;
     /// "Air could not read it" is not (air-ayp).
     #[serde(default)]
     pub refuted: bool,
+    /// Of `why`, only the refuted clauses (air-ppf). Empty on rows written before the field
+    /// existed; `landed_open` derives it from `why` for those.
+    #[serde(default)]
+    pub contradicted: String,
+}
+
+/// The refuted half of a `why` written before `contradicted` was stored (air-ppf). `why` is
+/// Air's own format — `"clause": how` parts joined by `; `, each opening with a quote, and an
+/// unreadable one ending in the fixed phrase — so this reads Air's text, not a person's.
+fn legacy_contradicted(why: &str) -> String {
+    const UNREADABLE: &str = ": nothing Air can look up";
+    let kept: Vec<String> = why
+        .split("; \"")
+        .enumerate()
+        .map(|(i, part)| {
+            if i == 0 {
+                part.to_string()
+            } else {
+                format!("\"{part}")
+            }
+        })
+        .filter(|part| !part.ends_with(UNREADABLE))
+        .collect();
+    kept.join("; ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -188,6 +219,11 @@ impl Ledger {
                     worker: l.worker.clone(),
                     merge_commit: l.merge_commit.clone().unwrap_or_default(),
                     why: ob.why.clone(),
+                    contradicted: if ob.contradicted.is_empty() {
+                        legacy_contradicted(&ob.why)
+                    } else {
+                        ob.contradicted.clone()
+                    },
                     landed_at: l.finished_at.clone(),
                 });
             }
@@ -311,12 +347,15 @@ mod tests {
                 bead: "fd-2".into(),
                 why: "\"the owner rules on X\": nothing Air can look up".into(),
                 refuted: false,
+                contradicted: String::new(),
             },
             // This one the merge contradicts.
             OpenBead {
                 bead: "fd-3".into(),
                 why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
                 refuted: true,
+                contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
+                    .into(),
             },
         ];
         l.record_landing(&r).unwrap();
@@ -359,6 +398,37 @@ mod tests {
         again.finished_at = "t9".into();
         l.record_landing(&again).unwrap();
         assert!(l.landed_open().unwrap().is_empty());
+    }
+
+    /// air-ppf: a row written before `contradicted` existed carries only `why`, which is the
+    /// refuted and the unreadable clauses together. The shape of the 2026-08-30 message that
+    /// cost two round trips, read back as only its refuted half.
+    #[test]
+    fn a_legacy_row_yields_only_its_refuted_clauses() {
+        let why = "\"Pin it in crates/cli/tests/install_and_launch.rs\": the merge did not \
+                   change crates/cli/tests/install_and_launch.rs; \"The owner is told; and \
+                   agrees\": nothing Air can look up; \"Docs updated\": nothing Air can look up";
+        assert_eq!(
+            legacy_contradicted(why),
+            "\"Pin it in crates/cli/tests/install_and_launch.rs\": the merge did not change \
+             crates/cli/tests/install_and_launch.rs"
+        );
+        let l = Ledger::open_in_memory().unwrap();
+        let mut r = row("1", "landed-refuted");
+        r.open_beads = vec![OpenBead {
+            bead: "fd-1".into(),
+            why: why.into(),
+            refuted: true,
+            contradicted: String::new(),
+        }];
+        l.record_landing(&r).unwrap();
+        let open = l.landed_open().unwrap();
+        assert_eq!(open.len(), 1);
+        assert!(!open[0].contradicted.contains("nothing Air can look up"));
+        assert!(
+            open[0].why.contains("nothing Air can look up"),
+            "the row keeps both"
+        );
     }
 
     #[test]

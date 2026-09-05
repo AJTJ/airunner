@@ -446,7 +446,18 @@ pub const SURFACE: &[SurfaceChange] = &[
                  when they were written and are outside it now - that is what went red here, \
                  and the same clock is in your copy.",
     },
-    // ---- 2026-09-05 ----------------------------------------------------------------
+    SurfaceChange {
+        id: "messages-table",
+        since: "2026-09-05 (air-srv)",
+        headline: "`.air/ledger.db` now holds the CONTENT of every `SendMessage` a session \
+                   sends, in a `messages` table (schema v13). The event line is unchanged: \
+                   recipient and byte count, never the text.",
+        silent_break: false,
+        action: "Nothing to run; the table is created on the next hook. Know that the ledger \
+                 file is now a transcript of agent-to-agent traffic: `sqlite3 .air/ledger.db \
+                 'select * from messages'` reads it, `air doctor` counts it. Only the send side \
+                 is a tool call, so a message from another fleet is in that fleet's ledger.",
+    },
     SurfaceChange {
         id: "task-by-file",
         since: "2026-09-05 (air-er0)",
@@ -521,8 +532,10 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.0.1", 1, 9),
     // 2026-08-29: the twelve notices of air-njb, and the forward-only install of air-w9d.
     ("0.1.0", 2, 21),
-    // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
+    // 2026-09-05: the `messages` table of air-srv; the ledger now holds message content.
     ("0.1.1", 3, 22),
+    // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
+    ("0.1.2", 4, 23),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
