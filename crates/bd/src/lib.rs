@@ -91,6 +91,10 @@ pub struct Issue {
     pub parent: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// bd's `issue_type`: `task`, `bug`, `feature`, `epic`, `chore`. Read since air-f10, when
+    /// the claimable count offered two epics as work and a worker nearly claimed one. An epic
+    /// is a container, not a task; `bd ready` lists it beside the tasks all the same.
+    pub issue_type: String,
 }
 
 /// What Air needs from a work tracker. `BdCli` is the only implementation today; tests use
