@@ -551,6 +551,20 @@ pub const SURFACE: &[SurfaceChange] = &[
                  bead must still declare it in the digest's `bead:` front matter, unchanged. \
                  If a rule of yours told workers to expect `<bead>` in the message, delete it.",
     },
+    SurfaceChange {
+        id: "handover-carried-bead",
+        since: "2026-09-05 (air-60x)",
+        headline: "`air handover <bead>` accepts a bead the branch CARRIES by a `Bead:` \
+                   trailer in main..HEAD, not only one the worker has claimed. A branch that \
+                   supersedes another worker's closed bead now has a hand-over path, and the \
+                   gate agrees with `air land` on what makes a branch handable.",
+        silent_break: false,
+        action: "Nothing to run. The claim refusal's fix is now the trailer (`Bead: <id>` on \
+                 the commit that does the work), never `air claim <id>`: the bead may be \
+                 closed and another worker's. The Stop advisory also speaks to a worker whose \
+                 branch carries a bead by trailer, not only to one holding a claim. Delete any \
+                 rule of yours that said a superseding branch must be handed over by hand.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -627,6 +641,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: the hand-over refusal names the held bead and skips the digest check with
     // nothing to declare (air-xbl).
     ("0.2.5", 9, 28),
+    // 2026-09-05: the gate accepts a bead carried by trailer; supersession has a path (air-60x).
+    ("0.2.6", 10, 29),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from

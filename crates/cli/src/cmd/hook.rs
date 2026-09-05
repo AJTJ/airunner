@@ -267,12 +267,13 @@ fn dispatch(
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
-            // Nothing to hand over if this worker holds no claim: say nothing (guardrails
-            // audit 2026-08-21; a non-green stop after a WIP commit is not a gap).
-            let holds_claim = ledger
-                .open_claims()
-                .map(|v| v.iter().any(|c| c.worker == worker))
-                .unwrap_or(false);
+            // Nothing to hand over if this worker holds no claim AND its branch carries no
+            // bead by trailer: say nothing (guardrails audit 2026-08-21; a non-green stop
+            // after a WIP commit is not a gap). The trailer half is air-60x: a superseding
+            // branch holds no claim and now has a hand-over path, so silence toward it
+            // stopped being correct the moment that path existed (adopter's w1: "a defect
+            // created by a fix elsewhere"). Both halves are the facts the gate itself read.
+            let has_work = !f.held_beads.is_empty() || !f.carried_beads.is_empty();
             // Silence is the signal that all is well, and silence when nothing has changed:
             // the advisory is spoken once per (session, HEAD, missing checks, latest verify)
             // and again only when one of those moves. A blocked worker is not nagged every
@@ -283,7 +284,7 @@ fn dispatch(
                 .flatten()
                 .map(|r| r.id)
                 .unwrap_or_default();
-            let fingerprint = if v.pass || !holds_claim {
+            let fingerprint = if v.pass || !has_work {
                 String::new()
             } else {
                 let checks: Vec<&str> = v.missing.iter().map(|m| m.check).collect();
@@ -292,12 +293,13 @@ fn dispatch(
             let speak = ledger
                 .emit_if_changed(&input.session_id, "stop", &fingerprint, &now())
                 .unwrap_or(true);
-            let context = if v.pass || !holds_claim || !speak {
+            let context = if v.pass || !has_work || !speak {
                 None
             } else {
                 Some(format!("air: {}", v.message))
             };
-            // Nudge (air-09i): no claim, beads ready, first stop: block once with the list.
+            // Nudge (air-09i): no claim and nothing carried, beads ready, first stop: block
+            // once with the list.
             //
             // The cache is the CHEAP GATE, not the answer (air-ouw). It decides whether there
             // is anything to say at all, which costs nothing on the great majority of stops;
@@ -313,7 +315,7 @@ fn dispatch(
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
-            let would_speak = !holds_claim
+            let would_speak = !has_work
                 && !stop_hook_active
                 && !cached.is_empty()
                 && role_for(worker) == "worker";
@@ -322,7 +324,7 @@ fn dispatch(
             } else {
                 Vec::new()
             };
-            let nudge = stop_nudge("worker", holds_claim, &ready, stop_hook_active);
+            let nudge = stop_nudge("worker", has_work, &ready, stop_hook_active);
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
                 .last_emission(&input.session_id, "nudge")
@@ -336,7 +338,7 @@ fn dispatch(
                 "nudge"
             } else if v.pass {
                 "pass"
-            } else if !holds_claim {
+            } else if !has_work {
                 "no-claim"
             } else if speak {
                 "would-refuse"
