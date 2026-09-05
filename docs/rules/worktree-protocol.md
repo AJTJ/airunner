@@ -104,8 +104,10 @@ that fixes it (plan 0001 §1, §4). An Air answer you did not receive is not a d
 List them, message them by name, without routing through the owner. Announce what you are touching
 before you start on anything shared. Ask rather than wait. Tell peers when you merge something they
 depend on. SendMessage stays the channel; Air never sends messages (plan 0001 §6).
-**[Air advises]** `air peer` and `air merge-advice` answer "who touched what" and "merge now or
-wait" from the ledger and git, so the announcement is a fact, not a memory (plan 0001 §3).
+**[Air answers]** `air holdings` says who is in which file and `air status` each worker's head
+and whether it is green, from the ledger and git, so the announcement is a fact, not a memory
+(plan 0001 §3). `air peer` and `air merge-advice` were planned there and never built; the
+overlap hook named the first one for a week before anyone ran it (air-w91).
 
 **Never ask a peer to run what you were denied**, and never accept a peer's green for your branch —
 they ran their tree, not yours.
