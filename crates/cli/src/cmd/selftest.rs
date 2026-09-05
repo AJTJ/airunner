@@ -425,6 +425,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
+        Mutation {
+            // Every missing path counts as an untouched file again, which is exactly the
+            // pre-fix rule (air-dqa): the tree is never consulted. One closure, it compiles,
+            // and the two landed-not-closed probes name files that ARE in their tree, so they
+            // stay GREEN under it — which shows this reaches the resolution rule alone.
+            file: "crates/cli/src/cmd/acceptance.rs",
+            from: ".partition(|p| ev.tree.iter().any(|t| t == *p));",
+            to: ".partition(|_p| true);",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -881,6 +894,7 @@ fn all_probes() -> Vec<Probe> {
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_contradicts_names_only_the_refuted(),
+        probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -1623,9 +1637,15 @@ fn probe_landed_but_open() -> Probe {
     use air_ledger::landings::{Landing, OpenBead};
 
     let changed = vec!["docs/rules/roles.md".to_string()];
+    let tree = vec![
+        "docs/rules/roles.md".to_string(),
+        "docs/rules/writing.md".to_string(),
+        "docs/absent.md".to_string(),
+    ];
     let ev = Evidence {
         green_at_landed: true,
         changed: &changed,
+        tree: &tree,
     };
     // A clause the merge CONTRADICTS: the bead names a file it did not touch.
     let refutable = judge_clauses(
@@ -1743,9 +1763,15 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     use air_ledger::landings::{Landing, OpenBead};
 
     let changed = vec!["docs/rules/roles.md".to_string()];
+    let tree = vec![
+        "docs/rules/roles.md".to_string(),
+        "docs/rules/writing.md".to_string(),
+        "docs/absent.md".to_string(),
+    ];
     let ev = Evidence {
         green_at_landed: true,
         changed: &changed,
+        tree: &tree,
     };
     let mixed = judge_clauses(
         "fd-1",
@@ -1822,6 +1848,53 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
         name: "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
         red_fires,
         green_passes,
+    }
+}
+
+/// air-dqa: a path Air read out of prose and got wrong must not become a confident false
+/// accusation. Three firings of `landed-not-closed`, zero true: adopter's clause wrote a
+/// possessive (`docs/reference/tooling.md`'s), the trim stopped at the `s`, the token matched
+/// nothing in a merge that had changed that very file, and Air reported CONTRADICTED.
+///
+/// Red: that clause, verbatim, against a merge that changed the file, is UNREADABLE with the
+/// token named, not refuted. Green: the ai_runner case, a clause naming an existing file the
+/// work correctly did not touch (the pin landed in install.rs, not install_and_launch.rs),
+/// stays REFUTED — the true fact, for a person to read — and the plainly written possessive
+/// clause discharges. The second is the true positive the first must not cost.
+fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
+    use crate::cmd::acceptance::{Evidence, Verdict, judge};
+
+    let tree = vec![
+        "docs/reference/tooling.md".to_string(),
+        "crates/cli/tests/install_and_launch.rs".to_string(),
+        "crates/cli/src/cmd/install.rs".to_string(),
+    ];
+    let adopter = Evidence {
+        green_at_landed: true,
+        changed: &["docs/reference/tooling.md".to_string()],
+        tree: &tree,
+    };
+    let possessive = "Air's own `docs/reference/tooling.md`'s section is updated.";
+    let red_fires = matches!(
+        judge(possessive, &adopter),
+        Verdict::Undecidable { how } if how.contains("cannot resolve") && how.contains("tooling.md`'s")
+    );
+
+    let ai_runner = Evidence {
+        changed: &["crates/cli/src/cmd/install.rs".to_string()],
+        ..adopter
+    };
+    let untouched_stays_refuted = matches!(
+        judge("Pin it in crates/cli/tests/install_and_launch.rs.", &ai_runner),
+        Verdict::Unevidenced { how }
+            if how == "the merge did not change crates/cli/tests/install_and_launch.rs"
+    );
+    let plain_discharges = judge("docs/reference/tooling.md is updated.", &adopter).discharged();
+
+    Probe {
+        name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
+        red_fires,
+        green_passes: untouched_stays_refuted && plain_discharges,
     }
 }
 
