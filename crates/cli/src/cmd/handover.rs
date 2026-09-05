@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use air_hooks::{GateFacts, Verdict, handover_verdict};
+use air_hooks::{GateFacts, MainMove, Verdict, handover_verdict};
 use air_ledger::Ledger;
 use air_ledger::verify::Kind;
 
@@ -35,6 +35,15 @@ pub fn facts(
         .map(|r| r.sha)
         .filter(|s| *s != head);
     let main_is_ancestor = git::is_ancestor(repo, "main", "HEAD").unwrap_or(false);
+    // air-5wq: the main this answer is true of, so a later refusal reads as main having moved
+    // rather than as a contradiction. air-4up: when it is not an ancestor, the landing that
+    // moved it, so the first refusal names the external cause instead of the third.
+    let main_sha = git::run(repo, &["rev-parse", "main"]).unwrap_or_default();
+    let main_moved = if main_is_ancestor {
+        None
+    } else {
+        main_moved_by(ledger, repo, &crate::cmd::now())
+    };
     let bead_claimed_by_worker = match bead {
         None => true, // no bead named: the claim check is not applicable
         Some(b) => ledger
@@ -98,6 +107,8 @@ pub fn facts(
         tree_green,
         last_green_sha,
         main_is_ancestor,
+        main_sha,
+        main_moved,
         bead_claimed_by_worker,
         bead: bead.map(str::to_string),
         runs_at_head,
@@ -105,6 +116,36 @@ pub fn facts(
         digest_dir,
         advisory,
     })
+}
+
+/// The landing that moved main past this branch (air-4up): the newest landed row whose merge
+/// commit HEAD does not contain. One `is-ancestor` per row it looks at, and it stops at the
+/// first. None when main moved some other way (a commit made on main by hand), or when git
+/// cannot answer — an unreadable answer reads as "not a landing", never as an accusation.
+fn main_moved_by(ledger: &Ledger, repo: &Path, now: &str) -> Option<MainMove> {
+    let l = ledger
+        .landings()
+        .ok()?
+        .into_iter()
+        .filter(air_ledger::landings::Landing::landed)
+        .find(|l| {
+            l.merge_commit
+                .as_deref()
+                .is_some_and(|m| !git::is_ancestor(repo, m, "HEAD").unwrap_or(true))
+        })?;
+    let ago_secs = seconds_between(&l.finished_at, now);
+    Some(MainMove {
+        merge_commit: l.merge_commit.unwrap_or_default(),
+        worker: l.worker,
+        at: l.finished_at,
+        ago_secs,
+    })
+}
+
+fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
+    let a: jiff::Timestamp = earlier.parse().ok()?;
+    let b: jiff::Timestamp = later.parse().ok()?;
+    Some(b.duration_since(a).as_secs())
 }
 
 /// `<main>/.claude/air.json`, parsed; None when absent or unreadable.
