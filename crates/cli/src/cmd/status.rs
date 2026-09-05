@@ -1799,9 +1799,57 @@ mod tests {
         }
     }
 
+    /// The one instant these tests hold. Every age is DERIVED from `Thresholds::default()`
+    /// (air-an9), never restated beside it: the fixtures used to be literal timestamps chosen
+    /// to sit either side of the defaults at the time, so moving a threshold flipped
+    /// assertions without the code under test changing. Same shape as the two dated cutoffs
+    /// that made main red for six days (air-24e), and the same fix air-jc0 gave the probes.
     const NOW: &str = "2026-08-20T12:00:00Z";
-    const T_30: &str = "2026-08-20T11:30:00Z";
-    const T_2: &str = "2026-08-20T11:58:00Z";
+
+    fn minutes_before(minutes: i64) -> String {
+        let t: jiff::Timestamp = NOW.parse().unwrap();
+        let span = jiff::Span::new().try_minutes(minutes).unwrap();
+        t.checked_sub(span).unwrap().to_string()
+    }
+
+    fn every_line() -> [i64; 5] {
+        let t = Thresholds::default();
+        [
+            t.stuck_min,
+            t.idle_with_claim_min,
+            t.silent_with_claim_min,
+            t.launch_grace_min,
+            t.idle_noclaim_min,
+        ]
+    }
+
+    /// An age past every threshold, whatever they are.
+    fn past_every_line_min() -> i64 {
+        every_line()
+            .into_iter()
+            .max()
+            .unwrap_or(0)
+            .saturating_add(10)
+    }
+
+    /// An age under every threshold, whatever they are.
+    fn under_every_line_min() -> i64 {
+        every_line()
+            .into_iter()
+            .min()
+            .unwrap_or(0)
+            .saturating_sub(1)
+    }
+
+    /// A timestamp past every line: what used to be `&past()`.
+    fn past() -> String {
+        minutes_before(past_every_line_min())
+    }
+
+    /// A timestamp under every line: what used to be `&under()`.
+    fn under() -> String {
+        minutes_before(under_every_line_min())
+    }
 
     #[test]
     fn quiet_fleet_raises_nothing() {
@@ -1810,11 +1858,11 @@ mod tests {
                 worker(
                     "a",
                     Some("working"),
-                    T_2,
-                    vec![claim("fd-1", "a", T_30, 0)],
+                    &under(),
+                    vec![claim("fd-1", "a", &past(), 0)],
                     Some(true),
                 ),
-                worker("b", Some("idle"), T_30, vec![], Some(true)), // idle without claim is fine
+                worker("b", Some("idle"), &past(), vec![], Some(true)), // idle without claim is fine
             ],
             ..Default::default()
         };
@@ -1825,38 +1873,38 @@ mod tests {
     fn each_condition_fires_with_its_threshold() {
         let s = Snapshot {
             workers: vec![
-                worker("stuck", Some("stuck"), T_30, vec![], None),
+                worker("stuck", Some("stuck"), &past(), vec![], None),
                 worker(
                     "idle",
                     Some("idle"),
-                    T_30,
-                    vec![claim("fd-2", "idle", T_30, 0)],
+                    &past(),
+                    vec![claim("fd-2", "idle", &past(), 0)],
                     None,
                 ),
                 worker(
                     "silent",
                     Some("running"),
-                    T_30,
-                    vec![claim("fd-3", "silent", T_30, 0)],
+                    &past(),
+                    vec![claim("fd-3", "silent", &past(), 0)],
                     None,
                 ),
                 worker(
                     "gone",
                     None,
-                    T_30,
-                    vec![claim("fd-4", "gone", T_30, 0)],
+                    &past(),
+                    vec![claim("fd-4", "gone", &past(), 0)],
                     None,
                 ),
                 worker(
                     "red",
                     Some("working"),
-                    T_2,
-                    vec![claim("fd-5", "red", T_2, 2)],
+                    &under(),
+                    vec![claim("fd-5", "red", &under(), 2)],
                     Some(false),
                 ),
             ],
             inbox_depth: 3,
-            oldest_capture_at: Some(T_30.into()),
+            oldest_capture_at: Some(past()),
             ..Default::default()
         };
         let att = attention(&s, NOW, Thresholds::default());
@@ -1871,14 +1919,17 @@ mod tests {
                 ("red", "handover-not-green"),
             ]
         );
-        assert_eq!(att[0].for_minutes, 30);
-        // Tighten nothing, loosen everything: all time-based ones go quiet.
+        assert_eq!(att[0].for_minutes, past_every_line_min());
+        // Tighten nothing, loosen everything past the oldest fixture: all time-based ones go
+        // quiet. The launch grace stays, so `gone` (a claim older than it, no session) still
+        // fires.
+        let beyond = past_every_line_min().saturating_add(1);
         let loose = Thresholds {
-            stuck_min: 60,
-            idle_with_claim_min: 60,
-            silent_with_claim_min: 60,
-            launch_grace_min: 3,
-            idle_noclaim_min: 60,
+            stuck_min: beyond,
+            idle_with_claim_min: beyond,
+            silent_with_claim_min: beyond,
+            launch_grace_min: Thresholds::default().launch_grace_min,
+            idle_noclaim_min: beyond,
         };
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
@@ -1890,8 +1941,8 @@ mod tests {
     /// as one, or every worker waiting on review would raise them for the whole round.
     #[test]
     fn a_bead_waiting_on_review_is_not_a_claim_in_progress() {
-        let mut w = worker("w", Some("idle"), T_30, vec![], Some(false));
-        w.handed_over = vec![claim("fd-1", "w", T_30, 1)];
+        let mut w = worker("w", Some("idle"), &past(), vec![], Some(false));
+        w.handed_over = vec![claim("fd-1", "w", &past(), 1)];
         let s = Snapshot {
             workers: vec![w.clone()],
             ready_depth: Some(0),
@@ -1922,8 +1973,8 @@ mod tests {
             workers: vec![worker(
                 "new",
                 None,
-                T_2,
-                vec![claim("fd-1", "new", T_2, 0)],
+                &under(),
+                vec![claim("fd-1", "new", &under(), 0)],
                 None,
             )],
             ..Default::default()
@@ -1933,8 +1984,8 @@ mod tests {
         let mut idle = worker(
             "w",
             Some("idle"),
-            T_2,
-            vec![claim("fd-2", "w", T_30, 0)],
+            &under(),
+            vec![claim("fd-2", "w", &past(), 0)],
             None,
         );
         idle.session.as_mut().unwrap().pid = Some(1);
@@ -1956,7 +2007,7 @@ mod tests {
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
         // ...and once it is old enough, it is reported as an idle worker holding a claim,
         // which is the condition that does fire.
-        idle.session.as_mut().unwrap().changed_at = T_30.to_string();
+        idle.session.as_mut().unwrap().changed_at = past();
         let s = Snapshot {
             workers: vec![idle],
             ..Default::default()
@@ -1978,7 +2029,7 @@ mod tests {
     #[test]
     fn status_renders_ready_depth_and_claims_without_a_review_line() {
         let s = Snapshot {
-            workers: vec![worker("w", Some("idle"), T_2, vec![], Some(true))],
+            workers: vec![worker("w", Some("idle"), &under(), vec![], Some(true))],
             ..Default::default()
         };
         let att = attention(&s, NOW, Thresholds::default());
@@ -2011,11 +2062,11 @@ mod tests {
     fn idle_without_claim_fires_only_with_ready_beads_past_the_threshold() {
         let mut s = Snapshot {
             workers: vec![
-                worker("w", Some("idle"), T_30, vec![], Some(true)),
-                worker("fresh", Some("idle"), T_2, vec![], Some(true)),
+                worker("w", Some("idle"), &past(), vec![], Some(true)),
+                worker("fresh", Some("idle"), &under(), vec![], Some(true)),
                 WorkerView {
                     role: "coordinator".into(),
-                    ..worker("main", Some("idle"), T_30, vec![], None)
+                    ..worker("main", Some("idle"), &past(), vec![], None)
                 },
             ],
             ready_depth: Some(5),
@@ -2030,10 +2081,14 @@ mod tests {
         );
         assert_eq!(
             att[0].detail,
-            "idle 30 min, 5 bead(s) they can claim; prompt them"
+            format!(
+                "idle {} min, 5 bead(s) they can claim; prompt them",
+                past_every_line_min()
+            )
         );
+        // A line under even the fresh fixture, so both idle workers are past it.
         let t = Thresholds {
-            idle_noclaim_min: 1,
+            idle_noclaim_min: under_every_line_min().saturating_sub(1),
             ..Thresholds::default()
         };
         assert_eq!(attention(&s, NOW, t).len(), 2);
@@ -2058,7 +2113,7 @@ mod tests {
     #[test]
     fn idle_without_claim_is_quiet_when_the_session_process_is_gone() {
         let mk = |alive: Option<bool>| {
-            let mut w = worker("w", Some("idle"), T_30, vec![], Some(true));
+            let mut w = worker("w", Some("idle"), &past(), vec![], Some(true));
             let sess = w.session.as_mut().unwrap();
             sess.pid = Some(1);
             sess.pid_alive = alive;
@@ -2090,14 +2145,14 @@ mod tests {
             pid: Some(1),
             pid_started: None,
             reason: "api".into(),
-            taken_at: T_30.into(),
+            taken_at: past(),
             heartbeat_at: beat.into(),
         };
         let leases = || {
             vec![
-                (lease(":8080", T_30), Some("dead (pid 1 gone)".into())),
-                (lease("chrome", T_30), Some("stale (idle 30 min)".into())),
-                (lease("runtime", T_2), None),
+                (lease(":8080", &past()), Some("dead (pid 1 gone)".into())),
+                (lease("chrome", &past()), Some("stale (idle 30 min)".into())),
+                (lease("runtime", &under()), None),
             ]
         };
         // Nobody waiting: two defects and not a word. `air lease take` takes a defective
@@ -2152,6 +2207,9 @@ mod tests {
         };
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());
         assert_eq!(minutes_between("garbage", NOW), None);
-        assert_eq!(minutes_between(NOW, T_30), Some(-30));
+        assert_eq!(
+            minutes_between(NOW, &past()),
+            past_every_line_min().checked_neg()
+        );
     }
 }
