@@ -44,9 +44,17 @@ pub fn facts(
     } else {
         main_moved_by(ledger, repo, &crate::cmd::now())
     };
-    let bead_claimed_by_worker = match bead {
-        None => true, // no bead named: the claim check is not applicable
-        Some(b) => ledger
+    // air-60x: what this branch carries, by the `Bead:` trailers in main..HEAD. The same fact
+    // `air land` attributes a landing by (status.rs `landings_for`), read here so the gate and
+    // the landing agree on what makes a branch handable. Declared ids only: the prose guess
+    // needs bd to narrow it and bd is never called on a hook path.
+    let carried_beads: Vec<String> = {
+        let mut v = super::attribution::attributed_in_range(repo, "main..HEAD").declared;
+        v.dedup();
+        v
+    };
+    let claimed = |b: &str| -> bool {
+        ledger
             .conn()
             .query_row(
                 "SELECT count(*) FROM claims WHERE bead=?1 AND worker=?2 AND released_at IS NULL",
@@ -54,8 +62,9 @@ pub fn facts(
                 |r| r.get::<_, i64>(0),
             )
             .map(|n| n > 0)
-            .unwrap_or(false),
+            .unwrap_or(false)
     };
+    let bead_claimed_or_carried = handable(bead, bead.is_some_and(claimed), &carried_beads);
     // Every bead this worker holds, once: the digest lookup reads it and the refusal names it
     // (air-xbl: it used to be computed for the lookup and thrown away before the message).
     let held: Vec<air_ledger::claims::Claim> = ledger
@@ -81,10 +90,11 @@ pub fn facts(
                 _ => c,
             }
         });
-        // The bead named on the command line, else every bead this worker still holds: the
-        // check is "did you write the digest for the work you are handing on". No bead at
-        // all means nothing to declare, and the check is skipped rather than failed.
-        let beads = digest_beads(bead, &held_beads)?;
+        // The bead named on the command line, else every bead this worker still holds or
+        // its branch carries: the check is "did you write the digest for the work you are
+        // handing on". No bead at all means nothing to declare, and the check is skipped
+        // rather than failed.
+        let beads = digest_beads(bead, &held_beads, &carried_beads)?;
         Some(digest_for_bead(
             &repo.join(d),
             worker,
@@ -103,9 +113,10 @@ pub fn facts(
         main_is_ancestor,
         main_sha,
         main_moved,
-        bead_claimed_by_worker,
+        bead_claimed_or_carried,
         bead: bead.map(str::to_string),
         held_beads,
+        carried_beads,
         runs_at_head,
         digest_present,
         digest_dir,
@@ -113,8 +124,27 @@ pub fn facts(
     })
 }
 
-/// Which beads the digest check looks for (air-xbl): the bead named to the gate, else every
-/// bead the worker holds; `None` when there is neither, which SKIPS the check.
+/// Is the named bead this worker's to hand over (air-60x)? Yes when nothing was named (the
+/// check is not applicable), when the worker holds an open claim on it, or when a commit in
+/// `main..HEAD` declares it in a `Bead:` trailer. The trailer is what `air land` reads, so a
+/// branch Air would land is a branch Air lets its author hand over: adopter's w1 built a
+/// better instrument for a defect w3 had already fixed and closed, on a branch carrying the
+/// closed bead by trailer, green with main merged, and had no route through this gate. Their
+/// coordinator landed it on Air's own stated criterion; that should not have needed judgement.
+///
+/// Supersession is named by the trailer rather than by a digest's `bead:` field because the
+/// trailer is the attribution the landing records, and because digests are optional
+/// (`digest_dir`) while every landing reads trailers. One fact, two readers (air-y3v).
+pub fn handable(named: Option<&str>, claimed: bool, carried: &[String]) -> bool {
+    match named {
+        None => true,
+        Some(b) => claimed || carried.iter().any(|c| c == b),
+    }
+}
+
+/// Which beads the digest check looks for (air-xbl, air-60x): the bead named to the gate,
+/// else every bead the worker holds or its branch carries by trailer; `None` when there is
+/// none, which SKIPS the check.
 ///
 /// Before this the no-claim case built an empty list, `digest_for_bead` matched nothing
 /// against it, and the gate refused every hand-over from a worktree holding no claim, with a
@@ -124,11 +154,22 @@ pub fn facts(
 /// shas, runs the full verify once) is the case; its work is those workers' beads, each with
 /// its own digest, and its own hand-over has no bead of its own. A worker that DOES hold a
 /// claim, or names a bead, is unchanged: it must still declare it.
-pub fn digest_beads(named: Option<&str>, held: &[String]) -> Option<Vec<String>> {
+pub fn digest_beads(
+    named: Option<&str>,
+    held: &[String],
+    carried: &[String],
+) -> Option<Vec<String>> {
     match named {
         Some(b) => Some(vec![b.to_string()]),
-        None if held.is_empty() => None,
-        None => Some(held.to_vec()),
+        None => {
+            let mut v = held.to_vec();
+            for c in carried {
+                if !v.contains(c) {
+                    v.push(c.clone());
+                }
+            }
+            (!v.is_empty()).then_some(v)
+        }
     }
 }
 
