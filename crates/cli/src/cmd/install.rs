@@ -740,6 +740,18 @@ pub const SURFACE: &[SurfaceChange] = &[
                  `messages-table` it holds the text of every agent-to-agent message, and one \
                  `git add -A` would commit it. There is no bypass flag.",
     },
+    SurfaceChange {
+        id: "status-batch-ready",
+        since: "2026-09-05 (air-80x.3)",
+        headline: "`air status` lists the branches a verify lane may merge into its next \
+                   batch, as `batch-ready: <worker> at <sha> (<beads>)`: head contains main, \
+                   no green at that head, a `Bead:` trailer names a bead the worker holds. \
+                   `--json` carries `batch_ready` and `not_batch_ready` with the reason.",
+        silent_break: false,
+        action: "Nothing to run. A verify lane scripts its merge from `air status --json`'s \
+                 `batch_ready`; nothing pushes it, and a branch that is already green is \
+                 landable instead and never listed here.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -841,6 +853,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.15", 19, 38),
     // 2026-09-05: install and init refuse while .air/ is not ignored (air-6di).
     ("0.2.16", 20, 39),
+    // 2026-09-05: `air status` lists batch-ready branches for the verify lane (air-80x.3).
+    ("0.2.17", 21, 40),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
