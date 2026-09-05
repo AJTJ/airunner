@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 14;
+pub const CURRENT_VERSION: i64 = 15;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -246,6 +246,16 @@ ALTER TABLE verify_runs ADD COLUMN tree TEXT;
 CREATE INDEX IF NOT EXISTS verify_runs_tree ON verify_runs(tree, kind);
 "#;
 
+/// v15 (2026-09-05, air-9dg): whether the session's hooks see `AIR_ENFORCE=1`. the adopter ran
+/// five hours believing close-with-proof was enforced while a second `--settings` had replaced
+/// the env block that carried it, and nothing either project reads said so. Written by the
+/// hook from ITS OWN environment on every session write, so it records what the gate actually
+/// runs with, not what a launcher meant to pass. NULL on rows from before this version, which
+/// `air status` reads as unknown and says nothing about; 0 on a worker is the finding.
+const V15: &str = r#"
+ALTER TABLE sessions ADD COLUMN enforce INTEGER;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -304,6 +314,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 14 {
         conn.execute_batch(V14)?;
         conn.pragma_update(None, "user_version", 14)?;
+    }
+    if version < 15 {
+        conn.execute_batch(V15)?;
+        conn.pragma_update(None, "user_version", 15)?;
     }
     Ok(())
 }

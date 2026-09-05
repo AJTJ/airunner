@@ -190,14 +190,20 @@ fn launchers_print_the_exact_command() {
         &["worker", "frontend", "--print", "--", "--model", "opus"],
     );
     assert_eq!(code, 0, "{err}");
-    assert!(out.starts_with("claude --worktree frontend "), "{out}");
+    // air-9dg: the env leads the line as shell assignments, on the process and not only in
+    // the blob; `zz` is scratch_repo's prefix.
+    assert!(
+        out.starts_with(
+            "AIR_ROLE=worker BEADS_ACTOR=frontend AIR_ENFORCE=1 AIR_PROJECT=zz claude --worktree frontend "
+        ),
+        "{out}"
+    );
     assert!(
         out.contains("--disallowed-tools 'Bash(air land *)'")
             && out.contains("'Bash(bd create *)'"),
         "{out}"
     );
-    assert!(out.contains("BEADS_ACTOR"), "{out}");
-    // air-0lk: both roles carry the project they may touch. `zz` is scratch_repo's prefix.
+    // air-0lk: both roles carry the project they may touch.
     assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
     assert!(out.trim().ends_with("--model opus"), "{out}");
     assert!(repo.join(".air/roles.md").exists());
@@ -209,10 +215,50 @@ fn launchers_print_the_exact_command() {
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
     assert!(
-        out.starts_with("claude --dangerously-load-development-channels server:air "),
+        out.starts_with(
+            "AIR_ROLE=coordinator AIR_PROJECT=zz claude --dangerously-load-development-channels server:air "
+        ),
         "{out}"
     );
     assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
+
+    // air-9dg: a pass-through --settings merges into Air's; the line carries one, with both.
+    let (code, out, err) = air(
+        &repo,
+        None,
+        &[
+            "worker",
+            "frontend",
+            "--print",
+            "--",
+            "--settings",
+            r#"{"remoteControlAtStartup":false}"#,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.matches("--settings").count(), 1, "{out}");
+    assert!(
+        out.contains(r#""remoteControlAtStartup":false"#) && out.contains(r#""AIR_ENFORCE":"1""#),
+        "{out}"
+    );
+    // And a file path is refused, naming what it would have dropped.
+    let (code, _, err) = air(
+        &repo,
+        None,
+        &[
+            "worker",
+            "frontend",
+            "--print",
+            "--",
+            "--settings",
+            "s.json",
+        ],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("AIR_ENFORCE") && err.contains("s.json"),
+        "{err}"
+    );
 }
 
 /// air-0lk: `--repo` may not leave this checkout's repository. A worktree of the same repo is
@@ -630,8 +676,11 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
+    // air-9dg: the env rides on `-e`, which is how a pane gets it from a running server.
     assert!(
-        stdout.starts_with("tmux new-session -d -s zz-w -c "),
+        stdout.starts_with(
+            "tmux new-session -d -s zz-w -e AIR_ROLE=worker -e BEADS_ACTOR=w -e AIR_ENFORCE=1 -e AIR_PROJECT=zz -c "
+        ),
         "{stdout}"
     );
     assert!(!stdout.contains("--tmux"), "{stdout}");
@@ -698,7 +747,7 @@ fn worker_with_no_name_picks_the_next_free_lane() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stderr.contains("no name given; using w1"), "{stderr}");
-    assert!(stdout.contains("new-session -d -s zz-w1 -c "), "{stdout}");
+    assert!(stdout.contains("new-session -d -s zz-w1 -e "), "{stdout}");
     assert!(
         stdout.contains("--worktree w1"),
         "the lane name reaches claude: {stdout}"

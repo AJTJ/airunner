@@ -493,6 +493,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  that reads a worker's task out of `ps` or the tmux command line reads the \
                  file instead; anything that cleans `.air/` leaves `tasks/` alone.",
     },
+    SurfaceChange {
+        id: "env-on-the-process",
+        since: "2026-09-05 (air-9dg)",
+        headline: "AIR_ENFORCE, AIR_ROLE, AIR_PROJECT and BEADS_ACTOR are set on the spawned \
+                   process (and by `tmux new-session -e` on the detached path); a pass-through \
+                   `--settings` is MERGED into Air's, and `air status` marks a worker whose \
+                   hooks do not see AIR_ENFORCE=1 as UNENFORCED (ledger v15).",
+        silent_break: true,
+        action: "Check every launch of yours for a second `--settings`: `air worker … -- \
+                 --settings '{…}'` used to REPLACE Air's env block and switch the one refusal \
+                 off with no message (adopter ran five hours unenforced after adding one to \
+                 disable Remote Control, and found out from a close that should have been \
+                 refused). Inline JSON now merges; a `--settings <file>` in pass-through is \
+                 refused with the four names. Relaunch every worker through `air worker` and \
+                 read `air status`: an UNENFORCED line is a session whose hooks still run \
+                 without the env. The detached path needs tmux >= 3.2 for `-e`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -560,6 +577,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.0", 4, 23),
     // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
     ("0.2.1", 5, 24),
+    // 2026-09-05: env on the process, one merged --settings, UNENFORCED in status (air-9dg).
+    ("0.2.2", 6, 25),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
