@@ -352,7 +352,14 @@ pub fn resolve(
         }
         return Ok(out);
     }
-    let mut out: Vec<super::status::Landing> = Vec::new();
+    // air-dnr: a bead SELECTS a branch; it does not filter the branch's beads. The merge is
+    // per branch and carries everything in `main..<head>` whatever was typed, so the record
+    // has to say so too. adopter, 2026-08-30: `air land <one-bead>` on a lane carrying five
+    // recorded `beads = [that one]`, and four beads landed with no acceptance check and no
+    // wrong-close detection — the external check air-ayp exists for, skipped for most of the
+    // batch. Chosen branches are collected here and expanded to every ready landing on them
+    // below, exactly as `--worker` does.
+    let mut chosen: BTreeSet<&str> = BTreeSet::new();
     let mut ambiguous: Vec<String> = Vec::new();
     let mut named_blocked: Vec<&super::status::Landing> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
@@ -384,9 +391,14 @@ pub fn resolve(
         }
         match blocked.iter().find(|l| &l.bead == bead) {
             Some(b) => named_blocked.push(b),
-            None => out.extend(ready.iter().filter(|l| &l.bead == bead).cloned()),
+            None => chosen.extend(carriers),
         }
     }
+    let out: Vec<super::status::Landing> = ready
+        .iter()
+        .filter(|l| chosen.contains(l.worker.as_str()))
+        .cloned()
+        .collect();
     if !ambiguous.is_empty() {
         return Err(format!(
             "refused: a bead names a branch only while one branch carries it; name the branch \
