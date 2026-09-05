@@ -281,7 +281,17 @@ fn dispatch(
                 ),
             )
         }
-        HookEvent::Stop | HookEvent::SubagentStop => {
+        // A subagent stopping is not the worker stopping: the main agent is mid-turn and
+        // about to read the subagent's result. Treating it as a Stop marked a working
+        // session idle and, with no claim held, ran the nudge's `bd ready` confirm — one bd
+        // process (~2 s) per subagent stop, 241 of them on adopter's 2026-08-30, none of
+        // which could ever be acted on (air-bp0). Observed, and nothing else.
+        HookEvent::SubagentStop => Dispatched::new(
+            HookOutcome::Allow { context: None },
+            "observed",
+            "subagent stop: not the worker's stop; no state change, no nudge, no bd".to_string(),
+        ),
+        HookEvent::Stop => {
             let prev = set_session(ledger, input, worker, "idle", None)?;
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
