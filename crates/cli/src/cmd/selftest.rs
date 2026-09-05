@@ -193,6 +193,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
+        Mutation {
+            // Drop the entry: the deny is gone and the matcher alone remains, which is the
+            // count without the refusal.
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "    \"AskUserQuestion\",\n];",
+            to: "];",
+            also_red: &[],
+        },
+    ),
+    (
         "gate: verify-green-at-head",
         Mutation {
             file: "crates/hooks/src/gate.rs",
@@ -413,6 +424,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/launch.rs",
             from: "(\"AIR_ENFORCE\", \"1\"),",
             to: "(\"AIR_ENFORCE\", \"0\"),",
+            also_red: &[],
+        },
+    ),
+    (
+        "gate: the digest refusal says the digest commit moves HEAD off the green and names the order, only when a green is at HEAD",
+        Mutation {
+            // The note stops being conditional on the green: it goes silent for the worker
+            // who has one (air-yol's report) and would speak for the one who has not.
+            file: "crates/hooks/src/gate.rs",
+            from: "let order_note = if f.green_at_head {",
+            to: "let order_note = if !f.green_at_head {",
             also_red: &[],
         },
     ),
@@ -1176,6 +1198,7 @@ fn all_probes() -> Vec<Probe> {
         probe_enforced_gate(),
         probe_env_reaches_the_hook(),
         probe_worktree_is_airs(),
+        probe_digest_refusal_names_the_order_only_with_a_green(),
         probe_bd_calls_are_per_event(),
         probe_status_reconcile_is_one_show(),
         probe_subagent_stop_is_not_a_stop(),
@@ -1205,6 +1228,7 @@ fn all_probes() -> Vec<Probe> {
         probe_claim_retries_a_timeout_once(),
         probe_release_unassigns(),
         probe_every_air_spawn_pins_identity(),
+        probe_worker_cannot_ask_the_owner_directly(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -3291,6 +3315,37 @@ fn probe_gate_digest() -> Probe {
     }
 }
 
+/// air-yol: the digest refusal's fix is right and, followed, produced the next refusal: the
+/// digest commit moves HEAD off the recorded green (adopter ad-8m9b, 2026-08-31, two
+/// workers). Red: with a green at HEAD, the refusal says so and names the order that works
+/// (commit, merge main, record verify LAST). Green: with no green at HEAD there is nothing to
+/// invalidate and the note is absent, so it is not the unconditional noise air-5wq refused.
+fn probe_digest_refusal_names_the_order_only_with_a_green() -> Probe {
+    let mut with = base_facts();
+    with.digest_present = Some(false);
+    with.digest_dir = Some("docs/log.d".into());
+    with.green_at_head = true;
+    let mut without = with.clone();
+    without.green_at_head = false;
+    let fix_of = |f: &air_hooks::GateFacts| -> String {
+        handover_verdict(f)
+            .missing
+            .iter()
+            .find(|m| m.check == "digest-present")
+            .map(|m| m.fix.clone())
+            .unwrap_or_default()
+    };
+    let w = fix_of(&with);
+    let wo = fix_of(&without);
+    Probe {
+        name: "gate: the digest refusal says the digest commit moves HEAD off the green and names the order, only when a green is at HEAD",
+        red_fires: w.contains("moves HEAD off")
+            && w.contains("air record verify -- make verify")
+            && w.contains("LAST"),
+        green_passes: !wo.is_empty() && !wo.contains("moves HEAD off"),
+    }
+}
+
 /// air-tdc: `air worker --task` from a socket stdin (the coordinator's Bash tool) must not
 /// exec `claude --tmux` (tcgetattr fails there). Red: the socket case is routed away from
 /// exec. Green: a detached tmux session is actually created (pure check only when tmux is
@@ -5361,6 +5416,36 @@ fn probe_status_reconcile_is_one_show() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-bm3 (owner, 2026-08-30): `AskUserQuestion` is denied to workers, and the PreToolUse
+/// matcher carries it so an attempt is recorded and the deny is countable. The owner is
+/// reached through `air capture`, filed by the coordinator as a bead labelled `owner`.
+///
+/// Red: the worker argv denies the tool, the coordinator's does not, and the matcher names
+/// it. Green: the deny is the bare tool name (the shape `EnterWorktree` uses), and the
+/// worker is not denied `air capture`, which is the path that does work.
+fn probe_worker_cannot_ask_the_owner_directly() -> Probe {
+    use crate::cmd::install::hook_entries;
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
+    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
+    let matcher_counts_it = hook_entries().iter().any(|(event, m)| {
+        *event == "PreToolUse" && m.is_some_and(|m| m.contains("AskUserQuestion"))
+    });
+
+    let red = denies(&worker, "AskUserQuestion")
+        && !denies(&coord, "AskUserQuestion")
+        && matcher_counts_it;
+    let green = !worker.iter().any(|a| a.contains("AskUserQuestion("))
+        && !worker.iter().any(|a| a.contains("air capture"));
+    Probe {
+        name: "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
         red_fires: red,
         green_passes: green,
     }

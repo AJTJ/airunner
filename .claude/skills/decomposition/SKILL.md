@@ -263,7 +263,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 
 ## Provenance
 
-- Source: `~/projects/metis/plugins/metis/skills/decomposition/SKILL.md` and
+- Source: `metis/plugins/metis/skills/decomposition/SKILL.md` and
   `references/decomposition-patterns.md` (metis `6745810`). v1.1.0 also draws on
   `plugins/metis/skills/project-patterns/references/{feature-development,anti-patterns,core-principles}.md`
   and `.metis/adrs/METIS-A-0003.md` (same SHA).
