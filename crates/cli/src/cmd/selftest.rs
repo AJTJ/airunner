@@ -4290,9 +4290,13 @@ fn probe_env_reaches_the_hook() -> Probe {
             .filter_map(|(i, _)| argv.get(i.saturating_add(1)))
             .collect();
         let merged = blobs.len() == 1
-            && serde_json::from_str::<serde_json::Value>(blobs[0]).is_ok_and(|v| {
-                v["remoteControlAtStartup"] == false && v["env"]["AIR_ENFORCE"] == "1"
-            });
+            && blobs
+                .first()
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                .is_some_and(|v| {
+                    v.get("remoteControlAtStartup") == Some(&serde_json::Value::Bool(false))
+                        && v.pointer("/env/AIR_ENFORCE").and_then(|x| x.as_str()) == Some("1")
+                });
         let recorded: Vec<(String, String)> = raw_env
             .lines()
             .filter_map(|l| l.split_once('='))
