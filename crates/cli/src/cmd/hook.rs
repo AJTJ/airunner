@@ -839,6 +839,10 @@ fn set_session(
         .and_then(|v| v.parse().ok());
     // Read once per hook, cheaply; None until the transcript has its first assistant message.
     let model = model_of(input.transcript_path.as_deref());
+    // What THIS hook process sees, which is what the gate at hook.rs runs with (air-9dg:
+    // adopter's workers ran unenforced for five hours after a second `--settings` replaced
+    // the env block; the ledger is where that becomes visible).
+    let enforce: i64 = i64::from(std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1"));
     ledger
         .conn()
         .execute(
@@ -846,14 +850,15 @@ fn set_session(
             // NULLIF plus COALESCE, so a hook that fires before the first assistant message
             // leaves the recorded model alone instead of blanking it. An empty string here
             // would be the "guess or empty" the bead rules out.
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,'')) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model, enforce) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,''),?11) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
              worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid), \
              project=excluded.project, \
-             model=COALESCE(NULLIF(excluded.model,''), sessions.model)",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project, model],
+             model=COALESCE(NULLIF(excluded.model,''), sessions.model), \
+             enforce=excluded.enforce",
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project, model, enforce],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
