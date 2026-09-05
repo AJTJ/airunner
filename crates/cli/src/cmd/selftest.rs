@@ -194,6 +194,21 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        Mutation {
+            // Back to filtering the branch's landings by the bead typed: the exact line
+            // adopter hit, in the one place the selection is expanded.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        .filter(|l| chosen.contains(l.worker.as_str()))",
+            to: "        .filter(|l| chosen.contains(l.worker.as_str()) && beads.contains(&l.bead))",
+            // The air-09b probe's green half asserts the same expansion for a single named
+            // bead (it used to assert the defect, `v.len() == 1`), so it falls with this too.
+            also_red: &[
+                "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+            ],
+        },
+    ),
+    (
         "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
         Mutation {
             // Let killed rows back into every green/red/flaky query: the one clause that
@@ -958,6 +973,7 @@ fn all_probes() -> Vec<Probe> {
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_refused_landing_publishes_nothing(),
+        probe_land_by_bead_carries_the_whole_branch(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -2104,15 +2120,76 @@ fn probe_land_names_a_branch() -> Probe {
         resolve(&fd1, &none, &[], &blocked, &[]),
         Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
     );
+    // air-dnr: naming fd-2 selects lane's branch, which carries fd-1 too. This used to assert
+    // `v.len() == 1`, which was the defect written down as the expectation.
     let single_ready = matches!(
         resolve(&fd2, &none, &lane_ready, &blocked, &[]),
-        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "lane")
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
     );
 
     Probe {
         name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
         red_fires: case1 && case2,
         green_passes: selector && single_blocked && single_ready,
+    }
+}
+
+/// air-dnr: `air land <bead>` records every bead the branch's merge range names, not the one
+/// typed. The merge is per branch; the argument selects the branch. adopter, 2026-08-30:
+/// `air land ad-ezn6` on a lane carrying five beads recorded one, and four landed with no
+/// acceptance check and no wrong-close detection.
+///
+/// Red: naming ONE bead on a branch carrying five selects all five, once each, and naming
+/// two of them still yields the five once. Green: a bead no branch names is still refused,
+/// and a bead on a different branch is not swept in.
+fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes: 5,
+        command: format!("air land --worker {worker}"),
+        acceptance: Vec::new(),
+        blocked: None,
+    };
+    let five = ["ad-7p85", "ad-epo9", "ad-fsxg", "ad-lqhf", "ad-xeq3"];
+    let mut ready: Vec<Landing> = five.iter().map(|b| landing("lane", b)).collect();
+    ready.push(landing("other", "ad-zzz"));
+    let none: Vec<String> = Vec::new();
+    fn beads_of(v: &[Landing]) -> Vec<&str> {
+        let mut b: Vec<&str> = v.iter().map(|l| l.bead.as_str()).collect();
+        b.sort_unstable();
+        b
+    }
+
+    let one = resolve(&["ad-fsxg".to_string()], &none, &ready, &[], &[]);
+    let all_five =
+        matches!(&one, Ok(v) if beads_of(v) == five && v.iter().all(|l| l.worker == "lane"));
+    let two = resolve(
+        &["ad-7p85".to_string(), "ad-xeq3".to_string()],
+        &none,
+        &ready,
+        &[],
+        &[],
+    );
+    let once_each = matches!(&two, Ok(v) if beads_of(v) == five);
+
+    let absent = matches!(
+        resolve(&["ad-nope".to_string()], &none, &ready, &[], &[]),
+        Err(m) if m.contains("no green branch names ad-nope")
+    );
+    let not_swept = matches!(
+        resolve(&["ad-zzz".to_string()], &none, &ready, &[], &[]),
+        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "other")
+    );
+
+    Probe {
+        name: "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        red_fires: all_five && once_each,
+        green_passes: absent && not_swept,
     }
 }
 
