@@ -18,9 +18,15 @@ pub fn facts(
     advisory: bool,
 ) -> Result<GateFacts, String> {
     let head = git::head(repo).map_err(|e| e.to_string())?;
-    let green_at_head = ledger
-        .is_green_at(worker, &head, Kind::Verify)
-        .map_err(|e| e.to_string())?;
+    // ONE predicate for every surface (air-7wf): the same `green::at` that `air status` and
+    // `air land` read, so the gate cannot refuse what status calls green or vice versa.
+    let evidence = super::green::at(ledger, repo, &head, Kind::Verify)?;
+    let green_at_head = evidence.holds();
+    let tree_green = if green_at_head {
+        None
+    } else {
+        evidence.detail()
+    };
     // The last green sha is only informative when it differs from HEAD (a red run at HEAD
     // after an earlier green one is still "not green now").
     let last_green_sha = ledger
@@ -84,13 +90,12 @@ pub fn facts(
             frontmatter_cutoff(),
         )
     });
-    let runs_at_head = ledger
-        .runs_at(worker, &head, Kind::Verify)
-        .unwrap_or((0, 0));
+    let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
     Ok(GateFacts {
         worker: worker.to_string(),
         head,
         green_at_head,
+        tree_green,
         last_green_sha,
         main_is_ancestor,
         bead_claimed_by_worker,
