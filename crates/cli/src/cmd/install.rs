@@ -539,6 +539,21 @@ pub const SURFACE: &[SurfaceChange] = &[
                  decision is the owner's. `air://owner-queue` is gone from `air mcp`.",
     },
     SurfaceChange {
+        id: "land-refuses-in-flight",
+        since: "2026-09-05 (air-1bm)",
+        headline: "`air land` REFUSES while any verify is in flight, naming each run and its \
+                   pid. It used to warn and land anyway. `--despite-inflight` lands regardless \
+                   and is recorded on the landings row (`despite_inflight`, schema v16) and the \
+                   event line.",
+        silent_break: false,
+        action: "A landing that used to print a warning and proceed now exits 2 with the runs \
+                 named. Wait (`air status` shows when they exit), stop one by pid (`kill \
+                 <pid>`, never `pkill -f`), or pass `--despite-inflight` knowing it destroys \
+                 those runs. adopter lost 1,199 s of finished verify to the warning on \
+                 2026-08-30 and an operational rule did not hold; the override count is what \
+                 decides whether the refusal stays.",
+    },
+    SurfaceChange {
         id: "handover-names-the-bead",
         since: "2026-09-05 (air-xbl)",
         headline: "`air handover` from a worktree holding no claim (and naming no bead) no \
@@ -674,8 +689,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.6", 10, 29),
     // 2026-09-05: the gate accepts a bead carried by trailer; supersession has a path (air-60x).
     ("0.2.7", 11, 30),
-    // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
+    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
+    // (air-1bm), schema v16; bd not answering about acceptance refuses before the merge
+    // (air-bh4).
     ("0.2.8", 12, 31),
+    // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
+    ("0.2.9", 13, 32),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
