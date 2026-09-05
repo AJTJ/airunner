@@ -85,7 +85,11 @@ case "$1" in
        # printf, not echo: /bin/sh's echo expands the \n inside the JSON description.
        printf '%s\n' "[$out]"; exit 0;;
   ready) if [ -f "$d/bd.ready.json" ]; then cat "$d/bd.ready.json"; exit 0; fi; echo "[]"; exit 0;;
-  update) [ -e "$d/bd.fail" ] && exit 1; exit 0;;
+  update) [ -e "$d/bd.fail" ] && exit 1
+          # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
+          # issue `show` answers from, so a later claim by another actor sees what bd would.
+          case "$*" in *"-s open -a"*) printf '%s' "{\"id\":\"$2\",\"status\":\"open\",\"assignee\":\"\",\"labels\":[]}" > "$d/bd.issue.json";; esac
+          exit 0;;
   *) exit 0;;
 esac
 "#,
@@ -210,8 +214,9 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["release", "fd-1", "--reason", "abandoned"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    // air-0kk: one process, status and assignee together (the trailing `-a ""` logs as `-a`).
     assert!(
-        log.lines().any(|l| l.trim() == "update fd-1 -s open"),
+        log.lines().any(|l| l.trim() == "update fd-1 -s open -a"),
         "{log}"
     );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
@@ -280,6 +285,9 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
         !err.contains("refused"),
         "a timeout is not a refusal: {err}"
     );
+    // air-gsj: it was retried once, the message says so, and it says what to do.
+    assert!(err.contains("retried once"), "{err}");
+    assert!(err.contains("re-run `air claim fd-9`"), "{err}");
     // Nothing in the ledger: the row is written only after a confirmed result.
     assert!(claims(&repo).is_empty(), "{:?}", claims(&repo));
     // And the event line carries `timeout`, so `air audit` can count how often it fires.
@@ -289,6 +297,80 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
         .collect::<String>();
     assert!(events.contains(r#""decision":"timeout""#), "{events}");
     assert!(!events.contains(r#""decision":"bd-refused""#), "{events}");
+    // air-gsj: exactly one retry between the two timeouts, never a third attempt.
+    assert_eq!(
+        events.matches(r#""decision":"timeout-retry""#).count(),
+        1,
+        "{events}"
+    );
+}
+
+/// air-gsj: bd hangs on the FIRST `--claim` and answers the second. `air claim` retries once
+/// internally, the claim lands, and the worker never retried by hand — which is when
+/// adopter's w1 lost ad-tjwx to a peer. The retry is recorded as `timeout-retry` and the
+/// outcome as `claimed-retried`, so `air audit` counts how often bd's tail bites.
+#[test]
+fn a_bd_timeout_on_claim_is_retried_once_and_the_retry_lands() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    // The first `update` hangs past the timeout and writes nothing; every later call is the
+    // ordinary fake bd, whose `update` succeeds.
+    let flaky = repo.join("bd-hang-once");
+    std::fs::write(
+        &flaky,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in update) if [ ! -e {mark} ]; then : > {mark}; sleep 3; exit 0; fi; exec {bd} \"$@\";; *) exec {bd} \"$@\";; esac\n",
+            mark = repo.join("bd.hung-once").display(),
+            bd = bd.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&flaky, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _ = Command::new(&flaky)
+        .arg("show")
+        .arg("warm")
+        .output()
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["claim", "fd-9"])
+        .env("AIR_BD_BIN", &flaky)
+        .env("FAKE_BD_DIR", &repo)
+        .env("AIR_BD_TIMEOUT_MS", "1000")
+        .env("BEADS_ACTOR", "tester")
+        .env_remove("AIR_ROLE")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("the retry landed"), "{text}");
+    // The ledger row is keyed by the worktree (`main` in a scratch repo); `tester` is the
+    // bd actor.
+    assert_eq!(
+        claims(&repo),
+        vec![("fd-9".to_string(), "main".to_string(), None)]
+    );
+    let events = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(events.contains(r#""decision":"timeout-retry""#), "{events}");
+    assert!(
+        events.contains(r#""decision":"claimed-retried""#),
+        "{events}"
+    );
+    assert!(!events.contains(r#""decision":"timeout""#), "{events}");
 }
 
 /// air-y8m: bd's write lands but bd answers after Air's timeout. The claim is reconciled
@@ -1135,6 +1217,59 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as
+/// unjournaled dirt with the report's time; once removed it is no holding. A tool edit the
+/// PostToolUse hook journaled reads as an edit with its age, dirty or clean.
+#[test]
+fn holdings_tags_say_when_and_tell_dirt_from_an_edit() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+
+    // Build output: present, uncommitted, never edited by a tool.
+    std::fs::write(repo.join("generated.txt"), "artifact\n").unwrap();
+    let (code, out, err) = air(&repo, &bd, &["holdings"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("compared 1 worktrees at 20"), "{out}");
+    assert!(
+        out.contains("generated.txt: main[uncommitted now, no edit journaled]"),
+        "{out}"
+    );
+    std::fs::remove_file(repo.join("generated.txt")).unwrap();
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(!out.contains("generated.txt"), "cleaned: {out}");
+
+    // A real edit: the hook journals it, and the tag says so with its age.
+    std::fs::write(repo.join("src.rs"), "fn f() {}\n").unwrap();
+    let edited = repo.join("src.rs").to_string_lossy().to_string();
+    let (code, err) = air_hook(
+        &repo,
+        &bd,
+        serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+        "tool_input": {"file_path": edited}}),
+        false,
+    );
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(
+        out.contains("src.rs: main[uncommitted now, edited 0 min ago]"),
+        "{out}"
+    );
+    // Committed and clean: the edit is remembered with its age, and the tree says clean.
+    git(&repo, &["add", "src.rs"]);
+    git(&repo, &["commit", "-q", "-m", "src"]);
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(
+        out.contains("src.rs: main[journaled 0 min ago, clean now]"),
+        "{out}"
+    );
+    let (_, out, _) = air(&repo, &bd, &["--json", "holdings"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["at"].as_str().unwrap().starts_with("20"), "{out}");
+    assert_eq!(v["files"]["src.rs"][0]["journaled"], true, "{out}");
+    assert!(v["files"]["src.rs"][0]["last_edit"].is_string(), "{out}");
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
@@ -1358,6 +1493,55 @@ fn nothing_landable_names_every_branch_and_its_fix() {
         !v["skipped"][0]["fix"].as_str().unwrap().is_empty(),
         "{out}"
     );
+}
+
+/// air-0kk: worker A claims and releases; worker B claims. Before the fix B was refused by
+/// Air's own rule (a pencilled assignee blocks every other `--claim` in bd 1.2.x), because
+/// the release reopened the bead and left A pencilled in. adopter's ad-tdv8 and this repo's
+/// air-an9 both sat in `bd ready` in that state.
+#[test]
+fn a_released_bead_is_claimable_by_another_worker() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let as_actor = |actor: &str, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
+            .env("BEADS_ACTOR", actor)
+            .env_remove("AIR_ROLE")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (code, text) = as_actor("alpha", &["claim", "fd-1"]);
+    assert_eq!(code, 0, "{text}");
+    // bd holds it in_progress by alpha (the stub's `update --claim` writes no state).
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-1","status":"in_progress","assignee":"alpha","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, text) = as_actor("alpha", &["release", "fd-1", "--reason", "reassigned"]);
+    assert_eq!(code, 0, "{text}");
+    // The stub mirrored the one write a release makes: open, assignee cleared.
+    let issue = std::fs::read_to_string(repo.join("bd.issue.json")).unwrap();
+    assert!(issue.contains(r#""assignee":"""#), "{issue}");
+    // Another actor can claim it now. This was refused before air-0kk.
+    let (code, text) = as_actor("beta", &["claim", "fd-1"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!text.contains("pencilled assignee"), "{text}");
 }
 
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so

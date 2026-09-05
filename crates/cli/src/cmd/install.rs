@@ -626,6 +626,20 @@ pub const SURFACE: &[SurfaceChange] = &[
                  own 14.8-per-command figure was this artefact.",
     },
     SurfaceChange {
+        id: "holdings-tense",
+        since: "2026-09-05 (air-v7o)",
+        headline: "`air holdings` tags name their tense: `uncommitted now, edited 3 min ago`, \
+                   `uncommitted now, no edit journaled` (build or test output, with `verify in \
+                   flight` when one is running), `journaled 6 h ago, clean now`. The report \
+                   carries `at`, and `air status`'s `overlap:` lines print the same tags.",
+        silent_break: true,
+        action: "A script matching the old `[uncommitted]` / `[journaled]` tokens, or reading \
+                 `overlaps` from `air status --json` as bare worker names, sees the new \
+                 strings. `air holdings --json` gained `at`, `last_edit` and \
+                 `verify_in_flight`. Read the tense: `uncommitted now` is true of `at` only; \
+                 `journaled` is history with its age.",
+    },
+    SurfaceChange {
         id: "worktrees-are-airs",
         since: "2026-09-05 (air-fdz)",
         headline: "`air worker <name>` creates `.claude/worktrees/<name>` itself (branch \
@@ -731,8 +745,10 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: bd_calls per event, one show per reconcile, SubagentStop is not a Stop
     // (air-bp0).
     ("0.2.10", 14, 33),
-    // 2026-09-05: Air creates, fills and removes worker worktrees (air-fdz).
+    // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
     ("0.2.11", 15, 34),
+    // 2026-09-05: Air creates, fills and removes worker worktrees (air-fdz).
+    ("0.2.12", 16, 35),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from

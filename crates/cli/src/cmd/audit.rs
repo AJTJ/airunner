@@ -363,6 +363,8 @@ pub const BOOKKEEPING: &[&str] = &[
     "captured",
     "claimed",
     "claimed-late",
+    // The retry landed (air-gsj). The retry itself is `timeout-retry`, a mechanism firing.
+    "claimed-retried",
     "clear",
     "closed",
     "dropped",
