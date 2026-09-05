@@ -538,6 +538,21 @@ pub const SURFACE: &[SurfaceChange] = &[
                  labels the bead `owner` (with its recommendation in the description) when the \
                  decision is the owner's. `air://owner-queue` is gone from `air mcp`.",
     },
+    SurfaceChange {
+        id: "land-refuses-in-flight",
+        since: "2026-09-05 (air-1bm)",
+        headline: "`air land` REFUSES while any verify is in flight, naming each run and its \
+                   pid. It used to warn and land anyway. `--despite-inflight` lands regardless \
+                   and is recorded on the landings row (`despite_inflight`, schema v15) and the \
+                   event line.",
+        silent_break: false,
+        action: "A landing that used to print a warning and proceed now exits 2 with the runs \
+                 named. Wait (`air status` shows when they exit), stop one by pid (`kill \
+                 <pid>`, never `pkill -f`), or pass `--despite-inflight` knowing it destroys \
+                 those runs. adopter lost 1,199 s of finished verify to the warning on \
+                 2026-08-30 and an operational rule did not hold; the override count is what \
+                 decides whether the refusal stays.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -611,6 +626,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.3", 7, 26),
     // 2026-09-05: a signalled verify is no verdict (air-ppm).
     ("0.2.4", 8, 27),
+    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
+    // (air-1bm), schema v15.
+    ("0.2.5", 9, 28),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
