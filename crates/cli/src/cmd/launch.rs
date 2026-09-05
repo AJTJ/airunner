@@ -8,6 +8,18 @@
 //! Coordinator: `claude` in the main checkout with the Air channel attached so attention
 //! conditions are delivered into the session.
 //!
+//! A `--task` never rides in argv. It is written to `<main>/.air/tasks/<name>.md` and the
+//! prompt claude receives is a fixed sentence naming that path (air-er0: adopter's seven
+//! worker deaths of 2026-08-30 were `pkill -f "air record verify"` matching the task prompt in
+//! every peer's command line; `ps -o command=` showed the whole prompt). What still sits in
+//! argv is Air's own fixed text: the roles path, the deny patterns, and until air-9dg the
+//! `--settings` env blob. Decided and recorded rather than silently left: the deny patterns are
+//! chosen by Air, not arbitrary, and the one plausible collision is `pkill -f "git push"`. They
+//! move to a settings file the day `permissions.deny` in `--settings` is verified to hold in
+//! every permission mode (the reason `--disallowed-tools` was chosen), or the first time a
+//! worker dies to a pattern matching one of them, whichever comes first. The file indirection
+//! itself goes when claude can take its first prompt from a file or stdin under tmux.
+//!
 //! `--print` shows the exact command instead of running it. Flags verified against
 //! https://code.claude.com/docs/en/cli-reference (accessed 2026-08-20). The channel flag is
 //! `--dangerously-load-development-channels server:air` (a local server is not on the
@@ -80,6 +92,29 @@ pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Write the task to `<main>/.air/tasks/<name>.md` and return the path. Overwritten on every
+/// launch of the same name: a worker outlives its bead, and the file is the CURRENT task.
+fn task_file(repo: &Path, name: &str, task: &str) -> Result<std::path::PathBuf, String> {
+    let dir = air_ledger::paths::air_dir_for(repo)
+        .map_err(|e| e.to_string())?
+        .join("tasks");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(format!("{name}.md"));
+    let mut body = task.trim_end().to_string();
+    body.push('\n');
+    std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Pure: the prompt that stands in for the task in argv (air-er0). Fixed words plus a path,
+/// so nothing a person typed into `--task` is ever in a process's command line.
+pub fn task_prompt(path: &Path) -> String {
+    format!(
+        "Your task is in {}. Read that file and carry it out.",
+        path.display()
+    )
 }
 
 fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
@@ -302,12 +337,14 @@ fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
     }
 }
 
-/// Worker argv with an initial task as the prompt and, if `tmux`, `--tmux` (an attachable
-/// pane the owner can open; the coordinator may launch workers this way, owner ruling
-/// 2026-08-21). `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which
-/// workers always have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
+/// Worker argv with an initial prompt and, if `tmux`, `--tmux` (an attachable pane the
+/// owner can open; the coordinator may launch workers this way, owner ruling 2026-08-21).
+/// `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which workers always
+/// have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
 ///
-/// The task goes *first*. `--disallowed-tools` takes space-separated values (cli-reference,
+/// `prompt` is [`task_prompt`] (the sentence naming the task file), never the task itself.
+///
+/// The prompt goes *first*. `--disallowed-tools` takes space-separated values (cli-reference,
 /// https://code.claude.com/docs/en/cli-reference, accessed 2026-08-22: example
 /// `"Bash(git log *)" "Bash(git diff *)" "Edit"`), so a positional appended after the deny
 /// list is read as one more deny rule, not as the prompt (air-2ct: adopter 2026-08-22,
@@ -318,10 +355,10 @@ pub fn worker_argv_tmux(
     base: Vec<String>,
     tmux: bool,
     mode: Option<&str>,
-    task: Option<&str>,
+    prompt: Option<&str>,
 ) -> Vec<String> {
     let mut v = Vec::new();
-    if let Some(t) = task.filter(|t| !t.trim().is_empty()) {
+    if let Some(t) = prompt.filter(|t| !t.trim().is_empty()) {
         v.push(t.to_string());
     }
     v.extend(base);
@@ -407,15 +444,27 @@ pub fn worker(
     if !(tmux || task.is_some()) {
         return exec_claude(repo, &argv, print);
     }
+    // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Written under
+    // `--print` too, so the printed command is one that runs.
+    let prompt = match task.filter(|t| !t.trim().is_empty()) {
+        Some(t) => match task_file(repo, name, t) {
+            Ok(p) => Some(task_prompt(&p)),
+            Err(e) => {
+                eprintln!("air worker: {e}");
+                return 1;
+            }
+        },
+        None => None,
+    };
     match launch_mode(std::io::stdin().is_terminal(), true) {
         Launch::Exec => {
-            argv = worker_argv_tmux(argv, true, tmux_mode().as_deref(), task);
+            argv = worker_argv_tmux(argv, true, tmux_mode().as_deref(), prompt.as_deref());
             exec_claude(repo, &argv, print)
         }
         Launch::Detached => {
-            // tmux is ours here, so claude gets no `--tmux`; the task still goes first
+            // tmux is ours here, so claude gets no `--tmux`; the prompt still goes first
             // (air-2ct: after the deny list it reads as one more deny rule).
-            argv = worker_argv_tmux(argv, false, None, task);
+            argv = worker_argv_tmux(argv, false, None, prompt.as_deref());
             spawn_detached(repo, name, &argv, print)
         }
     }
@@ -494,6 +543,20 @@ mod tests {
         assert_eq!(tmux_flag(None), "--tmux");
         assert_eq!(tmux_flag(Some("")), "--tmux");
         assert_eq!(tmux_flag(Some("classic")), "--tmux=classic");
+    }
+
+    /// air-er0: the prompt names the file and carries none of the task.
+    #[test]
+    fn task_prompt_carries_the_path_and_none_of_the_task() {
+        let p = task_prompt(Path::new("/r/.air/tasks/w1.md"));
+        assert_eq!(
+            p,
+            "Your task is in /r/.air/tasks/w1.md. Read that file and carry it out."
+        );
+        assert!(task_is_prompt(
+            &worker_argv_tmux(vec![], false, None, Some(&p)),
+            &p
+        ));
     }
 
     /// `--print` pasted into `sh -c` must reproduce the exec argv for a task with a space,
