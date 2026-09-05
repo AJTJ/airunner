@@ -458,6 +458,18 @@ pub const SURFACE: &[SurfaceChange] = &[
                  'select * from messages'` reads it, `air doctor` counts it. Only the send side \
                  is a tool call, so a message from another fleet is in that fleet's ledger.",
     },
+    SurfaceChange {
+        id: "land-worker",
+        since: "2026-09-05 (air-09b)",
+        headline: "`air land --worker <name>` names the branch to land. `air land <bead>` is \
+                   refused when more than one branch carries the bead, naming each carrier; \
+                   `air status` and `air inbox --owner` now offer the `--worker` form.",
+        silent_break: false,
+        action: "Land by branch: `air land --worker <name>`, which merges that branch with \
+                 every bead its range names. Naming a bead still works while exactly one \
+                 branch carries it. A script that greps the offered command for `air land \
+                 <bead>` reads `air land --worker <name>` now.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -520,6 +532,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.1.0", 2, 21),
     // 2026-09-05: the `messages` table of air-srv; the ledger now holds message content.
     ("0.1.1", 3, 22),
+    // 2026-09-05: `air land --worker` names the branch (air-09b).
+    ("0.1.2", 4, 23),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from

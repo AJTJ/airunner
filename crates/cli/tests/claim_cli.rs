@@ -1035,7 +1035,7 @@ fn owner_queue_lists_green_landings_with_their_commands() {
         out.contains(head.get(..8).unwrap()) && out.contains("from alpha"),
         "{out}"
     );
-    assert!(out.contains("air land fd-1"), "{out}");
+    assert!(out.contains("air land --worker alpha"), "{out}");
 
     // And in JSON, next to the captures, so the channel reads one shape.
     let (_, out, _) = air(&repo, &bd, &["--json", "inbox", "--owner"]);
@@ -1566,8 +1566,8 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
 
     // Both offered with `air land` while both are actually landable.
     let (_c, out, err) = air(&main, &bd, &["inbox", "--owner"]);
-    assert!(out.contains("air land fd-1"), "{out}{err}");
-    assert!(out.contains("air land fd-2"), "{out}{err}");
+    assert!(out.contains("air land --worker alpha"), "{out}{err}");
+    assert!(out.contains("air land --worker beta"), "{out}{err}");
 
     // Land one. This moves main past beta's branch point.
     let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
@@ -1578,7 +1578,7 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     assert!(out.contains("fd-2"), "still shown: {out}{err}");
     // ...but never with the command that cannot work.
     assert!(
-        !out.contains("air land fd-2"),
+        !out.contains("air land --worker beta"),
         "must not offer a land it would refuse: {out}"
     );
     assert!(out.contains("git merge main"), "{out}");
@@ -1608,9 +1608,123 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
     assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
     let (_c, out, _e) = air(&main, &bd, &["inbox", "--owner"]);
-    assert!(out.contains("air land fd-2"), "{out}");
+    assert!(out.contains("air land --worker beta"), "{out}");
     let (code, out, err) = air(&main, &bd, &["land", "fd-2"]);
     assert_eq!(code, 0, "{out}{err}");
+}
+
+/// air-09b: adopter's two observed cases, end to end. A batching lane (beta) merges alpha's
+/// branch, so both ranges name fd-1. Naming the bead is refused with both carriers and the
+/// `--worker` command for each: never the oldest-waiting branch, which is what landed the
+/// wrong one on 2026-08-30. When alpha's green goes stale the bead is still refused, now with
+/// beta's command and alpha's fix, rather than either refused outright or silently landing
+/// beta. `--worker beta` lands beta with every bead its range names, recorded as such.
+#[test]
+fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let root = main.parent().unwrap().to_path_buf();
+    let beta = root.join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let bd = fake_bd(&main);
+
+    // alpha does fd-1 and hands it on (the claim is released, as close-with-proof does).
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    std::fs::write(alpha.join("a.txt"), "work\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(&alpha, &["commit", "-q", "-m", "feat: a\n\nBead: fd-1\n"]);
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    assert_eq!(
+        air(&alpha, &bd, &["release", "fd-1", "--reason", "landed"]).0,
+        0
+    );
+    // beta is the batching lane: it takes alpha's branch and adds fd-2 on top.
+    std::fs::write(main.join("bd.in_progress"), "fd-1\nfd-2\n").unwrap();
+    assert_eq!(air(&beta, &bd, &["claim", "fd-1"]).0, 0);
+    assert_eq!(air(&beta, &bd, &["claim", "fd-2"]).0, 0);
+    git(
+        &beta,
+        &["merge", "-q", "worktree-alpha", "-m", "batch alpha"],
+    );
+    std::fs::write(beta.join("b.txt"), "work\n").unwrap();
+    git(&beta, &["add", "b.txt"]);
+    git(&beta, &["commit", "-q", "-m", "feat: b\n\nBead: fd-2\n"]);
+    git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    let before = git(&main, &["rev-parse", "HEAD"]);
+
+    // Case 1: both landable. The bead is refused, both carriers named, main untouched.
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(
+        out.contains("air land --worker alpha") && out.contains("air land --worker beta"),
+        "{out}{err}"
+    );
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "nothing landed");
+    // The surfaces offer the branch form, one line per (branch, bead).
+    let (_c, st, _e) = air(&main, &bd, &["inbox", "--owner"]);
+    assert!(
+        st.contains("air land --worker alpha") && st.contains("air land --worker beta"),
+        "{st}"
+    );
+
+    // Case 2: main moves (a docs commit) and only beta re-merges. alpha is still green at its
+    // head but behind main: blocked, with a fix. The bead is still refused, still both named:
+    // beta with its command, alpha with its fix. Not refused outright, not landed by state.
+    // (A branch whose green is merely stale is SKIPPED before its beads are read, so Air
+    // cannot see it as a carrier at all; this is the blocked case adopter observed.)
+    std::fs::write(main.join("README"), "b\n").unwrap();
+    git(&main, &["commit", "-q", "-am", "docs: readme"]);
+    let before = git(&main, &["rev-parse", "HEAD"]);
+    git(&beta, &["merge", "-q", "main", "-m", "merge main"]);
+    assert_eq!(air(&beta, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("air land --worker beta"), "{out}{err}");
+    assert!(
+        out.contains("alpha") && out.contains("does not contain main"),
+        "alpha's own reason and fix: {out}"
+    );
+    assert!(!out.contains("air land --worker alpha"), "{out}");
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]), before, "nothing landed");
+
+    // The selector: beta lands, carrying both beads, and the row records both.
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "beta"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("landed beta") && out.contains("fd-1") && out.contains("fd-2"),
+        "{out}{err}"
+    );
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let beads: String = conn
+        .query_row("SELECT beads FROM landings", [], |r| r.get(0))
+        .unwrap();
+    assert!(beads.contains("fd-1") && beads.contains("fd-2"), "{beads}");
+    // Everything alpha had went in with beta, so no listed branch carries fd-1 now: the
+    // missing-bead refusal, unchanged. (A bead on ONE blocked branch is the refusal
+    // `after_a_land_the_other_branch_reads_as_needing_a_remerge` drives.)
+    let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("no green branch names fd-1"), "{out}{err}");
+    // `--worker` on a branch the selection does not list is a refusal that names the branch,
+    // never a silent no-op: alpha is already in main, and there is no `nobody`.
+    for w in ["alpha", "nobody"] {
+        let (code, out, err) = air(&main, &bd, &["land", "--worker", w]);
+        assert_eq!(code, 2, "{out}{err}");
+        assert!(out.contains(&format!("worktree-{w}")), "{out}{err}");
+    }
 }
 
 /// air-ob0, narrowed by air-odv: a rewound merge that a worktree still carries is still named.
