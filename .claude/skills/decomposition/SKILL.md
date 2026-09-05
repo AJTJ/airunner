@@ -136,7 +136,7 @@ Before filing, every answer is yes:
   same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
   closes."
 - **Citations** (`file:line`) open and match now.
-- Description and acceptance agree; a contradiction goes to the owner queue (`air capture --for owner`), not a guess.
+- Description and acceptance agree; a contradiction goes to the coordinator (`air capture`), who files it as a bead labelled `owner` when the decision is the owner's; never a guess.
 - `owner` / `human` / `runtime` labels applied at filing; they are withheld from `next`.
 
 #### The two questions, asked of the TEMPLATE before it is applied
