@@ -29,8 +29,13 @@ pub struct GateFacts {
     /// When main is not an ancestor: the landing that moved it past this branch, if the
     /// ledger has one (air-4up). The external cause the refusal names.
     pub main_moved: Option<MainMove>,
-    /// The bead being handed over is claimed by this worker in the ledger.
-    pub bead_claimed_by_worker: bool,
+    /// The named bead is this worker's to hand over: it holds an open claim on it, OR a
+    /// commit in `main..HEAD` declares it in a `Bead:` trailer (air-60x). The trailer is the
+    /// same fact `air land` reads to decide which beads a branch carries, so the two agree on
+    /// what makes a branch handable; before this the gate consulted claims alone, and Air
+    /// would LAND a branch it refused to let its author HAND OVER. A branch that supersedes
+    /// another worker's closed bead carries it by trailer and can hold no claim on it.
+    pub bead_claimed_or_carried: bool,
     /// The bead NAMED to the gate: `--bead` on the CLI, or the id in the `bd` command on the
     /// hook path. `None` when nothing was named.
     pub bead: Option<String>,
@@ -39,6 +44,9 @@ pub struct GateFacts {
     /// named: the id was already computed for the digest lookup and then thrown away, so
     /// the fixing command printed a literal placeholder a worker could not run.
     pub held_beads: Vec<String>,
+    /// Every bead a commit in `main..HEAD` declares in a `Bead:` trailer (air-60x): the work
+    /// this branch carries, whoever claimed it. What `air land` will attribute the landing to.
+    pub carried_beads: Vec<String>,
     /// (green, red) runs recorded at HEAD; disagreement is reported as flakiness.
     pub runs_at_head: (i64, i64),
     /// Digest check (owner ruling D, 2026-08-21): `None` when the repo configures no digest
@@ -153,22 +161,39 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         });
     }
     // air-xbl: the ids a refusal names. The named bead first; else every bead the worker
-    // holds. Never a placeholder: the printed fix is the one line in the flow a worker
-    // copies verbatim, and adopter's w3 was handed `air claim <bead>` while holding one.
+    // holds or carries. Never a placeholder: the printed fix is the one line in the flow a
+    // worker copies verbatim, and adopter's w3 was handed `air claim <bead>` while holding
+    // one.
     let beads = beads_to_name(f);
-    if !f.bead_claimed_by_worker {
+    if !f.bead_claimed_or_carried {
+        // air-60x: the fix is the trailer, never `air claim <id>`. A claim reserves OPEN work
+        // and is the roles flow's business; the bead named here may be closed and another
+        // worker's (supersession), and claiming a closed bead is not a fix. the adopter was
+        // right to refuse to test that command rather than let the gap read as cleared.
         let (detail, fix) = match beads.as_slice() {
             [bead] => (
-                format!("{bead} is not claimed by {}", f.worker),
-                format!("air claim {bead}"),
+                format!(
+                    "{bead} is neither claimed by {} nor named by a `Bead:` trailer in main..HEAD",
+                    f.worker
+                ),
+                format!(
+                    "commit its work with a `Bead: {bead}` trailer (git commit --amend); that is what `air land` reads too"
+                ),
             ),
             [] => (
-                format!("no bead is claimed by {}", f.worker),
-                "air claim the bead you are handing over".to_string(),
+                format!("no bead is claimed by or carried on {}'s branch", f.worker),
+                "commit the work with a `Bead: <id>` trailer naming the bead it does".to_string(),
             ),
             many => (
-                format!("none of {} is claimed by {}", many.join(", "), f.worker),
-                format!("air claim {}", many.join(" ")),
+                format!(
+                    "none of {} is claimed by {} or named by a `Bead:` trailer in main..HEAD",
+                    many.join(", "),
+                    f.worker
+                ),
+                format!(
+                    "commit the work with a `Bead:` trailer naming it, one of {}",
+                    many.join(", ")
+                ),
             ),
         };
         missing.push(Missing {
@@ -268,11 +293,19 @@ fn short(sha: &str) -> &str {
 }
 
 /// The ids a refusal may name: the bead named to the gate, else every bead the worker holds
-/// (air-xbl). Empty only when neither exists.
+/// or its branch carries (air-xbl, air-60x). Empty only when none exists.
 fn beads_to_name(f: &GateFacts) -> Vec<String> {
     match &f.bead {
         Some(b) => vec![b.clone()],
-        None => f.held_beads.clone(),
+        None => {
+            let mut v = f.held_beads.clone();
+            for c in &f.carried_beads {
+                if !v.contains(c) {
+                    v.push(c.clone());
+                }
+            }
+            v
+        }
     }
 }
 
@@ -311,14 +344,31 @@ mod tests {
             main_is_ancestor: true,
             main_sha: "0a1b2c3d4e5f".into(),
             main_moved: None,
-            bead_claimed_by_worker: true,
+            bead_claimed_or_carried: true,
             runs_at_head: (1, 0),
             digest_present: None,
             digest_dir: None,
             bead: Some("ad-o5fi".into()),
             held_beads: vec!["ad-o5fi".into()],
+            carried_beads: vec![],
             advisory: false,
         }
+    }
+
+    /// air-60x: the claim refusal never offers `air claim <id>`. The bead may be closed and
+    /// another worker's; the fix is the trailer `air land` reads.
+    #[test]
+    fn the_claim_refusal_offers_the_trailer_never_a_claim() {
+        let mut f = facts();
+        f.bead = Some("ad-closed".into());
+        f.held_beads = vec![];
+        f.bead_claimed_or_carried = false;
+        let v = handover_verdict(&f);
+        let m = &v.missing[0];
+        assert_eq!(m.check, "claim");
+        assert!(m.detail.contains("ad-closed"), "{}", m.detail);
+        assert!(m.fix.contains("Bead: ad-closed"), "{}", m.fix);
+        assert!(!v.message.contains("air claim"), "{}", v.message);
     }
 
     /// air-xbl: adopter's w3 held exactly one claim, had not written its digest, and was
@@ -350,7 +400,7 @@ mod tests {
 
         // None held and none named: still no placeholder posing as a command.
         f.held_beads = vec![];
-        f.bead_claimed_by_worker = false;
+        f.bead_claimed_or_carried = false;
         let v = handover_verdict(&f);
         assert!(!v.message.contains("<bead>"), "{}", v.message);
         assert!(v.message.contains("holds no claim"), "{}", v.message);
@@ -363,9 +413,13 @@ mod tests {
         let mut f = facts();
         f.bead = Some("ad-named".into());
         f.held_beads = vec!["ad-other".into()];
-        f.bead_claimed_by_worker = false;
+        f.bead_claimed_or_carried = false;
         let v = handover_verdict(&f);
-        assert_eq!(v.missing[0].fix, "air claim ad-named");
+        assert!(
+            v.missing[0].fix.contains("Bead: ad-named"),
+            "{}",
+            v.missing[0].fix
+        );
         assert!(!v.message.contains("ad-other"), "{}", v.message);
     }
 
@@ -526,7 +580,7 @@ mod tests {
         let mut f = facts();
         f.green_at_head = green;
         f.main_is_ancestor = main;
-        f.bead_claimed_by_worker = claimed;
+        f.bead_claimed_or_carried = claimed;
         assert_eq!(handover_verdict(&f).missing.len(), n);
     }
 }
