@@ -136,6 +136,10 @@ pub struct Snapshot {
     /// worker over work that did not exist for it — at round end on 2026-08-29 the one ready
     /// bead was `air-4t1`, labelled `owner`, which gate had already declined.
     pub claimable_depth: Option<usize>,
+    /// Of `ready_depth`, the epics (air-f10): containers bd lists as ready that no worker may
+    /// claim and the coordinator has to decompose. Shown, not dropped, so the coordinator
+    /// does not have to ask bd for the number the line used to hide inside "claimable".
+    pub epic_depth: Option<usize>,
     /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
@@ -1284,14 +1288,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-uir: both counts come off the SAME `bd ready` answer and the same `claimable`
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
+    let mut epic_depth: Option<usize> = None;
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
             back_in_queue.extend(v.iter().map(|i| i.id.clone()));
-            let ids = super::ready_cache::claimable(&v);
+            // air-f10: one partition of one answer; the counts are its lengths.
+            let split = super::ready_cache::split(&v);
+            let ids = split.claimable;
             claimable_depth = Some(ids.len());
+            epic_depth = Some(split.epics.len());
             let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
+            let _ = ledger.bd_cache_put("epic_depth", &split.epics.len().to_string(), &at);
             super::ready_cache::write(repo, &ids, &super::now());
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
             Some(v.len())
@@ -1301,6 +1310,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             // against yesterday's count.
             claimable_depth = ledger
                 .bd_cache_get("claimable_depth")
+                .ok()
+                .flatten()
+                .and_then(|(v, _)| v.parse().ok());
+            epic_depth = ledger
+                .bd_cache_get("epic_depth")
                 .ok()
                 .flatten()
                 .and_then(|(v, _)| v.parse().ok());
@@ -1376,6 +1390,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         sessions: all_sessions,
         ready_depth,
         claimable_depth,
+        epic_depth,
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
@@ -1635,11 +1650,24 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         match (s.ready_depth, s.claimable_depth) {
             // air-uef: the owner-labelled count IS the owner's queue, the one number that
             // says what waits on the owner, printed where the coordinator already looks.
-            (Some(r), Some(c)) if r != c => format!(
-                " ({c} claimable; {} owner-labelled: the owner's queue, which `air claim` \
-                 refuses to workers)",
-                r.saturating_sub(c)
-            ),
+            // air-f10: epics are named apart, never folded into "claimable": "2 claimable"
+            // read as two workers' worth of work when the true count was zero and both were
+            // containers. The split keeps them visible for the coordinator to decompose.
+            (Some(r), Some(c)) if r != c => {
+                let epics = s.epic_depth.unwrap_or(0);
+                let owner = r.saturating_sub(c).saturating_sub(epics);
+                let mut parts = vec![format!("{c} claimable")];
+                if epics > 0 {
+                    parts.push(format!("{epics} epic(s) to decompose, not claimable"));
+                }
+                if owner > 0 {
+                    parts.push(format!(
+                        "{owner} owner-labelled: the owner's queue, which `air claim` \
+                         refuses to workers"
+                    ));
+                }
+                format!(" ({})", parts.join("; "))
+            }
             _ => String::new(),
         },
         // Which source, always: "0 ready" from a cache and "0 ready" from bd are different
