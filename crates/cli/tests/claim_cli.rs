@@ -958,10 +958,9 @@ fn handover_names_the_held_bead_and_skips_the_digest_with_no_claim() {
     assert!(st.contains("claims: ad-251z"), "{st}");
     let (code, o, _) = air(&repo, &bd, &["--json", "handover"]);
     let m = missing(&o);
-    let d = m
-        .iter()
-        .find(|m| m["check"] == "digest-present")
-        .unwrap_or_else(|| panic!("{o}"));
+    let d = m.iter().find(|m| m["check"] == "digest-present");
+    assert!(d.is_some(), "{o}");
+    let d = d.unwrap();
     assert!(
         d["detail"].as_str().unwrap().contains("bead: ad-251z"),
         "{o}"
@@ -1684,6 +1683,17 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     // Land one. This moves main past beta's branch point.
     let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
     assert_eq!(code, 0, "{out}{err}");
+
+    // air-4up: beta's own gate names the external cause — the landing that moved main, from
+    // whom, and where main is now — instead of describing beta's tree. Same fix.
+    let landed = git(&main, &["rev-parse", "HEAD"]);
+    let (_c, out, err) = air(&beta, &bd, &["handover"]);
+    assert!(
+        out.contains(&landed[..7]) && out.contains("(landing from alpha)"),
+        "{out}{err}"
+    );
+    assert!(out.contains("main is not an ancestor of HEAD"), "{out}");
+    assert!(out.contains("git merge main && air record verify"), "{out}");
 
     // The incident: beta is still shown, because work IS waiting...
     let (_c, out, err) = air(&main, &bd, &["--json", "status"]);

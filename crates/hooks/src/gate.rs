@@ -24,6 +24,11 @@ pub struct GateFacts {
     pub last_green_sha: Option<String>,
     /// `git merge-base --is-ancestor main HEAD`.
     pub main_is_ancestor: bool,
+    /// `git rev-parse main` at the moment the facts were read (air-5wq). Empty when unknown.
+    pub main_sha: String,
+    /// When main is not an ancestor: the landing that moved it past this branch, if the
+    /// ledger has one (air-4up). The external cause the refusal names.
+    pub main_moved: Option<MainMove>,
     /// The bead being handed over is claimed by this worker in the ledger.
     pub bead_claimed_by_worker: bool,
     /// The bead NAMED to the gate: `--bead` on the CLI, or the id in the `bd` command on the
@@ -45,6 +50,21 @@ pub struct GateFacts {
     pub digest_dir: Option<String>,
     /// Advisory mode: report what would be refused but allow (first round; decisions.md).
     pub advisory: bool,
+}
+
+/// A landing that moved main (air-4up). adopter ad-cqcr, 2026-08-30: eight refusals in one
+/// round, all four workers, every one caused by a coordinator landing, and the wording
+/// described the worker's tree. Two workers read it as their own defect and merged again
+/// without asking why. The instruction was right and the diagnosis was misleading.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct MainMove {
+    pub merge_commit: String,
+    /// The worker whose branch landed.
+    pub worker: String,
+    pub at: String,
+    /// Seconds between the landing and the facts being read; None when either clock is
+    /// unreadable.
+    pub ago_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -103,9 +123,32 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         });
     }
     if !f.main_is_ancestor {
+        // air-4up: the cause is outside the worker's tree, so say so. "main is not an
+        // ancestor of HEAD" stays in every form: adopter counts refusals by that phrase.
+        // The fix is unchanged; this is wording, not behaviour.
+        let at_main = if f.main_sha.is_empty() {
+            String::new()
+        } else {
+            format!("; main is at {}", short(&f.main_sha))
+        };
+        let detail = if let Some(m) = f.main_moved.as_ref() {
+            format!(
+                "main is not an ancestor of HEAD {}: your branch is behind main, which moved \
+                 {} to {} (landing from {}){at_main}",
+                short(&f.head),
+                ago(m.ago_secs),
+                short(&m.merge_commit),
+                m.worker
+            )
+        } else {
+            format!(
+                "main is not an ancestor of HEAD {}{at_main}",
+                short(&f.head)
+            )
+        };
         missing.push(Missing {
             check: "main-merged",
-            detail: "main is not an ancestor of HEAD".to_string(),
+            detail,
             fix: "git merge main && air record verify -- make verify".to_string(),
         });
     }
@@ -216,6 +259,15 @@ fn beads_to_name(f: &GateFacts) -> Vec<String> {
     }
 }
 
+/// "40s ago", "12 min ago", or "at an unknown time".
+fn ago(secs: Option<i64>) -> String {
+    match secs {
+        Some(s) if s < 120 => format!("{s}s ago"),
+        Some(s) => format!("{} min ago", s / 60),
+        None => "at an unknown time".to_string(),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -231,6 +283,8 @@ mod tests {
             tree_green: None,
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
+            main_sha: "0a1b2c3d4e5f".into(),
+            main_moved: None,
             bead_claimed_by_worker: true,
             runs_at_head: (1, 0),
             digest_present: None,
@@ -320,6 +374,46 @@ mod tests {
             v.missing[0].detail
         );
         assert_eq!(v.missing[0].fix, "air record verify -- make verify");
+    }
+
+    /// air-4up: a refusal caused by a landing names the landing, when, and from whom, keeps
+    /// the phrase adopter counts by, and keeps the fix. Without a landing to name it still
+    /// refuses and names main.
+    #[test]
+    fn a_refusal_after_a_landing_names_the_landing_that_moved_main() {
+        let mut f = facts();
+        f.main_is_ancestor = false;
+        f.main_moved = Some(MainMove {
+            merge_commit: "abcdef0123456".into(),
+            worker: "lane".into(),
+            at: "t".into(),
+            ago_secs: Some(40),
+        });
+        let v = handover_verdict(&f);
+        assert!(v.block);
+        let m = &v.missing[0];
+        assert_eq!(m.check, "main-merged");
+        assert!(
+            m.detail.contains("main is not an ancestor of HEAD"),
+            "{}",
+            m.detail
+        );
+        assert!(
+            m.detail
+                .contains("moved 40s ago to abcdef0 (landing from lane)"),
+            "{}",
+            m.detail
+        );
+        assert!(m.detail.contains("main is at 0a1b2c3"), "{}", m.detail);
+        assert_eq!(m.fix, "git merge main && air record verify -- make verify");
+
+        f.main_moved = None;
+        let v = handover_verdict(&f);
+        assert!(v.block);
+        assert!(!v.message.contains("landing"), "{}", v.message);
+        assert!(v.message.contains("main is at 0a1b2c3"), "{}", v.message);
+        assert_eq!(ago(Some(900)), "15 min ago");
+        assert_eq!(ago(None), "at an unknown time");
     }
 
     #[test]

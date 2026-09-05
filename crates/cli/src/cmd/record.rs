@@ -110,7 +110,13 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         eprintln!("air record: could not write ledger: {e}");
         return 1;
     }
-    let decision = if run.is_green() { "green" } else { "red" };
+    // air-ppm: a kill is not a verdict. The exit is still recorded and still mirrored below;
+    // only what it is CALLED changes, and the ledger's green/red/flaky queries skip it.
+    let decision = match run.verdict() {
+        air_ledger::verify::Verdict::Green => "green",
+        air_ledger::verify::Verdict::Red => "red",
+        air_ledger::verify::Verdict::Killed => "killed",
+    };
     let mut flags: Vec<&str> = Vec::new();
     if run.is_green() && (duration_ms < SUSPICIOUS_MS || output_bytes == 0) {
         flags.push("suspicious");
@@ -156,8 +162,13 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         "1 run",
     );
     emit(json, &run, || {
+        let note = if run.is_killed() {
+            " (signalled before it could decide: no verdict recorded for this sha)"
+        } else {
+            ""
+        };
         format!(
-            "recorded {} {} for {} at {}: exit {}",
+            "recorded {} {} for {} at {}: exit {}{note}",
             decision,
             kind.as_str(),
             worker,
@@ -205,5 +216,25 @@ pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32
     let out_bytes = out.and_then(|h| h.join().ok()).unwrap_or(0);
     let err_bytes = err.and_then(|h| h.join().ok()).unwrap_or(0);
     let bytes = out_bytes.saturating_add(err_bytes);
-    Ok((status.code().unwrap_or(-1), bytes))
+    Ok((exit_of(&status), bytes))
+}
+
+/// The child's exit as a shell would report it: its code, or 128 + the signal that killed it
+/// (air-ppm). A signalled child used to become -1, which `is_green` read as red; 128 + signal
+/// is the same number `make` and every shell produce for that death, so SIGTERM and SIGKILL
+/// land on [`air_ledger::verify::KILLED_EXITS`] whether the kill reached the child through
+/// `make` or directly.
+#[cfg(unix)]
+pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    match (status.code(), status.signal()) {
+        (Some(c), _) => c,
+        (None, Some(sig)) => 128i32.saturating_add(sig),
+        (None, None) => -1,
+    }
+}
+
+#[cfg(not(unix))]
+pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
 }
