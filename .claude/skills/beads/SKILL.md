@@ -268,18 +268,18 @@ measured on a live fleet.
 
 ## Provenance
 
-- Sources: `~/projects/beads/internal/templates/skills/beads/SKILL.md` (structure,
+- Sources: `beads/internal/templates/skills/beads/SKILL.md` (structure,
   first step, core workflow, what belongs in beads, rules; beads `d1e725d`);
-  `~/projects/another-project/.claude/skills/beads/SKILL.md`
+  `another-project/.claude/skills/beads/SKILL.md`
   (shell-quoting rules, task sizing, statuses, closing, dependency guidance;
   another-project) with the env-clearing recipe from
-  `~/projects/another-project/justfile:14` and
-  `~/projects/another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
+  `another-project/justfile:14` and
+  `another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
   adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (adopter `f2ca891`, not copied
   into this repo) for the Known traps section; version-trap facts from
   `docs/research/beads-and-gastown.md §0, §1.7, §1.8`. Read for context, not copied:
-  `~/projects/beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
-  `~/projects/beads/docs/integrations/claude-code.md`.
+  `beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
+  `beads/docs/integrations/claude-code.md`.
 - Ported 2026-08-18.
 - Adaptations: Asana section and `just bd` / `just beads-*` wrappers removed (Air is the
   wrapper); env clearing shown as a raw `env -u` recipe; Dolt/molecule/formula/swarm/gate

@@ -44,6 +44,17 @@ pub const WORKER_DENY: &[&str] = &[
     "Bash(air coordinator *)",
     "EnterWorktree",
     "ExitWorktree",
+    // Owner, 2026-08-30 (air-bm3): a worker reaches the owner through `air capture`, which
+    // the coordinator files as a bead labelled `owner`; that queue is visible in `air status`
+    // and leaves a row. `AskUserQuestion` is a second path to the same authority, obtained at
+    // will, outside the queue, with no trace of the question, the answer, or that a decision
+    // was made — the provenance gap of 2026-08-29/30 (capture 01M181J9ZNH46M66ZCEJ26ABEV:
+    // an instruction typed into a pane had to be confirmed by grepping a transcript). The
+    // PreToolUse matcher carries `AskUserQuestion` from the same change, so an attempt is an
+    // event line and the deny is countable. Remove when a round's PreToolUse events show zero
+    // `AskUserQuestion` attempts by worker sessions WITH the matcher carrying it: a zero
+    // before the matcher did was case 3b (the input never arrived) and settled nothing.
+    "AskUserQuestion",
 ];
 
 /// Deny rules for the coordinator: it steers and writes on main, but nothing it does reaches
