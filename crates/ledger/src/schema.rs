@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 13;
+pub const CURRENT_VERSION: i64 = 14;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -213,14 +213,35 @@ const V12: &str = r#"
 ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';
 "#;
 
-/// v13 (2026-09-05, air-7wf): the tree a verify run verified, beside the commit. `air land`
+/// v13 (2026-09-05, air-srv): every `SendMessage`, content included. Owner ruling: "Let's record
+/// every message in a database then, if it is just a hook on SendMessage, then it's easy."
+/// Agents solve problems together over `SendMessage` and none of it reached the ledger unless
+/// someone captured it by hand. This reverses half of air-q07: the event line still carries
+/// recipient and byte count and never the text; the text lives here. `summary` is not stored:
+/// it is model text about the message, not the message. Only the send side is a tool call, so
+/// within one project this table is the whole conversation.
+const V13: &str = r#"
+CREATE TABLE IF NOT EXISTS messages (
+    at           TEXT NOT NULL,
+    session_id   TEXT NOT NULL,
+    from_worker  TEXT NOT NULL,
+    from_role    TEXT NOT NULL,
+    project      TEXT NOT NULL,
+    "to"         TEXT NOT NULL,
+    bytes        INTEGER NOT NULL,
+    content      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_at ON messages(at);
+"#;
+
+/// v14 (2026-09-05, air-7wf): the tree a verify run verified, beside the commit. `air land`
 /// builds the landing commit from the branch's tree (air-odv), so every landing is a NEW sha
 /// over a tree that already carries a green, and main read "not green" after all three
 /// landings on 2026-08-30. Recorded at write time rather than resolved at read time: it is a
 /// fact about the run, it survives the commit becoming unreachable, and it keeps a git
 /// shell-out off the gate's hot path. NULL on rows written before this version, which reads as
 /// "tree unknown" and never matches.
-const V13: &str = r#"
+const V14: &str = r#"
 ALTER TABLE verify_runs ADD COLUMN tree TEXT;
 CREATE INDEX IF NOT EXISTS verify_runs_tree ON verify_runs(tree, kind);
 "#;
@@ -280,6 +301,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V13)?;
         conn.pragma_update(None, "user_version", 13)?;
     }
+    if version < 14 {
+        conn.execute_batch(V14)?;
+        conn.pragma_update(None, "user_version", 14)?;
+    }
     Ok(())
 }
 
@@ -300,12 +325,12 @@ mod tests {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants','verify_inflight')",
+                 ('verify_runs','edit_journal','claims','sessions','landings','captures','leases','lease_wants','verify_inflight','messages')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 9);
+        assert_eq!(n, 10);
     }
 
     /// air-air: v12 adds `sessions.model` by ALTER, so the case that matters is an EXISTING
@@ -344,19 +369,20 @@ mod tests {
         assert_eq!(v, CURRENT_VERSION);
     }
 
-    /// air-7wf: v13 adds `verify_runs.tree` by ALTER. A run recorded before it has no tree, and
+    /// air-7wf: v14 adds `verify_runs.tree` by ALTER. A run recorded before it has no tree, and
     /// a tree lookup must not match it: NULL is "unknown", never "any".
     #[test]
-    fn v13_adds_a_tree_column_that_old_rows_leave_null() {
+    fn v14_adds_a_tree_column_that_old_rows_leave_null() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V13).unwrap();
         conn.execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
              finished_at) VALUES ('r1','w','aaa','verify',0,'record','t','t')",
             [],
         )
         .unwrap();
-        conn.pragma_update(None, "user_version", 12).unwrap();
+        conn.pragma_update(None, "user_version", 13).unwrap();
 
         migrate(&conn).unwrap();
 
