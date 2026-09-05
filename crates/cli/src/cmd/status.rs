@@ -1022,7 +1022,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
 /// Whether this gather may shell out to bd (air-cmn).
 ///
 /// The channel poll ran a full `gather` every ~8 s, and every one of them called bd:
-/// `in_progress`, then `show` once per open claim, then `awaiting_review`, then `ready`. That
+/// `in_progress`, then `show` once per open claim (one `show` for all of them since
+/// air-bp0), then `awaiting_review`, then `ready`. That
 /// came to about 5,700 bd calls and 2.3 hours a day waiting on bd, around the clock, to deliver
 /// roughly 45 pushes (0007 §3). Only `idle-without-claim` needs any of it, for `ready_depth`.
 ///
@@ -1197,14 +1198,35 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     )
     .map(|v| v.into_iter().map(|i| i.id).collect());
     let mut reconciled = 0usize;
-    for c in ledger.open_claims().map_err(|e| e.to_string())? {
+    let open_claims = ledger.open_claims().map_err(|e| e.to_string())?;
+    // Every claim bd no longer holds in_progress, looked up in ONE `bd show a b c` rather
+    // than one process per bead (air-bp0): the cost is per process, ~2 s to open the store,
+    // and the query is close to free, so K claims cost K × 2 s before and 2 s now. bd omits
+    // an id it does not know and exits 0, so an id missing from the answer reads as
+    // "unknown", exactly what a single `show` answered with `None`.
+    let missing: Vec<String> = match &in_progress {
+        Some(ip) => open_claims
+            .iter()
+            .filter(|c| !ip.contains(&c.bead))
+            .map(|c| c.bead.clone())
+            .collect(),
+        None => Vec::new(),
+    };
+    let shown: Option<Vec<air_bd::Issue>> = if missing.is_empty() {
+        None
+    } else {
+        bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
+            air_bd::WorkLedger::show_all(b, &missing)
+        })
+    };
+    for c in open_claims {
         let mut handed_over = false;
         if let Some(ip) = &in_progress
             && !ip.contains(&c.bead)
         {
-            let status = bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
-                air_bd::WorkLedger::show(b, &c.bead)
-            });
+            let status: Option<Option<air_bd::Issue>> = shown
+                .as_ref()
+                .map(|v| v.iter().find(|i| i.id == c.bead).cloned());
             // air-3eu: `awaiting_review` is not the end of a claim. A handed-over bead is
             // still the worker's until it lands, and the row carries the declared files the
             // coordinator needs for overlap. Releasing it left a worker "not claimed" while
