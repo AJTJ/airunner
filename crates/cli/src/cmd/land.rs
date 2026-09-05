@@ -23,7 +23,7 @@
 //! ~1.4 s whatever it is asked (air-869, `air_bd::stats`). That is `air close`'s job and this
 //! calls into it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use air_ledger::landings::Landing as LandingRow;
@@ -290,7 +290,151 @@ enum Outcome {
     Refused(String),
 }
 
-pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
+/// One line saying why a listed branch is blocked, and the fix, for a refusal that names it.
+fn blocked_line(l: &super::status::Landing) -> String {
+    format!(
+        "\n  {} [{}]: {}\n    fix: {}",
+        l.worker,
+        l.bead,
+        l.blocked.as_deref().unwrap_or(""),
+        l.command
+    )
+}
+
+/// What `air land <bead>…` or `air land --worker <name>…` selects, out of the same list
+/// `air status` shows. Pure over the selection, so both of adopter's observed cases are
+/// probed without a repo (air-09b).
+///
+/// A branch is the unit `air land` merges (one merge per branch, however many beads it
+/// carries), and `--worker` names that unit directly. A bead is a handle on a branch only
+/// while exactly one branch carries it. adopter, 2026-08-30, twice in one round: a bead
+/// carried by a batching lane AND by the worker whose commits it batched. Named, the bead
+/// landed the oldest-waiting branch — the worker's — main moved, the lane was refused for
+/// main-moved, and four beads did not land. Then, with the worker's branch blocked, naming the
+/// bead was refused outright instead of reaching the lane that could land.
+///
+/// So a bead on more than one branch is refused, and every carrier is named with the command
+/// that lands it or the fix that unblocks it. Not resolved by ordering, and not by state
+/// either: landing "whichever one is landable" is the same silent pick as landing the oldest,
+/// and the branch the coordinator meant may be the blocked one. A bead on ONE blocked branch
+/// is refused with that branch's reason, exactly as before.
+pub fn resolve(
+    beads: &[String],
+    workers: &[String],
+    ready: &[super::status::Landing],
+    blocked: &[super::status::Landing],
+    skipped: &[super::status::Skipped],
+) -> Result<Vec<super::status::Landing>, String> {
+    if !workers.is_empty() {
+        let mut out: Vec<super::status::Landing> = Vec::new();
+        for w in workers {
+            let mine: Vec<super::status::Landing> =
+                ready.iter().filter(|l| &l.worker == w).cloned().collect();
+            if !mine.is_empty() {
+                out.extend(mine);
+                continue;
+            }
+            if let Some(b) = blocked.iter().find(|l| &l.worker == w) {
+                return Err(format!("refused: {w} not landable yet.{}", blocked_line(b)));
+            }
+            if let Some(sk) = skipped.iter().find(|s| &s.worker == w) {
+                return Err(format!(
+                    "refused: {w} has nothing landable.\n  {} [{}]: {}\n    fix: {}",
+                    sk.worker, sk.check, sk.detail, sk.fix
+                ));
+            }
+            return Err(format!(
+                "refused: no branch `{}` in the selection: no such worktree, or everything on \
+                 it is already in main. `air status` lists every branch it can see and why \
+                 each may or may not land.",
+                branch_for(w)
+            ));
+        }
+        return Ok(out);
+    }
+    let mut out: Vec<super::status::Landing> = Vec::new();
+    let mut ambiguous: Vec<String> = Vec::new();
+    let mut named_blocked: Vec<&super::status::Landing> = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
+    for bead in beads {
+        let carriers: BTreeSet<&str> = ready
+            .iter()
+            .chain(blocked)
+            .filter(|l| &l.bead == bead)
+            .map(|l| l.worker.as_str())
+            .collect();
+        if carriers.len() > 1 {
+            let mut s = format!("\n  {bead} is carried by {} branches:", carriers.len());
+            for w in carriers {
+                match blocked.iter().find(|l| l.worker == w && &l.bead == bead) {
+                    Some(b) => s.push_str(&format!(
+                        "\n    {w}: blocked: {}\n      fix: {}",
+                        b.blocked.as_deref().unwrap_or(""),
+                        b.command
+                    )),
+                    None => s.push_str(&format!("\n    {w}: landable: `air land --worker {w}`")),
+                }
+            }
+            ambiguous.push(s);
+            continue;
+        }
+        if carriers.is_empty() {
+            missing.push(bead);
+            continue;
+        }
+        match blocked.iter().find(|l| &l.bead == bead) {
+            Some(b) => named_blocked.push(b),
+            None => out.extend(ready.iter().filter(|l| &l.bead == bead).cloned()),
+        }
+    }
+    if !ambiguous.is_empty() {
+        return Err(format!(
+            "refused: a bead names a branch only while one branch carries it; name the branch \
+             with `--worker`.{}",
+            ambiguous.join("")
+        ));
+    }
+    // air-y3v: a bead whose branch the list already knows is blocked is refused with THAT
+    // reason, not with "no green branch names it". The surface said re-merge; so does this.
+    if !named_blocked.is_empty() {
+        return Err(format!(
+            "refused: {} not landable yet.{}",
+            named_blocked
+                .iter()
+                .map(|l| l.bead.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            named_blocked
+                .iter()
+                .map(|l| blocked_line(l))
+                .collect::<Vec<_>>()
+                .join("")
+        ));
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "refused: no green branch names {} in its merge range. `air status` lists what \
+             is landable (a branch with a recorded green at its head; its beads are the \
+             ones its commits declare in a `Bead:` trailer).{}",
+            missing.join(", "),
+            // Say what each branch failed on, so the named-bead refusal diagnoses as well
+            // as the --all one (air-6u5).
+            skipped
+                .iter()
+                .map(|sk| {
+                    format!(
+                        "\n  {} [{}]: {}\n    fix: {}",
+                        sk.worker, sk.check, sk.detail, sk.fix
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        ));
+    }
+    Ok(out)
+}
+
+pub fn run(repo: &Path, beads: &[String], workers: &[String], all: bool, json: bool) -> i32 {
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -304,8 +448,9 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         where_i_am: here.as_deref(),
         where_i_pointed: &worker,
     };
-    let inputs =
-        serde_json::json!({"beads": beads, "all": all, "caller": here, "repo_worker": worker});
+    let inputs = serde_json::json!({
+        "beads": beads, "workers": workers, "all": all, "caller": here, "repo_worker": worker
+    });
     if let Err(msg) = may_land(&caller) {
         // Logged under the CALLER, so a bypass attempt is attributed to whoever made it
         // rather than to `main`.
@@ -318,8 +463,8 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
         );
         return 2;
     }
-    if beads.is_empty() && !all {
-        eprintln!("air land: name a bead, or `air land --all`");
+    if beads.is_empty() && workers.is_empty() && !all {
+        eprintln!("air land: name a bead, `--worker <name>`, or `--all`");
         return 1;
     }
     // The landings are derived, never stored: the same facts `air status` shows (air-6p5).
@@ -354,15 +499,6 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     // A named bead that is blocked is refused below with the reason the list already gave.
     let (ready, blocked): (Vec<_>, Vec<_>) =
         sel.landings.into_iter().partition(|l| l.blocked.is_none());
-    let blocked_line = |l: &super::status::Landing| {
-        format!(
-            "\n  {} [{}]: {}\n    fix: {}",
-            l.worker,
-            l.bead,
-            l.blocked.as_deref().unwrap_or(""),
-            l.command
-        )
-    };
     // ...and nothing landable is a REPORT, not silence: every branch says which precondition
     // it failed and the command that fixes it.
     if all && ready.is_empty() {
@@ -398,79 +534,26 @@ pub fn run(repo: &Path, beads: &[String], all: bool, json: bool) -> i32 {
     let wanted: Vec<super::status::Landing> = if all {
         ready
     } else {
-        // air-y3v: a bead whose branch the list already knows is blocked is refused with THAT
-        // reason, not with "no green branch names it". The surface said re-merge; so does this.
-        let named_blocked: Vec<&super::status::Landing> =
-            blocked.iter().filter(|l| beads.contains(&l.bead)).collect();
-        if !named_blocked.is_empty() {
-            let msg = format!(
-                "refused: {} not landable yet.{}",
-                named_blocked
-                    .iter()
-                    .map(|l| l.bead.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                named_blocked
-                    .iter()
-                    .map(|l| blocked_line(l))
-                    .collect::<Vec<_>>()
-                    .join("")
-            );
-            log_event(&ledger, &worker, "land", &inputs, "refuse", &msg, "branch");
-            emit(
-                json,
-                &serde_json::json!({"ok": false, "reason": msg}),
-                || msg.clone(),
-            );
-            return 2;
+        match resolve(beads, workers, &ready, &blocked, &sel.skipped) {
+            Ok(w) => w,
+            Err(msg) => {
+                log_event(
+                    &ledger,
+                    &worker,
+                    "land",
+                    &inputs,
+                    "refuse",
+                    &msg,
+                    "selection",
+                );
+                emit(
+                    json,
+                    &serde_json::json!({"ok": false, "reason": msg}),
+                    || msg.clone(),
+                );
+                return 2;
+            }
         }
-        let missing: Vec<&String> = beads
-            .iter()
-            .filter(|b| !ready.iter().any(|l| &&l.bead == b))
-            .collect();
-        if !missing.is_empty() {
-            let msg = format!(
-                "refused: no green branch names {} in its merge range. `air status` lists what \
-                 is landable (a branch with a recorded green at its head; its beads are the \
-                 ones its commits declare in a `Bead:` trailer).{}",
-                missing
-                    .iter()
-                    .map(|b| b.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                // Say what each branch failed on, so the named-bead refusal diagnoses as well
-                // as the --all one (air-6u5).
-                sel.skipped
-                    .iter()
-                    .map(|sk| {
-                        format!(
-                            "\n  {} [{}]: {}\n    fix: {}",
-                            sk.worker, sk.check, sk.detail, sk.fix
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("")
-            );
-            log_event(
-                &ledger,
-                &worker,
-                "land",
-                &inputs,
-                "refuse",
-                &msg,
-                "bd + ledger",
-            );
-            emit(
-                json,
-                &serde_json::json!({"ok": false, "reason": msg}),
-                || msg.clone(),
-            );
-            return 2;
-        }
-        ready
-            .into_iter()
-            .filter(|l| beads.contains(&l.bead))
-            .collect()
     };
     if wanted.is_empty() {
         emit(json, &serde_json::json!({"ok": true, "landed": []}), || {

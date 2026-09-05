@@ -496,6 +496,32 @@ pub const SURFACE: &[SurfaceChange] = &[
                  apart. A wrapper that knows a stage was signalled should exit 143 to say so \
                  (adopter's run-logged.sh does).",
     },
+    SurfaceChange {
+        id: "task-by-file",
+        since: "2026-09-05 (air-er0)",
+        headline: "`air worker --task` writes the task to `<main>/.air/tasks/<name>.md`; the \
+                   process's command line carries a fixed sentence naming that path, never \
+                   the task text.",
+        silent_break: false,
+        action: "Nothing to change in how workers are launched. What changes is what `ps` \
+                 shows: a worker's argv no longer contains its prompt, so a `pkill -f` over \
+                 ordinary command text (`air record verify`, `git status`) stops matching \
+                 every peer. adopter lost seven workers to that on 2026-08-30. Anything \
+                 that reads a worker's task out of `ps` or the tmux command line reads the \
+                 file instead; anything that cleans `.air/` leaves `tasks/` alone.",
+    },
+    SurfaceChange {
+        id: "land-worker",
+        since: "2026-09-05 (air-09b)",
+        headline: "`air land --worker <name>` names the branch to land. `air land <bead>` is \
+                   refused when more than one branch carries the bead, naming each carrier; \
+                   `air status` and `air inbox --owner` now offer the `--worker` form.",
+        silent_break: false,
+        action: "Land by branch: `air land --worker <name>`, which merges that branch with \
+                 every bead its range names. Naming a bead still works while exactly one \
+                 branch carries it. A script that greps the offered command for `air land \
+                 <bead>` reads `air land --worker <name>` now.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -561,8 +587,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: green keyed by commit not (worker, sha), tree key by declaration, schema
     // v14 (air-7wf).
     ("0.2.0", 4, 23),
-    // 2026-09-05: a signalled verify is no verdict (air-ppm).
+    // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
     ("0.2.1", 5, 24),
+    // 2026-09-05: `air land --worker` names the branch (air-09b).
+    ("0.2.2", 6, 25),
+    // 2026-09-05: a signalled verify is no verdict (air-ppm).
+    ("0.2.3", 7, 26),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
