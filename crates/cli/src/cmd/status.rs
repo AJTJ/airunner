@@ -136,6 +136,10 @@ pub struct Snapshot {
     /// worker over work that did not exist for it — at round end on 2026-08-29 the one ready
     /// bead was `air-4t1`, labelled `owner`, which gate had already declined.
     pub claimable_depth: Option<usize>,
+    /// Of `ready_depth`, the epics (air-f10): containers bd lists as ready that no worker may
+    /// claim and the coordinator has to decompose. Shown, not dropped, so the coordinator
+    /// does not have to ask bd for the number the line used to hide inside "claimable".
+    pub epic_depth: Option<usize>,
     /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
@@ -1022,7 +1026,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
 /// Whether this gather may shell out to bd (air-cmn).
 ///
 /// The channel poll ran a full `gather` every ~8 s, and every one of them called bd:
-/// `in_progress`, then `show` once per open claim, then `awaiting_review`, then `ready`. That
+/// `in_progress`, then `show` once per open claim (one `show` for all of them since
+/// air-bp0), then `awaiting_review`, then `ready`. That
 /// came to about 5,700 bd calls and 2.3 hours a day waiting on bd, around the clock, to deliver
 /// roughly 45 pushes (0007 §3). Only `idle-without-claim` needs any of it, for `ready_depth`.
 ///
@@ -1197,14 +1202,35 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     )
     .map(|v| v.into_iter().map(|i| i.id).collect());
     let mut reconciled = 0usize;
-    for c in ledger.open_claims().map_err(|e| e.to_string())? {
+    let open_claims = ledger.open_claims().map_err(|e| e.to_string())?;
+    // Every claim bd no longer holds in_progress, looked up in ONE `bd show a b c` rather
+    // than one process per bead (air-bp0): the cost is per process, ~2 s to open the store,
+    // and the query is close to free, so K claims cost K × 2 s before and 2 s now. bd omits
+    // an id it does not know and exits 0, so an id missing from the answer reads as
+    // "unknown", exactly what a single `show` answered with `None`.
+    let missing: Vec<String> = match &in_progress {
+        Some(ip) => open_claims
+            .iter()
+            .filter(|c| !ip.contains(&c.bead))
+            .map(|c| c.bead.clone())
+            .collect(),
+        None => Vec::new(),
+    };
+    let shown: Option<Vec<air_bd::Issue>> = if missing.is_empty() {
+        None
+    } else {
+        bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
+            air_bd::WorkLedger::show_all(b, &missing)
+        })
+    };
+    for c in open_claims {
         let mut handed_over = false;
         if let Some(ip) = &in_progress
             && !ip.contains(&c.bead)
         {
-            let status = bd_try(&bd, &mut bd_slow, &mut errors, "show", |b| {
-                air_bd::WorkLedger::show(b, &c.bead)
-            });
+            let status: Option<Option<air_bd::Issue>> = shown
+                .as_ref()
+                .map(|v| v.iter().find(|i| i.id == c.bead).cloned());
             // air-3eu: `awaiting_review` is not the end of a claim. A handed-over bead is
             // still the worker's until it lands, and the row carries the declared files the
             // coordinator needs for overlap. Releasing it left a worker "not claimed" while
@@ -1284,14 +1310,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-uir: both counts come off the SAME `bd ready` answer and the same `claimable`
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
+    let mut epic_depth: Option<usize> = None;
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
             back_in_queue.extend(v.iter().map(|i| i.id.clone()));
-            let ids = super::ready_cache::claimable(&v);
+            // air-f10: one partition of one answer; the counts are its lengths.
+            let split = super::ready_cache::split(&v);
+            let ids = split.claimable;
             claimable_depth = Some(ids.len());
+            epic_depth = Some(split.epics.len());
             let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
+            let _ = ledger.bd_cache_put("epic_depth", &split.epics.len().to_string(), &at);
             super::ready_cache::write(repo, &ids, &super::now());
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
             Some(v.len())
@@ -1301,6 +1332,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             // against yesterday's count.
             claimable_depth = ledger
                 .bd_cache_get("claimable_depth")
+                .ok()
+                .flatten()
+                .and_then(|(v, _)| v.parse().ok());
+            epic_depth = ledger
+                .bd_cache_get("epic_depth")
                 .ok()
                 .flatten()
                 .and_then(|(v, _)| v.parse().ok());
@@ -1376,6 +1412,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         sessions: all_sessions,
         ready_depth,
         claimable_depth,
+        epic_depth,
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
@@ -1635,11 +1672,24 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         match (s.ready_depth, s.claimable_depth) {
             // air-uef: the owner-labelled count IS the owner's queue, the one number that
             // says what waits on the owner, printed where the coordinator already looks.
-            (Some(r), Some(c)) if r != c => format!(
-                " ({c} claimable; {} owner-labelled: the owner's queue, which `air claim` \
-                 refuses to workers)",
-                r.saturating_sub(c)
-            ),
+            // air-f10: epics are named apart, never folded into "claimable": "2 claimable"
+            // read as two workers' worth of work when the true count was zero and both were
+            // containers. The split keeps them visible for the coordinator to decompose.
+            (Some(r), Some(c)) if r != c => {
+                let epics = s.epic_depth.unwrap_or(0);
+                let owner = r.saturating_sub(c).saturating_sub(epics);
+                let mut parts = vec![format!("{c} claimable")];
+                if epics > 0 {
+                    parts.push(format!("{epics} epic(s) to decompose, not claimable"));
+                }
+                if owner > 0 {
+                    parts.push(format!(
+                        "{owner} owner-labelled: the owner's queue, which `air claim` \
+                         refuses to workers"
+                    ));
+                }
+                format!(" ({})", parts.join("; "))
+            }
             _ => String::new(),
         },
         // Which source, always: "0 ready" from a cache and "0 ready" from bd are different

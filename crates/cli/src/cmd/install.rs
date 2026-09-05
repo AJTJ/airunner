@@ -597,6 +597,34 @@ pub const SURFACE: &[SurfaceChange] = &[
                  branch carries a bead by trailer, not only to one holding a claim. Delete any \
                  rule of yours that said a superseding branch must be handed over by hand.",
     },
+    SurfaceChange {
+        id: "ready-split-epics",
+        since: "2026-09-05 (air-f10)",
+        headline: "The claimable count excludes epics and the `ready:` line names them apart \
+                   (`N epic(s) to decompose, not claimable`); `air claim <epic>` is refused. \
+                   The Stop nudge and `idle-without-claim` read the same split.",
+        silent_break: true,
+        action: "Your `ready:` line's claimable number may drop, and that is the true count: \
+                 `2 claimable` read as two workers' worth of work when both were containers. \
+                 A rule or script that claims an epic to \"own\" it now gets a refusal; \
+                 decompose it with `bd create` children instead. Nothing else to run.",
+    },
+    SurfaceChange {
+        id: "bd-calls-per-event",
+        since: "2026-09-05 (air-bp0)",
+        headline: "`bd_calls`/`bd_ms` on an event line are that event's own cost. Lines from \
+                   `air mcp` (`status.attention`, `channel.push`) used to carry the server's \
+                   running lifetime total, restamped on every tick. `air status` looks up \
+                   every reconciled claim in one `bd show`, and SubagentStop no longer runs \
+                   the Stop nudge (no bd call, no idle mark).",
+        silent_break: true,
+        action: "Any number derived by summing `bd_calls` over the event log is wrong for \
+                 every day before this: adopter's 2026-08-30 summed to 570,989 while the \
+                 largest total any process reached was 1,661, and one-shot commands cost \
+                 1 to 4. Re-derive from lines written by this version; for older days, take \
+                 the max `bd_calls` per command as that process's lifetime total. The bead's \
+                 own 14.8-per-command figure was this artefact.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -681,6 +709,11 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // (air-1bm), schema v16; bd not answering about acceptance refuses before the merge
     // (air-bh4).
     ("0.2.8", 12, 31),
+    // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
+    ("0.2.9", 13, 32),
+    // 2026-09-05: bd_calls per event, one show per reconcile, SubagentStop is not a Stop
+    // (air-bp0).
+    ("0.2.10", 14, 33),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
