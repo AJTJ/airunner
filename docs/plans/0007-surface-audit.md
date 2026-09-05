@@ -22,6 +22,18 @@ written once.
     grep -rhoE '(AIR|BEADS|CLAUDE)[A-Z_]*' crates/ | sort | uniq -c | sort -rn
     du -sh .air/events                                     # event-stream growth
 
+**Counts as of 2026-09-05** (air-wst; ledger from 2026-08-15; every number from the commands
+above, run at 271e61b): 23 CLI commands, 4 crates, 21,473 lines in the CLI crate (29,397 across
+all four; `selftest.rs` alone is 5,684), 13 ledger tables at schema v16, 9 hook events, 10 MCP
+tools, 5 MCP resources, 0 MCP prompts, 28 distinct `AIR|BEADS|CLAUDE` env names in the sources,
+24 registered mechanisms, 87 selftest probes (all green, 40 with a declared mutation), 38 skills
+in `.claude/skills/`, 36 surface notices over 17 releases (`0.0.1` to `0.2.13`). Ledger rows:
+208 verify runs, 289 edit-journal, 129 claims, 73 captures, 66 landings, 5 sessions, 772
+condition rows, 72 messages (air-srv, landed today), **0 leases** still. Event stream: 19.8 MB
+over 11 days; per day since air-5uz it tracks activity rather than the timer, 32 KB on
+2026-08-31 (quiet) against 2.0 MB on 2026-09-05 (five lanes). `air gc` reports 0 bytes
+collectable at 90 days.
+
 **Counts as of 2026-08-25** (ledger from 2026-08-15): 21 CLI commands, 4 crates, 12,434 lines in
 the CLI crate, 11 ledger tables at schema v10, 9 hook events, 13 MCP tools, 6 MCP resources,
 **0 MCP prompts despite a code comment claiming three** (§11), 25 environment variables, 14
@@ -41,6 +53,10 @@ registered mechanisms, 32 selftest probes (all green), 34 skills in `.claude/ski
 - Pass 5 (2026-08-25): herdr read first-hand (§10.5) and the landscape entry rewritten; §6.2b added
   after a module-by-module walk found `attribution.rs` and `acceptance.rs` missing from every
   earlier pass, which is two more of the "integrations you missed" the owner predicted.
+- Pass 7 (2026-09-05, air-wst): the commodity sweep, §13. Every count in the preamble re-run;
+  every module mapped to the three properties Air keeps. Deliberately after air-4t1 and air-djl,
+  both of which closed without the move §10.2 planned, so the pass is over what remains rather
+  than what was planned to remain.
 
 ---
 
@@ -602,3 +618,82 @@ adding anything and record the four-line answer in the bead.
 
 A row with no "why" is a deletion candidate by default. A number quoted here without saying what it
 counts is a defect, per §11.
+
+## 13. The commodity sweep (2026-09-05, air-wst)
+
+Plan 0008 item 5. The landscape's finding stands: about 70 of 186 rostered projects are spawn,
+isolate, watch, and the harness ships all three first-party. Air keeps three properties, not a
+component: **(A)** the refusal is on the tracked work item; **(B)** the green sits at a HEAD
+containing main; **(C)** it holds in an interactive session a human is watching. Everything
+below is either one of those, the record they are checked against, or listed with its reason
+and the condition under which it goes. Sizes are line counts at 271e61b.
+
+The two planned deletions this pass was to follow did not happen, each on a check rather than an
+argument: air-4t1 (the launcher moves to the harness) closed when the harness docs showed
+`--agent` replaces the system prompt and `permissions.deny` binds every session in the repo;
+air-djl (the poll thread goes) closed when re-measurement after air-5uz put the cost in bd, not
+the timer, and air-cmn took bd out of the poll path. So the sweep is over `launch.rs` and
+`mcp.rs` as they are, and finds one module that is spawn/isolate by its whole job, `worktree.rs`,
+which the owner ruled back in on 2026-08-30 (air-fdz, landed today) for `.worktreeinclude` and
+removal; isolation itself stays the harness's (`--worktree` is still passed, and its
+out-of-worktree refusal is what roles.md promises).
+
+| Module | Lines | Serves | Reason if none, and the condition under which it goes |
+|---|---|---|---|
+| `hooks/gate.rs` | 647 | A, B | The one refusal: pure over facts. |
+| `cli/handover.rs` | 414 | A, B | Gathers the gate's facts; `handable` and `digest_beads` decide what the branch carries (air-60x). |
+| `cli/green.rs` | 229 | B | THE green predicate, one for status, land and the gate (air-7wf). |
+| `cli/record.rs` | 240 | B | Writes the green. |
+| `ledger/verify.rs` | 621 | B | `verify_runs`, `verify_inflight`. |
+| `cli/land.rs` | 1142 | B | main moves only for a branch green at a head containing main; no re-verify (air-odv). |
+| `ledger/landings.rs` | 548 | B | What landed, which beads it carried, what a merge contradicts. |
+| `cli/acceptance.rs` | 734 | A | What a landing may close vs only land: the verdict per clause on the work item (air-ayp). |
+| `cli/attribution.rs` | 260 | A, B | Which beads a branch carries, from `Bead:` trailers: the link between a green branch and its work items. |
+| `cli/claim.rs` | 635 | A | The reservation on the work item; refuses an owner bead, an epic (air-f10), a peer's claim, a closed bead. |
+| `ledger/claims.rs` | 261 | A | The claim record bd cannot keep. |
+| `cli/close.rs` | 161 | A | The coordinator's batch close in one bd process. |
+| `cli/capture.rs`, `ledger/captures.rs` | 354, 208 | A | How work becomes a tracked item at all: workers capture, the coordinator files (air-uef: one queue). |
+| `cli/ready_cache.rs` | 155 | A | What a worker may claim, one split behind status, the nudge and `idle-without-claim` (air-f10). |
+| `bd/lib.rs` | 383 | A | The tracked work item lives in bd. |
+| `cli/hook.rs` | 1300 | A, C | The gate on `bd close`; session state rows and the Stop advisory in the live session; the message record. |
+| `hooks/input.rs`, `hooks/journal.rs`, `hooks/lib.rs` | 171, 83, 47 | C | The hook contract and the edit journal, both only in a live session. |
+| `cli/launch.rs` | 878 | C | Interactive only, never headless; roles applied; the deny list that holds in every mode; the task by file (air-er0). What is spawn here is name allocation, `--print` and the detached tmux start, and the detached path has no first-party equivalent (§10.2). |
+| `cli/tmux.rs` | 226 | C | `<project>-<worker>` pane names and the bead in the window title, so the human watching two fleets can find a pane (owner, 2026-08-22). Naming never fails a launch. |
+| `cli/status.rs` | 2251 | C | The coordinator's one screen and the conditions that mean a person is needed. |
+| `cli/mcp.rs` | 794 | C | The channel into the watched coordinator session; tools mirror the CLI. The poll thread is kept on air-djl's measurement: it reads the ledger only (air-cmn), writes on change only (air-5uz), and its cost is not where the cost was. Goes when the harness can push on a ledger change without a timer AND a round shows the pushes arriving that way. |
+| `cli/holdings.rs` | 282 | none of A, B, C | The collision fact behind `peer-warning`, which fired 133 times over 112 files in this window and whose tags now say when (air-v7o). Goes when a round passes with zero peer warnings (the mechanism's own condition). |
+| `cli/lease.rs`, `ledger/leases.rs` | 386, 247 | none | 0 rows here for the whole ledger; adopter takes one every round (air-uae reversed the deletion, §10.3). Goes on the two lease mechanisms' conditions, in a repo that takes leases. |
+| `ledger/messages.rs` | 110 | none | Owner ruling 2026-09-05 (air-srv): the coordination that never reached the ledger. 72 rows in its first day. Goes when the harness persists agent-to-agent messages where the ledger can read them, or when the fleet goes. |
+| `cli/worktree.rs` | 446 | none (isolate) | Owner ruling 2026-08-30 (air-fdz): Air creates and removes its worktrees because `claude --worktree` copies `.worktreeinclude` only on its own path and removes nothing. Goes when the harness creates a worktree Air names with the includes copied, and removal is not Air's, on the module's own recorded condition. |
+| `cli/audit.rs`, `cli/mechanisms.rs` | 1149, 499 | none | The removal-condition registry and its reading: how a mechanism is deleted on evidence rather than argument. This sweep is its reader. Goes when every mechanism's condition is machine-checkable and evaluated where it lives, so the registry is a query. |
+| `cli/gc.rs` | 274 | none | A stated retention for the events that audit reads (air-i7s). Goes when `events::append` bounds the stream itself (the mechanism's condition). |
+| `cli/bd_latency.rs` | 197 | none | What bd costs, read back from the log (air-869): the number status's bd budget is derived from and the number that answered air-djl. Goes when bd's per-process cost stops being the floor under every command (air-bp0's line), at which point the budget is a constant again. |
+| `cli/doctor.rs` | 243 | record | An absent or wrong ledger is visible, not silent; tables from `sqlite_master` (air-w0e); dated rules reported (air-24e). Stays while the ledger does. |
+| `cli/install.rs`, `cli/init.rs` | 1380, 420 | adoption | How A, B and C reach a repo: hooks, MCP, roles, skills, surface notices and releases, a stale-hook report (air-b5k). §10.2's plugin packaging remains the replacement to check when the harness's plugin format ships hooks plus MCP plus skills. |
+| `cli/selftest.rs` | 5684 | proof | Every mechanism ships with a red/green probe (repo rule); 40 carry a declared mutation. Its size is the price of the rule, and the rule has caught a mutation-less probe reading VACUOUS (air-8d7). |
+| `ledger/events.rs`, `ledger/schema.rs`, `ledger/lib.rs`, `ledger/paths.rs`, `cli/git.rs`, `cli/main.rs`, `cli/mod.rs` | 102, 461, 265, 67, 215, 432, 93 | record, plumbing | The ledger and the CLI they all sit on. |
+
+**Mechanisms, the same way.** 24 registered. Refusals (A/B): `handover-gate`, `claim-refusal`,
+`close-refusal`, `land-refusal`, `land-in-flight-refusal`, `coordinator-send-keys`;
+advisory (A/B): `handover-would-refuse`. Attention (C): `landable`, `landed-not-closed`,
+`handover-not-green`, `idle-without-claim`, and the six that have never fired here: `stuck`,
+`gone-with-claim`, `idle-with-claim`, `silent-with-claim`, `lease-held-by-dead-session`,
+`lease-stale`, each with a recorded reason its zero is not evidence (do-less: the input never
+arrives under auto mode, or the subject never occurred) and a condition that names what would
+have to occur. `rewound-and-carried` is history only and empties on its own. Watch-class:
+`peer-warning` (133), `stop-nudge` (12). Reports: `audit`, `gc`, `claim-retry` (0, landed today),
+`land-in-flight-override`. Nothing here is unregistered and nothing registered lacks a condition
+(`air audit` asserts both; `air selftest` proves it).
+
+**Do-less, in writing.** (1) The recorded failure this pass answers is §10.2's own: two planned
+deletions that would have made things no better, each caught by a check rather than shipped.
+(2) A measurement, not a mechanism: the sweep adds nothing that speaks or refuses. (3) The
+counts are re-run, not re-read (§11's lesson), and every number above names what it counts.
+(4) Silent. (5) The sweep's own removal condition is §12's refresh trigger: it is re-done when
+the harness's orchestration surface moves or monthly. (6) The smallest version is this section
+in the living inventory, no new document.
+
+**What did not become a deletion, and why not a capture.** `worktree.rs` and the poll thread are
+the two modules a reader would expect this sweep to remove, and both stand on a ruling or a
+measurement made after the plan was written. A "should go" here would be re-litigating a decided
+question with no new evidence; the conditions above say what evidence would reopen each.
