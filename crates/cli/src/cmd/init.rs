@@ -291,6 +291,11 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             s.push_str(".air/\n");
             std::fs::write(&path, s).map_err(|e| format!(".gitignore: {e}"))?;
         }
+        // The line is written; git has to agree (a later `!.air` or an odd layout can undo
+        // it), because the ledger about to be created holds every message (air-6di).
+        if let Some(why) = super::install::ignore_refusal(super::install::air_ignored(&dir)) {
+            return Err(format!("refusing to continue: {why}"));
+        }
         if !has_beads {
             // --skip-agents: no AGENTS.md and no `bd prime`; its command reference tells agents
             // to `bd update --claim` and `bd create`, which Air denies. --skip-hooks: no bd git
