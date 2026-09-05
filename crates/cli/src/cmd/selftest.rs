@@ -356,6 +356,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "events: bd_calls on a line is that event's own count, not the process's running total",
+        Mutation {
+            // `take` hands back the lifetime total again, which is what every `air mcp` line
+            // carried before air-bp0.
+            file: "crates/bd/src/lib.rs",
+            from: "calls.saturating_sub(prev_calls),",
+            to: "calls.saturating_sub(prev_calls.min(0)),",
+            also_red: &[],
+        },
+    ),
+    (
         "gate: the named bead must be claimed by the worker or carried by a `Bead:` trailer in main..HEAD",
         Mutation {
             file: "crates/hooks/src/gate.rs",
@@ -1063,6 +1074,9 @@ fn all_probes() -> Vec<Probe> {
         probe_install_goes_forward_only(),
         probe_enforced_gate(),
         probe_env_reaches_the_hook(),
+        probe_bd_calls_are_per_event(),
+        probe_status_reconcile_is_one_show(),
+        probe_subagent_stop_is_not_a_stop(),
         probe_batch_close(),
         probe_triage_bead_exists(),
         probe_surface_diff(),
@@ -4828,6 +4842,267 @@ fn probe_env_reaches_the_hook() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-bp0: `bd_calls`/`bd_ms` on an event line are that event's own cost. They were the
+/// process's running total, which is the same thing in a one-shot command and a different
+/// thing in `air mcp`, whose poll thread emits a line every tick for the life of the server:
+/// adopter's 2026-08-30 log summed to 570,989 bd calls while the largest total any process
+/// reached was 1,661. Red: the lifetime counter keeps everything and would be restamped on
+/// each line. Green: `take` hands each event only what happened since the previous one, and
+/// nothing when nothing did.
+fn probe_bd_calls_are_per_event() -> Probe {
+    use air_bd::stats::{record, snapshot, take};
+    let _ = take(); // drain what earlier probes spent, so this window starts empty
+    record(5);
+    record(7);
+    let first = take();
+    record(1);
+    let second = take();
+    let third = take();
+    let (_, lifetime) = snapshot();
+    Probe {
+        name: "events: bd_calls on a line is that event's own count, not the process's running total",
+        red_fires: lifetime >= 3 && lifetime > second.1,
+        green_passes: first == (12, 2) && second == (1, 1) && third == (0, 0),
+    }
+}
+
+/// A fake `bd` for the two probes below: logs every argv to `<dir>/bd.log`, answers `list`
+/// and `ready` from files, and `show` with a fixed status per id. Instant, and the log is the
+/// count of processes, which is the whole cost (`air_bd::stats`).
+fn fake_bd_script(dir: &Path) -> Result<std::path::PathBuf, String> {
+    let script = dir.join("bd");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nd='{d}'\necho \"$@\" >> \"$d/bd.log\"\ncase \"$1\" in\n  \
+             --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+             show) shift; out=''; for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n    \
+             case \"$id\" in fd-1) s=closed;; fd-2) s=awaiting_review;; *) s=open;; esac\n    \
+             out=\"$out${{out:+,}}{{\\\"id\\\":\\\"$id\\\",\\\"status\\\":\\\"$s\\\",\\\"labels\\\":[]}}\"; done\n    \
+             printf '%s\\n' \"[$out]\"; exit 0;;\n  \
+             list) echo '[]'; exit 0;;\n  \
+             ready) if [ -f \"$d/bd.ready\" ]; then cat \"$d/bd.ready\"; else echo '[]'; fi; exit 0;;\n  \
+             *) exit 0;;\nesac\n",
+            d = dir.display()
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(script)
+}
+
+fn bd_log(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("bd.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// air-bp0: `air status` reconciles every open claim bd no longer holds in_progress with ONE
+/// `bd show a b c`, not one process per bead. bd's cost is per process (~2 s to open the
+/// store) and the query is close to free, so K claims cost K × 2 s before and 2 s after.
+/// Red: the old shape, one `show` per id, is K processes for K ids against the same fake bd.
+/// Green: a real `air status` over three such claims runs exactly three bd processes (list,
+/// one show naming all three, ready), and every claim ends where the per-bead loop put it:
+/// the closed bead released as `closed`, the reopened one as `reconciled`, the
+/// awaiting_review one kept and marked handed over. Outputs, not only the count.
+fn probe_status_reconcile_is_one_show() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let git = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !git.status.success() {
+            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        }
+        let script = fake_bd_script(&dir)?;
+        let ids = ["fd-1", "fd-2", "fd-3"];
+        // RED: the shape the loop had, one process per bead.
+        let mut old = air_bd::BdCli::new(&dir);
+        old.bin = script.clone();
+        for id in ids {
+            let _ = air_bd::WorkLedger::show(&old, id);
+        }
+        let red = bd_log(&dir)
+            .iter()
+            .filter(|l| l.starts_with("show "))
+            .count()
+            == ids.len();
+        let _ = std::fs::remove_file(dir.join("bd.log"));
+
+        // GREEN: three open claims, none in_progress in bd; one status run.
+        let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+        for id in ids {
+            l.record_claim(id, "w", &[], "t0")
+                .map_err(|e| e.to_string())?;
+        }
+        drop(l);
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let out = Command::new(exe)
+            .current_dir(&dir)
+            .env("AIR_BD_BIN", &script)
+            .args(["--json", "status"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(String::from_utf8_lossy(&out.stderr).to_string());
+        }
+        let log = bd_log(&dir);
+        let shows: Vec<&String> = log.iter().filter(|l| l.starts_with("show ")).collect();
+        let one_show = shows.len() == 1
+            && shows
+                .first()
+                .is_some_and(|s| ids.iter().all(|id| s.split(' ').any(|w| w == *id)));
+        let three_processes = log.len() == 3;
+        let conn = rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+            .map_err(|e| e.to_string())?;
+        let row = |bead: &str| -> Result<(Option<String>, Option<String>), String> {
+            conn.query_row(
+                "SELECT release_reason, first_handover_at FROM claims WHERE bead=?1",
+                rusqlite::params![bead],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())
+        };
+        let closed = row("fd-1")?;
+        let handed = row("fd-2")?;
+        let reopened = row("fd-3")?;
+        let _ = std::fs::remove_dir_all(&dir);
+        let outputs = closed.0.as_deref() == Some("closed")
+            && reopened.0.as_deref() == Some("reconciled")
+            && handed.0.is_none()
+            && handed.1.is_some();
+        Ok((red, one_show && three_processes && outputs))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-bp0: a subagent stopping is not the worker stopping. The Stop arm marked the session
+/// idle and, with no claim held and beads ready, ran the nudge's `bd ready` confirm: one bd
+/// process per subagent stop, 241 on adopter's 2026-08-30, none of them actionable. Red: a
+/// Stop in that state does reach bd (the path SubagentStop shared). Green: a SubagentStop in
+/// the same state runs no bd process and leaves the session's state as it was.
+fn probe_subagent_stop_is_not_a_stop() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ])?;
+        let script = fake_bd_script(&dir)?;
+        std::fs::write(
+            dir.join("bd.ready"),
+            r#"[{"id":"fd-9","status":"open","labels":[]}]"#,
+        )
+        .map_err(|e| e.to_string())?;
+        // The cache write is best-effort and needs `.air/` to exist; opening the ledger
+        // creates it, as the first hook would.
+        drop(Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?);
+        crate::cmd::ready_cache::write(&dir, &["fd-9".to_string()], &crate::cmd::now());
+        if crate::cmd::ready_cache::read(&dir).is_none_or(|c| c.ids.is_empty()) {
+            return Err("ready cache was not written".into());
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let hook = |event: &str, tool: Option<&str>| -> Result<(), String> {
+            use std::io::Write;
+            let mut input = serde_json::json!({
+                "hook_event_name": event,
+                "session_id": "air-bp0-probe",
+                "cwd": wt.display().to_string(),
+            });
+            if let (Some(t), Some(obj)) = (tool, input.as_object_mut()) {
+                obj.insert("tool_name".into(), serde_json::Value::String(t.to_string()));
+            }
+            let mut child = Command::new(&exe)
+                .current_dir(&wt)
+                .arg("hook")
+                .env("AIR_BD_BIN", &script)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        let state = || -> Option<String> {
+            rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+                .ok()?
+                .query_row(
+                    "SELECT state FROM sessions WHERE session_id='air-bp0-probe'",
+                    [],
+                    |r| r.get(0),
+                )
+                .ok()
+        };
+        // RED: a Stop with no claim and a ready cache confirms against bd.
+        hook("Stop", None)?;
+        let red = bd_log(&dir).iter().any(|l| l.starts_with("ready"));
+        let _ = std::fs::remove_file(dir.join("bd.log"));
+        // GREEN: mid-turn (a tool just ran), a SubagentStop touches neither bd nor the state.
+        hook("PreToolUse", Some("Read"))?;
+        let before = state();
+        hook("SubagentStop", None)?;
+        let after = state();
+        let green = bd_log(&dir).is_empty() && before.is_some() && before == after;
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "hook: SubagentStop is not the worker's stop; it runs no bd and marks nothing idle",
         red_fires: red,
         green_passes: green,
     }

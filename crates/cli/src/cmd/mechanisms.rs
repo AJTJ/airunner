@@ -358,7 +358,9 @@ pub const MECHANISMS: &[Mechanism] = &[
         // never runs", which carries a declared mutation.
         added: "2026-08-22 (air-09i)",
         source: "crates/hooks/src/gate.rs, stop_nudge",
-        fires: Fires::Decisions(&[("hook.Stop", "nudge"), ("hook.SubagentStop", "nudge")]),
+        // `hook.SubagentStop` was a trace here until air-bp0: a subagent stopping is not the
+        // worker stopping, and the nudge (with its `bd ready` confirm) no longer runs there.
+        fires: Fires::Decisions(&[("hook.Stop", "nudge")]),
         removal: Removal::Judgement(
             "a round shows nudges that led to a claim <= nudges ignored, or workers claim the next bead unprompted in > 90% of hand-overs",
         ),
