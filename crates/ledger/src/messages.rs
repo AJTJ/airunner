@@ -89,7 +89,7 @@ mod tests {
             from_role: "worker".to_string(),
             project: "air".to_string(),
             to: "main".to_string(),
-            bytes: content.len() as i64,
+            bytes: i64::try_from(content.len()).unwrap(),
             content: content.to_string(),
         }
     }
