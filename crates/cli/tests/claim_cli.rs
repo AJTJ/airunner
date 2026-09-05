@@ -1301,6 +1301,10 @@ fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     )
     .unwrap();
     std::fs::write(main.join("README"), "a\n").unwrap();
+    // A file that exists at the landed commit and that the branch does NOT touch, so an
+    // acceptance clause naming it is refuted rather than unresolvable (air-dqa).
+    std::fs::create_dir_all(main.join("docs")).unwrap();
+    std::fs::write(main.join("docs/rule.md"), "the rule\n").unwrap();
     git(&main, &["add", "-A"]);
     git(&main, &["commit", "-q", "-m", "a"]);
     git(
@@ -1799,12 +1803,16 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
     close_with_proof(&main, &alpha, &bd, "fd-1");
-    // Three clauses: one Air can look up, one it can look up and refute, one it cannot read.
+    // Four clauses: one Air can look up, one it can look up and refute (a file that exists and
+    // the merge left alone), one it cannot read, and one naming a path-like token that is no
+    // file at the landed commit — adopter's possessive (air-dqa) — which must read as
+    // unresolvable, never as a contradiction.
     acceptance(
         &main,
         "- Verify recorded green at HEAD.\n\
-         - docs/absent.md says the rule.\n\
-         - The owner rules on the counter-argument.\n",
+         - docs/rule.md says the rule.\n\
+         - The owner rules on the counter-argument.\n\
+         - The `docs/note.md`'s section is updated.\n",
     );
     let before = git(&main, &["rev-parse", "HEAD"]);
 
@@ -1819,11 +1827,20 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     // The print: every clause with its verdict, so a wrong close is visible as it lands.
     assert!(out.contains("air land closes nothing"), "{out}");
     assert!(out.contains("ok   Verify recorded green at HEAD."), "{out}");
-    assert!(out.contains("MISS docs/absent.md says the rule."), "{out}");
+    assert!(out.contains("MISS docs/rule.md says the rule."), "{out}");
     assert!(
         out.contains("?    The owner rules on the counter-argument."),
         "{out}"
     );
+    // air-dqa: read end to end through `git ls-tree` at the landed commit. The merge changed
+    // docs/note.md; the token is `docs/note.md`'s; Air says it cannot resolve it, and says
+    // nothing about the merge not changing it.
+    assert!(
+        out.contains("?    The `docs/note.md`'s section is updated.")
+            && out.contains("cannot resolve it"),
+        "{out}"
+    );
+    assert!(!out.contains("did not change docs/note.md"), "{out}");
     assert!(out.contains("fd-1 — REFUTED"), "{out}");
     // It closes NOTHING, and writes no bd status of any kind.
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
@@ -1841,7 +1858,7 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
         .unwrap();
     assert_eq!(result, "landed-refuted");
     assert!(
-        open.contains("fd-1") && open.contains("docs/absent.md"),
+        open.contains("fd-1") && open.contains("docs/rule.md"),
         "{open}"
     );
 

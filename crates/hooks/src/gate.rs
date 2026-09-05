@@ -12,8 +12,14 @@ use serde::Serialize;
 pub struct GateFacts {
     pub worker: String,
     pub head: String,
-    /// `verify_runs` has a green `verify` row at exactly `head` for this worker.
+    /// `verify_runs` has a green `verify` row that stands for `head` under the repo's key
+    /// (air-7wf): at the commit itself by any worker, or at its tree where the repo declares
+    /// `verify_key: tree`.
     pub green_at_head: bool,
+    /// A green exists for `head`'s exact tree but does not count under the repo's key
+    /// (air-7wf). Only for the message: it names the re-verify as the price of a
+    /// commit-keyed repo rather than as an absence.
+    pub tree_green: Option<String>,
     /// The most recent green sha for this worker, if any (for the message).
     pub last_green_sha: Option<String>,
     /// `git merge-base --is-ancestor main HEAD`.
@@ -67,6 +73,14 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     short(&f.head)
                 ),
                 "fix or quarantine the flaky test (file it), then: air record verify -- make verify".to_string(),
+            )
+        } else if let Some(tree) = f.tree_green.as_deref() {
+            (
+                format!(
+                    "no green verify recorded at HEAD {}; {tree}",
+                    short(&f.head)
+                ),
+                "air record verify -- make verify".to_string(),
             )
         } else {
             (
@@ -150,6 +164,7 @@ mod tests {
             worker: "backend-leaning".into(),
             head: "f854145abcdef".into(),
             green_at_head: true,
+            tree_green: None,
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
             bead_claimed_by_worker: true,
@@ -173,6 +188,25 @@ mod tests {
             v.missing[0].detail
         );
         assert!(v.missing[0].fix.contains("quarantine"));
+    }
+
+    /// air-7wf: a green for this exact tree that the repo's key declines is named in the
+    /// refusal, so a worker re-verifying after a fast-forward reads the price rather than an
+    /// absence. It still refuses; the fix is unchanged.
+    #[test]
+    fn a_declined_tree_green_is_named_in_the_refusal() {
+        let mut f = facts();
+        f.green_at_head = false;
+        f.tree_green =
+            Some("this exact tree is green at 40076426 by w1, but keyed by commit".into());
+        let v = handover_verdict(&f);
+        assert!(v.block);
+        assert!(
+            v.missing[0].detail.contains("green at 40076426 by w1"),
+            "{}",
+            v.missing[0].detail
+        );
+        assert_eq!(v.missing[0].fix, "air record verify -- make verify");
     }
 
     #[test]
