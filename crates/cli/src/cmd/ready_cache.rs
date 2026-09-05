@@ -46,17 +46,49 @@ pub fn read(repo: &Path) -> Option<ReadyCache> {
     serde_json::from_str(&s).ok()
 }
 
-/// Which of bd's ready beads a worker may actually claim: everything except the ones
-/// awaiting the owner's authority. The ONE place that rule is written (air-5hw) — `air
-/// status` and this module both call it, so the label cannot mean one thing to the ready
-/// cache and another to the status screen. `human` is not a gate: it means a person is
-/// present and watching, which says nothing about who may finish the bead.
+/// bd's ready set, partitioned. The three lists are disjoint and together they are exactly
+/// bd's answer, so the counts `air status` prints are projections of ONE list and cannot
+/// disagree with bd about which beads (air-f10: the adopter flagged that a matching total is
+/// not a matching set, and Air has no ready set of its own to differ with).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadySplit {
+    /// What a worker may claim: a task with no `owner` label.
+    pub claimable: Vec<String>,
+    /// Containers in the ready set: not claimable, and the coordinator's to decompose. Kept
+    /// visible rather than silently dropped (adopter's reasoning, air-f10: the coordinator
+    /// needed that count and had to get it from bd).
+    pub epics: Vec<String>,
+    /// Awaiting the owner's authority: the owner's queue (air-uef).
+    pub owner: Vec<String>,
+}
+
+/// Partition bd's ready beads. The ONE place the rule is written (air-5hw): `air status`,
+/// the Stop nudge and `idle-without-claim` all read this, so the label and the type cannot
+/// mean one thing to the cache and another to the status screen. `human` is not a gate: it
+/// means a person is present and watching, which says nothing about who may finish the bead.
+///
+/// An `owner`-labelled epic is the owner's, not a container to decompose: the label is the
+/// authority and comes first.
+pub fn split(ready: &[air_bd::Issue]) -> ReadySplit {
+    let mut s = ReadySplit::default();
+    for i in ready {
+        if i.labels.iter().any(|l| l == crate::cmd::claim::OWNER_LABEL) {
+            s.owner.push(i.id.clone());
+        } else if i.issue_type == EPIC {
+            s.epics.push(i.id.clone());
+        } else {
+            s.claimable.push(i.id.clone());
+        }
+    }
+    s
+}
+
+/// bd's type for a container.
+pub const EPIC: &str = "epic";
+
+/// Which of bd's ready beads a worker may actually claim: [`split`]'s first list.
 pub fn claimable(ready: &[air_bd::Issue]) -> Vec<String> {
-    ready
-        .iter()
-        .filter(|i| !i.labels.iter().any(|l| l == crate::cmd::claim::OWNER_LABEL))
-        .map(|i| i.id.clone())
-        .collect()
+    split(ready).claimable
 }
 
 /// The claimable list as bd has it *now*, for the one caller that must not be wrong: the Stop
@@ -93,20 +125,31 @@ pub fn refresh(repo: &Path, bd: &air_bd::BdCli, now: &str) -> Option<Vec<String>
 mod tests {
     use super::*;
 
-    /// air-5hw: `owner` is the gate, `human` is presence and gates nothing.
+    /// air-5hw: `owner` is the gate, `human` is presence and gates nothing. air-f10: an epic
+    /// is a container, not a task, and an owner-labelled one is the owner's first.
     #[test]
-    fn claimable_excludes_owner_beads_only() {
-        let issue = |id: &str, labels: &[&str]| air_bd::Issue {
+    fn claimable_excludes_owner_beads_and_epics() {
+        let issue = |id: &str, labels: &[&str], kind: &str| air_bd::Issue {
             id: id.to_string(),
             labels: labels.iter().map(|s| s.to_string()).collect(),
+            issue_type: kind.to_string(),
             ..Default::default()
         };
         let ready = [
-            issue("fd-1", &[]),
-            issue("fd-2", &["owner"]),
-            issue("fd-3", &["human"]),
-            issue("fd-4", &["runtime", "owner"]),
+            issue("fd-1", &[], "task"),
+            issue("fd-2", &["owner"], "task"),
+            issue("fd-3", &["human"], "bug"),
+            issue("fd-4", &["runtime", "owner"], "task"),
+            issue("fd-5", &[], "epic"),
+            issue("fd-6", &["owner"], "epic"),
         ];
         assert_eq!(claimable(&ready), ["fd-1", "fd-3"]);
+        let s = split(&ready);
+        assert_eq!(s.epics, ["fd-5"]);
+        assert_eq!(s.owner, ["fd-2", "fd-4", "fd-6"]);
+        assert_eq!(
+            s.claimable.len() + s.epics.len() + s.owner.len(),
+            ready.len()
+        );
     }
 }
