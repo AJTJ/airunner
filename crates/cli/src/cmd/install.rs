@@ -597,6 +597,18 @@ pub const SURFACE: &[SurfaceChange] = &[
                  branch carries a bead by trailer, not only to one holding a claim. Delete any \
                  rule of yours that said a superseding branch must be handed over by hand.",
     },
+    SurfaceChange {
+        id: "ready-split-epics",
+        since: "2026-09-05 (air-f10)",
+        headline: "The claimable count excludes epics and the `ready:` line names them apart \
+                   (`N epic(s) to decompose, not claimable`); `air claim <epic>` is refused. \
+                   The Stop nudge and `idle-without-claim` read the same split.",
+        silent_break: true,
+        action: "Your `ready:` line's claimable number may drop, and that is the true count: \
+                 `2 claimable` read as two workers' worth of work when both were containers. \
+                 A rule or script that claims an epic to \"own\" it now gets a refusal; \
+                 decompose it with `bd create` children instead. Nothing else to run.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -681,6 +693,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // (air-1bm), schema v16; bd not answering about acceptance refuses before the merge
     // (air-bh4).
     ("0.2.8", 12, 31),
+    // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
+    ("0.2.9", 13, 32),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
