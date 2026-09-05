@@ -95,13 +95,32 @@ fn log_fail_open(repo: &Path, raw: &str, error: &str) {
 }
 
 fn inner(repo: &Path, raw: &str) -> Result<(HookEvent, HookOutcome), String> {
+    inner_env(
+        repo,
+        raw,
+        std::env::var("AIR_ROLE").ok().as_deref(),
+        std::env::var("BEADS_ACTOR").ok().as_deref(),
+    )
+}
+
+/// `inner` with the launcher's environment supplied rather than inherited (air-7ah): the unit
+/// tests run inside a launched session too, and read as that session if they read the
+/// ambient `AIR_ROLE`.
+fn inner_env(
+    repo: &Path,
+    raw: &str,
+    role: Option<&str>,
+    actor: Option<&str>,
+) -> Result<(HookEvent, HookOutcome), String> {
     let input = HookInput::parse(raw).map_err(|e| e.to_string())?;
     let cwd = input
         .cwd
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| repo.to_path_buf());
-    let (ledger, worker) = open(&cwd)?;
+    let (ledger, derived) = open(&cwd)?;
+    // air-75u: who this session is comes from its launcher, not from where its shell sits.
+    let worker = identity_from(role, actor, &derived);
     let event = input.event();
     let d = dispatch(&ledger, &worker, &cwd, &input)?;
     let mut inputs = d.inputs;
@@ -678,6 +697,27 @@ pub fn is_handover_command(cmd: &str) -> bool {
 
 /// Role is a property of the checkout (research: agent-roles-and-confinement §1): the main
 /// checkout is the coordinator, every worktree is a worker.
+/// Which session this hook is running in (air-75u).
+///
+/// The hook derived it from the input's `cwd` alone, and that is the SHELL's directory: a
+/// coordinator whose shell had stepped into a worker's worktree was taken for that worker at
+/// its next Stop. adopter ad-fv4z, 2026-08-30, twice: the main checkout's Stop hook reported
+/// a hand-over refusal naming HEAD e7005fe, w1's head, while main was at f4f7008, with nothing
+/// saying whose tree that was. A coordinator acting on it would run `git merge main` in the
+/// wrong checkout; and the session row was written under w1.
+///
+/// The launcher states the identity in the environment (`AIR_ROLE`, and `BEADS_ACTOR` for a
+/// worker), every hook inherits it, and it cannot wander. The checkout-derived name is the
+/// fallback for a session Air did not launch. Env is passed in, not read here, so the tests
+/// do not depend on the environment they run in (air-7ah).
+pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> String {
+    match (role, actor) {
+        (Some("coordinator"), _) => "main".to_string(),
+        (Some("worker"), Some(a)) if !a.is_empty() => a.to_string(),
+        _ => derived.to_string(),
+    }
+}
+
 pub fn role_for(worker: &str) -> &'static str {
     if worker == "main" {
         "coordinator"
@@ -818,7 +858,7 @@ fn set_session(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::{inner, is_handover_command};
+    use super::{identity_from, inner_env, is_handover_command};
     use std::path::Path;
     use std::process::Command;
 
@@ -851,7 +891,7 @@ mod tests {
         let mut v = body;
         v["session_id"] = "s1".into();
         v["cwd"] = repo.to_string_lossy().to_string().into();
-        inner(repo, &v.to_string()).unwrap();
+        inner_env(repo, &v.to_string(), None, None).unwrap();
     }
 
     fn events(repo: &Path) -> Vec<serde_json::Value> {
@@ -944,6 +984,20 @@ mod tests {
             ("ended", "idle -> gone")
         );
         assert!(ev.iter().all(|e| e["inputs"]["session_id"] == "s1"));
+    }
+
+    /// air-75u: the launcher's word beats the shell's directory, and only the launcher's.
+    #[test]
+    fn identity_is_the_launchers_and_the_checkout_only_as_a_fallback() {
+        assert_eq!(identity_from(Some("coordinator"), None, "w1"), "main");
+        assert_eq!(identity_from(Some("coordinator"), Some("x"), "w1"), "main");
+        assert_eq!(identity_from(Some("worker"), Some("w2"), "w1"), "w2");
+        // A worker launch without an actor, or an actor without a role (every test helper sets
+        // BEADS_ACTOR=tester), is what the checkout says.
+        assert_eq!(identity_from(Some("worker"), None, "w1"), "w1");
+        assert_eq!(identity_from(Some("worker"), Some(""), "w1"), "w1");
+        assert_eq!(identity_from(None, Some("tester"), "w1"), "w1");
+        assert_eq!(identity_from(None, None, "main"), "main");
     }
 
     /// air-0lk: the session row carries its project, so `air status --json` answers "is that
