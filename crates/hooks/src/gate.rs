@@ -170,7 +170,17 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     let pass = missing.is_empty();
     let block = !pass && !f.advisory;
     let message = if pass {
-        format!("handover ok: {} at {}", f.worker, short(&f.head))
+        // air-5wq: a snapshot that reads as a clearance. the adopter measured 88 refusals in
+        // four days arriving within 120 s of that same worker's own `handover ok`: an answer
+        // expiring before it could be used. Naming the main it was true of lets a reader see
+        // at a glance whether it still applies, and the refusal (which names main too, air-4up)
+        // then reads as main having moved rather than as a contradiction.
+        format!(
+            "handover ok: {} at {}{}",
+            f.worker,
+            short(&f.head),
+            containing_main(&f.main_sha)
+        )
     } else {
         let mode = if f.advisory {
             "would refuse"
@@ -193,6 +203,15 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
 
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
+}
+
+/// ", containing main <sha>", or nothing when main's sha could not be read.
+fn containing_main(main_sha: &str) -> String {
+    if main_sha.is_empty() {
+        String::new()
+    } else {
+        format!(", containing main {}", short(main_sha))
+    }
 }
 
 /// "40s ago", "12 min ago", or "at an unknown time".
@@ -308,6 +327,36 @@ mod tests {
         let v = handover_verdict(&facts());
         assert!(v.pass && !v.block);
         assert!(v.message.starts_with("handover ok"));
+    }
+
+    /// air-5wq: the pair is the point. The ok line names the main it was true of; after main
+    /// moves, the refusal names a different main, so the two read against each other rather
+    /// than as a contradiction.
+    #[test]
+    fn the_ok_line_names_main_and_a_later_refusal_names_a_different_one() {
+        let ok = handover_verdict(&facts());
+        assert_eq!(
+            ok.message,
+            "handover ok: backend-leaning at f854145, containing main 0a1b2c3"
+        );
+        let mut f = facts();
+        f.main_is_ancestor = false;
+        f.main_sha = "9f9f9f9f9f9f".into();
+        let refused = handover_verdict(&f);
+        assert!(refused.block);
+        assert!(
+            refused.message.contains("main is at 9f9f9f9"),
+            "{}",
+            refused.message
+        );
+        assert!(!refused.message.contains("0a1b2c3"), "{}", refused.message);
+        // An unreadable main is omitted, never rendered as an empty sha.
+        let mut g = facts();
+        g.main_sha = String::new();
+        assert_eq!(
+            handover_verdict(&g).message,
+            "handover ok: backend-leaning at f854145"
+        );
     }
 
     #[test]

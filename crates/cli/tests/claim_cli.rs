@@ -1608,6 +1608,15 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
         "{out}{err}"
     );
 
+    // air-5wq: beta's ok line names the main it was true of.
+    let main_before = git(&main, &["rev-parse", "HEAD"]);
+    let (code, out, err) = air(&beta, &bd, &["handover"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!("containing main {}", &main_before[..7])),
+        "{out}{err}"
+    );
+
     // Land one. This moves main past beta's branch point.
     let (code, out, err) = air(&main, &bd, &["land", "fd-1"]);
     assert_eq!(code, 0, "{out}{err}");
@@ -1622,6 +1631,12 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
     );
     assert!(out.contains("main is not an ancestor of HEAD"), "{out}");
     assert!(out.contains("git merge main && air record verify"), "{out}");
+    // air-5wq: and names the main it compared against, which is not the one the ok line
+    // named, so the pair reads as main having moved rather than as a contradiction.
+    assert!(
+        out.contains(&format!("main is at {}", &landed[..7])) && landed != main_before,
+        "{out}"
+    );
 
     // The incident: beta is still shown, because work IS waiting...
     let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
