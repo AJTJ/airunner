@@ -222,9 +222,22 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Invert the blank-task test: a real task stops becoming the prompt, and a blank one
             // starts. One branch, and the one this probe is about (air-7q5).
             file: "crates/cli/src/cmd/launch.rs",
-            from: "if let Some(t) = task.filter(|t| !t.trim().is_empty()) {",
-            to: "if let Some(t) = task.filter(|t| t.trim().is_empty()) {",
-            also_red: &["launch: --task reaches claude as the prompt"],
+            from: "if let Some(t) = prompt.filter(|t| !t.trim().is_empty()) {",
+            to: "if let Some(t) = prompt.filter(|t| t.trim().is_empty()) {",
+            also_red: &[
+                "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+            ],
+        },
+    ),
+    (
+        "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+        Mutation {
+            // Put the task back into argv, which is the shape that killed adopter's workers
+            // (air-er0). The file is still written; only the prompt regresses.
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "Ok(p) => Some(task_prompt(&p)),",
+            to: "Ok(_p) => Some(t.to_string()),",
+            also_red: &[],
         },
     ),
     (
@@ -469,6 +482,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/acceptance.rs",
             from: ".partition(|p| ev.tree.iter().any(|t| t == *p));",
             to: ".partition(|_p| true);",
+            also_red: &[],
+        },
+    ),
+    (
+        "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        Mutation {
+            // Never see a bead as ambiguous, which is the pre-fix rule exactly (air-09b): two
+            // landable carriers both go to the batch and the oldest lands first; a blocked
+            // carrier beside a landable one is refused as blocked. One comparison, it
+            // compiles, and the `--worker` path and the single-carrier paths are untouched by
+            // it, which is what shows it reaches the ambiguity rule alone.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        if carriers.len() > 1 {",
+            to: "        if carriers.len() > 99 {",
             also_red: &[],
         },
     ),
@@ -933,6 +960,7 @@ fn all_probes() -> Vec<Probe> {
         probe_refused_landing_publishes_nothing(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
+        probe_land_names_a_branch(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -2013,6 +2041,78 @@ fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
         name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
         red_fires,
         green_passes: untouched_stays_refuted && plain_discharges,
+    }
+}
+
+/// air-09b: a bead is a handle on a branch only while one branch carries it. adopter,
+/// 2026-08-30, twice: a bead carried by a batching lane and by the worker it batched. Named,
+/// `air land` took the oldest-waiting branch (the worker's), main moved, and the lane was
+/// refused; with the worker's branch blocked, the bead was refused outright.
+///
+/// Red, both observed cases: two landable carriers is refused naming each with `--worker`; a
+/// landable carrier beside a blocked one is refused the same way, with the landable one's
+/// command and the blocked one's fix, not silently resolved by state. Green: `--worker` lands
+/// that branch with every bead it carries; a bead on ONE blocked branch is still refused with
+/// that branch's fix; a bead on one landable branch still lands.
+fn probe_land_names_a_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str, minutes: i64, blocked: Option<&str>| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes,
+        command: match blocked {
+            None => format!("air land --worker {worker}"),
+            Some(_) => "git merge main && air record verify -- make verify".into(),
+        },
+        acceptance: Vec::new(),
+        blocked: blocked.map(String::from),
+    };
+    let none: Vec<String> = Vec::new();
+    let fd1 = vec!["fd-1".to_string()];
+    let fd2 = vec!["fd-2".to_string()];
+
+    // Case 1: alpha did fd-1 and has waited longest; lane batched it and carries fd-2 too.
+    let both_ready = vec![
+        landing("alpha", "fd-1", 30, None),
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case1 = matches!(
+        resolve(&fd1, &none, &both_ready, &[], &[]),
+        Err(m) if m.contains("--worker alpha") && m.contains("--worker lane")
+    );
+    // Case 2: alpha's branch is behind main now; lane can land.
+    let blocked = vec![landing("alpha", "fd-1", 30, Some("does not contain main"))];
+    let lane_ready = vec![
+        landing("lane", "fd-1", 5, None),
+        landing("lane", "fd-2", 5, None),
+    ];
+    let case2 = matches!(
+        resolve(&fd1, &none, &lane_ready, &blocked, &[]),
+        Err(m) if m.contains("--worker lane") && m.contains("does not contain main")
+            && !m.contains("--worker alpha")
+    );
+
+    let selector = matches!(
+        resolve(&none, &["lane".to_string()], &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
+    );
+    let single_blocked = matches!(
+        resolve(&fd1, &none, &[], &blocked, &[]),
+        Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
+    );
+    let single_ready = matches!(
+        resolve(&fd2, &none, &lane_ready, &blocked, &[]),
+        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "lane")
+    );
+
+    Probe {
+        name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+        red_fires: case1 && case2,
+        green_passes: selector && single_blocked && single_ready,
     }
 }
 
@@ -3720,20 +3820,30 @@ fn probe_git_ancestor() -> Probe {
     }
 }
 
-/// air-2ct: the `--task` text must reach claude as the prompt, not as a trailing value of
-/// the variadic `--disallowed-tools` list. Red: the old ordering (task appended after the
-/// deny list) is reported as eaten. Green: `air worker --task` launched against a stub
-/// `claude` (`AIR_CLAUDE_BIN`) hands the stub the task as its first argument.
+/// air-er0: the `--task` text must not be in the worker process's command line. adopter's
+/// seven worker deaths of 2026-08-30 were `pkill -f "air record verify"` matching the prompt
+/// in every peer's argv (`ps -o command=` showed the whole task). Red: the old shape, the
+/// task pushed into argv, carries the distinctive string. Green: `air worker --task` launched
+/// against a stub `claude` (`AIR_CLAUDE_BIN`, which records the argv it was exec'd with,
+/// which is what `ps -o command=` shows) has NO element containing that string, and the task
+/// still reaches the session as its first prompt: argv opens on the sentence naming
+/// `.air/tasks/w.md`, that sentence is read as the prompt and not as a deny value (air-2ct),
+/// and the file holds the task byte for byte. Without the second half the fix would be a
+/// silent no-op and every worker would start idle.
 fn probe_worker_task_prompt() -> Probe {
-    use crate::cmd::launch::{task_is_prompt, worker_argv};
-    let task = "say hello, it's $HOME";
+    use crate::cmd::launch::{task_is_prompt, task_prompt, worker_argv};
+    let task = "say hello, it's $HOME, then run air record verify -- make verify";
+    let marker = "air record verify";
     let mut old = worker_argv("w", "air", std::path::Path::new("/r/roles.md"), &[]);
     old.push(task.to_string());
-    let red = !task_is_prompt(&old, task);
+    let red = old.iter().any(|a| a.contains(marker));
 
     let green = (|| -> Result<bool, String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Canonical, because the launcher names the task file from its cwd as the kernel
+        // reports it (`/private/var/...` on macOS, not the `/var/...` temp_dir hands out).
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
         let git = Command::new("git")
             .arg("-C")
             .arg(&dir)
@@ -3787,6 +3897,8 @@ fn probe_worker_task_prompt() -> Probe {
         let _ = Command::new("tmux")
             .args(["-L", &socket, "kill-server"])
             .output();
+        let task_path = dir.join(".air").join("tasks").join("w.md");
+        let on_disk = std::fs::read_to_string(&task_path).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
@@ -3797,11 +3909,15 @@ fn probe_worker_task_prompt() -> Probe {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect();
-        Ok(argv.first().is_some_and(|a| a == task) && task_is_prompt(&argv, task))
+        let prompt = task_prompt(&task_path);
+        Ok(!argv.iter().any(|a| a.contains(marker))
+            && argv.first().is_some_and(|a| *a == prompt)
+            && task_is_prompt(&argv, &prompt)
+            && on_disk == format!("{task}\n"))
     })()
     .unwrap_or(false);
     Probe {
-        name: "launch: --task reaches claude as the prompt",
+        name: "launch: --task reaches claude as the prompt by file; the task text is not in argv",
         red_fires: red,
         green_passes: green,
     }

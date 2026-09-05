@@ -157,6 +157,12 @@ enum Cmd {
     /// One merge per branch, however many beads that branch carries; `--all` takes the oldest
     /// branch first and stops at the first refusal.
     ///
+    /// **The branch is the unit, and `--worker <name>` names it** (air-09b). A bead id names a
+    /// branch only while exactly one branch carries it; a bead on two branches (a batching
+    /// lane and the worker it batched, adopter 2026-08-30) is refused with every carrier and
+    /// the `--worker` command for each, never resolved by ordering or by which one happens to
+    /// be landable. `--worker` lands that branch with every bead its merge range names.
+    ///
     /// It closes nothing. The worker closes its own bead with proof before the branch lands
     /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
     /// acceptance criteria and Air's verdict on each clause — the only external check on that.
@@ -166,6 +172,10 @@ enum Cmd {
     /// `air status` (air-ayp).
     Land {
         bead: Vec<String>,
+        /// Land this worker's branch (`worktree-<name>`), whatever beads it carries. The
+        /// unambiguous selector; repeatable.
+        #[arg(long = "worker", value_name = "NAME", conflicts_with = "bead")]
+        worker: Vec<String>,
         /// Land every green branch, oldest first, stopping at the first red.
         #[arg(long)]
         all: bool,
@@ -361,7 +371,7 @@ fn main() -> ExitCode {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }
         Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
-        Cmd::Land { bead, all } => cmd::land::run(&repo, &bead, all, cli.json),
+        Cmd::Land { bead, worker, all } => cmd::land::run(&repo, &bead, &worker, all, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
