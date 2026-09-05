@@ -63,6 +63,25 @@
 //! can actively REFUTE — a bead naming a file the merge did not touch — is the signal worth
 //! carrying past scrollback, because that is a wrong close rather than an unreadable one.
 //!
+//! ## A path Air cannot resolve is unreadable, not refuted (air-dqa)
+//!
+//! `paths_named` reads path-like tokens out of prose, and a token it trims wrongly (adopter
+//! wrote `docs/reference/tooling.md`'s, and the possessive survived the trim) matched nothing in
+//! the merge and was reported as CONTRADICTED. Three firings, zero true, in the mechanism whose
+//! job is to be believed. So a named path that is NOT in the merge's file list is checked
+//! against the tree at the landed commit before anything is asserted: a file that exists and
+//! was not touched is refuted (the ai_runner case, where the work correctly landed in a
+//! different file, and a person must read it); a token that is no file at all is reported as
+//! a path Air cannot resolve, which is the unreadable direction. No further trimming rule was
+//! added: a stricter trimmer is the same brittleness with a longer regex.
+//!
+//! **Decided, 2026-09-05: acceptance clauses are NOT required to declare paths in a fixed
+//! form.** The digest declares its bead (air-agq) because that fact guards a gate and fails
+//! toward permitting. This mechanism reports; its failure is a person reading a wrong line,
+//! and with the tree check the wrong line can only be the true fact "exists, untouched". A
+//! declared form would be a syntax every bead author in every adopting repo must know, for a
+//! reporter. Revisit if a false refutation is recorded after this change.
+//!
 //! Removal condition: remove when acceptance criteria are machine-checkable by construction,
 //! at which point the merge either satisfies them or does not and no judgement is involved.
 
@@ -141,9 +160,13 @@ pub enum Verdict {
     /// Air looked it up and it does not hold. The strongest signal: the bead names a file the
     /// merge did not touch.
     Unevidenced { how: String },
-    /// Air has nothing to look up. Not a defect in the bead.
-    Undecidable,
+    /// Air has nothing to look up. Not a defect in the bead. `how` says why: plain prose, or a
+    /// path-like token that is no file at the landed commit (air-dqa).
+    Undecidable { how: String },
 }
+
+/// The one reason most clauses are undecidable: they are prose.
+const PROSE: &str = "nothing Air can look up";
 
 impl Verdict {
     pub fn discharged(&self) -> bool {
@@ -159,6 +182,9 @@ pub struct Evidence<'a> {
     pub green_at_landed: bool,
     /// Repo-relative paths the merge changed.
     pub changed: &'a [String],
+    /// Every path in the tree at the landed commit (air-dqa). A named path in neither list is
+    /// a token Air cannot resolve, not a file the merge failed to touch.
+    pub tree: &'a [String],
 }
 
 /// Does this token look like a repository path? Deliberately narrow: a slash and a dot, no
@@ -214,25 +240,35 @@ pub fn judge(clause: &str, ev: &Evidence<'_>) -> Verdict {
     }
     let paths = paths_named(clause);
     if paths.is_empty() {
-        return Verdict::Undecidable;
+        return Verdict::Undecidable { how: PROSE.into() };
     }
     let missing: Vec<&String> = paths
         .iter()
         .filter(|p| !ev.changed.iter().any(|c| c == *p))
         .collect();
     if missing.is_empty() {
-        Verdict::Discharged {
+        return Verdict::Discharged {
             how: format!("the merge changed {}", paths.join(", ")),
+        };
+    }
+    // air-dqa: before asserting the merge did not change a file, make sure it IS a file.
+    // A token the trimmer got wrong is no file at the landed commit, and saying "did not
+    // change" about it is a confident false accusation. An existing file the merge left alone
+    // is the true fact, and the one Air must keep saying.
+    let (untouched, unresolved): (Vec<&String>, Vec<&String>) = missing
+        .into_iter()
+        .partition(|p| ev.tree.iter().any(|t| t == *p));
+    let list = |v: &[&String]| v.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ");
+    if !untouched.is_empty() {
+        Verdict::Unevidenced {
+            how: format!("the merge did not change {}", list(&untouched)),
         }
     } else {
-        Verdict::Unevidenced {
+        Verdict::Undecidable {
             how: format!(
-                "the merge did not change {}",
-                missing
-                    .iter()
-                    .map(|p| p.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "names {}, which is not a path in the tree at the landed commit, so Air \
+                 cannot resolve it",
+                list(&unresolved)
             ),
         }
     }
@@ -273,9 +309,8 @@ impl Judged {
             let short = text.chars().take(70).collect::<String>();
             match v {
                 Verdict::Discharged { .. } => {}
-                Verdict::Unevidenced { how } => parts.push(format!("\"{short}\": {how}")),
-                Verdict::Undecidable => {
-                    parts.push(format!("\"{short}\": nothing Air can look up"));
+                Verdict::Unevidenced { how } | Verdict::Undecidable { how } => {
+                    parts.push(format!("\"{short}\": {how}"));
                 }
             }
         }
@@ -336,9 +371,7 @@ pub fn report(judged: &[Judged]) -> String {
             let (mark, how) = match v {
                 Verdict::Discharged { how } => ("ok  ", how.as_str()),
                 Verdict::Unevidenced { how } => ("MISS", how.as_str()),
-                Verdict::Undecidable => {
-                    ("?   ", "nothing Air can look up; a person must read this")
-                }
+                Verdict::Undecidable { how } => ("?   ", how.as_str()),
             };
             s.push_str(&format!("    {mark} {text}\n         {how}\n"));
         }
@@ -402,9 +435,14 @@ Something happened. See docs/rules/roles.md for the rule.
     #[test]
     fn a_path_the_merge_touched_discharges_and_one_it_did_not_is_unevidenced() {
         let changed = vec!["docs/rules/roles.md".to_string()];
+        let tree = vec![
+            "docs/rules/roles.md".to_string(),
+            "docs/rules/writing.md".to_string(),
+        ];
         let ev = Evidence {
             green_at_landed: true,
             changed: &changed,
+            tree: &tree,
         };
         assert!(judge("docs/rules/roles.md names the rule.", &ev).discharged());
         let v = judge("docs/rules/writing.md names the rule.", &ev);
@@ -420,10 +458,12 @@ Something happened. See docs/rules/roles.md for the rule.
         let green = Evidence {
             green_at_landed: true,
             changed: &none,
+            tree: &none,
         };
         let red = Evidence {
             green_at_landed: false,
             changed: &none,
+            tree: &none,
         };
         assert!(judge("Verify recorded green at HEAD.", &green).discharged());
         assert!(matches!(
@@ -431,15 +471,15 @@ Something happened. See docs/rules/roles.md for the rule.
             Verdict::Unevidenced { .. }
         ));
         // Air is not the judge of prose: it says so rather than guessing.
-        assert_eq!(
+        assert!(matches!(
             judge("The owner is told what changed.", &green),
-            Verdict::Undecidable
-        );
+            Verdict::Undecidable { .. }
+        ));
         // "verify" without a request for evidence is not a ledger question.
-        assert_eq!(
+        assert!(matches!(
             judge("Verify the merged result reads well.", &green),
-            Verdict::Undecidable
-        );
+            Verdict::Undecidable { .. }
+        ));
     }
 
     /// The bead's own rule: close on evidence, land-but-hold on anything else.
@@ -449,6 +489,7 @@ Something happened. See docs/rules/roles.md for the rule.
         let ev = Evidence {
             green_at_landed: true,
             changed: &changed,
+            tree: &changed,
         };
         // The probe clause is prose to Air, so this one lands and stays open.
         let j = judge_desc("air-1", BEAD, &ev);
@@ -476,6 +517,7 @@ Something happened. See docs/rules/roles.md for the rule.
         let ev = Evidence {
             green_at_landed: true,
             changed: &changed,
+            tree: &changed,
         };
         let r = report(&[
             judge_desc("air-1", BEAD, &ev),
@@ -533,6 +575,7 @@ Something happened. See docs/rules/roles.md for the rule.
             &Evidence {
                 green_at_landed: true,
                 changed: &[],
+                tree: &[],
             },
         );
         assert!(!j.all_discharged() && !j.refuted());
@@ -564,7 +607,13 @@ Something happened. See docs/rules/roles.md for the rule.
         let ev = Evidence {
             green_at_landed: true,
             changed: &changed,
+            tree: &changed,
         };
+        let tree = vec![
+            "docs/rules/roles.md".to_string(),
+            "docs/absent.md".to_string(),
+        ];
+        let ev = Evidence { tree: &tree, ..ev };
         let refuted = judge_clauses("a", vec!["docs/absent.md says it.".into()], &ev);
         let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
         assert!(refuted.refuted() && !refuted.all_discharged());
@@ -576,9 +625,14 @@ Something happened. See docs/rules/roles.md for the rule.
     #[test]
     fn the_contradicted_line_omits_what_air_merely_could_not_read() {
         let changed = vec!["docs/rules/roles.md".to_string()];
+        let tree = vec![
+            "docs/rules/roles.md".to_string(),
+            "docs/absent.md".to_string(),
+        ];
         let ev = Evidence {
             green_at_landed: true,
             changed: &changed,
+            tree: &tree,
         };
         let j = judge_clauses(
             "a",
@@ -597,6 +651,75 @@ Something happened. See docs/rules/roles.md for the rule.
         assert!(j.why_open().contains("docs/absent.md"));
         let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
         assert_eq!(unreadable.why_contradicted(), "");
+    }
+
+    /// air-dqa, the two cases the bead names. The possessive: adopter wrote
+    /// `docs/reference/tooling.md`'s, the trim stopped at the `s`, the token matched nothing
+    /// in a merge that HAD changed that file, and Air reported a contradiction. Now: no file by
+    /// that name at the landed commit, so unreadable, with the token named. The ai_runner case:
+    /// a clause naming a file the work correctly did not touch (the pin landed in install.rs
+    /// rather than install_and_launch.rs). The file exists and the merge left it alone, which is
+    /// the true fact, and stays refuted for a person to read.
+    #[test]
+    fn a_token_that_is_no_file_is_unreadable_and_an_untouched_file_is_refuted() {
+        let changed = vec!["docs/reference/tooling.md".to_string()];
+        let tree = vec![
+            "docs/reference/tooling.md".to_string(),
+            "crates/cli/tests/install_and_launch.rs".to_string(),
+            "crates/cli/src/cmd/install.rs".to_string(),
+        ];
+        let ev = Evidence {
+            green_at_landed: true,
+            changed: &changed,
+            tree: &tree,
+        };
+        // The possessive, verbatim from ad-cnjx.
+        let v = judge(
+            "Air's own `docs/reference/tooling.md`'s section is updated.",
+            &ev,
+        );
+        assert!(
+            matches!(&v, Verdict::Undecidable { how } if how.contains("cannot resolve")
+                && how.contains("docs/reference/tooling.md`'s")),
+            "{v:?}"
+        );
+        // The same clause written plainly discharges, so the tree check costs nothing real.
+        assert!(judge("docs/reference/tooling.md is updated.", &ev).discharged());
+        // The true positive Air must keep: an existing file the merge did not touch.
+        let v = judge(
+            "Pin it in crates/cli/tests/install_and_launch.rs.",
+            &Evidence {
+                changed: &["crates/cli/src/cmd/install.rs".to_string()],
+                ..ev
+            },
+        );
+        assert!(
+            matches!(&v, Verdict::Unevidenced { how }
+                if how == "the merge did not change crates/cli/tests/install_and_launch.rs"),
+            "{v:?}"
+        );
+        // A file the merge deleted is in `changed` and not in `tree`: still discharged.
+        assert!(
+            judge(
+                "docs/old.md is removed.",
+                &Evidence {
+                    changed: &["docs/old.md".to_string()],
+                    ..ev
+                }
+            )
+            .discharged()
+        );
+        // Mixed: one real untouched file beside one unresolvable token is still refuted, and
+        // names only the real one.
+        let v = judge(
+            "crates/cli/tests/install_and_launch.rs and docs/nope.md`'s are touched.",
+            &ev,
+        );
+        assert!(
+            matches!(&v, Verdict::Unevidenced { how }
+                if how == "the merge did not change crates/cli/tests/install_and_launch.rs"),
+            "{v:?}"
+        );
     }
 
     #[test]
