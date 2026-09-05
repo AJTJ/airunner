@@ -553,6 +553,19 @@ pub const SURFACE: &[SurfaceChange] = &[
                  2026-08-30 and an operational rule did not hold; the override count is what \
                  decides whether the refusal stays.",
     },
+    SurfaceChange {
+        id: "handover-names-the-bead",
+        since: "2026-09-05 (air-xbl)",
+        headline: "`air handover` from a worktree holding no claim (and naming no bead) no \
+                   longer fails the digest check unconditionally: with nothing to declare, \
+                   the check is skipped. A refusal names the bead the worker holds instead \
+                   of a literal `<bead>`.",
+        silent_break: false,
+        action: "Nothing to run. A batching lane that merges other workers' green work and \
+                 holds no claim can now hand over; a worker that holds a claim or names a \
+                 bead must still declare it in the digest's `bead:` front matter, unchanged. \
+                 If a rule of yours told workers to expect `<bead>` in the message, delete it.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -626,9 +639,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.3", 7, 26),
     // 2026-09-05: a signalled verify is no verdict (air-ppm).
     ("0.2.4", 8, 27),
+    // 2026-09-05: the hand-over refusal names the held bead and skips the digest check with
+    // nothing to declare (air-xbl).
+    ("0.2.5", 9, 28),
     // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
     // (air-1bm), schema v15.
-    ("0.2.5", 9, 28),
+    ("0.2.6", 10, 29),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
