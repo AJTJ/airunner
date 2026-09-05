@@ -306,8 +306,9 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 - **bd's agent setup is not installed.** `air init` runs `bd init --skip-agents --skip-hooks`:
   no AGENTS.md, no `bd prime` SessionStart hook. `bd prime` injects a command reference that
   tells agents to `bd update --claim` and `bd create`, which Air denies; Air's roles text is
-  the only agent-facing instruction. **[adopter]** remove the `bd prime --hook-json` hook
-  from `.claude/settings.json`.
+  the only agent-facing instruction. **[adopter]** `air install` reports a leftover
+  `bd prime --hook-json` hook as `STALE HOOK` on every run until it is gone (air-b5k); delete
+  the entry it names.
 - **Air records friction it did not cause.** `PermissionDenied` and `PostToolUseFailure` hooks
   log, per worker, the tool, the command, and who or what refused, so the repo's own guards
   and declined prompts land in the same event stream as Air's.
@@ -552,14 +553,18 @@ back in its `docs/guides/intake.md`.
 
 **5. Is the stale `bd prime --hook-json` hook still in `.claude/settings.json`?**
 
-```sh
-grep -n "bd prime" .claude/settings.json
+`air install` (dry run or `--write`) answers this: a leftover entry prints as
+
+```
+STALE HOOK: SessionStart runs `bd prime --hook-json`, which contradicts Air
+        do: `bd prime` injects a command reference telling agents to run `bd update --claim` ...
 ```
 
-adopter had exactly one hook, `SessionStart → bd prime --hook-json`
-(`adopter-as-built.md:50`). `air install --write` **merges**, so it adds Air's hooks
-alongside that one and leaves it in place — it will not remove it and does not report it.
-Delete the `bd prime` entry by hand.
+and keeps printing on every install until the entry is gone (air-b5k). the adopter had exactly
+one hook, `SessionStart → bd prime --hook-json` (`adopter-as-built.md:50`). `air install
+--write` **merges**, so it adds Air's hooks alongside that one and leaves it in place; it will
+not remove another tool's hook. Delete the entry the report names. Only on an installer older
+than 0.2.13, which does not report it, fall back to `grep -n "bd prime" .claude/settings.json`.
 
 *Skipping it:* `bd prime` injects a command reference telling agents to run `bd update --claim`
 and `bd create`, both of which Air denies. Agents get instructions that contradict their deny
