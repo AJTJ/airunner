@@ -38,7 +38,9 @@ pub mod kinds {
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
     pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
-    pub const OWNER_DECISION_WAITING: &str = "owner-decision-waiting";
+    // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
+    // Its subject was the owner capture queue, which is gone: the owner's queue is beads
+    // labelled `owner`, counted on the `ready:` line of `air status`.
     pub const LEASE_HELD_BY_DEAD_SESSION: &str = "lease-held-by-dead-session";
     pub const LEASE_STALE: &str = "lease-stale";
 
@@ -53,7 +55,6 @@ pub mod kinds {
         LANDABLE,
         REWOUND_AND_CARRIED,
         LANDED_NOT_CLOSED,
-        OWNER_DECISION_WAITING,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
     ];
@@ -109,8 +110,6 @@ pub struct Snapshot {
     pub workers: Vec<WorkerView>,
     pub inbox_depth: usize,
     pub oldest_capture_at: Option<String>,
-    pub owner_queue_depth: usize,
-    pub oldest_owner_capture_at: Option<String>,
     /// Every lease, with the defect the CLI found (None = healthy).
     pub leases: Vec<(Lease, Option<String>)>,
     /// Who is waiting for a resource, by resource (air-q9c). A lease defect is a signal for
@@ -216,8 +215,7 @@ pub struct Attention {
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
     /// stuck | idle-with-claim | silent-with-claim | handover-not-green |
-    /// owner-decision-waiting | lease-held-by-dead-session | lease-stale | review-waiting |
-    /// idle-without-claim
+    /// lease-held-by-dead-session | lease-stale | idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
     /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
     /// on a fact nobody was told)
@@ -236,9 +234,12 @@ pub struct Attention {
 }
 
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
-/// is `air land`: the coordinator's one allowed path onto main.
-pub fn land_command(bead: &str) -> String {
-    format!("air land {bead}")
+/// is `air land`: the coordinator's one allowed path onto main. It names the BRANCH (air-09b):
+/// `air land <bead>` is refused the moment two branches carry the bead, and the batching lane
+/// adopter runs makes that the normal case, so the command a surface offers is the one that
+/// cannot be ambiguous.
+pub fn land_command(worker: &str) -> String {
+    format!("air land --worker {worker}")
 }
 
 /// A green hand-over that only the owner can clear (air-6p5). The coordinator may not commit
@@ -274,38 +275,9 @@ fn sort_by_wait(v: &mut [Landing]) {
     v.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.bead.cmp(&b.bead)));
 }
 
-/// Pure: the block at the top of `air status`. Empty when nothing waits, so a quiet fleet
-/// prints nothing.
-///
-/// Landings are the coordinator's since air-3pz (`air land --all`), so they are no longer
-/// "waiting on owner"; only decisions are. The bead list stays because it is what the
-/// coordinator relays when the owner asks what is outstanding (air-6p5).
-pub fn waiting_on_owner(s: &Snapshot) -> String {
-    let decisions = s.owner_queue_depth;
-    if decisions == 0 {
-        return String::new();
-    }
-    let plural = |n: usize, word: &str| {
-        if n == 1 {
-            format!("{n} {word}")
-        } else {
-            format!("{n} {word}s")
-        }
-    };
-    let mut out = String::new();
-    if decisions > 0 {
-        out.push_str(&format!(
-            "waiting on owner: {}; `air inbox --owner`\n",
-            plural(decisions, "decision")
-        ));
-    }
-    out
-}
-
 /// The landings alone, without a full `gather`: bd's `awaiting_review` list, the claim row
 /// that names who handed each over, and that worker's green at HEAD. Derived every time, so
-/// the owner's feed and `air status` cannot disagree (air-6p5). bd absent or slow means no
-/// landings, not an error: `air inbox --owner` still shows the decisions.
+/// two readers cannot disagree (air-6p5). bd absent or slow means no landings, not an error.
 /// Which candidate ids this worker is responsible for, from Air's OWN ledger — no bd call.
 ///
 /// **Claimed by this worker, and not already landed.** Both halves come from tables Air
@@ -487,7 +459,9 @@ pub fn select(repo: &Path) -> Selection {
                     head.get(..8).unwrap_or(&head),
                     head.get(..8).unwrap_or(&head)
                 ),
-                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend), or land it by name: air land <bead>"
+                // The "or land it by name" this used to offer never worked: a bead absent
+                // from the range is refused as "no green branch names it" (air-09b).
+                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend)"
                     .to_string(),
                 worker: worker.clone(),
             });
@@ -507,7 +481,7 @@ pub fn select(repo: &Path) -> Selection {
                 // needs is a re-merge, and offering `air land` there is what cost the owner
                 // three cycles in an hour.
                 command: match &blocked {
-                    None => land_command(&bead),
+                    None => land_command(&worker),
                     Some(_) => super::land::remerge_command(),
                 },
                 blocked: blocked.clone(),
@@ -525,7 +499,7 @@ pub fn select(repo: &Path) -> Selection {
     out
 }
 
-/// Just the landable list, for the read-only callers (`air status`, `air inbox --owner`).
+/// Just the landable list, for the read-only callers (`air status`).
 /// `air land` uses [`select`], because it is the caller that must not read an error as empty.
 pub fn landings_for(repo: &Path) -> Vec<Landing> {
     select(repo).landings
@@ -1041,20 +1015,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             fingerprint: format!("{bead}/{why}"),
         });
     }
-    if let Some(oldest) = &s.oldest_owner_capture_at {
-        out.push(Attention {
-            worker: "owner".to_string(),
-            kind: kinds::OWNER_DECISION_WAITING,
-            detail: format!(
-                "{} decision(s) waiting for the owner, oldest {} min; `air inbox --owner`",
-                s.owner_queue_depth,
-                minutes_between(oldest, now).unwrap_or(0)
-            ),
-            for_minutes: minutes_between(oldest, now).unwrap_or(0),
-            // How many are waiting, not how long the oldest has waited.
-            fingerprint: format!("depth:{}", s.owner_queue_depth),
-        });
-    }
     out
 }
 
@@ -1369,7 +1329,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ));
     }
     let inbox = ledger.inbox().map_err(|e| e.to_string())?;
-    let owner_q = ledger.inbox_for("owner").map_err(|e| e.to_string())?;
     let stale = std::env::var("AIR_LEASE_STALE_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1403,8 +1362,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
-        owner_queue_depth: owner_q.len(),
-        oldest_owner_capture_at: owner_q.first().map(|c| c.captured_at.clone()),
         leases,
         lease_wants,
         // A ledger read, so it survives an absent bd (air-ayp). A bead bd shows back in the
@@ -1532,7 +1489,7 @@ pub fn record_and_log(
         } else {
             "status"
         },
-        &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "owner_queue": snap.owner_queue_depth, "duration_ms": snap.duration_ms}),
+        &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "duration_ms": snap.duration_ms}),
         if att.is_empty() { "quiet" } else { "attention" },
         &if att.is_empty() {
             "no conditions".to_string()
@@ -1557,8 +1514,7 @@ pub fn render_for_probe(s: &Snapshot) -> String {
 }
 
 fn render(s: &Snapshot, att: &[Attention]) -> String {
-    // First, because it is the only thing here nobody else can clear (air-6p5).
-    let mut out = waiting_on_owner(s);
+    let mut out = String::new();
     for w in &s.workers {
         let sess = w
             .session
@@ -1677,8 +1633,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         // "ready: 1" at round end had to open the bead to find the queue was empty for every
         // worker, which is the same defect one layer up from the condition itself.
         match (s.ready_depth, s.claimable_depth) {
+            // air-uef: the owner-labelled count IS the owner's queue, the one number that
+            // says what waits on the owner, printed where the coordinator already looks.
             (Some(r), Some(c)) if r != c => format!(
-                " ({c} claimable; {} owner-labelled, which `air claim` refuses to workers)",
+                " ({c} claimable; {} owner-labelled: the owner's queue, which `air claim` \
+                 refuses to workers)",
                 r.saturating_sub(c)
             ),
             _ => String::new(),
@@ -1691,10 +1650,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             _ => "",
         }
     ));
-    out.push_str(&format!(
-        "inbox: {} open; owner queue: {} open\n",
-        s.inbox_depth, s.owner_queue_depth
-    ));
+    out.push_str(&format!("inbox: {} open\n", s.inbox_depth));
     if let Some(l) = &s.bd_latency {
         out.push_str(&super::bd_latency::line(l));
     }
@@ -1905,29 +1861,6 @@ mod tests {
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
         assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
-    }
-
-    /// air-6p5 asked this line to name every landing waiting on the owner. Landings moved to
-    /// the coordinator (air-3pz, `air land --all`), and the list it printed was derived from
-    /// `review_waits`, which air-okc deleted with the `review-waiting` condition. What is left
-    /// is the half that was still true: decisions are the only thing that waits on the owner.
-    #[test]
-    fn waiting_on_owner_names_decisions_and_is_empty_when_nothing_waits() {
-        let s = Snapshot {
-            owner_queue_depth: 1,
-            ..Default::default()
-        };
-        assert_eq!(
-            waiting_on_owner(&s),
-            "waiting on owner: 1 decision; `air inbox --owner`\n"
-        );
-        let two = Snapshot {
-            owner_queue_depth: 2,
-            ..Default::default()
-        };
-        assert!(waiting_on_owner(&two).contains("2 decisions"));
-        // A quiet fleet stays quiet.
-        assert_eq!(waiting_on_owner(&Snapshot::default()), "");
     }
 
     /// air-3eu: the claim on a handed-over bead stays open so the coordinator still sees the
@@ -2164,18 +2097,12 @@ mod tests {
             ]
             .into_iter()
             .collect(),
-            owner_queue_depth: 2,
-            oldest_owner_capture_at: Some(T_2.into()),
             ..Default::default()
         };
         let att = attention(&s, NOW, Thresholds::default());
         assert_eq!(
             att.iter().map(|a| a.kind).collect::<Vec<_>>(),
-            vec![
-                kinds::LEASE_HELD_BY_DEAD_SESSION,
-                kinds::LEASE_STALE,
-                "owner-decision-waiting"
-            ]
+            vec![kinds::LEASE_HELD_BY_DEAD_SESSION, kinds::LEASE_STALE]
         );
         // Addressed to the waiter, never to the holder, and it names the action as theirs.
         assert_eq!(att[0].worker, "b");

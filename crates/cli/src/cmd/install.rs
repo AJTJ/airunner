@@ -480,6 +480,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  re-verify per landed bead, which `air status` now names as such.",
     },
     SurfaceChange {
+        id: "killed-is-no-verdict",
+        since: "2026-09-05 (air-ppm)",
+        headline: "A verify that exits 143 or 137 is recorded as KILLED, not red: it is no \
+                   verdict for that sha. A child that died by signal is recorded as 128+signal \
+                   rather than -1.",
+        silent_break: true,
+        action: "A run your harness killed at its timeout no longer reads as a red at HEAD, \
+                 no longer makes a green/kill pair read as flaky, and no longer tells the \
+                 worker \"the repo's test is the bug\". The exit code is still recorded and \
+                 `air record` still mirrors it, so a script gated on its exit sees what it \
+                 saw. Only 137 and 143 are read this way: when `make`'s CHILD is the process \
+                 signalled, make exits 2 and Air records a red, because 2 is a real failure's \
+                 code too and Air does not parse make's \"Terminated\" line to tell them \
+                 apart. A wrapper that knows a stage was signalled should exit 143 to say so \
+                 (adopter's run-logged.sh does).",
+    },
+    SurfaceChange {
         id: "task-by-file",
         since: "2026-09-05 (air-er0)",
         headline: "`air worker --task` writes the task to `<main>/.air/tasks/<name>.md`; the \
@@ -492,6 +509,34 @@ pub const SURFACE: &[SurfaceChange] = &[
                  every peer. adopter lost seven workers to that on 2026-08-30. Anything \
                  that reads a worker's task out of `ps` or the tmux command line reads the \
                  file instead; anything that cleans `.air/` leaves `tasks/` alone.",
+    },
+    SurfaceChange {
+        id: "land-worker",
+        since: "2026-09-05 (air-09b)",
+        headline: "`air land --worker <name>` names the branch to land. `air land <bead>` is \
+                   refused when more than one branch carries the bead, naming each carrier; \
+                   `air status` and `air inbox --owner` now offer the `--worker` form.",
+        silent_break: false,
+        action: "Land by branch: `air land --worker <name>`, which merges that branch with \
+                 every bead its range names. Naming a bead still works while exactly one \
+                 branch carries it. A script that greps the offered command for `air land \
+                 <bead>` reads `air land --worker <name>` now.",
+    },
+    SurfaceChange {
+        id: "owner-inbox-gone",
+        since: "2026-09-05 (air-uef)",
+        headline: "The owner inbox is gone: `air capture --for owner` is refused, `air inbox \
+                   --owner` and the `owner-decision-waiting` condition no longer exist. The \
+                   owner's queue is beads labelled `owner`, counted on the `ready:` line of \
+                   `air status`.",
+        silent_break: true,
+        action: "A rule or script that runs `air capture --for owner` now gets a refusal \
+                 (exit 2) naming the replacement; one that runs `air inbox --owner` gets a \
+                 clap error. Captures an older binary wrote for the owner are still there: \
+                 `air inbox` lists every open capture, so triage them on the next pass. The \
+                 coordinator triages EVERY capture into a bead or drops it with a reason, and \
+                 labels the bead `owner` (with its recommendation in the description) when the \
+                 decision is the owner's. `air://owner-queue` is gone from `air mcp`.",
     },
     SurfaceChange {
         id: "env-on-the-process",
@@ -577,8 +622,14 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.0", 4, 23),
     // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
     ("0.2.1", 5, 24),
-    // 2026-09-05: env on the process, one merged --settings, UNENFORCED in status (air-9dg).
+    // 2026-09-05: `air land --worker` names the branch (air-09b).
     ("0.2.2", 6, 25),
+    // 2026-09-05: the owner inbox goes (air-uef); the owner's queue is owner-labelled beads.
+    ("0.2.3", 7, 26),
+    // 2026-09-05: a signalled verify is no verdict (air-ppm).
+    ("0.2.4", 8, 27),
+    // 2026-09-05: env on the process, one merged --settings, UNENFORCED in status (air-9dg).
+    ("0.2.5", 9, 28),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
@@ -984,6 +1035,21 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+        // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
+        assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
+        assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
+        assert!(
+            !ROLES_MD.contains("inbox --owner"),
+            "the owner inbox is gone (air-uef)"
+        );
+        assert!(
+            !ROLES_MD.contains("--for owner"),
+            "the owner audience is gone (air-uef)"
+        );
+        assert!(!ROLES_MD.contains("owner decision waiting"));
+        // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
+        assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
+        assert!(ROLES_MD.contains("reads the tree alone and not git history"));
     }
 
     /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for

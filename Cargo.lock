@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "air"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "air-bd",
  "air-hooks",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "air-bd"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "rstest",
  "serde",
@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "air-hooks"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "air-ledger",
  "insta",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "air-ledger"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "jiff",
  "rstest",
