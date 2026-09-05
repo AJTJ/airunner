@@ -211,6 +211,30 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "hook: every `air <subcommand>` a shipped hook or status string names is a real subcommand",
+        Mutation {
+            // The pre-fix advice, verbatim (air-w91): the string ships a command that does not
+            // exist. The probe reads hook.rs at build time, so the mutated source is what it
+            // sees; nothing else reads that string, so every other probe stays GREEN.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "(`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
+            to: "(run `air peer <name>` for their green sha)",
+            also_red: &[],
+        },
+    ),
+    (
+        "status: the unit tests hold one instant and derive every age from Thresholds::default()",
+        Mutation {
+            // Put one of the copied literals back beside NOW, which is the pre-fix shape
+            // exactly (air-an9). Only this probe reads status.rs's test module as text, so
+            // every other probe stays GREEN.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "    const NOW: &str = \"2026-08-20T12:00:00Z\";\n",
+            to: "    const NOW: &str = \"2026-08-20T12:00:00Z\";\n    const T_30: &str = \"2026-08-20T11:30:00Z\";\n",
+            also_red: &[],
+        },
+    ),
+    (
         "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
         Mutation {
             // The ok line without the main it was true of: the pre-fix line exactly
@@ -1001,6 +1025,8 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_verify(),
         probe_gate_main(),
         probe_session_identity_is_the_launchers(),
+        probe_shipped_advice_names_real_subcommands(),
+        probe_status_tests_hold_one_instant(),
         probe_gate_names_the_landing_that_moved_main(),
         probe_handover_ok_names_the_main_it_checked(),
         probe_handover_matcher(),
@@ -3993,6 +4019,121 @@ fn probe_session_identity_is_the_launchers() -> Probe {
             && identity_from(None, None, "main") == "main"
             && v.message
                 .starts_with("handover refused for probe at 0123456: "),
+    }
+}
+
+/// `air <word>` mentions in COMMAND position in one source file's non-comment lines: after a
+/// backtick, an opening paren, or a colon-space, which is how every shipped advice string
+/// names a command ("run `air status`", "(air claim fd-1)", "fix: air record verify"). Prose
+/// about Air in a string ("the newer air and re-run", "will add air hooks") is preceded by a
+/// plain space or opens the literal, and is not a command. Returns (line, word).
+fn command_mentions(source: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut from = 0;
+        while let Some(pos) = line.get(from..).and_then(|s| s.find("air ")) {
+            let at = from.saturating_add(pos);
+            from = at.saturating_add(4);
+            let before = at.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+            let two_before = at.checked_sub(2).and_then(|p| bytes.get(p)).copied();
+            let command_position = matches!(before, Some(b'`') | Some(b'('))
+                || (before == Some(b' ') && two_before == Some(b':'));
+            if !command_position {
+                continue;
+            }
+            let word: String = line
+                .get(from..)
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                .collect();
+            if !word.is_empty() {
+                out.push((i.saturating_add(1), word));
+            }
+        }
+    }
+    out
+}
+
+/// air-w91: the file-overlap advice told every worker to run `air peer <name>`, a command that
+/// was planned in CLAUDE.md's subsystem table and never built; adopter's w3 hit
+/// "unrecognized subcommand" while already dealing with a shared file. `gc` from the same
+/// list shipped; `peer` did not; the string went out anyway, into every repo Air installs into.
+///
+/// Red: the pre-fix string is caught (`peer` is no subcommand). Green: every `air <word>` in
+/// command position in the shipped sources resolves to a subcommand clap knows, so the next
+/// planned-but-unbuilt command cannot ship in advice again. The command list is read from the
+/// binary's own clap tree, never from a list somebody typed.
+fn probe_shipped_advice_names_real_subcommands() -> Probe {
+    use clap::CommandFactory;
+
+    let real: Vec<String> = crate::Cli::command()
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    let sources: &[(&str, &str)] = &[
+        ("hook.rs", include_str!("hook.rs")),
+        ("status.rs", include_str!("status.rs")),
+        ("install.rs", include_str!("install.rs")),
+        ("land.rs", include_str!("land.rs")),
+        ("claim.rs", include_str!("claim.rs")),
+        ("capture.rs", include_str!("capture.rs")),
+        ("lease.rs", include_str!("lease.rs")),
+        ("handover.rs", include_str!("handover.rs")),
+        ("record.rs", include_str!("record.rs")),
+        ("close.rs", include_str!("close.rs")),
+        ("launch.rs", include_str!("launch.rs")),
+        ("init.rs", include_str!("init.rs")),
+        ("doctor.rs", include_str!("doctor.rs")),
+        ("mcp.rs", include_str!("mcp.rs")),
+        ("gate.rs", include_str!("../../../hooks/src/gate.rs")),
+    ];
+    let dangling: Vec<String> = sources
+        .iter()
+        .flat_map(|(name, src)| {
+            command_mentions(src)
+                .into_iter()
+                .filter(|(_, w)| !real.contains(w))
+                .map(move |(line, w)| format!("{name}:{line} names `air {w}`"))
+        })
+        .collect();
+    if !dangling.is_empty() {
+        eprintln!("selftest: shipped advice names a subcommand that does not exist:");
+        for d in &dangling {
+            eprintln!("  {d}");
+        }
+    }
+    let pre_fix = "context: Some(format!(\"... (run `air peer <name>` for their green sha)\"))";
+    let red = command_mentions(pre_fix)
+        .iter()
+        .any(|(_, w)| w == "peer" && !real.contains(w));
+    Probe {
+        name: "hook: every `air <subcommand>` a shipped hook or status string names is a real subcommand",
+        red_fires: red,
+        green_passes: !real.is_empty() && dangling.is_empty(),
+    }
+}
+
+/// air-an9: `status.rs`'s unit tests carried three literal timestamps chosen to sit either
+/// side of `Thresholds::default()` at the time they were written, the shape that made main
+/// red for six days when two dated cutoffs expired (air-24e), and the shape air-jc0 took out
+/// of the probes. They now hold ONE instant and derive every age from the thresholds. Red: a
+/// second literal instant in the file is caught. Green: the file has exactly one, and the
+/// helpers that derive the ages read the thresholds (the control air-jc0 prescribes, moving a
+/// default and watching the tests stay green, is run by hand and recorded in the digest).
+fn probe_status_tests_hold_one_instant() -> Probe {
+    let src = include_str!("status.rs");
+    let instants = src.matches("\"2026-08-20T").count();
+    Probe {
+        name: "status: the unit tests hold one instant and derive every age from Thresholds::default()",
+        red_fires: instants == 1,
+        green_passes: src.contains("fn past_every_line_min() -> i64")
+            && src.contains("fn under_every_line_min() -> i64")
+            && src.contains("fn every_line() -> [i64; 5]"),
     }
 }
 
