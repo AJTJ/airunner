@@ -529,7 +529,12 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
         );
     }
     if status == "in_progress" && reason != "landed" {
-        match bd.set_status(bead, "open") {
+        // air-0kk: open AND unassigned, in ONE bd process. Reopening alone left the assignee
+        // pencilled in, and in bd 1.2.x that blocks every other worker's `--claim`: the bead
+        // sat in `bd ready` claimable by nobody but the worker that had just released it
+        // (adopter ad-tdv8; here air-an9 after gate's session was gone). One process, so
+        // the status and the assignee cannot be left half-applied.
+        match bd.reopen_unassigned(bead) {
             Ok(()) => {}
             Err(BdError::Timeout(_)) => {
                 return fail(
@@ -538,14 +543,17 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
                     "release",
                     inputs,
                     "timeout",
-                    timeout_msg("-s open", bead),
+                    timeout_msg("-s open -a \"\"", bead),
                     "bd exit",
                     json,
                     1,
                 );
             }
             Err(e) => {
-                let msg = format!("bd refused to reopen {bead}; nothing recorded: {e}");
+                let msg = format!(
+                    "bd refused to reopen and unassign {bead} (one `bd update -s open -a \"\"`); \
+                     nothing recorded, and the bead is still in_progress by you: {e}"
+                );
                 return fail(
                     &ledger,
                     &me,
