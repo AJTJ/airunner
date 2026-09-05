@@ -371,6 +371,9 @@ pub const BOOKKEEPING: &[&str] = &[
     "failed",
     "green",
     "journaled",
+    // `air record` whose child was signalled before it could decide (air-ppm): a fact about
+    // the run, recorded like `green` and `red`, deciding nothing.
+    "killed",
     "landed",
     // Counting a message is bookkeeping, not a mechanism firing: nothing is decided by it
     // (air-q07). It has its own block in the report instead.
