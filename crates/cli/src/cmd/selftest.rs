@@ -197,6 +197,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
+        Mutation {
+            // The ok line without the main it was true of: the pre-fix line exactly
+            // (air-5wq). One argument; the refusal side is untouched, so the green half
+            // and `gate: main-merged` stay GREEN, which shows this reaches the ok line alone.
+            file: "crates/hooks/src/gate.rs",
+            from: "containing_main(&f.main_sha)",
+            to: "containing_main(\"\")",
+            also_red: &[],
+        },
+    ),
+    (
         "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
         Mutation {
             // The old denylist of one, exactly as it stood: only `in-flight` is skipped, so a
@@ -939,6 +951,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_verify(),
         probe_gate_main(),
         probe_gate_names_the_landing_that_moved_main(),
+        probe_handover_ok_names_the_main_it_checked(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
@@ -3722,6 +3735,30 @@ fn probe_gate_names_the_landing_that_moved_main() -> Probe {
             && plain.block
             && !plain.message.contains("landing")
             && plain.message.contains("main is at fedcba9"),
+    }
+}
+
+/// air-5wq: `handover ok: w2 at 3c39883` reads as a clearance and is a snapshot. adopter
+/// measured 88 refusals in four days within 120 s of that worker's own ok line. Red: the ok
+/// line names the main it checked against. Green: after main moves, the refusal names the new
+/// main and not the old one, so the pair reads as main having moved; an unreadable main is
+/// omitted rather than rendered empty.
+fn probe_handover_ok_names_the_main_it_checked() -> Probe {
+    let ok = handover_verdict(&base_facts());
+    let red = ok.pass && ok.message.ends_with(", containing main fedcba9");
+    let mut moved = base_facts();
+    moved.main_is_ancestor = false;
+    moved.main_sha = "1111111222222".into();
+    let refused = handover_verdict(&moved);
+    let mut unknown = base_facts();
+    unknown.main_sha = String::new();
+    Probe {
+        name: "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
+        red_fires: red,
+        green_passes: refused.block
+            && refused.message.contains("main is at 1111111")
+            && !refused.message.contains("fedcba9")
+            && handover_verdict(&unknown).message == "handover ok: probe at 0123456",
     }
 }
 
