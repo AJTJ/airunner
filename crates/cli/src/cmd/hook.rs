@@ -481,8 +481,12 @@ fn pre_tool_use(
             if !peers.is_empty() {
                 return Ok(Dispatched::new(
                     HookOutcome::Allow {
+                        // air-w91: this named `air peer`, a command that was planned and never
+                        // built, and adopter's worker hit "unrecognized subcommand" at the
+                        // moment it was dealing with a shared file. Both commands below exist;
+                        // a probe holds every shipped advice string to that.
                         context: Some(format!(
-                            "air: {} is also being edited by {} — coordinate before overlapping edits (run `air peer <name>` for their green sha)",
+                            "air: {} is also being edited by {} — coordinate before overlapping edits (`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
                             rel,
                             peers.join(", ")
                         )),
