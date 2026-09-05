@@ -410,6 +410,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: the digest refusal says the digest commit moves HEAD off the green and names the order, only when a green is at HEAD",
+        Mutation {
+            // The note stops being conditional on the green: it goes silent for the worker
+            // who has one (air-yol's report) and would speak for the one who has not.
+            file: "crates/hooks/src/gate.rs",
+            from: "let order_note = if f.green_at_head {",
+            to: "let order_note = if !f.green_at_head {",
+            also_red: &[],
+        },
+    ),
+    (
         "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
         Mutation {
             // Air stops copying: the worktree is the naive one and its build fails, which is
@@ -1141,6 +1152,7 @@ fn all_probes() -> Vec<Probe> {
         probe_enforced_gate(),
         probe_env_reaches_the_hook(),
         probe_worktree_is_airs(),
+        probe_digest_refusal_names_the_order_only_with_a_green(),
         probe_bd_calls_are_per_event(),
         probe_status_reconcile_is_one_show(),
         probe_subagent_stop_is_not_a_stop(),
@@ -3253,6 +3265,37 @@ fn probe_gate_digest() -> Probe {
             .iter()
             .any(|m| m.check == "digest-present"),
         green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// air-yol: the digest refusal's fix is right and, followed, produced the next refusal: the
+/// digest commit moves HEAD off the recorded green (adopter ad-8m9b, 2026-08-31, two
+/// workers). Red: with a green at HEAD, the refusal says so and names the order that works
+/// (commit, merge main, record verify LAST). Green: with no green at HEAD there is nothing to
+/// invalidate and the note is absent, so it is not the unconditional noise air-5wq refused.
+fn probe_digest_refusal_names_the_order_only_with_a_green() -> Probe {
+    let mut with = base_facts();
+    with.digest_present = Some(false);
+    with.digest_dir = Some("docs/log.d".into());
+    with.green_at_head = true;
+    let mut without = with.clone();
+    without.green_at_head = false;
+    let fix_of = |f: &air_hooks::GateFacts| -> String {
+        handover_verdict(f)
+            .missing
+            .iter()
+            .find(|m| m.check == "digest-present")
+            .map(|m| m.fix.clone())
+            .unwrap_or_default()
+    };
+    let w = fix_of(&with);
+    let wo = fix_of(&without);
+    Probe {
+        name: "gate: the digest refusal says the digest commit moves HEAD off the green and names the order, only when a green is at HEAD",
+        red_fires: w.contains("moves HEAD off")
+            && w.contains("air record verify -- make verify")
+            && w.contains("LAST"),
+        green_passes: !wo.is_empty() && !wo.contains("moves HEAD off"),
     }
 }
 

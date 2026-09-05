@@ -668,6 +668,17 @@ pub const SURFACE: &[SurfaceChange] = &[
                  The merge never removes another tool's hook, so the report is the only thing \
                  that will keep saying it is there.",
     },
+    SurfaceChange {
+        id: "digest-refusal-names-the-order",
+        since: "2026-09-05 (air-yol)",
+        headline: "The digest refusal, when a green is recorded at HEAD, says that committing \
+                   the digest moves HEAD off that green and names the order: commit, `git \
+                   merge main`, then `air record verify -- make verify` last.",
+        silent_break: false,
+        action: "Nothing to run. A rule of yours that explained this ordering by hand can \
+                 point at the refusal instead; with no green at HEAD the message is as \
+                 before.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -763,6 +774,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.12", 16, 35),
     // 2026-09-05: `air install` reports a stale `bd prime` hook (air-b5k).
     ("0.2.13", 17, 36),
+    // 2026-09-05: the digest refusal names the order that keeps the green (air-yol).
+    ("0.2.14", 18, 37),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
