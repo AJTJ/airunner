@@ -43,9 +43,8 @@ worker keeps working or releases with a reason.
 
 ```bash
 air capture "<one line: what, where (file:line), why it matters>"   # worker or coordinator  [built]
-air capture --for owner "<decision only the owner can make>"          # owner decision queue   [built]
 air inbox            # coordinator: open captures, oldest first         [built]
-air inbox --owner    # the owner's queue; attention `owner-decision-waiting`  [built]
+air status           # the `ready:` line counts owner-labelled beads: the owner's queue (air-uef)  [built]
 ```
 
 **The coordinator triages inline** (`decisions.md` 2026-08-18 item 2, reaffirmed 2026-08-20).
@@ -61,9 +60,10 @@ For each capture, one of three outcomes:
    air triage <capture-id> --bead <new-id> # links the capture; records time-to-triage  [built]
    ```
 2. **It is not worth a bead.** `air triage <id> --drop "<why>"` **[built]**.
-3. **It is the owner's.** `air capture --for owner` (or it arrived that way); the owner walks
-   `air inbox --owner` with an agent. `bd human` does not exist in bd 1.2.x and is never used
-   (`decisions.md` 2026-08-21 E; `rules/adopting-air.md §3`).
+3. **It is the owner's.** File the bead anyway, label it `owner`, and put your recommendation
+   in the description; `air claim` refuses it to workers and `air status` counts it. The owner
+   inbox (`--for owner`) went with air-uef (owner, 2026-09-05). `bd human` does not exist in
+   bd 1.2.x and is never used (`decisions.md` 2026-08-21 E; `rules/adopting-air.md §3`).
 
 What refuses what:
 
@@ -145,7 +145,7 @@ a successor.
 
 **Coordinator modes** (`rules/roles.md` "Coordinator"; owner 2026-08-21): **active** means
 every online worker has a bead, assigned without asking, and an idle worker is a coordinator
-failure; **idle** means feed no one. Escalate to the owner only through `air capture --for owner`.
+failure; **idle** means feed no one. Escalate to the owner only by filing a bead labelled `owner`.
 There is no cap on work in flight (§8).
 
 **Per-worker queues from live state.** Queues are beads fields only: `assignee`, priority,
@@ -182,7 +182,7 @@ toward discarded work (spec §2.3).
 → next bead. Ending a turn after the claim is a failure. Blocker: one `air capture`, then
 release or take unrelated work. Hooks are quiet unless actionable and changed; the channel
 delivers stuck / idle-with-claim / silent-with-claim / gone-with-claim / handover-not-green /
-inbox-waiting / owner-decision-waiting / lease-held-by-dead-session to the coordinator
+inbox-waiting / lease-held-by-dead-session to the coordinator
 (`crates/cli/src/cmd/status.rs`; `air mcp`) **[built]**.
 
 ## 5. Hand-over, review, landing
@@ -227,7 +227,7 @@ with reason `landed`.
 | Verify integrity: foreground, duration, output, flaky, command change, dirty tree | `air record` | built | Verify completeness (the repo's fitness) |
 | Role from the checkout; edit journal; peer warning on a held path | `air hook` | built | Announcing intent; splitting a shared file |
 | Attention conditions pushed once, re-pushed only on change | `air mcp` channel; `air status --attention` | built | What to do about them |
-| Owner decision queue | `air capture --for owner`; `air inbox --owner` | built | The decision |
+| Owner decision queue | beads labelled `owner`, counted on `air status`'s `ready:` line (air-uef) | built | The decision |
 | Estimate vs actual; inbox depth; review wait; awaiting-review count | ledger, `air status`; `air metrics --round` | built (facts) / roadmap (report) | Reading them; re-sizing |
 | Overlap-ranked frontier, stale-citation flag at claim and post-merge | `air next`, `air post-merge` | roadmap | Re-cutting siblings; superseding |
 | Land with receipt; close by evidence | `air land` | roadmap (repo's `make land` meanwhile) | When to land; batching |
