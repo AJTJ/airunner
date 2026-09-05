@@ -179,6 +179,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.main_is_ancestor {",
             to: "if false {",
+            also_red: &[
+                "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+            ],
+        },
+    ),
+    (
+        "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        Mutation {
+            // Never name the landing, which is the pre-fix wording exactly (air-4up): the
+            // refusal still fires and still names the fix, so `gate: main-merged` stays
+            // GREEN under it — which shows this reaches the wording and not the check.
+            file: "crates/hooks/src/gate.rs",
+            from: "if let Some(m) = f.main_moved.as_ref() {",
+            to: "if let Some(m) = f.main_moved.as_ref().filter(|_| false) {",
             also_red: &[],
         },
     ),
@@ -898,6 +912,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
+        probe_gate_names_the_landing_that_moved_main(),
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
@@ -3549,6 +3564,8 @@ fn base_facts() -> GateFacts {
         tree_green: None,
         last_green_sha: None,
         main_is_ancestor: true,
+        main_sha: "fedcba9876543210".into(),
+        main_moved: None,
         bead_claimed_by_worker: true,
         runs_at_head: (1, 0),
         digest_present: None,
@@ -3579,6 +3596,43 @@ fn probe_gate_main() -> Probe {
         name: "gate: main-merged",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-4up: eight refusals in one adopter round, all caused by a coordinator landing, every
+/// one worded as a defect in the worker's tree. Red: with a landing on record that HEAD does
+/// not contain, the refusal names it — the sha, how long ago, whose branch — and keeps the
+/// phrase adopter counts refusals by. Green: the fix is unchanged, and with no landing to
+/// name the gate still refuses and names main without inventing a cause.
+fn probe_gate_names_the_landing_that_moved_main() -> Probe {
+    use air_hooks::MainMove;
+
+    let mut f = base_facts();
+    f.main_is_ancestor = false;
+    f.main_moved = Some(MainMove {
+        merge_commit: "abcdef0123456".into(),
+        worker: "lane".into(),
+        at: "t".into(),
+        ago_secs: Some(40),
+    });
+    let v = handover_verdict(&f);
+    let red = v.block
+        && v.message
+            .contains("moved 40s ago to abcdef0 (landing from lane)")
+        && v.message.contains("main is not an ancestor of HEAD");
+    let fix_unchanged = v.missing.iter().any(|m| {
+        m.check == "main-merged" && m.fix == "git merge main && air record verify -- make verify"
+    });
+    let mut g = base_facts();
+    g.main_is_ancestor = false;
+    let plain = handover_verdict(&g);
+    Probe {
+        name: "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        red_fires: red,
+        green_passes: fix_unchanged
+            && plain.block
+            && !plain.message.contains("landing")
+            && plain.message.contains("main is at fedcba9"),
     }
 }
 
