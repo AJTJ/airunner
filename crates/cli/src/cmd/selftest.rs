@@ -223,6 +223,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "status: the unit tests hold one instant and derive every age from Thresholds::default()",
+        Mutation {
+            // Put one of the copied literals back beside NOW, which is the pre-fix shape
+            // exactly (air-an9). Only this probe reads status.rs's test module as text, so
+            // every other probe stays GREEN.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "    const NOW: &str = \"2026-08-20T12:00:00Z\";\n",
+            to: "    const NOW: &str = \"2026-08-20T12:00:00Z\";\n    const T_30: &str = \"2026-08-20T11:30:00Z\";\n",
+            also_red: &[],
+        },
+    ),
+    (
         "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
         Mutation {
             // The ok line without the main it was true of: the pre-fix line exactly
@@ -991,6 +1003,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_main(),
         probe_session_identity_is_the_launchers(),
         probe_shipped_advice_names_real_subcommands(),
+        probe_status_tests_hold_one_instant(),
         probe_gate_names_the_landing_that_moved_main(),
         probe_handover_ok_names_the_main_it_checked(),
         probe_handover_matcher(),
@@ -3971,6 +3984,25 @@ fn probe_shipped_advice_names_real_subcommands() -> Probe {
         name: "hook: every `air <subcommand>` a shipped hook or status string names is a real subcommand",
         red_fires: red,
         green_passes: !real.is_empty() && dangling.is_empty(),
+    }
+}
+
+/// air-an9: `status.rs`'s unit tests carried three literal timestamps chosen to sit either
+/// side of `Thresholds::default()` at the time they were written, the shape that made main
+/// red for six days when two dated cutoffs expired (air-24e), and the shape air-jc0 took out
+/// of the probes. They now hold ONE instant and derive every age from the thresholds. Red: a
+/// second literal instant in the file is caught. Green: the file has exactly one, and the
+/// helpers that derive the ages read the thresholds (the control air-jc0 prescribes, moving a
+/// default and watching the tests stay green, is run by hand and recorded in the digest).
+fn probe_status_tests_hold_one_instant() -> Probe {
+    let src = include_str!("status.rs");
+    let instants = src.matches("\"2026-08-20T").count();
+    Probe {
+        name: "status: the unit tests hold one instant and derive every age from Thresholds::default()",
+        red_fires: instants == 1,
+        green_passes: src.contains("fn past_every_line_min() -> i64")
+            && src.contains("fn under_every_line_min() -> i64")
+            && src.contains("fn every_line() -> [i64; 5]"),
     }
 }
 
