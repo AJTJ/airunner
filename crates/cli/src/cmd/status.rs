@@ -83,7 +83,13 @@ pub struct WorkerView {
     pub role: String,
     pub session: Option<Session>,
     pub head: Option<String>,
+    /// Green under the repo's key (`cmd::green`): at the commit, or at its tree where the
+    /// repo declares `verify_key: tree`. `None` when the head could not be read.
     pub green_at_head: Option<bool>,
+    /// What is behind the word when a green was found by tree (air-7wf): which commit it was
+    /// recorded at and by whom, and, where it does not count, why not. `None` for a plain
+    /// commit green or a plain absence.
+    pub green_detail: Option<String>,
     pub claims: Vec<Claim>,
     /// Open claims bd shows in `awaiting_review`: still held (the files are still the
     /// worker's) but no longer work in progress (air-3eu).
@@ -338,7 +344,9 @@ fn known_beads(
         .landings()
         .map_err(|e| format!("landings: {e}"))?
         .into_iter()
-        .filter(|l| l.result == "landed")
+        // air-8zn: positive on what landed. This filter was already positive but named one
+        // result, so a bead on a `landed-refuted` row still counted as unlanded here.
+        .filter(air_ledger::landings::Landing::landed)
         .flat_map(|l| l.beads)
         .collect();
     Ok(ids
@@ -421,7 +429,7 @@ pub fn select(repo: &Path) -> Selection {
                 continue;
             }
         };
-        match ledger.is_green_at(&worker, &head, Kind::Verify) {
+        match super::green::at(&ledger, &path, &head, Kind::Verify).map(|e| e.holds()) {
             Ok(true) => {}
             Ok(false) => {
                 out.skipped.push(Skipped {
@@ -1104,17 +1112,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         .unwrap_or_default()
                 });
                 let head = git::head(&path).ok();
-                let green = match &head {
-                    Some(h) => ledger.is_green_at(&name, h, Kind::Verify).ok(),
-                    None => None,
-                };
+                // air-7wf: the same predicate the gate and `air land` read, so this line
+                // cannot say "not green" about a commit the gate would pass.
+                let evidence = head
+                    .as_deref()
+                    .and_then(|h| super::green::at(&ledger, &path, h, Kind::Verify).ok());
                 views.insert(
                     name.clone(),
                     WorkerView {
                         role: super::hook::role_for(&name).to_string(),
                         worker: name,
                         head,
-                        green_at_head: green,
+                        green_at_head: evidence.as_ref().map(super::green::Evidence::holds),
+                        green_detail: evidence.as_ref().and_then(super::green::Evidence::detail),
                         ..Default::default()
                     },
                 );
@@ -1567,10 +1577,12 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 format!("{} since {} [{model}]", x.state, x.changed_at)
             })
             .unwrap_or_else(|| "no session".to_string());
-        let green = match w.green_at_head {
-            Some(true) => "green",
-            Some(false) => "not green",
-            None => "unknown",
+        let green = match (w.green_at_head, w.green_detail.as_deref()) {
+            (Some(true), None) => "green".to_string(),
+            (Some(true), Some(d)) => format!("green ({d})"),
+            (Some(false), None) => "not green".to_string(),
+            (Some(false), Some(d)) => format!("not green ({d})"),
+            (None, _) => "unknown".to_string(),
         };
         let claims: Vec<String> = w
             .claims
@@ -1793,6 +1805,7 @@ mod tests {
             }),
             head: Some("abc".into()),
             green_at_head: green,
+            green_detail: None,
             claims,
             handed_over: vec![],
             files_held: 0,

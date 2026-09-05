@@ -57,7 +57,11 @@ Two constraints, because Air checks them and they are about ordering rather than
 
 - **The recorded green has to be at the commit you hand on, and that commit has to contain
   `main`.** So merge `main` first and run `air record verify -- <cmd>` last; a green recorded
-  before the merge is a green for a tree nobody will land.
+  before the merge is a green for a tree nobody will land. Whose green does not matter: a
+  green at a sha is a green at that sha whoever ran it (air-7wf). Where the repo declares
+  `verify_key: tree` in `.claude/air.json`, a green at another commit with the identical tree
+  counts too, which is what makes a fast-forward onto a landing green with no re-verify.
+  **[fact]**
 - **A digest, where the repo configures `digest_dir`, has to name its bead** in front matter
   (`---` / `bead: <id>` / `---`) and be written with the work rather than after the fact. Air
   reads the declared field, not the filename: a digest for another bead used to satisfy the
