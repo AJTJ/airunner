@@ -233,9 +233,12 @@ pub struct Attention {
 }
 
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
-/// is `air land`: the coordinator's one allowed path onto main.
-pub fn land_command(bead: &str) -> String {
-    format!("air land {bead}")
+/// is `air land`: the coordinator's one allowed path onto main. It names the BRANCH (air-09b):
+/// `air land <bead>` is refused the moment two branches carry the bead, and the batching lane
+/// adopter runs makes that the normal case, so the command a surface offers is the one that
+/// cannot be ambiguous.
+pub fn land_command(worker: &str) -> String {
+    format!("air land --worker {worker}")
 }
 
 /// A green hand-over that only the owner can clear (air-6p5). The coordinator may not commit
@@ -484,7 +487,9 @@ pub fn select(repo: &Path) -> Selection {
                     head.get(..8).unwrap_or(&head),
                     head.get(..8).unwrap_or(&head)
                 ),
-                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend), or land it by name: air land <bead>"
+                // The "or land it by name" this used to offer never worked: a bead absent
+                // from the range is refused as "no green branch names it" (air-09b).
+                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend)"
                     .to_string(),
                 worker: worker.clone(),
             });
@@ -504,7 +509,7 @@ pub fn select(repo: &Path) -> Selection {
                 // needs is a re-merge, and offering `air land` there is what cost the owner
                 // three cycles in an hour.
                 command: match &blocked {
-                    None => land_command(&bead),
+                    None => land_command(&worker),
                     Some(_) => super::land::remerge_command(),
                 },
                 blocked: blocked.clone(),

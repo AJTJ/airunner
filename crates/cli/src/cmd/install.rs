@@ -493,6 +493,18 @@ pub const SURFACE: &[SurfaceChange] = &[
                  that reads a worker's task out of `ps` or the tmux command line reads the \
                  file instead; anything that cleans `.air/` leaves `tasks/` alone.",
     },
+    SurfaceChange {
+        id: "land-worker",
+        since: "2026-09-05 (air-09b)",
+        headline: "`air land --worker <name>` names the branch to land. `air land <bead>` is \
+                   refused when more than one branch carries the bead, naming each carrier; \
+                   `air status` and `air inbox --owner` now offer the `--worker` form.",
+        silent_break: false,
+        action: "Land by branch: `air land --worker <name>`, which merges that branch with \
+                 every bead its range names. Naming a bead still works while exactly one \
+                 branch carries it. A script that greps the offered command for `air land \
+                 <bead>` reads `air land --worker <name>` now.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -560,6 +572,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.0", 4, 23),
     // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
     ("0.2.1", 5, 24),
+    // 2026-09-05: `air land --worker` names the branch (air-09b).
+    ("0.2.2", 6, 25),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
