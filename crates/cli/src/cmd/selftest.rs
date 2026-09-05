@@ -193,6 +193,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
+        Mutation {
+            // Drop the entry: the deny is gone and the matcher alone remains, which is the
+            // count without the refusal.
+            file: "crates/cli/src/cmd/launch.rs",
+            from: "    \"AskUserQuestion\",\n];",
+            to: "];",
+            also_red: &[],
+        },
+    ),
+    (
         "gate: verify-green-at-head",
         Mutation {
             file: "crates/hooks/src/gate.rs",
@@ -1157,6 +1168,7 @@ fn all_probes() -> Vec<Probe> {
         probe_claim_retries_a_timeout_once(),
         probe_release_unassigns(),
         probe_every_air_spawn_pins_identity(),
+        probe_worker_cannot_ask_the_owner_directly(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -5128,6 +5140,36 @@ fn probe_status_reconcile_is_one_show() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-bm3 (owner, 2026-08-30): `AskUserQuestion` is denied to workers, and the PreToolUse
+/// matcher carries it so an attempt is recorded and the deny is countable. The owner is
+/// reached through `air capture`, filed by the coordinator as a bead labelled `owner`.
+///
+/// Red: the worker argv denies the tool, the coordinator's does not, and the matcher names
+/// it. Green: the deny is the bare tool name (the shape `EnterWorktree` uses), and the
+/// worker is not denied `air capture`, which is the path that does work.
+fn probe_worker_cannot_ask_the_owner_directly() -> Probe {
+    use crate::cmd::install::hook_entries;
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
+    let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
+    let matcher_counts_it = hook_entries().iter().any(|(event, m)| {
+        *event == "PreToolUse" && m.is_some_and(|m| m.contains("AskUserQuestion"))
+    });
+
+    let red = denies(&worker, "AskUserQuestion")
+        && !denies(&coord, "AskUserQuestion")
+        && matcher_counts_it;
+    let green = !worker.iter().any(|a| a.contains("AskUserQuestion("))
+        && !worker.iter().any(|a| a.contains("air capture"));
+    Probe {
+        name: "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
         red_fires: red,
         green_passes: green,
     }

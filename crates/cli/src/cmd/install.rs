@@ -87,7 +87,12 @@ pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {
         // wants minimised — agent-to-agent coordination — was the one thing the ledger did
         // not contain: one worker sent ~46,900 characters in a day and a query over the event
         // log returned zero, not because there was none but because it was invisible.
-        ("PreToolUse", Some("Edit|Write|MultiEdit|Bash|SendMessage")),
+        // `AskUserQuestion` is here to be COUNTED (air-bm3): the tool is denied to workers,
+        // and without the event the deny's removal condition could never be settled.
+        (
+            "PreToolUse",
+            Some("Edit|Write|MultiEdit|Bash|SendMessage|AskUserQuestion"),
+        ),
         ("PostToolUse", Some("Edit|Write|MultiEdit|Bash")),
         ("PermissionRequest", None),
         ("PermissionDenied", None),
@@ -639,6 +644,19 @@ pub const SURFACE: &[SurfaceChange] = &[
                  `verify_in_flight`. Read the tense: `uncommitted now` is true of `at` only; \
                  `journaled` is history with its age.",
     },
+    SurfaceChange {
+        id: "worker-deny-ask-owner",
+        since: "2026-09-05 (air-bm3; owner ruling 2026-08-30)",
+        headline: "Workers are denied `AskUserQuestion`, and the PreToolUse hook matcher \
+                   carries it so an attempt is an event line.",
+        silent_break: false,
+        action: "A worker that needs the owner runs `air capture \"<question>\"`; the \
+                 coordinator files it as a bead labelled `owner`, which `air status` counts \
+                 and `air claim` refuses to workers. Re-run `air install --write` to pick up \
+                 the matcher; workers launched by this binary carry the deny already. If a \
+                 rule of yours told workers to ask the owner directly, point it at the \
+                 capture.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -730,6 +748,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.10", 14, 33),
     // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
     ("0.2.11", 15, 34),
+    // 2026-09-05: `AskUserQuestion` denied to workers and counted (air-bm3).
+    ("0.2.12", 16, 35),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from

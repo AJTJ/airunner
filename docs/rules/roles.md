@@ -86,7 +86,9 @@ do not route around it. **[Air enforces: a healthy holder is not broken by `take
 
 Not available to a worker, by deny rule in every permission mode: `air land`, `air close`,
 `git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
-worktree. Editing
+worktree, and `AskUserQuestion`. The owner is reached through `air capture "<question>"`: the
+coordinator files it as a bead labelled `owner`, the queue shows in `air status`, and the
+question and its answer leave a row (owner, 2026-08-30; air-bm3). Editing
 the main checkout is blocked natively. **[Air enforces]** The one refusal: the `bd` write that
 ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
 whichever your repo uses — is denied without a recorded green at HEAD that contains `main`.
