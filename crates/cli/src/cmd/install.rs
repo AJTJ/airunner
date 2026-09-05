@@ -6,7 +6,11 @@
 //! - `<repo>/.mcp.json`: the `air` server (`air mcp`), merged the same way.
 //! - `<repo>/.air/`: created; `roles.md` written from the copy embedded in this binary so the
 //!   launchers can pass it with `--append-system-prompt-file`.
-//! - `.gitignore`: advises if `.air/` is not ignored; does not edit it.
+//! - `.gitignore`: `--write` REFUSES when `git check-ignore -q .air` fails (air-6di: since
+//!   air-srv the ledger holds the text of every agent-to-agent message, and a stranger's
+//!   first `git add -A` is the recorded shape of the failure); it names the fix and does not
+//!   edit the file. Removed when the ledger no longer holds content a person would call
+//!   private, or when `air init`'s own ignore line leaves the check nothing to refuse.
 //!
 //! It never touches the live fleet's state beyond these files, and it refuses to write when
 //! the `air` on PATH is not this binary (enforcement rank 10: a worktree copy must not be
@@ -106,6 +110,34 @@ fn is_ours(h: &Value) -> bool {
     h.get("command")
         .and_then(Value::as_str)
         .is_some_and(|c| c == "air hook" || c.ends_with("/air hook"))
+}
+
+/// Does git ignore the ledger in this repo? `git check-ignore -q .air/ledger.db` is the same
+/// answer git gives `git add -A`, wherever the rule lives. The file, not the directory: before
+/// the first install `.air` does not exist, and a directory-only pattern (`.air/`, the one
+/// every doc recommends) cannot match a path git cannot see as a directory, while a path
+/// inside it matches either way. False outside a git repo.
+pub fn air_ignored(repo: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["check-ignore", "-q", ".air/ledger.db"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Pure: the refusal `--write` prints when `.air` is not ignored, with the fix (air-6di).
+/// `None` when it is. No bypass flag: the ledger holds every agent-to-agent message since
+/// air-srv, and the failure this prevents is one `git add -A`.
+pub fn ignore_refusal(ignored: bool) -> Option<String> {
+    (!ignored).then(|| {
+        "`.air/` is not ignored (`git check-ignore -q .air` fails) and the ledger in it holds \
+         the text of every agent-to-agent message. Fix: echo '.air/' >> .gitignore"
+            .to_string()
+    })
 }
 
 /// Pure: merge our hook entries into a settings object. Idempotent.
@@ -679,6 +711,17 @@ pub const SURFACE: &[SurfaceChange] = &[
                  point at the refusal instead; with no green at HEAD the message is as \
                  before.",
     },
+    SurfaceChange {
+        id: "install-refuses-unignored-air",
+        since: "2026-09-05 (air-6di)",
+        headline: "`air install --write` and `air init --write` REFUSE while `git check-ignore \
+                   -q .air` fails, naming the fix. It used to be advice.",
+        silent_break: true,
+        action: "A repo that never ignored `.air/` now gets exit 2 from `install --write`: \
+                 `echo '.air/' >> .gitignore` and re-run. The reason is the ledger: since \
+                 `messages-table` it holds the text of every agent-to-agent message, and one \
+                 `git add -A` would commit it. There is no bypass flag.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -776,6 +819,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.13", 17, 36),
     // 2026-09-05: the digest refusal names the order that keeps the green (air-yol).
     ("0.2.14", 18, 37),
+    // 2026-09-05: install and init refuse while .air/ is not ignored (air-6di).
+    ("0.2.15", 19, 38),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
@@ -1027,12 +1072,9 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         }
     };
     let after_mcp = merge_mcp(before_mcp.clone());
-    let gitignore_has_air = std::fs::read_to_string(repo.join(".gitignore"))
-        .map(|s| {
-            s.lines()
-                .any(|l| matches!(l.trim(), ".air" | ".air/" | "/.air" | "/.air/"))
-        })
-        .unwrap_or(false);
+    // git's answer, not a scan of one file: a nested `.gitignore`, `.git/info/exclude` or a
+    // later `!.air` line all change it, and the ledger's content is what is at stake.
+    let gitignore_has_air = air_ignored(&repo);
 
     // "Already installed" means the hooks are wired or `.air/roles.md` is there. Without
     // that, this is a first install and nothing has changed under anyone.
@@ -1112,6 +1154,10 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             );
             return 2;
         }
+        if let Some(why) = ignore_refusal(plan.gitignore_has_air) {
+            eprintln!("air install: refusing to write: {why}");
+            return 2;
+        }
         let steps: Result<(), String> = (|| {
             if plan.settings_changed {
                 write_json(&settings_path, &after_settings)?;
@@ -1180,8 +1226,8 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             "ledger:   {}/ (roles.md written here)\n",
             plan.air_dir.display()
         ));
-        if !plan.gitignore_has_air {
-            s.push_str("advice:   add `.air/` to .gitignore\n");
+        if let Some(why) = ignore_refusal(plan.gitignore_has_air) {
+            s.push_str(&format!("REFUSAL:  {why}\n"));
         }
         s.push_str(if plan.written {
             "written.\n"

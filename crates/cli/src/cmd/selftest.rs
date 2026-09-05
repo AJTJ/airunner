@@ -1153,6 +1153,7 @@ fn all_probes() -> Vec<Probe> {
         probe_env_reaches_the_hook(),
         probe_worktree_is_airs(),
         probe_digest_refusal_names_the_order_only_with_a_green(),
+        probe_install_refuses_unignored_air(),
         probe_bd_calls_are_per_event(),
         probe_status_reconcile_is_one_show(),
         probe_subagent_stop_is_not_a_stop(),
@@ -3265,6 +3266,75 @@ fn probe_gate_digest() -> Probe {
             .iter()
             .any(|m| m.check == "digest-present"),
         green_passes: handover_verdict(&green).pass,
+    }
+}
+
+/// air-6di: since air-srv `.air/ledger.db` holds the text of every agent-to-agent message,
+/// and `air install` only advised that `.air/` be ignored; a stranger's first `git add -A` is
+/// the recorded shape of the failure. Red: a repo where `git check-ignore -q .air` fails is
+/// refused by `install --write` with the fix on the line. Green: the same repo with the line
+/// added is written. The real binary against a real repo, PATH pointed at this executable so
+/// the "is the air on PATH" check passes.
+fn probe_install_refuses_unignored_air() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["commit", "-q", "--allow-empty", "-m", "a"][..],
+        ] {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        // This executable first, so `which air` is this binary; the rest of PATH after it, so
+        // `git` (which the ignore check asks) is still reachable.
+        let bin_dir = format!(
+            "{}:{}",
+            exe.parent()
+                .ok_or_else(|| "no parent".to_string())?
+                .display(),
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into())
+        );
+        let install = || -> Result<(i32, String), String> {
+            let out = air_command(&exe, &dir)
+                .arg("--repo")
+                .arg(&dir)
+                .args(["install", "--write"])
+                .env("PATH", &bin_dir)
+                .env("AIR_BD_BIN", "/nonexistent/bd")
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok((
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ))
+        };
+        let (code, err) = install()?;
+        let red = code == 2 && err.contains("echo '.air/' >> .gitignore");
+        std::fs::write(dir.join(".gitignore"), ".air/\n").map_err(|e| e.to_string())?;
+        let (code, err) = install()?;
+        let green = code == 0 && !err.contains("check-ignore");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "install: --write refuses while .air/ is not ignored, naming the fix; ignored, it writes",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
