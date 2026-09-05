@@ -583,6 +583,20 @@ pub const SURFACE: &[SurfaceChange] = &[
                  read `air status`: an UNENFORCED line is a session whose hooks still run \
                  without the env. The detached path needs tmux >= 3.2 for `-e`.",
     },
+    SurfaceChange {
+        id: "handover-carried-bead",
+        since: "2026-09-05 (air-60x)",
+        headline: "`air handover <bead>` accepts a bead the branch CARRIES by a `Bead:` \
+                   trailer in main..HEAD, not only one the worker has claimed. A branch that \
+                   supersedes another worker's closed bead now has a hand-over path, and the \
+                   gate agrees with `air land` on what makes a branch handable.",
+        silent_break: false,
+        action: "Nothing to run. The claim refusal's fix is now the trailer (`Bead: <id>` on \
+                 the commit that does the work), never `air claim <id>`: the bead may be \
+                 closed and another worker's. The Stop advisory also speaks to a worker whose \
+                 branch carries a bead by trailer, not only to one holding a claim. Delete any \
+                 rule of yours that said a superseding branch must be handed over by hand.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -661,9 +675,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.5", 9, 28),
     // 2026-09-05: env on the process, one merged --settings, UNENFORCED in status (air-9dg).
     ("0.2.6", 10, 29),
-    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
-    // (air-1bm), schema v16.
+    // 2026-09-05: the gate accepts a bead carried by trailer; supersession has a path (air-60x).
     ("0.2.7", 11, 30),
+    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
+    // (air-1bm), schema v16; bd not answering about acceptance refuses before the merge
+    // (air-bh4).
+    ("0.2.8", 12, 31),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
