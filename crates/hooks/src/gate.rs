@@ -191,7 +191,14 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             .iter()
             .map(|m| format!("{}: {} — run `{}`", m.check, m.detail, m.fix))
             .collect();
-        format!("handover {mode}: {}", items.join("; "))
+        // air-75u: whose tree, as the ok line already says. A refusal shown in a session that
+        // is not the one it is about (ad-fv4z) is otherwise a true statement with no scope.
+        format!(
+            "handover {mode} for {} at {}: {}",
+            f.worker,
+            short(&f.head),
+            items.join("; ")
+        )
     };
     Verdict {
         pass,
@@ -367,7 +374,13 @@ mod tests {
         let v = handover_verdict(&f);
         assert!(!v.pass && v.block);
         assert_eq!(v.missing[0].check, "verify-green-at-head");
-        assert!(v.message.contains("9bb1713"));
+        // air-75u: the refusal names whose tree it is about, like the ok line.
+        assert!(
+            v.message
+                .starts_with("handover refused for backend-leaning at 9bb1713: "),
+            "{}",
+            v.message
+        );
         assert!(v.message.contains("last green: f854145"));
         assert!(v.message.contains("air record verify"));
     }
