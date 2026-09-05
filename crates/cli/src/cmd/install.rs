@@ -479,6 +479,20 @@ pub const SURFACE: &[SurfaceChange] = &[
                  the declaration nothing about the gate's strictness changed; the price is one \
                  re-verify per landed bead, which `air status` now names as such.",
     },
+    SurfaceChange {
+        id: "task-by-file",
+        since: "2026-09-05 (air-er0)",
+        headline: "`air worker --task` writes the task to `<main>/.air/tasks/<name>.md`; the \
+                   process's command line carries a fixed sentence naming that path, never \
+                   the task text.",
+        silent_break: false,
+        action: "Nothing to change in how workers are launched. What changes is what `ps` \
+                 shows: a worker's argv no longer contains its prompt, so a `pkill -f` over \
+                 ordinary command text (`air record verify`, `git status`) stops matching \
+                 every peer. adopter lost seven workers to that on 2026-08-30. Anything \
+                 that reads a worker's task out of `ps` or the tmux command line reads the \
+                 file instead; anything that cleans `.air/` leaves `tasks/` alone.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -544,6 +558,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: green keyed by commit not (worker, sha), tree key by declaration, schema
     // v14 (air-7wf).
     ("0.2.0", 4, 23),
+    // 2026-09-05: the task file of air-er0 (the prompt leaves the worker's command line).
+    ("0.2.1", 5, 24),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
