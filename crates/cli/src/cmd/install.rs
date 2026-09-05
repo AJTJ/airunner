@@ -543,7 +543,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         since: "2026-09-05 (air-1bm)",
         headline: "`air land` REFUSES while any verify is in flight, naming each run and its \
                    pid. It used to warn and land anyway. `--despite-inflight` lands regardless \
-                   and is recorded on the landings row (`despite_inflight`, schema v15) and the \
+                   and is recorded on the landings row (`despite_inflight`, schema v16) and the \
                    event line.",
         silent_break: false,
         action: "A landing that used to print a warning and proceed now exits 2 with the runs \
@@ -565,6 +565,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  holds no claim can now hand over; a worker that holds a claim or names a \
                  bead must still declare it in the digest's `bead:` front matter, unchanged. \
                  If a rule of yours told workers to expect `<bead>` in the message, delete it.",
+    },
+    SurfaceChange {
+        id: "env-on-the-process",
+        since: "2026-09-05 (air-9dg)",
+        headline: "AIR_ENFORCE, AIR_ROLE, AIR_PROJECT and BEADS_ACTOR are set on the spawned \
+                   process (and by `tmux new-session -e` on the detached path); a pass-through \
+                   `--settings` is MERGED into Air's, and `air status` marks a worker whose \
+                   hooks do not see AIR_ENFORCE=1 as UNENFORCED (ledger v15).",
+        silent_break: true,
+        action: "Check every launch of yours for a second `--settings`: `air worker … -- \
+                 --settings '{…}'` used to REPLACE Air's env block and switch the one refusal \
+                 off with no message (adopter ran five hours unenforced after adding one to \
+                 disable Remote Control, and found out from a close that should have been \
+                 refused). Inline JSON now merges; a `--settings <file>` in pass-through is \
+                 refused with the four names. Relaunch every worker through `air worker` and \
+                 read `air status`: an UNENFORCED line is a session whose hooks still run \
+                 without the env. The detached path needs tmux >= 3.2 for `-e`.",
     },
 ];
 
@@ -642,9 +659,11 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-05: the hand-over refusal names the held bead and skips the digest check with
     // nothing to declare (air-xbl).
     ("0.2.5", 9, 28),
-    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
-    // (air-1bm), schema v15.
+    // 2026-09-05: env on the process, one merged --settings, UNENFORCED in status (air-9dg).
     ("0.2.6", 10, 29),
+    // 2026-09-05: `air land` refuses over a verify in flight; `--despite-inflight` is recorded
+    // (air-1bm), schema v16.
+    ("0.2.7", 11, 30),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
