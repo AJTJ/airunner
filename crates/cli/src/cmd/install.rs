@@ -610,6 +610,22 @@ pub const SURFACE: &[SurfaceChange] = &[
                  decompose it with `bd create` children instead. Nothing else to run.",
     },
     SurfaceChange {
+        id: "bd-calls-per-event",
+        since: "2026-09-05 (air-bp0)",
+        headline: "`bd_calls`/`bd_ms` on an event line are that event's own cost. Lines from \
+                   `air mcp` (`status.attention`, `channel.push`) used to carry the server's \
+                   running lifetime total, restamped on every tick. `air status` looks up \
+                   every reconciled claim in one `bd show`, and SubagentStop no longer runs \
+                   the Stop nudge (no bd call, no idle mark).",
+        silent_break: true,
+        action: "Any number derived by summing `bd_calls` over the event log is wrong for \
+                 every day before this: adopter's 2026-08-30 summed to 570,989 while the \
+                 largest total any process reached was 1,661, and one-shot commands cost \
+                 1 to 4. Re-derive from lines written by this version; for older days, take \
+                 the max `bd_calls` per command as that process's lifetime total. The bead's \
+                 own 14.8-per-command figure was this artefact.",
+    },
+    SurfaceChange {
         id: "holdings-tense",
         since: "2026-09-05 (air-v7o)",
         headline: "`air holdings` tags name their tense: `uncommitted now, edited 3 min ago`, \
@@ -709,8 +725,11 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.8", 12, 31),
     // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
     ("0.2.9", 13, 32),
-    // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
+    // 2026-09-05: bd_calls per event, one show per reconcile, SubagentStop is not a Stop
+    // (air-bp0).
     ("0.2.10", 14, 33),
+    // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
+    ("0.2.11", 15, 34),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
