@@ -1007,6 +1007,7 @@ fn all_probes() -> Vec<Probe> {
         probe_owner_queue_is_the_ready_line_not_a_condition(),
         probe_handover_names_the_held_bead_and_skips_with_none(),
         probe_a_superseding_branch_hands_over_by_its_trailer(),
+        probe_ready_split_names_epics_apart(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -2838,6 +2839,74 @@ fn probe_a_superseding_branch_hands_over_by_its_trailer() -> Probe {
         && v.message.contains("Bead: fd-x");
     Probe {
         name: "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// air-f10 (adopter w2, 2026-08-31): `ready: 11 (2 claimable; 9 owner-labelled ...)` when
+/// the true claimable count was zero, both "claimable" beads being epics. One predicate,
+/// `ready_cache::claimable`, fed the status line, the Stop nudge's offer and
+/// `idle-without-claim`, and consulted the label alone; `air claim` had no epic check, so a
+/// worker offered a container could pencil an assignee onto it. The failure is the
+/// reassuring direction: both numbers are plausible and nothing looks broken.
+///
+/// Red: a ready set of only epics and owner-labelled beads reports ZERO claimable, names the
+/// epics apart on the line, and offers nothing to a nudge. Green: a plain task is still
+/// claimable, an owner-labelled epic is the owner's, and the three lists are exactly bd's
+/// set, so a matching total is a matching set.
+///
+/// The mutation that made it red, seen: `split` filing every unlabelled bead as claimable
+/// (the epic branch removed), which is the old predicate.
+fn probe_ready_split_names_epics_apart() -> Probe {
+    use crate::cmd::ready_cache::{claimable, split};
+    use crate::cmd::status::{Snapshot, render_for_probe};
+    use air_hooks::stop_nudge;
+
+    let issue = |id: &str, labels: &[&str], kind: &str| air_bd::Issue {
+        id: id.to_string(),
+        labels: labels.iter().map(|s| s.to_string()).collect(),
+        issue_type: kind.to_string(),
+        ..Default::default()
+    };
+    let mut ready = vec![issue("ad-7vw", &[], "epic"), issue("ad-w00", &[], "epic")];
+    for n in 0..9 {
+        ready.push(issue(&format!("fd-o{n}"), &["owner"], "task"));
+    }
+    let s = split(&ready);
+    let line = render_for_probe(&Snapshot {
+        ready_depth: Some(ready.len()),
+        claimable_depth: Some(s.claimable.len()),
+        epic_depth: Some(s.epics.len()),
+        ..Default::default()
+    });
+    let red_fires = s.claimable.is_empty()
+        && s.epics == ["ad-7vw", "ad-w00"]
+        && s.owner.len() == 9
+        && line.contains(
+            "ready: 11 (0 claimable; 2 epic(s) to decompose, not claimable; 9 owner-labelled",
+        )
+        && stop_nudge("worker", false, &claimable(&ready), false).is_none();
+
+    ready.push(issue("ad-task", &[], "task"));
+    ready.push(issue("fd-oe", &["owner"], "epic"));
+    let s = split(&ready);
+    let mut all: Vec<String> = s
+        .claimable
+        .iter()
+        .chain(&s.epics)
+        .chain(&s.owner)
+        .cloned()
+        .collect();
+    all.sort();
+    let mut bds: Vec<String> = ready.iter().map(|i| i.id.clone()).collect();
+    bds.sort();
+    let green_passes = s.claimable == ["ad-task"]
+        && s.epics == ["ad-7vw", "ad-w00"]
+        && s.owner.contains(&"fd-oe".to_string())
+        && all == bds;
+    Probe {
+        name: "status: the ready line names epics apart from claimable work; a set of only epics and owner beads is zero claimable, and the split is exactly bd's set",
         red_fires,
         green_passes,
     }
