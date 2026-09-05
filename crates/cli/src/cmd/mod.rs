@@ -25,6 +25,7 @@ pub mod record;
 pub mod selftest;
 pub mod status;
 pub mod tmux;
+pub mod worktree;
 
 use std::path::Path;
 
