@@ -74,6 +74,22 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
    publish target is covered the day it exists (**[adopter]** `make deploy-site` shipped
    outside an enumerated list).
 
+   A fourth field, `"verify_key": "tree"`, is **opt-in and off by default** (air-7wf). A
+   recorded green is looked up by commit, by whichever worker ran it. `air land` builds the
+   landing commit from the branch's tree, so main is a new sha over a verified tree and reads
+   `not green` until somebody re-verifies it; with the tree key that green is found again and
+   no re-verify runs. **Declare it only if your verify is a function of the tree alone.** A
+   suite that reads history verifies differently at two commits with one tree: adopter's
+   `make verify` runs `git log main..HEAD` to choose which beads to check
+   (`scripts/lib/bead_citations.py:140`), so a tree-keyed gate there would pass beads it never
+   checked. The ten-minute check is to grep the verify for `git log`, `rev-list`, `describe`
+   and anything reading commit messages; ai_runner's own passes (its only real-repo git calls
+   in `make verify` are `git status --porcelain` and `git checkout --`), which is why this
+   repo's `.claude/air.json` declares it. Either way `air status` names a tree green honestly:
+   `green (same tree as <sha> verified by <worker>)` when it counts, and `not green (this
+   exact tree is green at <sha> by <worker>, but this repo keys green by commit)` when it
+   does not.
+
 ## 2. Coexistence, not retirement (default adoption model)
 
 **[adopter, owner reframing 2026-08-21]** Do not retire the repo's make targets and
