@@ -285,6 +285,28 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "release: reopening a bead clears its assignee in the same bd process, so anyone can claim it",
+        Mutation {
+            // Back to reopening alone: the exact write that left ad-tdv8 and air-an9
+            // unclaimable.
+            file: "crates/bd/src/lib.rs",
+            from: "    [\"update\", id, \"-s\", \"open\", \"-a\", \"\"]",
+            to: "    [\"update\", id, \"-s\", \"open\"]",
+            also_red: &[],
+        },
+    ),
+    (
+        "claim: a bd timeout is retried once and a refusal never is; two timeouts stop at two attempts",
+        Mutation {
+            // No retry at all: the timeout is returned as it came. The refusal half and the
+            // two-attempt cap are untouched, so only the red case falls.
+            file: "crates/cli/src/cmd/claim.rs",
+            from: "        Err(BdError::Timeout(_)) => {\n            on_retry();\n            (f(), true)\n        }",
+            to: "        Err(BdError::Timeout(t)) => (Err(BdError::Timeout(t)), false),",
+            also_red: &[],
+        },
+    ),
+    (
         "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
         Mutation {
             // The old arm: a bd error becomes one empty clause list per bead, which the
@@ -1079,6 +1101,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_names_the_held_bead_and_skips_with_none(),
         probe_a_superseding_branch_hands_over_by_its_trailer(),
         probe_ready_split_names_epics_apart(),
+        probe_holdings_tags_name_their_tense(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -1111,6 +1134,8 @@ fn all_probes() -> Vec<Probe> {
         probe_refused_landing_publishes_nothing(),
         probe_land_by_bead_carries_the_whole_branch(),
         probe_acceptance_unread_refuses(),
+        probe_claim_retries_a_timeout_once(),
+        probe_release_unassigns(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -2275,6 +2300,94 @@ fn probe_land_names_a_branch() -> Probe {
     }
 }
 
+/// air-0kk: a release reopens AND unassigns in one bd process. Reopening alone left the
+/// assignee pencilled in, which in bd 1.2.x blocks every other worker's `--claim`: the bead
+/// sat in `bd ready` claimable by nobody but the worker that had released it (adopter
+/// ad-tdv8; air-an9 here after gate's session was gone).
+///
+/// Red: the release argv clears the assignee in the same process that sets the status.
+/// Green: a plain status write still leaves the assignee alone (a close keeps its closer),
+/// and the id is in the right place.
+fn probe_release_unassigns() -> Probe {
+    use air_bd::reopen_argv;
+
+    let argv = reopen_argv("fd-1");
+    let has = |a: &str, b: &str| {
+        argv.windows(2)
+            .any(|w| matches!(w, [x, y] if x == a && y == b))
+    };
+    let red = argv.first().is_some_and(|c| c == "update")
+        && argv.get(1).is_some_and(|id| id == "fd-1")
+        && has("-s", "open")
+        && has("-a", "");
+    let green = argv.len() == 6 && argv.iter().filter(|a| *a == "-a").count() == 1;
+    Probe {
+        name: "release: reopening a bead clears its assignee in the same bd process, so anyone can claim it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-gsj: `air claim` retries bd exactly once, and only on a timeout. adopter's w1 retried
+/// a claim by hand three times and another worker took the bead in between; the message read
+/// as a denial. A fresh process starts at bd's ~2 s floor while any usable timeout is crossed
+/// by the same stalls (air-bp0), so the retry has a mechanism behind it and a longer wait does
+/// not.
+///
+/// Red: a timeout followed by an answer is retried once and the answer is returned. Green: a
+/// refusal is bd's answer and is not retried; a second timeout is returned after exactly two
+/// attempts, never a third.
+fn probe_claim_retries_a_timeout_once() -> Probe {
+    use crate::cmd::claim::retry_once;
+    use air_bd::BdError;
+    use std::time::Duration;
+
+    let timeout = || BdError::Timeout(Duration::from_secs(1));
+    let refusal = || BdError::Failed {
+        code: 1,
+        stderr: "no".into(),
+    };
+
+    // Timeout, then an answer.
+    let mut calls: u32 = 0;
+    let mut noted = false;
+    let (r, retried) = retry_once(
+        || {
+            calls = calls.saturating_add(1);
+            if calls == 1 { Err(timeout()) } else { Ok(42) }
+        },
+        || noted = true,
+    );
+    let red = matches!(r, Ok(42)) && retried && calls == 2 && noted;
+
+    // A refusal: bd answered, so no retry.
+    let mut calls: u32 = 0;
+    let (r, retried) = retry_once(
+        || {
+            calls = calls.saturating_add(1);
+            Err::<i32, _>(refusal())
+        },
+        || {},
+    );
+    let refusal_not_retried = matches!(r, Err(BdError::Failed { .. })) && !retried && calls == 1;
+    // Two timeouts: two attempts, then the timeout is reported.
+    let mut calls: u32 = 0;
+    let (r, retried) = retry_once(
+        || {
+            calls = calls.saturating_add(1);
+            Err::<i32, _>(timeout())
+        },
+        || {},
+    );
+    let twice_then_stop = matches!(r, Err(BdError::Timeout(_))) && retried && calls == 2;
+
+    Probe {
+        name: "claim: a bd timeout is retried once and a refusal never is; two timeouts stop at two attempts",
+        red_fires: red,
+        green_passes: refusal_not_retried && twice_then_stop,
+    }
+}
+
 /// air-bh4: bd not answering about a bead's acceptance REFUSES the landing before anything
 /// moves; it does not become an empty clause list. The row for a timed-out landing used to say
 /// "the bead states no acceptance criteria ... so Air read nothing to check" about a bead with
@@ -3032,6 +3145,60 @@ fn probe_ready_split_names_epics_apart() -> Probe {
         && all == bds;
     Probe {
         name: "status: the ready line names epics apart from claimable work; a set of only epics and owner beads is zero claimable, and the split is exactly bd's set",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// air-v7o (adopter, 2026-08-30): `uncommitted` and `journaled` printed identically and
+/// neither said when. w1 nearly released a bead over an `uncommitted` that was nine minutes of
+/// regenerated fixtures during w3's full verify and had evaporated by the time they checked;
+/// w3 had earlier nearly stood down over a `journaled` for work landed hours before. The tag
+/// answered "dirty right now?" to a reader who needed "is another agent working here?".
+///
+/// Red: a file made dirty by a verify and never edited by a tool reads as unjournaled dirt
+/// with the verify named, and once clean it is no holding at all (nothing journaled, nothing
+/// dirty: no tag). Green: a genuine concurrent edit still reads as one, with its age, so the
+/// fix is not a silence; and a remembered edit says how old it is and that the tree is clean.
+///
+/// The mutation that made it red, seen: `tags` printing `uncommitted` for both the journaled
+/// and the unjournaled case, which is the old output.
+fn probe_holdings_tags_name_their_tense() -> Probe {
+    use crate::cmd::holdings::{Holding, tags};
+
+    let now = "2026-08-30T21:15:00Z";
+    let dirt = Holding {
+        worker: "w3".into(),
+        uncommitted: true,
+        verify_in_flight: true,
+        ..Default::default()
+    };
+    let cleaned = Holding {
+        worker: "w3".into(),
+        ..Default::default()
+    };
+    let red_fires = tags(&dirt, now).contains("no edit journaled")
+        && tags(&dirt, now).contains("verify in flight")
+        && !tags(&dirt, now).contains("edited")
+        && tags(&cleaned, now).is_empty();
+
+    let edit = Holding {
+        worker: "w1".into(),
+        uncommitted: true,
+        journaled: true,
+        last_edit: Some("2026-08-30T21:12:00Z".into()),
+        ..Default::default()
+    };
+    let remembered = Holding {
+        worker: "w1".into(),
+        journaled: true,
+        last_edit: Some("2026-08-30T15:00:00Z".into()),
+        ..Default::default()
+    };
+    let green_passes = tags(&edit, now) == "uncommitted now, edited 3 min ago"
+        && tags(&remembered, now) == "journaled 6 h ago, clean now";
+    Probe {
+        name: "holdings: every tag names its tense; build dirt is not an edit, a cleaned file is no holding, a live edit still is",
         red_fires,
         green_passes,
     }
