@@ -26,6 +26,38 @@ use serde_json::Value;
 use crate::cmd::emit;
 use crate::cmd::hook::{handover_gate, is_handover_command};
 
+/// The ONE way a probe spawns `air` (air-dws). Identity comes from the launcher's environment
+/// since air-75u (`AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_ENFORCE`), so a child that
+/// inherits the shell's copy answers for whoever is running the suite: the SubagentStop probe
+/// passed in every worker's worktree and failed in the coordinator's shell, which is where
+/// `make release` runs, and no v0.2.10 could be cut. Every probe that wants an identity sets
+/// it on the returned `Command` explicitly; none inherits one.
+///
+/// [`probe_every_air_spawn_pins_identity`] reads this file and fails if a raw
+/// `Command::new(exe)` appears anywhere else, so the class does not come back one probe at a
+/// time.
+fn air_command(exe: &Path, cwd: &Path) -> Command {
+    let mut c = Command::new(exe);
+    c.current_dir(cwd)
+        .env_remove("AIR_ROLE")
+        .env_remove("BEADS_ACTOR")
+        .env_remove("AIR_PROJECT")
+        .env_remove("AIR_ENFORCE");
+    c
+}
+
+/// How many raw `air` spawns a probe file holds beside the helper: lines building a
+/// `Command::new` on the current executable. Pure over the text so the probe can show a
+/// violation as well as the absence of one.
+fn raw_air_spawns(source: &str) -> usize {
+    source
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("let ") || l.starts_with("Command::new"))
+        .filter(|l| l.contains("Command::new(exe)") || l.contains("Command::new(&exe)"))
+        .count()
+}
+
 /// air-682: the edit that neutralises the rule a probe names, declared next to the probe so it
 /// can be RUN. adopter's standard, adopted over ours by owner ruling: a probe is evidence only
 /// once it has been seen failing with its rule neutralised, and the evidence is a revert, not an
@@ -381,6 +413,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/launch.rs",
             from: "(\"AIR_ENFORCE\", \"1\"),",
             to: "(\"AIR_ENFORCE\", \"0\"),",
+            also_red: &[],
+        },
+    ),
+    (
+        "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
+        Mutation {
+            // Air stops copying: the worktree is the naive one and its build fails, which is
+            // the adopter fleet that does not compile (air-fdz).
+            file: "crates/cli/src/cmd/worktree.rs",
+            from: "let copied = copy_included(main, &path)?;",
+            to: "let copied = Copied::default();",
             also_red: &[],
         },
     ),
@@ -1125,11 +1168,14 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_names_the_held_bead_and_skips_with_none(),
         probe_a_superseding_branch_hands_over_by_its_trailer(),
         probe_ready_split_names_epics_apart(),
+        probe_holdings_tags_name_their_tense(),
+        probe_install_reports_a_stale_bd_prime_hook(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
         probe_enforced_gate(),
         probe_env_reaches_the_hook(),
+        probe_worktree_is_airs(),
         probe_bd_calls_are_per_event(),
         probe_status_reconcile_is_one_show(),
         probe_subagent_stop_is_not_a_stop(),
@@ -1158,6 +1204,7 @@ fn all_probes() -> Vec<Probe> {
         probe_acceptance_unread_refuses(),
         probe_claim_retries_a_timeout_once(),
         probe_release_unassigns(),
+        probe_every_air_spawn_pins_identity(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -3172,6 +3219,60 @@ fn probe_ready_split_names_epics_apart() -> Probe {
     }
 }
 
+/// air-v7o (adopter, 2026-08-30): `uncommitted` and `journaled` printed identically and
+/// neither said when. w1 nearly released a bead over an `uncommitted` that was nine minutes of
+/// regenerated fixtures during w3's full verify and had evaporated by the time they checked;
+/// w3 had earlier nearly stood down over a `journaled` for work landed hours before. The tag
+/// answered "dirty right now?" to a reader who needed "is another agent working here?".
+///
+/// Red: a file made dirty by a verify and never edited by a tool reads as unjournaled dirt
+/// with the verify named, and once clean it is no holding at all (nothing journaled, nothing
+/// dirty: no tag). Green: a genuine concurrent edit still reads as one, with its age, so the
+/// fix is not a silence; and a remembered edit says how old it is and that the tree is clean.
+///
+/// The mutation that made it red, seen: `tags` printing `uncommitted` for both the journaled
+/// and the unjournaled case, which is the old output.
+fn probe_holdings_tags_name_their_tense() -> Probe {
+    use crate::cmd::holdings::{Holding, tags};
+
+    let now = "2026-08-30T21:15:00Z";
+    let dirt = Holding {
+        worker: "w3".into(),
+        uncommitted: true,
+        verify_in_flight: true,
+        ..Default::default()
+    };
+    let cleaned = Holding {
+        worker: "w3".into(),
+        ..Default::default()
+    };
+    let red_fires = tags(&dirt, now).contains("no edit journaled")
+        && tags(&dirt, now).contains("verify in flight")
+        && !tags(&dirt, now).contains("edited")
+        && tags(&cleaned, now).is_empty();
+
+    let edit = Holding {
+        worker: "w1".into(),
+        uncommitted: true,
+        journaled: true,
+        last_edit: Some("2026-08-30T21:12:00Z".into()),
+        ..Default::default()
+    };
+    let remembered = Holding {
+        worker: "w1".into(),
+        journaled: true,
+        last_edit: Some("2026-08-30T15:00:00Z".into()),
+        ..Default::default()
+    };
+    let green_passes = tags(&edit, now) == "uncommitted now, edited 3 min ago"
+        && tags(&remembered, now) == "journaled 6 h ago, clean now";
+    Probe {
+        name: "holdings: every tag names its tense; build dirt is not an edit, a cleaned file is no holding, a live edit still is",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// Check 5 (ruling D): digest configured but absent → missing `digest-present`; not
 /// configured → not applicable.
 fn probe_gate_digest() -> Probe {
@@ -4106,6 +4207,42 @@ fn probe_channel_dedupe() -> Probe {
     }
 }
 
+/// air-b5k: adopting-air.md step 5 told a repo to hand-edit a `bd prime --hook-json` hook
+/// out of `.claude/settings.json`, because `air install` merges and never removes it. A hand
+/// edit in an adoption walkthrough is the step that gets skipped once and never revisited, and
+/// nothing reported its state afterwards. The installer already reads that file.
+///
+/// Red: a settings file with the stale hook, after Air's merge, is reported with its event,
+/// its command, and what to do. Green: Air's own hooks and a bd hook that is not `prime`
+/// report nothing, so the line means something when it appears.
+///
+/// The mutation that made it red, seen: `stale_hooks` matching no command (`is_bd` forced
+/// false), which is the installer back to silent.
+fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
+    use crate::cmd::install::{merge_hooks, render_stale, stale_hooks};
+
+    let with = merge_hooks(serde_json::json!({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "bd prime --hook-json"}]}]}}));
+    let stale = stale_hooks(&with);
+    let text = render_stale(&stale);
+    let red_fires = stale.len() == 1
+        && stale
+            .first()
+            .is_some_and(|h| h.event == "SessionStart" && h.command == "bd prime --hook-json")
+        && text.contains("STALE HOOK: SessionStart runs `bd prime --hook-json`")
+        && text.contains("do: ");
+    let without = merge_hooks(serde_json::json!({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "bd ready --json"}]}]}}));
+    let green_passes = stale_hooks(&without).is_empty()
+        && stale_hooks(&merge_hooks(serde_json::json!({}))).is_empty()
+        && render_stale(&[]).is_empty();
+    Probe {
+        name: "install: a stale `bd prime` hook is reported with its fix; Air's hooks and other bd hooks are not",
+        red_fires,
+        green_passes,
+    }
+}
+
 /// `air install` merge adds our hooks to an empty config and changes nothing the second time.
 fn probe_install_merge() -> Probe {
     use crate::cmd::install::merge_hooks;
@@ -4653,14 +4790,25 @@ fn probe_worker_task_prompt() -> Probe {
         // Canonical, because the launcher names the task file from its cwd as the kernel
         // reports it (`/private/var/...` on macOS, not the `/var/...` temp_dir hands out).
         let dir = dir.canonicalize().map_err(|e| e.to_string())?;
-        let git = Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !git.status.success() {
-            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            // A commit, because the launcher now creates the lane's worktree first (air-fdz)
+            // and a worktree needs something to branch from.
+            &["commit", "-q", "--allow-empty", "-m", "a"][..],
+        ] {
+            let git = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !git.status.success() {
+                return Err(String::from_utf8_lossy(&git.stderr).to_string());
+            }
         }
         // The stub records its argv in a file rather than on stdout: without a tty (this
         // probe under `air record verify`, a Bash tool) the launcher starts the stub inside a
@@ -4686,8 +4834,7 @@ fn probe_worker_task_prompt() -> Probe {
         }
         let socket = format!("air-selftest-{}", new_id());
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = Command::new(exe)
-            .current_dir(&dir)
+        let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
@@ -4708,6 +4855,12 @@ fn probe_worker_task_prompt() -> Probe {
             .output();
         let task_path = dir.join(".air").join("tasks").join("w.md");
         let on_disk = std::fs::read_to_string(&task_path).unwrap_or_default();
+        let worktree_made = dir
+            .join(".claude")
+            .join("worktrees")
+            .join("w")
+            .join(".git")
+            .is_file();
         let _ = std::fs::remove_dir_all(&dir);
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
@@ -4719,10 +4872,17 @@ fn probe_worker_task_prompt() -> Probe {
             .map(str::to_string)
             .collect();
         let prompt = task_prompt(&task_path);
+        // air-fdz: the lane's worktree exists before claude runs, and claude is still handed
+        // it by name (the isolation the harness enforces is keyed on that flag).
+        let wt_made = worktree_made;
         Ok(!argv.iter().any(|a| a.contains(marker))
             && argv.first().is_some_and(|a| *a == prompt)
             && task_is_prompt(&argv, &prompt)
-            && on_disk == format!("{task}\n"))
+            && on_disk == format!("{task}\n")
+            && wt_made
+            && argv.windows(2).any(|w| {
+                w.first().is_some_and(|a| a == "--worktree") && w.get(1).is_some_and(|b| b == "w")
+            }))
     })()
     .unwrap_or(false);
     Probe {
@@ -4796,13 +4956,8 @@ fn probe_env_reaches_the_hook() -> Probe {
                 "session_id": "air-9dg-probe",
                 "cwd": wt.display().to_string(),
             });
-            let mut child = Command::new(&exe)
-                .current_dir(&wt)
+            let mut child = air_command(&exe, &wt)
                 .arg("hook")
-                .env_remove("AIR_ENFORCE")
-                .env_remove("AIR_ROLE")
-                .env_remove("AIR_PROJECT")
-                .env_remove("BEADS_ACTOR")
                 .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
@@ -4865,16 +5020,12 @@ fn probe_env_reaches_the_hook() -> Probe {
                 .map_err(|e| e.to_string())?;
         }
         let socket = format!("air-selftest-{}", new_id());
-        let out = Command::new(&exe)
-            .current_dir(&dir)
+        // Scrubbed by `air_command`, so the stub can only have the identity variables if the
+        // launcher delivered them.
+        let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
-            // Scrubbed, so the stub can only have them if the launcher delivered them.
-            .env_remove("AIR_ENFORCE")
-            .env_remove("AIR_ROLE")
-            .env_remove("AIR_PROJECT")
-            .env_remove("BEADS_ACTOR")
             .args(["worker", "w", "--task", "hi", "--", "--settings", theirs])
             .output()
             .map_err(|e| e.to_string())?;
@@ -4934,6 +5085,131 @@ fn probe_env_reaches_the_hook() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-fdz: Air creates and fills a worker's worktree, and removes it only when nothing holds
+/// it. The blocker the audit found: adopter's `.worktreeinclude` copies gitignored files a
+/// worktree cannot build without (`backend/keys/*.pem` is read by `include_str!` at compile
+/// time), and their own note says the error does not reveal why. Red: a naive `git worktree
+/// add` gives a worktree whose build fails, which is exactly the fleet a launcher that only
+/// ran git would produce. Green: Air's worktree has the listed files (and only those: an
+/// unlisted ignored file is not copied, a symlink is skipped), sits on `worktree-<name>`
+/// under `.claude/worktrees/<name>`, and its build passes; then removal is refused while the
+/// tree carries uncommitted work, naming the file, and removes a clean tree keeping the
+/// branch. "A worktree that builds is the test, not a file listing."
+fn probe_worktree_is_airs() -> Probe {
+    use crate::cmd::worktree::{Holding, branch_for, ensure, holdings, remove};
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |cwd: &Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&dir, &["init", "-q", "-b", "main"])?;
+        // adopter's shape in miniature: two gitignored files the build needs, one it does
+        // not, a symlink beside them, and the include file naming the first two.
+        std::fs::create_dir_all(dir.join("backend").join("keys")).map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".gitignore"),
+            ".env\n*.pem\nsecret.txt\n.claude/worktrees/\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".worktreeinclude"),
+            "# copied into every worktree\nbackend/.env\nbackend/keys/*.pem\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join("build.sh"),
+            "#!/bin/sh\ntest -f backend/.env && test -f backend/keys/dev.pem\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join(".env"), "DATABASE_URL=x\n")
+            .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join("keys").join("dev.pem"), "KEY\n")
+            .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join("secret.txt"), "not listed\n")
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("dev.pem", dir.join("backend").join("keys").join("link.pem"))
+            .map_err(|e| e.to_string())?;
+        g(&dir, &["add", "-A"])?;
+        g(&dir, &["commit", "-q", "-m", "a"])?;
+        let builds = |wt: &Path| -> bool {
+            Command::new("sh")
+                .arg("build.sh")
+                .current_dir(wt)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+
+        // RED: git alone. The tracked build script is there and the build fails.
+        let naive = dir.join("naive");
+        g(
+            &dir,
+            &["worktree", "add", "-q", &naive.display().to_string()],
+        )?;
+        let red = naive.join("build.sh").is_file() && !builds(&naive);
+
+        // GREEN: Air's worktree.
+        let made = ensure(&dir, "w")?;
+        let wt = made.path.clone();
+        let on_branch = g(&wt, &["rev-parse", "--abbrev-ref", "HEAD"])? == branch_for("w");
+        let placed = wt == dir.join(".claude").join("worktrees").join("w") && !made.existed;
+        let files_right = builds(&wt)
+            && !wt.join("backend").join("secret.txt").exists()
+            && !wt.join("backend").join("keys").join("link.pem").exists()
+            && made.copied.copied.len() == 2
+            && made.copied.skipped.iter().any(|s| s.contains("link.pem"));
+        // A relaunch finds it and re-copies the current file.
+        std::fs::write(dir.join("backend").join(".env"), "DATABASE_URL=y\n")
+            .map_err(|e| e.to_string())?;
+        let again = ensure(&dir, "w")?;
+        let relaunch = again.existed
+            && std::fs::read_to_string(wt.join("backend").join(".env")).unwrap_or_default()
+                == "DATABASE_URL=y\n";
+        // Removal: refused while dirty, naming the file; then removed, branch kept.
+        std::fs::write(wt.join("wip.txt"), "unsaved\n").map_err(|e| e.to_string())?;
+        let held = holdings(&dir, "w")?;
+        let refused = matches!(remove(&dir, "w"), Err(e) if e.contains("wip.txt"))
+            && held
+                .iter()
+                .any(|h| matches!(h, Holding::Dirty(f) if f.iter().any(|x| x.contains("wip.txt"))))
+            && wt.is_dir();
+        std::fs::remove_file(wt.join("wip.txt")).map_err(|e| e.to_string())?;
+        let removed = remove(&dir, "w").is_ok()
+            && !wt.exists()
+            && g(
+                &dir,
+                &["rev-parse", "--verify", "-q", "refs/heads/worktree-w"],
+            )
+            .is_ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((
+            red,
+            on_branch && placed && files_right && relaunch && refused && removed,
+        ))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
         red_fires: red,
         green_passes: green,
     }
@@ -5046,8 +5322,7 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         }
         drop(l);
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = Command::new(exe)
-            .current_dir(&dir)
+        let out = air_command(&exe, &dir)
             .env("AIR_BD_BIN", &script)
             .args(["--json", "status"])
             .output()
@@ -5088,6 +5363,26 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-dws: every probe that spawns `air` goes through [`air_command`], which strips the
+/// launcher's identity variables, so a probe's verdict does not depend on the shell it runs
+/// in. The SubagentStop probe inherited `AIR_ROLE=coordinator` from the coordinator's shell,
+/// took the coordinator path, and made `make release` red on main while every worker's
+/// worktree was green.
+///
+/// Red: a source with a raw `Command::new(exe)` beside the helper is counted as one. Green:
+/// this file holds exactly one, the helper's own.
+fn probe_every_air_spawn_pins_identity() -> Probe {
+    let here = include_str!("selftest.rs");
+    // Assembled in pieces so this line is not itself a raw spawn to the scan.
+    let raw = ["    let out = Command::new(", "&exe).arg(\"hook\");"].concat();
+    let with_a_raw_spawn = format!("{here}\n{raw}\n");
+    Probe {
+        name: "selftest: every probe that spawns air pins its identity through air_command; a raw spawn is caught",
+        red_fires: raw_air_spawns(&with_a_raw_spawn) == 2,
+        green_passes: raw_air_spawns(here) == 1,
     }
 }
 
@@ -5152,8 +5447,8 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
             if let (Some(t), Some(obj)) = (tool, input.as_object_mut()) {
                 obj.insert("tool_name".into(), serde_json::Value::String(t.to_string()));
             }
-            let mut child = Command::new(&exe)
-                .current_dir(&wt)
+            // Pinned identity (air-dws): a worker's worktree, no inherited role.
+            let mut child = air_command(&exe, &wt)
                 .arg("hook")
                 .env("AIR_BD_BIN", &script)
                 .stdin(std::process::Stdio::piped())
