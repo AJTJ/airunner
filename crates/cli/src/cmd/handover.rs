@@ -47,19 +47,21 @@ pub fn facts(
             .map(|n| n > 0)
             .unwrap_or(false),
     };
+    // Every bead this worker holds, once: the digest lookup reads it and the refusal names it
+    // (air-xbl: it used to be computed for the lookup and thrown away before the message).
+    let held: Vec<air_ledger::claims::Claim> = ledger
+        .open_claims()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.worker == worker)
+        .collect();
+    let held_beads: Vec<String> = held.iter().map(|c| c.bead.clone()).collect();
     let digest_dir = digest_dir(repo);
-    let digest_present = digest_dir.as_deref().map(|d| {
+    let digest_present = digest_dir.as_deref().and_then(|d| {
         // Newer than this worker's oldest open claim, or than the branch point from main,
         // whichever is earlier: a re-claim after a bd timeout must not postdate a digest
-        // that was written between the first claim and the re-claim (air-y8m). With no
-        // claim, any digest by this worker counts (the check is about the hand-over, not a
-        // specific bead).
-        let claim = ledger.open_claims().ok().and_then(|v| {
-            v.into_iter()
-                .filter(|c| c.worker == worker)
-                .map(|c| c.claimed_at)
-                .min()
-        });
+        // that was written between the first claim and the re-claim (air-y8m).
+        let claim = held.iter().map(|c| c.claimed_at.clone()).min();
         let since = claim.map(|c| {
             let bp = git::branch_point_time(repo, "main").ok();
             match (
@@ -71,24 +73,16 @@ pub fn facts(
             }
         });
         // The bead named on the command line, else every bead this worker still holds: the
-        // check is "did you write the digest for the work you are handing on".
-        let beads: Vec<String> = match bead {
-            Some(b) => vec![b.to_string()],
-            None => ledger
-                .open_claims()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|c| c.worker == worker)
-                .map(|c| c.bead)
-                .collect(),
-        };
-        digest_for_bead(
+        // check is "did you write the digest for the work you are handing on". No bead at
+        // all means nothing to declare, and the check is skipped rather than failed.
+        let beads = digest_beads(bead, &held_beads)?;
+        Some(digest_for_bead(
             &repo.join(d),
             worker,
             &beads,
             since.as_deref(),
             frontmatter_cutoff(),
-        )
+        ))
     });
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
     Ok(GateFacts {
@@ -100,11 +94,31 @@ pub fn facts(
         main_is_ancestor,
         bead_claimed_by_worker,
         bead: bead.map(str::to_string),
+        held_beads,
         runs_at_head,
         digest_present,
         digest_dir,
         advisory,
     })
+}
+
+/// Which beads the digest check looks for (air-xbl): the bead named to the gate, else every
+/// bead the worker holds; `None` when there is neither, which SKIPS the check.
+///
+/// Before this the no-claim case built an empty list, `digest_for_bead` matched nothing
+/// against it, and the gate refused every hand-over from a worktree holding no claim, with a
+/// fix naming a literal `<bead>`. The comment above it said any digest by the worker would
+/// count. Neither was right: a digest declares a bead, and with no bead there is nothing for
+/// it to declare. adopter's batching lane (w4: claims nothing, merges other workers' green
+/// shas, runs the full verify once) is the case; its work is those workers' beads, each with
+/// its own digest, and its own hand-over has no bead of its own. A worker that DOES hold a
+/// claim, or names a bead, is unchanged: it must still declare it.
+pub fn digest_beads(named: Option<&str>, held: &[String]) -> Option<Vec<String>> {
+    match named {
+        Some(b) => Some(vec![b.to_string()]),
+        None if held.is_empty() => None,
+        None => Some(held.to_vec()),
+    }
 }
 
 /// `<main>/.claude/air.json`, parsed; None when absent or unreadable.
