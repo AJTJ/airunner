@@ -34,6 +34,8 @@ fn scratch_repo() -> tempfile::TempDir {
         "issue-prefix: \"zz\"\n",
     )
     .unwrap();
+    // `.air/` ignored, or `install --write` refuses (air-6di: the ledger holds messages).
+    std::fs::write(dir.path().join(".gitignore"), ".air/\n").unwrap();
     g(&["add", "-A"]);
     g(&["commit", "-q", "-m", "a"]);
     dir
@@ -84,7 +86,9 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
 
     // --write with PATH resolving to this binary: written, user settings preserved.
     let bin_dir = Path::new(env!("CARGO_BIN_EXE_air")).parent().unwrap();
-    let path = bin_dir.to_string_lossy().to_string();
+    // This binary first (the on-PATH check), then the system dirs so `git` is reachable for
+    // the ignore check (air-6di).
+    let path = format!("{}:/usr/bin:/bin", bin_dir.to_string_lossy());
     let (code, out, err) = air(&repo, Some(&path), &["install", "--write"]);
     assert_eq!(code, 0, "{out}{err}");
     let settings: serde_json::Value =
@@ -133,7 +137,9 @@ fn install_reports_the_surface_diff_to_an_already_installed_repo() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bin_dir = Path::new(env!("CARGO_BIN_EXE_air")).parent().unwrap();
-    let path = bin_dir.to_string_lossy().to_string();
+    // This binary first (the on-PATH check), then the system dirs so `git` is reachable for
+    // the ignore check (air-6di).
+    let path = format!("{}:/usr/bin:/bin", bin_dir.to_string_lossy());
 
     // A first install has nothing to report: this repo never had Air.
     let (code, out, _) = air(&repo, Some(&path), &["install"]);
