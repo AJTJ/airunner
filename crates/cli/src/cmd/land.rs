@@ -104,28 +104,82 @@ pub fn where_i_am() -> Option<String> {
     air_ledger::paths::worker_name_for(&cwd).ok()
 }
 
-/// What `air land` says about the verifies running right now (air-4cr). Empty when nothing is
-/// running, so the ok path is silent.
+/// Why `air land` refuses while a verify is in flight (air-1bm), naming every run and the fix.
+/// `None` when nothing is running, so the ok path is silent.
 ///
 /// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
-/// every verify in flight is about to become worthless. adopter's coordinator did this to
-/// three workers in one round with no signal available; their fix was a protocol where the
-/// worker warns first, which is exactly the relayed fact Air exists to remove. A full verify
-/// is ~420 s there and their landing rate was faster, so no cadence solves it.
+/// EVERY verify in flight is about to become worthless — not only one on the landed branch,
+/// since every other branch's contains-main precondition breaks and its tree changes on the
+/// re-merge. adopter's coordinator did this to three workers in one round with no signal
+/// available (air-4cr); their fix was a protocol where the worker warns first.
 ///
-/// Warn, never refuse (the bead's own default, owner's call): a coordinator may still have to
-/// land, and this is a fact, not a gate. **Removal condition**: delete when a round's landings
-/// show zero warnings, or show warnings that nothing ever waits on.
-pub fn in_flight_warnings(flights: &[air_ledger::verify::InFlight], at: &str) -> Vec<String> {
-    flights
-        .iter()
-        .map(|f| {
-            format!(
-                "warning: verify in flight, {} — landing now invalidates it and costs a re-run",
-                super::status::in_flight_line(f, at)
-            )
-        })
-        .collect()
+/// This used to warn and then land. air-4cr defaulted to warn ("a coordinator may still have
+/// to land, and a refusal here would be a gate over a fact") and wrote a removal condition
+/// asking for a round's data. The data came the other way (ad-fthq, adopter 2026-08-30):
+/// 1,199 s of completed verify destroyed in two incidents, six more runs invalidated, and an
+/// operational rule ("check first, land later") tried three times and broken the fourth. w2's
+/// framing is the fix: the gate and the action in one call are one artefact, and one artefact
+/// cannot check another. Coordinator's ruling, 2026-09-05 (`docs/decisions.md`): refuse, with
+/// an explicit `--despite-inflight` that lands anyway and is RECORDED on the landings row —
+/// with four workers and a twelve-minute verify there is almost always a run in flight, so a
+/// refusal with no way past starves landings (adopter round note, item 1). The override is
+/// the measurement.
+///
+/// **Removal condition** (`mechanisms.rs` `land-in-flight-refusal`): a full round with zero
+/// overrides, meaning the refusal is only ever waited out and could become a plain wait; or a
+/// round with zero refusals under overlapping verifies, measured from the `landings` and
+/// `verify_inflight` tables.
+pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> Option<String> {
+    if flights.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "refused: a verify is in flight, and landing now would destroy it: main moves, so its \
+         green would be for a head that no longer contains main.",
+    );
+    for f in flights {
+        s.push_str(&format!("\n  {}", in_flight_run_line(f, at)));
+    }
+    s.push_str(
+        "\n  fix: wait for it (`air status` names it until it exits), or stop it by pid: \
+         `kill <pid>` — never `pkill -f`, which reached every peer's argv (ad-ub34). To land \
+         anyway and destroy it: add `--despite-inflight`; the runs destroyed are recorded on \
+         the landing.",
+    );
+    Some(s)
+}
+
+/// One in-flight run as the refusal and the landings row name it: who, how long, what, where,
+/// and the pid to stop.
+pub fn in_flight_run_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
+    match f.pid {
+        Some(p) => format!("{} (pid {p})", super::status::in_flight_line(f, at)),
+        None => super::status::in_flight_line(f, at),
+    }
+}
+
+/// What a landing does with bd's answer about its beads' acceptance (air-bh4). An answer is
+/// the clause lists, one per bead, empty where a bead states none. No answer is a REFUSAL,
+/// never an empty list: "could not evaluate" and "evaluated and found nothing" must not read
+/// alike, and a check that degrades to a no-op is a green over an empty population,
+/// indistinguishable from a green over a full one (adopter's w1, 2026-08-31).
+///
+/// Refusing here is cheap because it happens before the merge: nothing has moved, and the fix
+/// is to run the same command again when bd answers. Pure, so the probe reaches the branch.
+pub fn acceptance_read(
+    result: Result<Vec<Vec<String>>, String>,
+    beads: &[String],
+) -> Result<Vec<Vec<String>>, String> {
+    match result {
+        Ok(c) => Ok(c),
+        Err(e) => Err(format!(
+            "refused: bd did not answer for {} ({e}), so their acceptance could not be read. \
+             Nothing was changed: a landing whose check did not run must not be recorded as \
+             one that checked and found nothing (fix: run the same `air land` again when bd \
+             answers; `air status` shows bd's median cost today)",
+            beads.join(" ")
+        )),
+    }
 }
 
 /// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
@@ -446,7 +500,14 @@ pub fn resolve(
     Ok(out)
 }
 
-pub fn run(repo: &Path, beads: &[String], workers: &[String], all: bool, json: bool) -> i32 {
+pub fn run(
+    repo: &Path,
+    beads: &[String],
+    workers: &[String],
+    all: bool,
+    despite_inflight: bool,
+    json: bool,
+) -> i32 {
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -578,24 +639,54 @@ pub fn run(repo: &Path, beads: &[String], workers: &[String], all: bool, json: b
     let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
-    // air-4cr. Landing moves main, and the hand-over gate wants a green at a HEAD containing
-    // main, so every verify running right now is about to become worthless. adopter's
-    // coordinator did this to three workers in one round and had no signal; their fix was a
-    // protocol where the worker warns first. Warn, do not refuse (bead air-4cr, owner's
-    // default): a coordinator may still have to land, and a refusal here would be a gate over
-    // a fact. Removal condition: delete this warning when a round's landings show it firing
-    // zero times, or when it fires and nothing ever waits on it.
-    lines.extend(in_flight_warnings(
-        &super::status::verifies_in_flight(&ledger),
-        &now(),
-    ));
-    if !json {
-        for l in &lines {
-            eprintln!("{l}");
+    // air-1bm: a verify in flight REFUSES the landing (it used to warn and land, air-4cr), and
+    // `--despite-inflight` is the recorded way past. The whole reasoning is on
+    // `in_flight_refusal`; what happens here is only which of the two paths was taken.
+    let at = now();
+    let flights = super::status::verifies_in_flight(&ledger);
+    let despite: Vec<String> = flights.iter().map(|f| in_flight_run_line(f, &at)).collect();
+    if let Some(msg) = in_flight_refusal(&flights, &at) {
+        if !despite_inflight {
+            log_event(
+                &ledger,
+                &worker,
+                "land",
+                &inputs,
+                "refuse-in-flight",
+                &msg,
+                &format!("{} verify(ies) in flight", flights.len()),
+            );
+            emit(
+                json,
+                &serde_json::json!({"ok": false, "landed": [], "reason": msg, "in_flight": flights}),
+                || msg.clone(),
+            );
+            return 2;
+        }
+        // The override is the measurement: an event line now, and the runs on every row this
+        // invocation writes.
+        let note = format!(
+            "landing despite {} verify(ies) in flight (--despite-inflight), which this \
+             destroys:\n  {}",
+            flights.len(),
+            despite.join("\n  ")
+        );
+        log_event(
+            &ledger,
+            &worker,
+            "land",
+            &inputs,
+            "despite-inflight",
+            &note,
+            &format!("{} verify(ies) in flight", flights.len()),
+        );
+        lines.push(note.clone());
+        if !json {
+            eprintln!("{note}");
         }
     }
     for batch in batches(&wanted) {
-        match land_one(repo, &ledger, &batch, json) {
+        match land_one(repo, &ledger, &batch, &despite, json) {
             Outcome::Landed { merge, noted } => {
                 lines.push(format!(
                     "landed {} ({}) at {}",
@@ -657,7 +748,13 @@ pub fn run(repo: &Path, beads: &[String], workers: &[String], all: bool, json: b
 
 /// Land one branch: build the merge commit off main and fast-forward onto it. No verify
 /// runs here and there is nothing to rewind (air-odv).
-fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool) -> Outcome {
+fn land_one(
+    repo: &Path,
+    ledger: &air_ledger::Ledger,
+    batch: &Batch,
+    despite: &[String],
+    json: bool,
+) -> Outcome {
     let branch = branch_for(&batch.worker);
     let started_at = now();
     let tip = match git::head(repo) {
@@ -721,6 +818,7 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             pid: Some(i64::from(std::process::id())),
             started_at: started_at.clone(),
             finished_at: now(),
+            despite_inflight: despite.to_vec(),
         });
     };
     let record =
@@ -776,6 +874,24 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
             remerge_command()
         ));
     }
+    // air-bh4: the acceptance text is read BEFORE anything moves, so bd not answering refuses
+    // with main untouched — the same shape as `air claim` (four arms, every one returns
+    // before a write) and `air triage`. It used to be read after the fast-forward and, on a
+    // bd timeout, degrade to an empty clause list: the row then said "the bead states no
+    // acceptance criteria", a positive false statement about a bead Air never read, and the
+    // one external check on close-with-proof recorded a clean result for a check that did
+    // not run (adopter ad-0vh3, 2026-08-31). `bd show` costs ~1.4 s per id, which is fine
+    // beside a landing and ruinous on every `air status` (air-7kp).
+    let clauses = match acceptance_read(
+        super::status::acceptance_for(repo, &batch.beads),
+        &batch.beads,
+    ) {
+        Ok(c) => c,
+        Err(why) => {
+            record("refused", None, None, Some("acceptance-unread".into()));
+            return Outcome::Refused(why);
+        }
+    };
     let message = format!("Land {branch}: {}", batch.beads.join(" "));
     let tree = match git::run(repo, &["rev-parse", &format!("{head}^{{tree}}")]) {
         Ok(t) => t,
@@ -848,18 +964,7 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         changed: &changed,
         tree: &tree,
     };
-    // The acceptance text is fetched HERE, for this branch's beads only: `bd show` costs
-    // ~1.4 s per id, which is fine beside a full verify and ruinous on every `air status`
-    // (air-7kp).
-    let clauses = match super::status::acceptance_for(repo, &batch.beads) {
-        Ok(c) => c,
-        Err(e) => {
-            // The merge already happened and verified; refusing now would be worse than
-            // saying what is unknown. Report it as unread rather than as absent.
-            eprintln!("air land: could not read acceptance from bd, so no clause was checked: {e}");
-            Vec::new()
-        }
-    };
+    // `clauses` was read before the merge (air-bh4), so every bead here was actually read.
     let judged: Vec<acceptance::Judged> = batch
         .beads
         .iter()
