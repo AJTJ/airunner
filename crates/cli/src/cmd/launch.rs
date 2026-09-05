@@ -126,19 +126,127 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
+/// The env a worker session runs with, set on the SPAWNED PROCESS (`Command::env`, or
+/// `tmux new-session -e` on the detached path) and not only in a `--settings` blob.
+///
+/// air-9dg: adopter's workers carried two `--settings`; the second (added to turn off Remote
+/// Control) replaced the first, so `AIR_ENFORCE` never reached a hook and the one refusal Air
+/// promises advised instead of refusing for five hours, with nothing saying so. Nothing on a
+/// command line can clobber a process environment. The blob stays too, merged with any
+/// pass-through `--settings` ([`merge_settings`]), because whether `claude --tmux` carries the
+/// launching process's env into the pane it opens is not verified; that path is the one
+/// reason it is still there, and it goes when Air owns the tmux session on every path
+/// (air-fdz) or the forwarding is verified.
+///
+/// AIR_ENFORCE=1: the hand-over gate denies instead of advising (air-i59; first bypass of the
+/// advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
+/// AIR_PROJECT: which fleet this session may touch (air-0lk); both roles set it.
+pub fn worker_env(name: &str, project: &str) -> Vec<(String, String)> {
+    [
+        ("AIR_ROLE", "worker"),
+        ("BEADS_ACTOR", name),
+        ("AIR_ENFORCE", "1"),
+        ("AIR_PROJECT", project),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+/// The coordinator's env: no AIR_ENFORCE (the gate is the worker's), the project fence for
+/// both roles (air-0lk).
+pub fn coordinator_env(project: &str) -> Vec<(String, String)> {
+    [("AIR_ROLE", "coordinator"), ("AIR_PROJECT", project)]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn settings_blob(env: &[(String, String)]) -> String {
+    let env: serde_json::Map<String, serde_json::Value> = env
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    serde_json::json!({ "env": env }).to_string()
+}
+
+/// Pure: pull every `--settings <v>` / `--settings=<v>` out of pass-through args. Inline JSON
+/// objects come back to be merged; a file path is refused, naming what it would have dropped
+/// (air-9dg: the defect was SILENT replacement; a loud refusal is acceptable, a merge better).
+pub fn split_settings(extra: &[String]) -> Result<(Vec<String>, Vec<serde_json::Value>), String> {
+    let mut rest = Vec::new();
+    let mut blobs = Vec::new();
+    let mut it = extra.iter();
+    while let Some(a) = it.next() {
+        let value = if a == "--settings" {
+            it.next().cloned()
+        } else if let Some(v) = a.strip_prefix("--settings=") {
+            Some(v.to_string())
+        } else {
+            rest.push(a.clone());
+            continue;
+        };
+        let Some(value) = value else {
+            return Err("--settings given without a value".into());
+        };
+        match serde_json::from_str::<serde_json::Value>(&value) {
+            Ok(v) if v.is_object() => blobs.push(v),
+            _ => {
+                return Err(format!(
+                    "a pass-through `--settings {value}` would replace Air's own --settings, \
+                     dropping AIR_ENFORCE, AIR_ROLE, AIR_PROJECT and BEADS_ACTOR from the \
+                     session (air-9dg). Pass the settings as inline JSON and they are merged."
+                ));
+            }
+        }
+    }
+    Ok((rest, blobs))
+}
+
+/// Pure: merge pass-through settings objects into the `--settings` blob already in `argv`,
+/// so the command line carries ONE. Theirs first, ours on top: every key of theirs survives,
+/// `env` is merged as a map, and Air's four env values win.
+pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
+    let Some(i) = argv.iter().position(|a| a == "--settings") else {
+        return;
+    };
+    let Some(slot) = argv.get_mut(i.saturating_add(1)) else {
+        return;
+    };
+    let ours: serde_json::Value = serde_json::from_str(slot).unwrap_or_default();
+    let mut merged = serde_json::Map::new();
+    for t in theirs {
+        if let Some(o) = t.as_object() {
+            for (k, v) in o {
+                if k == "env" {
+                    let env = merged.entry("env").or_insert_with(|| serde_json::json!({}));
+                    if let (Some(dst), Some(src)) = (env.as_object_mut(), v.as_object()) {
+                        dst.extend(src.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    }
+                } else {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    if let Some(o) = ours.as_object() {
+        for (k, v) in o {
+            if k == "env" {
+                let env = merged.entry("env").or_insert_with(|| serde_json::json!({}));
+                if let (Some(dst), Some(src)) = (env.as_object_mut(), v.as_object()) {
+                    dst.extend(src.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            } else {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    *slot = serde_json::Value::Object(merged).to_string();
+}
+
 /// Pure: the argv for a worker session.
 pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
-    // AIR_ENFORCE=1: the hand-over gate denies instead of advising (air-i59; first bypass of
-    // the advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
-    // AIR_PROJECT: which fleet this session may touch (air-0lk); both roles set it.
-    let settings = serde_json::json!({
-        "env": {
-            "AIR_ROLE": "worker",
-            "BEADS_ACTOR": name,
-            "AIR_ENFORCE": "1",
-            "AIR_PROJECT": project,
-        }
-    });
+    let settings = settings_blob(&worker_env(name, project));
     let mut v: Vec<String> = vec![
         "--worktree".into(),
         name.into(),
@@ -153,12 +261,20 @@ pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) ->
     v
 }
 
-/// Worker argv including the repo's own deny rules (inserted before any pass-through args).
-fn worker_argv_for(repo: &Path, name: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+/// Worker argv including the repo's own deny rules (inserted before any pass-through args),
+/// with any pass-through `--settings` merged into Air's so the line carries one (air-9dg).
+fn worker_argv_for(
+    repo: &Path,
+    name: &str,
+    roles: &Path,
+    extra: &[String],
+) -> Result<Vec<String>, String> {
+    let (extra, theirs) = split_settings(extra)?;
     let mut base = worker_argv(name, &super::tmux::project_prefix(repo), roles, &[]);
+    merge_settings(&mut base, &theirs);
     base.extend(repo_deny(repo, "worker_deny"));
-    base.extend(extra.iter().cloned());
-    base
+    base.extend(extra);
+    Ok(base)
 }
 
 /// Pure: the argv for the coordinator session.
@@ -170,14 +286,14 @@ pub fn coordinator_argv(
 ) -> Vec<String> {
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
     // the coordinator is the one that can see every fleet on the machine.
-    let settings = serde_json::json!({"env": {"AIR_ROLE": "coordinator", "AIR_PROJECT": project}});
+    let settings = settings_blob(&coordinator_env(project));
     let mut v: Vec<String> = vec![
         channels_flag.into(),
         "server:air".into(),
         "--append-system-prompt-file".into(),
         roles.display().to_string(),
         "--settings".into(),
-        settings.to_string(),
+        settings,
         "--disallowed-tools".into(),
     ];
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
@@ -185,11 +301,18 @@ pub fn coordinator_argv(
     v
 }
 
-fn coordinator_argv_for(repo: &Path, roles: &Path, flag: &str, extra: &[String]) -> Vec<String> {
+fn coordinator_argv_for(
+    repo: &Path,
+    roles: &Path,
+    flag: &str,
+    extra: &[String],
+) -> Result<Vec<String>, String> {
+    let (extra, theirs) = split_settings(extra)?;
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, &[]);
+    merge_settings(&mut base, &theirs);
     base.extend(repo_deny(repo, "coordinator_deny"));
-    base.extend(extra.iter().cloned());
-    base
+    base.extend(extra);
+    Ok(base)
 }
 
 fn claude_bin() -> String {
@@ -218,6 +341,17 @@ pub fn print_line(bin: &str, argv: &[String]) -> String {
         .join(" ")
 }
 
+/// Pure: [`print_line`] with the process env in front as shell assignments, so the printed
+/// line runs with the same environment the launcher would have set (air-9dg).
+pub fn print_env_line(env: &[(String, String)], bin: &str, argv: &[String]) -> String {
+    let mut parts: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!("{k}={}", shell_quote(v)))
+        .collect();
+    parts.push(print_line(bin, argv));
+    parts.join(" ")
+}
+
 /// How a worker session is started. Pure decision so the selftest probe can exercise it.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Launch {
@@ -237,12 +371,17 @@ pub fn launch_mode(stdin_is_tty: bool, tmux_requested: bool) -> Launch {
     }
 }
 
-/// Pure: `tmux new-session -d -s <name> -c <repo> -- <bin> <argv...>`. `socket` (from
-/// `AIR_TMUX_SOCKET`) becomes `-L <socket>` so tests never touch the user's tmux server.
+/// Pure: `tmux new-session -d -s <name> -e K=V… -c <repo> -- <bin> <argv...>`. `socket`
+/// (from `AIR_TMUX_SOCKET`) becomes `-L <socket>` so tests never touch the user's tmux server.
+///
+/// `-e` (tmux ≥ 3.2, 2021) is how env reaches a pane when the server already exists: a
+/// running server hands new sessions ITS environment plus `update-environment`, not the
+/// client's, so `Command::env` on the `tmux` client alone would set nothing (air-9dg).
 pub fn tmux_detached_argv(
     name: &str,
     repo: &Path,
     socket: Option<&str>,
+    env: &[(String, String)],
     bin: &str,
     argv: &[String],
 ) -> Vec<String> {
@@ -251,19 +390,12 @@ pub fn tmux_detached_argv(
         v.push("-L".into());
         v.push(s.into());
     }
-    v.extend(
-        [
-            "new-session",
-            "-d",
-            "-s",
-            name,
-            "-c",
-            &repo.display().to_string(),
-            "--",
-            bin,
-        ]
-        .map(String::from),
-    );
+    v.extend(["new-session", "-d", "-s", name].map(String::from));
+    for (k, val) in env {
+        v.push("-e".into());
+        v.push(format!("{k}={val}"));
+    }
+    v.extend(["-c", &repo.display().to_string(), "--", bin].map(String::from));
     v.extend(argv.iter().cloned());
     v
 }
@@ -279,11 +411,17 @@ fn tmux_socket() -> Option<String> {
 ///
 /// The session is `<project>-<worker>`, not `<worker>`: `tmux ls` is machine-wide, so with two
 /// fleets running the list said nothing about which project a pane belonged to (air-5lg).
-fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 {
+fn spawn_detached(
+    repo: &Path,
+    name: &str,
+    env: &[(String, String)],
+    argv: &[String],
+    print: bool,
+) -> i32 {
     let bin = claude_bin();
     let socket = tmux_socket();
     let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
-    let targv = tmux_detached_argv(&session, repo, socket.as_deref(), &bin, argv);
+    let targv = tmux_detached_argv(&session, repo, socket.as_deref(), env, &bin, argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return 0;
@@ -309,14 +447,17 @@ fn spawn_detached(repo: &Path, name: &str, argv: &[String], print: bool) -> i32 
     }
 }
 
-fn exec_claude(repo: &Path, argv: &[String], print: bool) -> i32 {
+fn exec_claude(repo: &Path, env: &[(String, String)], argv: &[String], print: bool) -> i32 {
     let bin = claude_bin();
     if print {
-        println!("{}", print_line(&bin, argv));
+        println!("{}", print_env_line(env, &bin, argv));
         return 0;
     }
     let mut cmd = Command::new(&bin);
-    cmd.args(argv).current_dir(repo);
+    // On the process, not only in argv: nothing on a command line can clobber it (air-9dg).
+    cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .args(argv)
+        .current_dir(repo);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -440,9 +581,16 @@ pub fn worker(
             return 1;
         }
     };
-    let mut argv = worker_argv_for(repo, name, &roles, extra);
+    let env = worker_env(name, &super::tmux::project_prefix(repo));
+    let mut argv = match worker_argv_for(repo, name, &roles, extra) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("air worker: {e}");
+            return 1;
+        }
+    };
     if !(tmux || task.is_some()) {
-        return exec_claude(repo, &argv, print);
+        return exec_claude(repo, &env, &argv, print);
     }
     // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Written under
     // `--print` too, so the printed command is one that runs.
@@ -459,13 +607,13 @@ pub fn worker(
     match launch_mode(std::io::stdin().is_terminal(), true) {
         Launch::Exec => {
             argv = worker_argv_tmux(argv, true, tmux_mode().as_deref(), prompt.as_deref());
-            exec_claude(repo, &argv, print)
+            exec_claude(repo, &env, &argv, print)
         }
         Launch::Detached => {
             // tmux is ours here, so claude gets no `--tmux`; the prompt still goes first
             // (air-2ct: after the deny list it reads as one more deny rule).
             argv = worker_argv_tmux(argv, false, None, prompt.as_deref());
-            spawn_detached(repo, name, &argv, print)
+            spawn_detached(repo, name, &env, &argv, print)
         }
     }
 }
@@ -483,11 +631,15 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
     // channels allowlist (use --dangerously-load-development-channels for local dev)").
     let flag = std::env::var("AIR_CHANNELS_FLAG")
         .unwrap_or_else(|_| "--dangerously-load-development-channels".into());
-    exec_claude(
-        repo,
-        &coordinator_argv_for(repo, &roles, &flag, extra),
-        print,
-    )
+    let argv = match coordinator_argv_for(repo, &roles, &flag, extra) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("air coordinator: {e}");
+            return 1;
+        }
+    };
+    let env = coordinator_env(&super::tmux::project_prefix(repo));
+    exec_claude(repo, &env, &argv, print)
 }
 
 #[cfg(test)]
@@ -597,9 +749,17 @@ mod tests {
     }
 
     #[test]
-    fn detached_argv_never_passes_tmux_to_claude() {
+    fn detached_argv_never_passes_tmux_to_claude_and_carries_env_by_dash_e() {
         let argv = vec!["--worktree".to_string(), "w".into(), "do x".into()];
-        let v = tmux_detached_argv("w", Path::new("/r"), Some("air-test"), "claude", &argv);
+        let env = vec![("AIR_ENFORCE".to_string(), "1".to_string())];
+        let v = tmux_detached_argv(
+            "w",
+            Path::new("/r"),
+            Some("air-test"),
+            &env,
+            "claude",
+            &argv,
+        );
         assert_eq!(
             v,
             [
@@ -609,6 +769,8 @@ mod tests {
                 "-d",
                 "-s",
                 "w",
+                "-e",
+                "AIR_ENFORCE=1",
                 "-c",
                 "/r",
                 "--",
@@ -619,8 +781,59 @@ mod tests {
             ]
         );
         assert!(!v.iter().any(|a| a.starts_with("--tmux")));
-        let v = tmux_detached_argv("w", Path::new("/r"), None, "claude", &argv);
+        let v = tmux_detached_argv("w", Path::new("/r"), None, &[], "claude", &argv);
         assert_eq!(v[0], "new-session");
+        assert!(!v.iter().any(|a| a == "-e"));
+    }
+
+    /// air-9dg: a pass-through `--settings` is merged into Air's, never a second flag; a file
+    /// path is refused naming what it would drop; Air's env values win inside `env`.
+    #[test]
+    fn passthrough_settings_merge_into_one_blob_and_a_file_is_refused() {
+        let extra: Vec<String> = [
+            "--model",
+            "x",
+            "--settings",
+            r#"{"remoteControlAtStartup":false,"env":{"FOO":"bar","AIR_ENFORCE":"0"}}"#,
+        ]
+        .map(String::from)
+        .to_vec();
+        let (rest, theirs) = split_settings(&extra).unwrap();
+        assert_eq!(rest, ["--model", "x"]);
+        assert_eq!(theirs.len(), 1);
+        let mut argv = worker_argv("w", "air", Path::new("/r/roles.md"), &[]);
+        merge_settings(&mut argv, &theirs);
+        assert_eq!(argv.iter().filter(|a| *a == "--settings").count(), 1);
+        let i = argv.iter().position(|a| a == "--settings").unwrap();
+        let s: serde_json::Value = serde_json::from_str(&argv[i + 1]).unwrap();
+        assert_eq!(s["remoteControlAtStartup"], false);
+        assert_eq!(s["env"]["FOO"], "bar");
+        assert_eq!(s["env"]["AIR_ENFORCE"], "1");
+        assert_eq!(s["env"]["BEADS_ACTOR"], "w");
+        // `--settings=<json>` is the same thing.
+        let (rest, theirs) = split_settings(&[r#"--settings={"a":1}"#.to_string()]).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(theirs[0]["a"], 1);
+        // A file path cannot be merged; it is refused with the four names in the message.
+        let err =
+            split_settings(&["--settings".to_string(), "/tmp/s.json".to_string()]).unwrap_err();
+        assert!(
+            err.contains("AIR_ENFORCE") && err.contains("/tmp/s.json"),
+            "{err}"
+        );
+        // And a value-less flag is an error rather than a silently eaten argument.
+        assert!(split_settings(&["--settings".to_string()]).is_err());
+    }
+
+    /// air-9dg: the printed line carries the env as shell assignments in front of the exec.
+    #[test]
+    fn print_env_line_prefixes_assignments() {
+        let env = worker_env("w1", "air");
+        let line = print_env_line(&env, "claude", &["--worktree".into(), "w1".into()]);
+        assert_eq!(
+            line,
+            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air claude --worktree w1"
+        );
     }
 
     #[test]
