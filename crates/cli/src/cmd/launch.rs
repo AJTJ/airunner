@@ -581,6 +581,30 @@ pub fn worker(
             return 1;
         }
     };
+    // The worktree is Air's to create and fill (air-fdz); claude is handed the existing one
+    // by name and keeps its isolation. Not under `--print`, which runs nothing.
+    if !print {
+        match super::worktree::ensure(&super::worktree::main_checkout(repo), name) {
+            Ok(c) => {
+                if !c.existed {
+                    eprintln!("air worker: created {} on {}", c.path.display(), c.branch);
+                }
+                if !c.copied.copied.is_empty() {
+                    eprintln!(
+                        "air worker: copied {} file(s) from .worktreeinclude",
+                        c.copied.copied.len()
+                    );
+                }
+                for s in c.copied.skipped.iter().chain(c.copied.unsupported.iter()) {
+                    eprintln!("air worker: .worktreeinclude: skipped {s}");
+                }
+            }
+            Err(e) => {
+                eprintln!("air worker: {e}");
+                return 1;
+            }
+        }
+    }
     let env = worker_env(name, &super::tmux::project_prefix(repo));
     let mut argv = match worker_argv_for(repo, name, &roles, extra) {
         Ok(v) => v,
