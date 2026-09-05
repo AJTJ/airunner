@@ -410,6 +410,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
+        Mutation {
+            // Air stops copying: the worktree is the naive one and its build fails, which is
+            // the adopter fleet that does not compile (air-fdz).
+            file: "crates/cli/src/cmd/worktree.rs",
+            from: "let copied = copy_included(main, &path)?;",
+            to: "let copied = Copied::default();",
+            also_red: &[],
+        },
+    ),
+    (
         "events: bd_calls on a line is that event's own count, not the process's running total",
         Mutation {
             // `take` hands back the lifetime total again, which is what every `air mcp` line
@@ -1128,6 +1139,7 @@ fn all_probes() -> Vec<Probe> {
         probe_install_goes_forward_only(),
         probe_enforced_gate(),
         probe_env_reaches_the_hook(),
+        probe_worktree_is_airs(),
         probe_bd_calls_are_per_event(),
         probe_status_reconcile_is_one_show(),
         probe_subagent_stop_is_not_a_stop(),
@@ -4706,14 +4718,25 @@ fn probe_worker_task_prompt() -> Probe {
         // Canonical, because the launcher names the task file from its cwd as the kernel
         // reports it (`/private/var/...` on macOS, not the `/var/...` temp_dir hands out).
         let dir = dir.canonicalize().map_err(|e| e.to_string())?;
-        let git = Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !git.status.success() {
-            return Err(String::from_utf8_lossy(&git.stderr).to_string());
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            // A commit, because the launcher now creates the lane's worktree first (air-fdz)
+            // and a worktree needs something to branch from.
+            &["commit", "-q", "--allow-empty", "-m", "a"][..],
+        ] {
+            let git = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !git.status.success() {
+                return Err(String::from_utf8_lossy(&git.stderr).to_string());
+            }
         }
         // The stub records its argv in a file rather than on stdout: without a tty (this
         // probe under `air record verify`, a Bash tool) the launcher starts the stub inside a
@@ -4760,6 +4783,12 @@ fn probe_worker_task_prompt() -> Probe {
             .output();
         let task_path = dir.join(".air").join("tasks").join("w.md");
         let on_disk = std::fs::read_to_string(&task_path).unwrap_or_default();
+        let worktree_made = dir
+            .join(".claude")
+            .join("worktrees")
+            .join("w")
+            .join(".git")
+            .is_file();
         let _ = std::fs::remove_dir_all(&dir);
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
@@ -4771,10 +4800,17 @@ fn probe_worker_task_prompt() -> Probe {
             .map(str::to_string)
             .collect();
         let prompt = task_prompt(&task_path);
+        // air-fdz: the lane's worktree exists before claude runs, and claude is still handed
+        // it by name (the isolation the harness enforces is keyed on that flag).
+        let wt_made = worktree_made;
         Ok(!argv.iter().any(|a| a.contains(marker))
             && argv.first().is_some_and(|a| *a == prompt)
             && task_is_prompt(&argv, &prompt)
-            && on_disk == format!("{task}\n"))
+            && on_disk == format!("{task}\n")
+            && wt_made
+            && argv.windows(2).any(|w| {
+                w.first().is_some_and(|a| a == "--worktree") && w.get(1).is_some_and(|b| b == "w")
+            }))
     })()
     .unwrap_or(false);
     Probe {
@@ -4977,6 +5013,131 @@ fn probe_env_reaches_the_hook() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-fdz: Air creates and fills a worker's worktree, and removes it only when nothing holds
+/// it. The blocker the audit found: adopter's `.worktreeinclude` copies gitignored files a
+/// worktree cannot build without (`backend/keys/*.pem` is read by `include_str!` at compile
+/// time), and their own note says the error does not reveal why. Red: a naive `git worktree
+/// add` gives a worktree whose build fails, which is exactly the fleet a launcher that only
+/// ran git would produce. Green: Air's worktree has the listed files (and only those: an
+/// unlisted ignored file is not copied, a symlink is skipped), sits on `worktree-<name>`
+/// under `.claude/worktrees/<name>`, and its build passes; then removal is refused while the
+/// tree carries uncommitted work, naming the file, and removes a clean tree keeping the
+/// branch. "A worktree that builds is the test, not a file listing."
+fn probe_worktree_is_airs() -> Probe {
+    use crate::cmd::worktree::{Holding, branch_for, ensure, holdings, remove};
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |cwd: &Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&dir, &["init", "-q", "-b", "main"])?;
+        // adopter's shape in miniature: two gitignored files the build needs, one it does
+        // not, a symlink beside them, and the include file naming the first two.
+        std::fs::create_dir_all(dir.join("backend").join("keys")).map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".gitignore"),
+            ".env\n*.pem\nsecret.txt\n.claude/worktrees/\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".worktreeinclude"),
+            "# copied into every worktree\nbackend/.env\nbackend/keys/*.pem\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join("build.sh"),
+            "#!/bin/sh\ntest -f backend/.env && test -f backend/keys/dev.pem\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join(".env"), "DATABASE_URL=x\n")
+            .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join("keys").join("dev.pem"), "KEY\n")
+            .map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backend").join("secret.txt"), "not listed\n")
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("dev.pem", dir.join("backend").join("keys").join("link.pem"))
+            .map_err(|e| e.to_string())?;
+        g(&dir, &["add", "-A"])?;
+        g(&dir, &["commit", "-q", "-m", "a"])?;
+        let builds = |wt: &Path| -> bool {
+            Command::new("sh")
+                .arg("build.sh")
+                .current_dir(wt)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+
+        // RED: git alone. The tracked build script is there and the build fails.
+        let naive = dir.join("naive");
+        g(
+            &dir,
+            &["worktree", "add", "-q", &naive.display().to_string()],
+        )?;
+        let red = naive.join("build.sh").is_file() && !builds(&naive);
+
+        // GREEN: Air's worktree.
+        let made = ensure(&dir, "w")?;
+        let wt = made.path.clone();
+        let on_branch = g(&wt, &["rev-parse", "--abbrev-ref", "HEAD"])? == branch_for("w");
+        let placed = wt == dir.join(".claude").join("worktrees").join("w") && !made.existed;
+        let files_right = builds(&wt)
+            && !wt.join("backend").join("secret.txt").exists()
+            && !wt.join("backend").join("keys").join("link.pem").exists()
+            && made.copied.copied.len() == 2
+            && made.copied.skipped.iter().any(|s| s.contains("link.pem"));
+        // A relaunch finds it and re-copies the current file.
+        std::fs::write(dir.join("backend").join(".env"), "DATABASE_URL=y\n")
+            .map_err(|e| e.to_string())?;
+        let again = ensure(&dir, "w")?;
+        let relaunch = again.existed
+            && std::fs::read_to_string(wt.join("backend").join(".env")).unwrap_or_default()
+                == "DATABASE_URL=y\n";
+        // Removal: refused while dirty, naming the file; then removed, branch kept.
+        std::fs::write(wt.join("wip.txt"), "unsaved\n").map_err(|e| e.to_string())?;
+        let held = holdings(&dir, "w")?;
+        let refused = matches!(remove(&dir, "w"), Err(e) if e.contains("wip.txt"))
+            && held
+                .iter()
+                .any(|h| matches!(h, Holding::Dirty(f) if f.iter().any(|x| x.contains("wip.txt"))))
+            && wt.is_dir();
+        std::fs::remove_file(wt.join("wip.txt")).map_err(|e| e.to_string())?;
+        let removed = remove(&dir, "w").is_ok()
+            && !wt.exists()
+            && g(
+                &dir,
+                &["rev-parse", "--verify", "-q", "refs/heads/worktree-w"],
+            )
+            .is_ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((
+            red,
+            on_branch && placed && files_right && relaunch && refused && removed,
+        ))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
         red_fires: red,
         green_passes: green,
     }
