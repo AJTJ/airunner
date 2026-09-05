@@ -570,11 +570,12 @@ fn land_one(repo: &Path, ledger: &air_ledger::Ledger, batch: &Batch, json: bool)
         Err(e) => return Outcome::Refused(format!("cannot read main's HEAD: {e}")),
     };
     let branch_head = git::run(repo, &["rev-parse", &format!("{branch}^{{commit}}")]).ok();
+    // The same predicate `select` and the gate read (air-7wf, after air-y3v): a branch is
+    // green here exactly when `air status` said it was.
     let green = branch_head.as_deref().and_then(|h| {
-        ledger
-            .is_green_at(&batch.worker, h, Kind::Verify)
+        super::green::at(ledger, repo, h, Kind::Verify)
             .ok()
-            .filter(|g| *g)
+            .filter(super::green::Evidence::holds)
             .map(|_| h.to_string())
     });
     let site = Site {

@@ -35,6 +35,10 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
             return 1;
         }
     };
+    // air-7wf: the tree is recorded with the run, so a green can be found again from the
+    // landing commit `air land` builds over it. A tree that cannot be read is recorded as
+    // unknown, which never matches; the exit is still the fact.
+    let tree = super::green::tree_of(repo, &head).ok();
     let Some((prog, args)) = command.split_first() else {
         eprintln!("air record: missing command after --");
         return 1;
@@ -100,6 +104,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         duration_ms: Some(duration_ms),
         output_bytes: Some(output_bytes),
         dirty,
+        tree,
     };
     if let Err(e) = ledger.record_verify(&run) {
         eprintln!("air record: could not write ledger: {e}");
@@ -116,7 +121,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     if dirty {
         flags.push("dirty-tree");
     }
-    let (greens, reds) = ledger.runs_at(&worker, &head, kind).unwrap_or((0, 0));
+    // Counted at the commit, every worker (air-7wf): a peer's red at this sha and my green
+    // are two verdicts on one commit, which is the disagreement this flag exists to show.
+    let (greens, reds) = ledger.runs_at(&head, kind).unwrap_or((0, 0));
     let flaky = greens > 0 && reds > 0;
     let flaky_note = if flaky {
         format!(
