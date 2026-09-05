@@ -84,7 +84,7 @@ case "$1" in
        fi
        # printf, not echo: /bin/sh's echo expands the \n inside the JSON description.
        printf '%s\n' "[$out]"; exit 0;;
-  ready) echo "[]"; exit 0;;
+  ready) if [ -f "$d/bd.ready.json" ]; then cat "$d/bd.ready.json"; exit 0; fi; echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1
           # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
           # issue `show` answers from, so a later claim by another actor sees what bd would.
@@ -1173,6 +1173,48 @@ fn a_superseding_branch_hands_over_by_its_trailer() {
     let m = missing(&o);
     assert!(m.iter().any(|m| m["check"] == "claim"), "{o}");
     assert!(o.contains("Bead: fd-9") && !o.contains("air claim"), "{o}");
+}
+
+/// air-f10 (adopter w2, 2026-08-31), end to end: bd's ready set holds two epics, one
+/// owner-labelled bead and one task. The line says one claimable and names the epics apart,
+/// and `air claim` on an epic is refused with the reason, so no assignee lands on a container.
+#[test]
+fn ready_line_names_epics_apart_and_claim_refuses_one() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::write(
+        repo.join("bd.ready.json"),
+        r#"[{"id":"fd-e1","status":"open","issue_type":"epic"},
+            {"id":"fd-e2","status":"open","issue_type":"epic"},
+            {"id":"ad-own","status":"open","issue_type":"task","labels":["owner"]},
+            {"id":"fd-t","status":"open","issue_type":"task"}]"#,
+    )
+    .unwrap();
+    let (code, out, err) = air(&repo, &bd, &["status"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(
+            "ready: 4 (1 claimable; 2 epic(s) to decompose, not claimable; 1 owner-labelled"
+        ),
+        "{out}"
+    );
+    // The cache the Stop nudge reads holds only the task.
+    let cache = std::fs::read_to_string(repo.join(".air/ready.json")).unwrap();
+    assert!(
+        cache.contains("fd-t") && !cache.contains("fd-e1"),
+        "{cache}"
+    );
+
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"fd-e1","status":"open","issue_type":"epic","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, out, _) = air(&repo, &bd, &["claim", "fd-e1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("is an epic"), "{out}");
+    assert!(out.contains("claim a child"), "{out}");
 }
 
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the

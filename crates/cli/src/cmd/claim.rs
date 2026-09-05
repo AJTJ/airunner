@@ -249,6 +249,27 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                     2,
                 );
             }
+            // air-f10: an epic is a container. A worker offered one by a count that could
+            // not tell it from a task nearly claimed it, and a claim pencils an assignee
+            // onto the container that nobody else can then take (air-0kk's residue through
+            // the front door). Refused for everyone: the coordinator decomposes, it does not
+            // claim.
+            if issue.issue_type == super::ready_cache::EPIC {
+                let msg = format!(
+                    "refused: {bead} is an epic, a container rather than a task; claiming it would put an assignee on work nobody else can take. Decompose it (`bd create` its children) and claim a child."
+                );
+                return fail(
+                    &ledger,
+                    &worker,
+                    "claim",
+                    inputs(serde_json::json!({})),
+                    "refuse",
+                    msg,
+                    "bd show",
+                    json,
+                    2,
+                );
+            }
             if issue.status == "closed" {
                 let msg = format!(
                     "refused: {bead} is closed; closed is closed. File a new bead that references it."
