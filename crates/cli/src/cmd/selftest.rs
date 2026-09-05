@@ -183,6 +183,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
+        Mutation {
+            // The old denylist of one, exactly as it stood: only `in-flight` is skipped, so a
+            // refused row is read as a landing again. One branch, in the reader that was wrong.
+            file: "crates/ledger/src/landings.rs",
+            from: "            if !l.landed() {",
+            to: "            if l.result == \"in-flight\" {",
+            also_red: &[],
+        },
+    ),
+    (
         "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         Mutation {
             // Let a tree green count under the default key. That is the silent upgrade
@@ -907,6 +918,7 @@ fn all_probes() -> Vec<Probe> {
         probe_project_is_taken_from_what_it_is_told(),
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
+        probe_refused_landing_publishes_nothing(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_close_with_proof_sequence(),
@@ -1690,7 +1702,7 @@ fn probe_landed_but_open() -> Probe {
             worker: "alpha".into(),
             sha: "aaa".into(),
             tip_sha: Some("bbb".into()),
-            result: "landed-open".into(),
+            result: "landed-refuted".into(),
             failing_step: None,
             verify_run_id: None,
             attempt_no: 1,
@@ -1759,6 +1771,85 @@ fn probe_landed_but_open() -> Probe {
             && !unreadable.refuted()
             && !unreadable.all_discharged()
             && cleared,
+    }
+}
+
+/// air-8zn: a REFUSED landing publishes no landed beads, and a successful one still publishes
+/// all of them. `landed_open` excluded only `in-flight` and treated every other result as a
+/// landing, so the second branch of an `air land --all` — refused for main-moved, as every
+/// branch after the first is — was read as the newest word on the five beads its row carried.
+///
+/// Red: a refused row carrying a refuted bead reports nothing, and a refused row NEWER than a
+/// real landing does not silence that landing's refutation. Green: the real landing reports
+/// every refuted bead it carries, which is what stops the fix becoming a silence.
+fn probe_refused_landing_publishes_nothing() -> Probe {
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let row = |id: &str, result: &str, at: &str, beads: &[&str], open: Vec<OpenBead>| Landing {
+        id: id.into(),
+        worker: "w4".into(),
+        sha: "823b2fd5".into(),
+        tip_sha: Some("99b10fa0".into()),
+        result: result.into(),
+        failing_step: (result == "refused").then(|| "check".to_string()),
+        verify_run_id: None,
+        attempt_no: 1,
+        beads: beads.iter().map(|b| b.to_string()).collect(),
+        open_beads: open,
+        merge_commit: (result != "refused").then(|| "ccc".to_string()),
+        pid: None,
+        started_at: at.into(),
+        finished_at: at.into(),
+    };
+    let refuted = |bead: &str| OpenBead {
+        bead: bead.into(),
+        why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+        refuted: true,
+        contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+    };
+    let five = ["ad-7p85", "ad-epo9", "ad-fsxg", "ad-lqhf", "ad-xeq3"];
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        // The live case: a refusal carrying five beads. Even with a refuted clause on the row
+        // it publishes nothing, because nothing landed.
+        l.record_landing(&row("r1", "refused", "t1", &five, vec![refuted("ad-7p85")]))
+            .map_err(|e| e.to_string())?;
+        let refused_publishes_nothing = l.landed_open().map_err(|e| e.to_string())?.is_empty();
+
+        // A real landing that refutes two of them reports both.
+        l.record_landing(&row(
+            "l1",
+            "landed-refuted",
+            "t2",
+            &five,
+            vec![refuted("ad-epo9"), refuted("ad-fsxg")],
+        ))
+        .map_err(|e| e.to_string())?;
+        let mut reported: Vec<String> = l
+            .landed_open()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|o| o.bead)
+            .collect();
+        reported.sort();
+        let landed_publishes_all = reported == ["ad-epo9", "ad-fsxg"];
+
+        // A newer refusal of the same branch (main moved under it) leaves both standing.
+        l.record_landing(&row("r2", "refused", "t3", &five, vec![]))
+            .map_err(|e| e.to_string())?;
+        let refusal_does_not_silence = l.landed_open().map_err(|e| e.to_string())?.len() == 2;
+        Ok((
+            refused_publishes_nothing && refusal_does_not_silence,
+            landed_publishes_all,
+        ))
+    })()
+    .unwrap_or((false, false));
+    let (red, green) = res;
+    Probe {
+        name: "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
