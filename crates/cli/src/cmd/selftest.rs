@@ -197,6 +197,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
+        Mutation {
+            // Ignore the launcher's role, which is the pre-fix rule exactly (air-75u): the
+            // identity falls through to the checkout the shell is in. One guard, it compiles,
+            // and the worker arm and the fallback are untouched.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "        (Some(\"coordinator\"), _) => \"main\".to_string(),",
+            to: "        (Some(\"coordinator\"), _) if false => \"main\".to_string(),",
+            also_red: &[],
+        },
+    ),
+    (
         "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
         Mutation {
             // The ok line without the main it was true of: the pre-fix line exactly
@@ -950,6 +962,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
+        probe_session_identity_is_the_launchers(),
         probe_gate_names_the_landing_that_moved_main(),
         probe_handover_ok_names_the_main_it_checked(),
         probe_handover_matcher(),
@@ -3805,6 +3818,30 @@ fn probe_handover_ok_names_the_main_it_checked() -> Probe {
             && refused.message.contains("main is at 1111111")
             && !refused.message.contains("fedcba9")
             && handover_verdict(&unknown).message == "handover ok: probe at 0123456",
+    }
+}
+
+/// air-75u: the main checkout's Stop hook reported a hand-over refusal naming w1's HEAD, twice
+/// in one adopter round, because the hook took its identity from the shell's directory and
+/// the coordinator's shell was in w1's worktree. Red: with the launcher's `AIR_ROLE`, the
+/// session is main whatever the shell says, and a worker is its `BEADS_ACTOR`. Green: a
+/// session Air did not launch is what its checkout says, and a refusal names whose tree it is
+/// about, so the un-launched case is at least scoped.
+fn probe_session_identity_is_the_launchers() -> Probe {
+    use crate::cmd::hook::identity_from;
+
+    let red = identity_from(Some("coordinator"), None, "w1") == "main"
+        && identity_from(Some("worker"), Some("w2"), "w1") == "w2";
+    let mut f = base_facts();
+    f.main_is_ancestor = false;
+    let v = handover_verdict(&f);
+    Probe {
+        name: "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
+        red_fires: red,
+        green_passes: identity_from(None, Some("tester"), "w1") == "w1"
+            && identity_from(None, None, "main") == "main"
+            && v.message
+                .starts_with("handover refused for probe at 0123456: "),
     }
 }
 
