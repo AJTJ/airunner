@@ -278,7 +278,7 @@ fn dispatch(
             // and again only when one of those moves. A blocked worker is not nagged every
             // turn about a blocker it cannot clear (adopter, 2026-08-21).
             let latest = ledger
-                .latest_run(worker, &f.head, air_ledger::verify::Kind::Verify)
+                .latest_run_at_commit(&f.head, air_ledger::verify::Kind::Verify)
                 .ok()
                 .flatten()
                 .map(|r| r.id)
@@ -1082,6 +1082,7 @@ mod tests {
                 duration_ms: None,
                 output_bytes: None,
                 dirty: false,
+                tree: None,
             })
             .unwrap();
         let d = stop(&ledger);
@@ -1104,6 +1105,7 @@ mod tests {
                 duration_ms: None,
                 output_bytes: None,
                 dirty: false,
+                tree: None,
             })
             .unwrap();
         let d = stop(&ledger);
