@@ -172,6 +172,9 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
                 "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+                // Its "with neither digest nor green it is still refused" half is this rule
+                // (air-60x; declared by air-8d7).
+                "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
             ],
         },
     ),
@@ -183,6 +186,10 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             to: "if false {",
             also_red: &[
                 "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+                // Both assert on the refusal this rule produces (air-75u, air-5wq; declared
+                // by air-8d7).
+                "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
+                "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
             ],
         },
     ),
@@ -361,7 +368,11 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "if !f.bead_claimed_or_carried {",
             to: "if false {",
-            also_red: &[],
+            // The superseding-branch probe's "never told to claim" half reads this refusal
+            // (air-60x; declared by air-8d7).
+            also_red: &[
+                "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
+            ],
         },
     ),
     (
@@ -449,13 +460,15 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     (
         "install: a repo at yesterday's surface is told what changed; a current one is told nothing",
         Mutation {
-            // Nothing is ever new, which is the pre-air-6g1 world: install reports success and
-            // an adopting repo learns nothing. The green half legitimately still passes (an
-            // empty diff for a current repo is what it asserts), so only the red half falls —
-            // which is the point of naming one branch.
+            // A repo that has recorded ANYTHING is told nothing, while a repo recorded at
+            // nothing still sees every change (air-8d7). The earlier form, `false`, took the
+            // whole diff out and so also felled `install: an older recorded surface diffs`,
+            // whose red half is `surface_diff(&[])`; that is the shared rule, and the report
+            // read VACUOUS. This one reaches the branch only this probe drives: a partially
+            // told repo. The green half still passes (a fully told repo is told nothing).
             file: "crates/cli/src/cmd/install.rs",
             from: "!known.iter().any(|k| k == c.id)",
-            to: "false",
+            to: "known.is_empty()",
             also_red: &[],
         },
     ),
@@ -668,7 +681,12 @@ struct ProofRow {
 /// air-682: run every declared mutation and report any probe that stays green.
 ///
 /// Edits tracked files, so it refuses a dirty tree rather than risk restoring the wrong content,
-/// and restores with `git checkout --` after each mutation whatever the outcome.
+/// and restores after each mutation whatever the outcome — by writing the bytes it read back,
+/// never through git (air-8d7). It used `git checkout --`, which takes the index lock, and one
+/// restore lost that lock to a `git status` run beside it and was ignored: the bd-budget
+/// mutation stayed applied, that probe went red under every later mutation, and fourteen
+/// verdicts read VACUOUS for a collateral that was not theirs. A restore that fails now ends
+/// the run with the reason, since every verdict after it would be about a tree nobody chose.
 pub fn prove(repo: &Path, json: bool) -> i32 {
     let baseline = all_probes();
     let names: Vec<&str> = baseline.iter().map(|p| p.name).collect();
@@ -750,8 +768,21 @@ pub fn prove(repo: &Path, json: bool) -> i32 {
             Err(detail) => Proof::Broken { detail },
             Ok(mutated) => judge(probe, m, &mutated),
         };
-        restore(repo, m.file);
         rows.push(ProofRow { probe, proof });
+        if let Err(e) = restore(&path, &original) {
+            rows.push(ProofRow {
+                probe,
+                proof: Proof::Broken {
+                    detail: format!(
+                        "could not restore {} after its mutation ({e}); stopping here, since \
+                         every later verdict would be about a tree nobody chose. Restore it by \
+                         hand: git checkout -- {}",
+                        m.file, m.file
+                    ),
+                },
+            });
+            break;
+        }
     }
     report(json, &rows, baseline.len())
 }
@@ -888,11 +919,15 @@ fn git_clean(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn restore(repo: &Path, file: &str) {
-    let _ = Command::new("git")
-        .args(["checkout", "--", file])
-        .current_dir(repo)
-        .output();
+/// Put the file back exactly as it was read, and prove it by reading it again.
+fn restore(path: &Path, original: &str) -> Result<(), String> {
+    std::fs::write(path, original).map_err(|e| e.to_string())?;
+    let back = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    if back == original {
+        Ok(())
+    } else {
+        Err("read back differs from what was written".to_string())
+    }
 }
 
 /// air-7q5: starting a session must not start work. The owner drew the line at launch time, and
