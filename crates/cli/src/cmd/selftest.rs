@@ -208,6 +208,32 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        Mutation {
+            // Back to filtering the branch's landings by the bead typed: the exact line
+            // adopter hit, in the one place the selection is expanded.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        .filter(|l| chosen.contains(l.worker.as_str()))",
+            to: "        .filter(|l| chosen.contains(l.worker.as_str()) && beads.contains(&l.bead))",
+            // The air-09b probe's green half asserts the same expansion for a single named
+            // bead (it used to assert the defect, `v.len() == 1`), so it falls with this too.
+            also_red: &[
+                "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
+            ],
+        },
+    ),
+    (
+        "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
+        Mutation {
+            // Let killed rows back into every green/red/flaky query: the one clause that
+            // makes a kill no verdict, in the one place it is spelled.
+            file: "crates/ledger/src/verify.rs",
+            from: "const NOT_KILLED: &str = \"exit_code NOT IN (137, 143)\";",
+            to: "const NOT_KILLED: &str = \"1=1\";",
+            also_red: &[],
+        },
+    ),
+    (
         "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         Mutation {
             // Let a tree green count under the default key. That is the silent upgrade
@@ -916,6 +942,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
+        probe_killed_is_no_verdict(),
         probe_git_ancestor(),
         probe_gate_claim(),
         probe_claim_cas(),
@@ -962,6 +989,7 @@ fn all_probes() -> Vec<Probe> {
         probe_audit_help_names_only_what_it_prints(),
         probe_landed_but_open(),
         probe_refused_landing_publishes_nothing(),
+        probe_land_by_bead_carries_the_whole_branch(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -2108,15 +2136,76 @@ fn probe_land_names_a_branch() -> Probe {
         resolve(&fd1, &none, &[], &blocked, &[]),
         Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
     );
+    // air-dnr: naming fd-2 selects lane's branch, which carries fd-1 too. This used to assert
+    // `v.len() == 1`, which was the defect written down as the expectation.
     let single_ready = matches!(
         resolve(&fd2, &none, &lane_ready, &blocked, &[]),
-        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "lane")
+        Ok(v) if v.len() == 2 && v.iter().all(|l| l.worker == "lane")
     );
 
     Probe {
         name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
         red_fires: case1 && case2,
         green_passes: selector && single_blocked && single_ready,
+    }
+}
+
+/// air-dnr: `air land <bead>` records every bead the branch's merge range names, not the one
+/// typed. The merge is per branch; the argument selects the branch. adopter, 2026-08-30:
+/// `air land ad-ezn6` on a lane carrying five beads recorded one, and four landed with no
+/// acceptance check and no wrong-close detection.
+///
+/// Red: naming ONE bead on a branch carrying five selects all five, once each, and naming
+/// two of them still yields the five once. Green: a bead no branch names is still refused,
+/// and a bead on a different branch is not swept in.
+fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
+    use crate::cmd::land::resolve;
+    use crate::cmd::status::Landing;
+
+    let landing = |worker: &str, bead: &str| Landing {
+        bead: bead.into(),
+        worker: worker.into(),
+        head: format!("{worker}0000"),
+        minutes: 5,
+        command: format!("air land --worker {worker}"),
+        acceptance: Vec::new(),
+        blocked: None,
+    };
+    let five = ["ad-7p85", "ad-epo9", "ad-fsxg", "ad-lqhf", "ad-xeq3"];
+    let mut ready: Vec<Landing> = five.iter().map(|b| landing("lane", b)).collect();
+    ready.push(landing("other", "ad-zzz"));
+    let none: Vec<String> = Vec::new();
+    fn beads_of(v: &[Landing]) -> Vec<&str> {
+        let mut b: Vec<&str> = v.iter().map(|l| l.bead.as_str()).collect();
+        b.sort_unstable();
+        b
+    }
+
+    let one = resolve(&["ad-fsxg".to_string()], &none, &ready, &[], &[]);
+    let all_five =
+        matches!(&one, Ok(v) if beads_of(v) == five && v.iter().all(|l| l.worker == "lane"));
+    let two = resolve(
+        &["ad-7p85".to_string(), "ad-xeq3".to_string()],
+        &none,
+        &ready,
+        &[],
+        &[],
+    );
+    let once_each = matches!(&two, Ok(v) if beads_of(v) == five);
+
+    let absent = matches!(
+        resolve(&["ad-nope".to_string()], &none, &ready, &[], &[]),
+        Err(m) if m.contains("no green branch names ad-nope")
+    );
+    let not_swept = matches!(
+        resolve(&["ad-zzz".to_string()], &none, &ready, &[], &[]),
+        Ok(v) if v.len() == 1 && v.first().is_some_and(|l| l.worker == "other")
+    );
+
+    Probe {
+        name: "land: naming one bead lands and records every bead its branch carries, once each; an unnamed bead is still refused and another branch is not swept in",
+        red_fires: all_five && once_each,
+        green_passes: absent && not_swept,
     }
 }
 
@@ -3680,6 +3769,79 @@ fn probe_ledger_roundtrip() -> Probe {
     let (red, green) = ok.unwrap_or((false, false));
     Probe {
         name: "ledger: verify_runs round-trip",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-ppm: a run killed by signal records no verdict, and a genuine exit-2 failure still
+/// records red. The second is what makes the first safe.
+///
+/// Red: `run_tee` on a child that dies by SIGTERM yields 143, not -1, and a 143 row at a sha
+/// is not the latest run there, not red, not one side of a flaky pair, and does not turn a
+/// green tree red. Green: an exit-2 row is red and does count toward flakiness beside a green.
+fn probe_killed_is_no_verdict() -> Probe {
+    use crate::cmd::record::run_tee;
+    use air_ledger::verify::{KILLED_EXITS, Verdict};
+
+    let dir = std::env::temp_dir();
+    // The real signal path: the child kills itself with TERM, and Air sees 128 + 15.
+    let signalled = run_tee("sh", &["-c".into(), "kill -TERM $$".into()], &dir)
+        .map(|(code, _)| code)
+        .unwrap_or(-1);
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let run = |sha: &str, exit: i32, at: &str| VerifyRun {
+            id: new_id(),
+            worker: "probe".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: exit,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: at.into(),
+            finished_at: at.into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: Some("T".into()),
+        };
+        l.record_verify(&run("aaa", 0, "t1"))
+            .map_err(|e| e.to_string())?;
+        l.record_verify(&run("aaa", signalled, "t2"))
+            .map_err(|e| e.to_string())?;
+        let killed_is_no_verdict = KILLED_EXITS.contains(&signalled)
+            && run("aaa", signalled, "t").verdict() == Verdict::Killed
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 0)
+            && l.green_at("bbb", Some("T"), Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_some();
+        // A kill alone at a commit is nothing at all.
+        l.record_verify(&run("ccc", 137, "t3"))
+            .map_err(|e| e.to_string())?;
+        let alone = l
+            .latest_run_at_commit("ccc", Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none();
+        // A genuine failure is red, and flaky beside the green.
+        l.record_verify(&run("aaa", 2, "t4"))
+            .map_err(|e| e.to_string())?;
+        let exit_2_is_red = run("aaa", 2, "t").verdict() == Verdict::Red
+            && l.green_at("aaa", None, Kind::Verify)
+                .map_err(|e| e.to_string())?
+                .is_none()
+            && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 1);
+        Ok((killed_is_no_verdict && alone, exit_2_is_red))
+    })()
+    .unwrap_or((false, false));
+    let (red, green) = res;
+    Probe {
+        name: "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
         red_fires: red,
         green_passes: green,
     }
