@@ -93,9 +93,10 @@ impl HookInput {
 
     /// For `SendMessage` tool calls: (recipient, message bytes) (air-q07).
     ///
-    /// **The content is deliberately not returned.** Air records that a message was sent, to
-    /// whom, and how big it was; reading what agents say to each other is not measurement, and
-    /// the event log is not a transcript. `summary` is not read either — it is model text.
+    /// The content is not returned here: this pair is what the EVENT LINE carries, and the
+    /// event log is not a transcript. The content goes to the ledger's `messages` table via
+    /// [`Self::message_text`] (air-srv, owner ruling 2026-09-05: every message is recorded,
+    /// content included). `summary` is read by neither: it is model text about the message.
     pub fn message_sent(&self) -> Option<(String, usize)> {
         if self.tool_name.as_deref() != Some("SendMessage") {
             return None;
@@ -111,6 +112,15 @@ impl HookInput {
             .and_then(serde_json::Value::as_str)
             .map_or(0, str::len);
         Some((to, bytes))
+    }
+
+    /// For `SendMessage` tool calls: the message text itself, for the ledger's `messages`
+    /// table (air-srv). `None` for any other tool, or when the call carries no `message`.
+    pub fn message_text(&self) -> Option<&str> {
+        if self.tool_name.as_deref() != Some("SendMessage") {
+            return None;
+        }
+        self.tool_input.as_ref()?.get("message")?.as_str()
     }
 
     /// For Bash tool calls: the command string.
