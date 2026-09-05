@@ -390,8 +390,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // `take` hands back the lifetime total again, which is what every `air mcp` line
             // carried before air-bp0.
             file: "crates/bd/src/lib.rs",
-            from: "calls.saturating_sub(prev_calls),",
-            to: "calls.saturating_sub(prev_calls.min(0)),",
+            from: "calls.saturating_sub(prev_calls))",
+            to: "calls.saturating_sub(prev_calls.min(0)))",
             also_red: &[],
         },
     ),
