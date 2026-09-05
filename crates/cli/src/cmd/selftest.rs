@@ -332,10 +332,10 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "gate: claim required for the named bead",
+        "gate: the named bead must be claimed by the worker or carried by a `Bead:` trailer in main..HEAD",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.bead_claimed_by_worker {",
+            from: "if !f.bead_claimed_or_carried {",
             to: "if false {",
             also_red: &[],
         },
@@ -1029,6 +1029,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_message_is_recorded_with_its_content(),
         probe_owner_queue_is_the_ready_line_not_a_condition(),
         probe_handover_names_the_held_bead_and_skips_with_none(),
+        probe_a_superseding_branch_hands_over_by_its_trailer(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -2856,14 +2857,62 @@ fn probe_handover_names_the_held_bead_and_skips_with_none() -> Probe {
     let same_as_status = held.iter().all(|b| v.message.contains(b.as_str()));
     let red_fires = names_it && same_as_status && !v.message.contains("<bead>");
 
-    let skipped_without = digest_beads(None, &[]).is_none();
-    let kept_with_claim = digest_beads(None, &held) == Some(held.clone());
-    let kept_with_name = digest_beads(Some("fd-9"), &[]) == Some(vec!["fd-9".to_string()]);
-    let named_wins = digest_beads(Some("fd-9"), &held) == Some(vec!["fd-9".to_string()]);
+    let skipped_without = digest_beads(None, &[], &[]).is_none();
+    let kept_with_claim = digest_beads(None, &held, &[]) == Some(held.clone());
+    let kept_with_name = digest_beads(Some("fd-9"), &[], &[]) == Some(vec!["fd-9".to_string()]);
+    let named_wins = digest_beads(Some("fd-9"), &held, &[]) == Some(vec!["fd-9".to_string()]);
     Probe {
         name: "handover: a refusal names the bead the worker holds, never a placeholder; no claim and no bead means no digest check",
         red_fires,
         green_passes: skipped_without && kept_with_claim && kept_with_name && named_wins,
+    }
+}
+
+/// air-60x (adopter ad-pml7, 2026-08-31): `air land` says a branch is landable when it
+/// contains main and carries a recorded green at its head, and attributes it by `Bead:`
+/// trailers; `air handover` additionally demanded an open claim held by the asking worker.
+/// So Air would land a branch it refused to let its author hand over, and a branch that
+/// superseded another worker's closed bead had no route. Supersession happened twice in one
+/// evening there.
+///
+/// Red: a branch carrying a bead by trailer with no claim on it, a digest declaring it, and
+/// a green at a head containing main is handable, and the digest check looks for that bead.
+/// Green: the same branch with neither digest nor green is still refused, and the refusal
+/// offers the trailer, never `air claim` on a bead that may be closed.
+///
+/// The mutation that made it red, seen: `handable` ignoring `carried`, which is the gate
+/// consulting claims alone again.
+fn probe_a_superseding_branch_hands_over_by_its_trailer() -> Probe {
+    use crate::cmd::handover::{digest_beads, handable};
+
+    let carried = vec!["fd-x".to_string()];
+    let mut ok = base_facts();
+    ok.bead = Some("fd-x".into());
+    ok.carried_beads = carried.clone();
+    ok.bead_claimed_or_carried = handable(Some("fd-x"), false, &carried);
+    ok.digest_present = Some(true);
+    ok.digest_dir = Some("docs/log.d".into());
+    let red_fires =
+        handover_verdict(&ok).pass && digest_beads(None, &[], &carried) == Some(carried.clone());
+
+    let mut bad = base_facts();
+    bad.bead = Some("fd-x".into());
+    bad.carried_beads = vec![];
+    bad.bead_claimed_or_carried = handable(Some("fd-x"), false, &[]);
+    bad.green_at_head = false;
+    bad.digest_present = Some(false);
+    bad.digest_dir = Some("docs/log.d".into());
+    let v = handover_verdict(&bad);
+    let green_passes = !v.pass
+        && v.missing.iter().any(|m| m.check == "claim")
+        && v.missing.iter().any(|m| m.check == "verify-green-at-head")
+        && v.missing.iter().any(|m| m.check == "digest-present")
+        && !v.message.contains("air claim")
+        && v.message.contains("Bead: fd-x");
+    Probe {
+        name: "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
+        red_fires,
+        green_passes,
     }
 }
 
@@ -3037,21 +3086,29 @@ fn probe_enforced_gate() -> Probe {
     }
 }
 
-/// Check 4: a hand-over names a bead the worker does not hold → missing `claim`.
+/// Check 4: a hand-over names a bead the worker neither holds nor carries → missing `claim`.
+/// Held or carried by trailer (air-60x) passes; the pure decision is `handover::handable`.
 fn probe_gate_claim() -> Probe {
+    use crate::cmd::handover::handable;
+
     let mut red = base_facts();
     red.bead = Some("fd-1".into());
-    red.bead_claimed_by_worker = false;
+    red.bead_claimed_or_carried = false;
     let mut green = base_facts();
     green.bead = Some("fd-1".into());
-    green.bead_claimed_by_worker = true;
+    green.bead_claimed_or_carried = true;
+    let carried = vec!["fd-1".to_string()];
     Probe {
-        name: "gate: claim required for the named bead",
+        name: "gate: the named bead must be claimed by the worker or carried by a `Bead:` trailer in main..HEAD",
         red_fires: handover_verdict(&red)
             .missing
             .iter()
-            .any(|m| m.check == "claim"),
-        green_passes: handover_verdict(&green).pass,
+            .any(|m| m.check == "claim")
+            && !handable(Some("fd-1"), false, &[]),
+        green_passes: handover_verdict(&green).pass
+            && handable(Some("fd-1"), true, &[])
+            && handable(Some("fd-1"), false, &carried)
+            && handable(None, false, &[]),
     }
 }
 
@@ -3819,12 +3876,13 @@ fn base_facts() -> GateFacts {
         main_is_ancestor: true,
         main_sha: "fedcba9876543210".into(),
         main_moved: None,
-        bead_claimed_by_worker: true,
+        bead_claimed_or_carried: true,
         runs_at_head: (1, 0),
         digest_present: None,
         digest_dir: None,
         bead: None,
         held_beads: vec![],
+        carried_beads: vec![],
         advisory: false,
     }
 }
