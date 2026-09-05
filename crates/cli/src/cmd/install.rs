@@ -609,6 +609,20 @@ pub const SURFACE: &[SurfaceChange] = &[
                  A rule or script that claims an epic to \"own\" it now gets a refusal; \
                  decompose it with `bd create` children instead. Nothing else to run.",
     },
+    SurfaceChange {
+        id: "holdings-tense",
+        since: "2026-09-05 (air-v7o)",
+        headline: "`air holdings` tags name their tense: `uncommitted now, edited 3 min ago`, \
+                   `uncommitted now, no edit journaled` (build or test output, with `verify in \
+                   flight` when one is running), `journaled 6 h ago, clean now`. The report \
+                   carries `at`, and `air status`'s `overlap:` lines print the same tags.",
+        silent_break: true,
+        action: "A script matching the old `[uncommitted]` / `[journaled]` tokens, or reading \
+                 `overlaps` from `air status --json` as bare worker names, sees the new \
+                 strings. `air holdings --json` gained `at`, `last_edit` and \
+                 `verify_in_flight`. Read the tense: `uncommitted now` is true of `at` only; \
+                 `journaled` is history with its age.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -695,6 +709,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.8", 12, 31),
     // 2026-09-05: epics named apart from claimable work; `air claim` refuses one (air-f10).
     ("0.2.9", 13, 32),
+    // 2026-09-05: holdings tags name their tense; dirt is told from an edit (air-v7o).
+    ("0.2.10", 14, 33),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from

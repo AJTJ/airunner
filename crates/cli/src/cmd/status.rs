@@ -1265,7 +1265,15 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                     }
                 }
                 if holders.len() > 1 {
-                    overlaps.insert(file, holders.into_iter().map(|h| h.worker).collect());
+                    // air-v7o: the same tags `air holdings` prints, so the two cannot
+                    // diverge and the coordinator reads a tense here too.
+                    overlaps.insert(
+                        file,
+                        holders
+                            .iter()
+                            .map(|h| format!("{}[{}]", h.worker, holdings::tags(h, &rep.at)))
+                            .collect(),
+                    );
                 }
             }
             errors.extend(rep.errors);
