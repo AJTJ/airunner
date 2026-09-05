@@ -1217,6 +1217,59 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as
+/// unjournaled dirt with the report's time; once removed it is no holding. A tool edit the
+/// PostToolUse hook journaled reads as an edit with its age, dirty or clean.
+#[test]
+fn holdings_tags_say_when_and_tell_dirt_from_an_edit() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+
+    // Build output: present, uncommitted, never edited by a tool.
+    std::fs::write(repo.join("generated.txt"), "artifact\n").unwrap();
+    let (code, out, err) = air(&repo, &bd, &["holdings"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("compared 1 worktrees at 20"), "{out}");
+    assert!(
+        out.contains("generated.txt: main[uncommitted now, no edit journaled]"),
+        "{out}"
+    );
+    std::fs::remove_file(repo.join("generated.txt")).unwrap();
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(!out.contains("generated.txt"), "cleaned: {out}");
+
+    // A real edit: the hook journals it, and the tag says so with its age.
+    std::fs::write(repo.join("src.rs"), "fn f() {}\n").unwrap();
+    let edited = repo.join("src.rs").to_string_lossy().to_string();
+    let (code, err) = air_hook(
+        &repo,
+        &bd,
+        serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+        "tool_input": {"file_path": edited}}),
+        false,
+    );
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(
+        out.contains("src.rs: main[uncommitted now, edited 0 min ago]"),
+        "{out}"
+    );
+    // Committed and clean: the edit is remembered with its age, and the tree says clean.
+    git(&repo, &["add", "src.rs"]);
+    git(&repo, &["commit", "-q", "-m", "src"]);
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(
+        out.contains("src.rs: main[journaled 0 min ago, clean now]"),
+        "{out}"
+    );
+    let (_, out, _) = air(&repo, &bd, &["--json", "holdings"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["at"].as_str().unwrap().starts_with("20"), "{out}");
+    assert_eq!(v["files"]["src.rs"][0]["journaled"], true, "{out}");
+    assert!(v["files"]["src.rs"][0]["last_edit"].is_string(), "{out}");
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
