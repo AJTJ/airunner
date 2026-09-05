@@ -107,6 +107,11 @@ pub struct Landing {
     /// When the row was last written. On an `in-flight` row this is the merge time, not an
     /// end: the row is deliberately not a claim that anything finished.
     pub finished_at: String,
+    /// The verifies this landing was told were in flight and ran over anyway
+    /// (`--despite-inflight`, air-1bm), one line each. Empty on every landing that was not an
+    /// override, which is the measurement: a round of empty ones means the refusal is only
+    /// ever waited out.
+    pub despite_inflight: Vec<String>,
 }
 
 impl Landing {
@@ -132,16 +137,17 @@ impl Ledger {
     pub fn record_landing(&self, l: &Landing) -> Result<()> {
         let beads = serde_json::to_string(&l.beads)?;
         let open_beads = serde_json::to_string(&l.open_beads)?;
+        let despite = serde_json::to_string(&l.despite_inflight)?;
         self.conn.execute(
             "INSERT INTO landings (id, worker, sha, tip_sha, result, failing_step, \
              verify_run_id, attempt_no, beads, merge_commit, started_at, finished_at, \
-             open_beads, pid) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) \
+             open_beads, pid, despite_inflight) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
              ON CONFLICT(id) DO UPDATE SET result=excluded.result, \
              failing_step=excluded.failing_step, verify_run_id=excluded.verify_run_id, \
              beads=excluded.beads, merge_commit=excluded.merge_commit, \
              finished_at=excluded.finished_at, open_beads=excluded.open_beads, \
-             pid=excluded.pid",
+             pid=excluded.pid, despite_inflight=excluded.despite_inflight",
             params![
                 l.id,
                 l.worker,
@@ -156,7 +162,8 @@ impl Ledger {
                 l.started_at,
                 l.finished_at,
                 open_beads,
-                l.pid
+                l.pid,
+                despite
             ],
         )?;
         Ok(())
@@ -253,8 +260,8 @@ impl Ledger {
     pub fn landings(&self) -> Result<Vec<Landing>> {
         let mut st = self.conn.prepare(
             "SELECT id, worker, sha, tip_sha, result, failing_step, verify_run_id, attempt_no, \
-             beads, merge_commit, started_at, finished_at, open_beads, pid FROM landings \
-             ORDER BY finished_at DESC",
+             beads, merge_commit, started_at, finished_at, open_beads, pid, despite_inflight \
+             FROM landings ORDER BY finished_at DESC",
         )?;
         let v = st
             .query_map([], |r| {
@@ -279,6 +286,10 @@ impl Ledger {
                         .get::<_, Option<String>>(12)?
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
+                    despite_inflight: r
+                        .get::<_, Option<String>>(14)?
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -293,6 +304,7 @@ mod tests {
 
     fn row(id: &str, result: &str) -> Landing {
         Landing {
+            despite_inflight: vec![],
             id: id.into(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -462,6 +474,24 @@ mod tests {
         rewound.finished_at = "t4".into();
         l.record_landing(&rewound).unwrap();
         assert_eq!(l.landed_open().unwrap().len(), 1, "nor a rewind");
+    }
+
+    /// air-1bm: the runs a `--despite-inflight` landing destroyed round-trip through the row,
+    /// and the in-flight write and the outcome write of one landing keep them.
+    #[test]
+    fn an_override_records_the_runs_it_destroyed() {
+        let l = Ledger::open_in_memory().unwrap();
+        let mut r = row("1", "in-flight");
+        r.despite_inflight = vec!["w2 started 906s ago: make verify at 40076426 (pid 77)".into()];
+        l.record_landing(&r).unwrap();
+        r.result = "landed".into();
+        l.record_landing(&r).unwrap();
+        let rows = l.landings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].despite_inflight, r.despite_inflight);
+        // An ordinary landing carries none, which is the count the removal condition reads.
+        l.record_landing(&row("2", "landed")).unwrap();
+        assert!(l.landings().unwrap()[0].despite_inflight.is_empty());
     }
 
     /// air-ppf: a row written before `contradicted` existed carries only `why`, which is the
