@@ -158,6 +158,30 @@ pub fn in_flight_run_line(f: &air_ledger::verify::InFlight, at: &str) -> String 
     }
 }
 
+/// What a landing does with bd's answer about its beads' acceptance (air-bh4). An answer is
+/// the clause lists, one per bead, empty where a bead states none. No answer is a REFUSAL,
+/// never an empty list: "could not evaluate" and "evaluated and found nothing" must not read
+/// alike, and a check that degrades to a no-op is a green over an empty population,
+/// indistinguishable from a green over a full one (adopter's w1, 2026-08-31).
+///
+/// Refusing here is cheap because it happens before the merge: nothing has moved, and the fix
+/// is to run the same command again when bd answers. Pure, so the probe reaches the branch.
+pub fn acceptance_read(
+    result: Result<Vec<Vec<String>>, String>,
+    beads: &[String],
+) -> Result<Vec<Vec<String>>, String> {
+    match result {
+        Ok(c) => Ok(c),
+        Err(e) => Err(format!(
+            "refused: bd did not answer for {} ({e}), so their acceptance could not be read. \
+             Nothing was changed: a landing whose check did not run must not be recorded as \
+             one that checked and found nothing (fix: run the same `air land` again when bd \
+             answers; `air status` shows bd's median cost today)",
+            beads.join(" ")
+        )),
+    }
+}
+
 /// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
 fn branch_for(worker: &str) -> String {
     format!("worktree-{worker}")
@@ -850,6 +874,24 @@ fn land_one(
             remerge_command()
         ));
     }
+    // air-bh4: the acceptance text is read BEFORE anything moves, so bd not answering refuses
+    // with main untouched — the same shape as `air claim` (four arms, every one returns
+    // before a write) and `air triage`. It used to be read after the fast-forward and, on a
+    // bd timeout, degrade to an empty clause list: the row then said "the bead states no
+    // acceptance criteria", a positive false statement about a bead Air never read, and the
+    // one external check on close-with-proof recorded a clean result for a check that did
+    // not run (adopter ad-0vh3, 2026-08-31). `bd show` costs ~1.4 s per id, which is fine
+    // beside a landing and ruinous on every `air status` (air-7kp).
+    let clauses = match acceptance_read(
+        super::status::acceptance_for(repo, &batch.beads),
+        &batch.beads,
+    ) {
+        Ok(c) => c,
+        Err(why) => {
+            record("refused", None, None, Some("acceptance-unread".into()));
+            return Outcome::Refused(why);
+        }
+    };
     let message = format!("Land {branch}: {}", batch.beads.join(" "));
     let tree = match git::run(repo, &["rev-parse", &format!("{head}^{{tree}}")]) {
         Ok(t) => t,
@@ -922,18 +964,7 @@ fn land_one(
         changed: &changed,
         tree: &tree,
     };
-    // The acceptance text is fetched HERE, for this branch's beads only: `bd show` costs
-    // ~1.4 s per id, which is fine beside a full verify and ruinous on every `air status`
-    // (air-7kp).
-    let clauses = match super::status::acceptance_for(repo, &batch.beads) {
-        Ok(c) => c,
-        Err(e) => {
-            // The merge already happened and verified; refusing now would be worse than
-            // saying what is unknown. Report it as unread rather than as absent.
-            eprintln!("air land: could not read acceptance from bd, so no clause was checked: {e}");
-            Vec::new()
-        }
-    };
+    // `clauses` was read before the merge (air-bh4), so every bead here was actually read.
     let judged: Vec<acceptance::Judged> = batch
         .beads
         .iter()

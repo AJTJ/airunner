@@ -261,6 +261,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
+        Mutation {
+            // The old arm: a bd error becomes one empty clause list per bead, which the
+            // judge reads as "states no acceptance criteria". Exactly the row adopter got.
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        Ok(c) => Ok(c),\n        Err(e) => Err(format!(",
+            to: "        Ok(c) => Ok(c),\n        Err(_) => Ok(vec![Vec::new(); beads.len()]),\n        #[allow(unreachable_patterns)]\n        Err(e) => Err(format!(",
+            also_red: &[],
+        },
+    ),
+    (
         "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
         Mutation {
             // Let killed rows back into every green/red/flaky query: the one clause that
@@ -1045,6 +1056,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landed_but_open(),
         probe_refused_landing_publishes_nothing(),
         probe_land_by_bead_carries_the_whole_branch(),
+        probe_acceptance_unread_refuses(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -2206,6 +2218,51 @@ fn probe_land_names_a_branch() -> Probe {
         name: "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
         red_fires: case1 && case2,
         green_passes: selector && single_blocked && single_ready,
+    }
+}
+
+/// air-bh4: bd not answering about a bead's acceptance REFUSES the landing before anything
+/// moves; it does not become an empty clause list. The row for a timed-out landing used to say
+/// "the bead states no acceptance criteria ... so Air read nothing to check" about a bead with
+/// four criteria Air never read (adopter ad-0vh3), and the wrong-close check read that row as
+/// a clean result.
+///
+/// Red: a bd error yields a refusal naming bd, the beads, and "Nothing was changed", and it
+/// does not contain the no-criteria sentence. Green: a bead that genuinely states none still
+/// judges as "states no acceptance criteria" — the two are different artefacts (a refusal
+/// string versus a landed row's `why`), which is what the bead asks for.
+fn probe_acceptance_unread_refuses() -> Probe {
+    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use crate::cmd::land::acceptance_read;
+
+    let beads = vec!["ad-0vh3".to_string()];
+    let refused = acceptance_read(
+        Err("bd show for ad-0vh3: timed out after 10s".into()),
+        &beads,
+    );
+    let red = matches!(&refused, Err(m) if m.starts_with("refused:")
+        && m.contains("bd did not answer for ad-0vh3")
+        && m.contains("Nothing was changed")
+        && !m.contains("no acceptance criteria"));
+
+    let changed: Vec<String> = Vec::new();
+    let tree: Vec<String> = Vec::new();
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+        tree: &tree,
+    };
+    let answered = acceptance_read(Ok(vec![Vec::new()]), &beads);
+    let none = judge_clauses("ad-0vh3", Vec::new(), &ev);
+    let green = matches!(&answered, Ok(c) if c.len() == 1 && c[0].is_empty())
+        && none.why_open().contains("states no acceptance criteria")
+        && !none.all_discharged()
+        && !none.refuted();
+
+    Probe {
+        name: "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
