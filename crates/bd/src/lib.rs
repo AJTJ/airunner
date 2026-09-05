@@ -43,14 +43,21 @@ pub type Result<T> = std::result::Result<T, BdError>;
 /// peer's `bd` holds `.beads/embeddeddolt/.lock`. So N single-id writes cost N x 1.4 s
 /// and one batched write costs 1.4 s. Air records the number so the claim stays checkable.
 ///
-/// `air` is one short-lived process per command, so a process-global accumulator *is* this
-/// invocation's whole bd cost; `log_event` stamps it on the event line without every call
-/// site having to carry it.
+/// A process-global accumulator; `log_event` stamps the part of it since the previous event
+/// line ([`stats::take`]) so every call site does not have to carry it. That used to be
+/// [`stats::snapshot`], the running total, on the assumption that `air` is one short-lived
+/// process per command. `air mcp` is not: its poll thread emits an event every tick for the
+/// life of the server, and every one of those lines carried the whole lifetime total again.
+/// adopter's 2026-08-30 log summed to 570,989 bd calls that way; the largest total any
+/// process ever reached was 1,661, and a one-shot command costs 1 to 4 (air-bp0). A derived
+/// number that reads like an observed one, and it was read as one.
 pub mod stats {
     use super::{AtomicU64, Ordering};
 
     static MS: AtomicU64 = AtomicU64::new(0);
     static CALLS: AtomicU64 = AtomicU64::new(0);
+    static TAKEN_MS: AtomicU64 = AtomicU64::new(0);
+    static TAKEN_CALLS: AtomicU64 = AtomicU64::new(0);
 
     /// Add one finished `bd` process. Timeouts and failures count: the wait was real.
     pub fn record(ms: u64) {
@@ -58,9 +65,19 @@ pub mod stats {
         CALLS.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// (total ms, processes) so far. `(0, 0)` means this process never shelled out to bd.
+    /// (total ms, processes) for the whole life of this process. `(0, 0)` means it never
+    /// shelled out to bd. The lifetime total, not what one event should carry.
     pub fn snapshot() -> (u64, u64) {
         (MS.load(Ordering::Relaxed), CALLS.load(Ordering::Relaxed))
+    }
+
+    /// (ms, processes) since the previous `take`: what THIS event cost. In a one-shot
+    /// command it equals [`snapshot`]; in a long-lived process it is one tick's share.
+    pub fn take() -> (u64, u64) {
+        let (ms, calls) = snapshot();
+        let prev_ms = TAKEN_MS.swap(ms, Ordering::Relaxed);
+        let prev_calls = TAKEN_CALLS.swap(calls, Ordering::Relaxed);
+        (ms.saturating_sub(prev_ms), calls.saturating_sub(prev_calls))
     }
 }
 
@@ -244,6 +261,10 @@ pub fn parse_issues(json: &str) -> Result<Vec<Issue>> {
         serde_json::Value::Array(a) => a,
         serde_json::Value::Object(mut o) => match o.remove("issues") {
             Some(serde_json::Value::Array(a)) => a,
+            // `bd show <one id> --json` answers a single object (see `show`); `show_all`
+            // with one id must read it as a one-item list, or the batched reconcile in
+            // `air status` would call a bead bd just answered for "unknown" (air-bp0).
+            _ if o.contains_key("id") => vec![serde_json::Value::Object(o)],
             _ => Vec::new(),
         },
         _ => Vec::new(),
@@ -311,6 +332,18 @@ impl WorkLedger for BdCli {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-bp0: one id through `show_all` gets bd's single-object answer, which is one issue.
+    #[test]
+    fn parses_a_bare_single_issue_as_one() {
+        let one = r#"{"id":"fd-1","title":"a","status":"awaiting_review","labels":[]}"#;
+        let got = parse_issues(one).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].status, "awaiting_review");
+        // An object that is not an issue (no id) is still nothing.
+        assert!(parse_issues(r#"{"count":3}"#).unwrap().is_empty());
+        assert!(parse_issues("null").unwrap().is_empty());
+    }
 
     #[test]
     fn parses_bare_array_and_wrapped_object() {
