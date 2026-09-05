@@ -4792,8 +4792,8 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
                 "session_id": "air-bp0-probe",
                 "cwd": wt.display().to_string(),
             });
-            if let Some(t) = tool {
-                input["tool_name"] = serde_json::Value::String(t.to_string());
+            if let (Some(t), Some(obj)) = (tool, input.as_object_mut()) {
+                obj.insert("tool_name".into(), serde_json::Value::String(t.to_string()));
             }
             let mut child = Command::new(&exe)
                 .current_dir(&wt)
