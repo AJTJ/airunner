@@ -519,10 +519,33 @@ mod tests {
     #[test]
     fn a_green_that_lacks_main_never_covers_and_no_commits_means_no_batch() {
         let commits = vec![commit("c1")];
-        assert_eq!(
-            cover(&[cand("x", false, &[true])], &commits),
-            Batch::default()
-        );
-        assert_eq!(cover(&[cand("x", true, &[true])], &[]), Batch::default());
+        // The VERDICT is what this pins. `scanned` is diagnostic and is asserted separately
+        // below (air-hgi9); comparing whole `Batch` values made every new diagnostic field a
+        // false failure here, which is how a test starts resisting information.
+        let lacks_main = cover(&[cand("x", false, &[true])], &commits);
+        assert_eq!((&lacks_main.covering, &lacks_main.predates), (&None, &None));
+        let no_commits = cover(&[cand("x", true, &[true])], &[]);
+        assert_eq!((&no_commits.covering, &no_commits.predates), (&None, &None));
+    }
+
+    /// air-hgi9: the counts that let a refusal say WHICH not-green state it is, taken from the
+    /// loop `cover` already runs. Four states that were one sentence; two of them have
+    /// opposite correct responses.
+    #[test]
+    fn the_scan_counts_what_it_looked_at() {
+        let commits = vec![commit("c2"), commit("c1")];
+        // Nothing recorded to look at.
+        assert_eq!(cover(&[], &commits).scanned.candidates, 0);
+        // Recorded, but disqualified on the main it was recorded over (air-9ij): counted as a
+        // candidate, never as one containing main.
+        let s = cover(&[cand("x", false, &[true, true])], &commits).scanned;
+        assert_eq!((s.candidates, s.with_main, s.commits), (1, 0, 2));
+        // Contains main, touches nothing of this bead.
+        let s = cover(&[cand("y", true, &[false, false])], &commits).scanned;
+        assert_eq!((s.with_main, s.touching), (1, 0));
+        // Contains main and touches it, but does not cover it: that is `predates`, and the
+        // count says the candidate was reached rather than filtered out.
+        let s = cover(&[cand("z", true, &[false, true])], &commits).scanned;
+        assert_eq!((s.with_main, s.touching), (1, 1));
     }
 }
