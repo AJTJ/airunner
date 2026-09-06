@@ -193,6 +193,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "doctor: an install record older than the binary is named with both versions, the unread notices and the fix; a current or absent one is not",
+        Mutation {
+            // Invert the surface comparison: a record behind on surface version alone stops
+            // lagging, which is the probe's first red record. The crate comparison is untouched,
+            // so the anchor names ONE branch and the probe's second red record still fires.
+            file: "crates/cli/src/cmd/install.rs",
+            from: "    let surface_older = rec.surface_version.is_some_and(|s| s < surface_version);",
+            to: "    let surface_older = rec.surface_version.is_some_and(|s| s > surface_version);",
+            also_red: &[],
+        },
+    ),
+    (
         "record: a red at a batch head is reported by member and lands nothing; a red at a worker's own head is not a batch",
         Mutation {
             // Drop the members filter: every red run becomes a "batch", including a worker's
@@ -1255,6 +1267,7 @@ fn all_probes() -> Vec<Probe> {
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
+        probe_install_lag_is_named(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -5658,6 +5671,81 @@ fn probe_red_batch_is_reported_by_member_and_lands_nothing() -> Probe {
 
     Probe {
         name: "record: a red at a batch head is reported by member and lands nothing; a red at a worker's own head is not a batch",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-d61: `air doctor` and `air status` say when the install record lags the binary. adopter's
+/// hooks ran 0.2.18 for days on a record that said 0.1.0 / surface 2, and doctor said nothing.
+///
+/// Red: a temp `.air` whose `installed.json` is older than this binary yields the line, with
+/// both versions, the unread notice count, and the fix, in the doctor render and the status
+/// render. Green: a record at this binary yields no line, and so does no record at all (told
+/// about nothing, which air-w9d deliberately allows).
+fn probe_install_lag_is_named() -> Probe {
+    use crate::cmd::install::{Installed, SURFACE_VERSION, lag, lag_line, surface_diff};
+    use crate::cmd::status::{Snapshot, render_for_probe};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let write = |rec: &Installed| -> Result<(), String> {
+            let s = serde_json::to_string(rec).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("installed.json"), s).map_err(|e| e.to_string())
+        };
+        // Behind on the surface version alone: the branch the declared mutation neutralises.
+        let old = Installed {
+            air_version: env!("CARGO_PKG_VERSION").into(),
+            surface_version: Some(2),
+            surface: vec!["first".into()],
+            ..Default::default()
+        };
+        write(&old)?;
+        let unread = surface_diff(&old.surface).len();
+        let l = lag(&dir);
+        let line = l.as_ref().map(lag_line).unwrap_or_default();
+        let shown = render_for_probe(&Snapshot {
+            install_lag: l.clone(),
+            ..Default::default()
+        });
+        let surface_lag = l.is_some()
+            && line.starts_with(&format!(
+                "install record lags the binary: installed {} / surface 2, running {} / surface {SURFACE_VERSION}",
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_VERSION")
+            ))
+            && line.contains(&format!("{unread} notice(s) unread"))
+            && line.contains("air install --write")
+            && shown.contains("install record lags");
+        // Behind on the crate version alone (a record written before surface versions
+        // existed carries only that): the other branch.
+        write(&Installed {
+            air_version: "0.1.0".into(),
+            ..Default::default()
+        })?;
+        let crate_lag = lag(&dir)
+            .as_ref()
+            .map(lag_line)
+            .is_some_and(|s| s.contains("installed 0.1.0 / surface none"));
+        let red = surface_lag && crate_lag;
+
+        let current = Installed {
+            air_version: env!("CARGO_PKG_VERSION").into(),
+            surface_version: Some(SURFACE_VERSION),
+            ..Default::default()
+        };
+        write(&current)?;
+        let at_binary = lag(&dir).is_none();
+        std::fs::remove_file(dir.join("installed.json")).map_err(|e| e.to_string())?;
+        let no_record = lag(&dir).is_none();
+        let quiet = !render_for_probe(&Snapshot::default()).contains("install record");
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red, at_binary && no_record && quiet))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "doctor: an install record older than the binary is named with both versions, the unread notices and the fix; a current or absent one is not",
         red_fires: red,
         green_passes: green,
     }

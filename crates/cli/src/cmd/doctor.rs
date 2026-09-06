@@ -106,6 +106,9 @@ pub struct Report {
     /// The event stream's stated retention and what is collectable under it (air-i7s). Here
     /// because a retention nobody can read is not a stated one.
     pub events: crate::cmd::gc::Plan,
+    /// The install record is older than this binary (air-d61): the repo's hooks run a binary
+    /// it was never told about.
+    pub install_lag: Option<crate::cmd::install::InstallLag>,
 }
 
 /// Row counts for every table the ledger actually has, asked of `sqlite_master` rather than
@@ -179,6 +182,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
             crate::cmd::gc::KEEP_DAYS,
             &crate::cmd::gc::referenced_days(ledger.conn()),
         ),
+        install_lag: crate::cmd::install::lag(ledger.dir()),
     };
     emit(json, &report, || {
         let mut s = format!(
@@ -235,6 +239,10 @@ pub fn run(repo: &Path, json: bool) -> i32 {
                     r.name, r.date, r.what
                 ));
             }
+        }
+        // air-d61: the record says what this repo was told; the binary says what runs.
+        if let Some(l) = &report.install_lag {
+            s.push_str(&format!("{}\n", crate::cmd::install::lag_line(l)));
         }
         s.trim_end().to_string()
     });
