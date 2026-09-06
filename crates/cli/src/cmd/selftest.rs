@@ -145,6 +145,21 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-btz. The anchor is the walk's bound, so the `blocks` filter, the rendering and the
+    // two bd calls all survive it: what changes is only how far up the check looks. Under it
+    // the parent case is still found — and bd already refuses that one on every route, so a
+    // probe that stayed green under this was testing a shape that cannot occur. The whole
+    // reachable subject is an ancestor two or more levels up, which is exactly what bd's own
+    // dotted-id prefix test misses. Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "status: a bead blocked by its own ancestor is named with the edge and the fix; the hierarchy edge and a sibling are not, and bd is asked once per call",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "for depth in 1..=parents.len()",
+            to: "for depth in 1..=1",
+            also_red: &[],
+        },
+    ),
     // air-jsz. The anchor is the one arm that turned a silent pass into a refusal. Under
     // it a repo that declares an adopter and has no names goes back to skipping, which is
     // the exact state a whole round ran in; the leak refusal and the contributor's skip
@@ -1618,6 +1633,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_green_closes_the_bead_it_covers(),
         probe_batch_green_survives_main_moving_under_it(),
         probe_epic_with_no_open_children_is_named(),
+        probe_ancestor_deadlock_is_named(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -5900,10 +5916,15 @@ fn bd_log(dir: &Path) -> Vec<String> {
 /// `bd show a b c`, not one process per bead. bd's cost is per process (~2 s to open the
 /// store) and the query is close to free, so K claims cost K × 2 s before and 2 s after.
 /// Red: the old shape, one `show` per id, is K processes for K ids against the same fake bd.
-/// Green: a real `air status` over three such claims runs exactly three bd processes (list,
-/// one show naming all three, ready), and every claim ends where the per-bead loop put it:
-/// the closed bead released as `closed`, the reopened one as `reconciled`, the
-/// awaiting_review one kept and marked handed over. Outputs, not only the count.
+/// Green: a real `air status` over three such claims runs exactly four bd processes — the
+/// in-progress list, ONE `show` naming all three, `ready`, and the unfinished list the
+/// ancestor-deadlock scan reads (air-btz) — and NO `dep list`, because no bead here has a
+/// parent and the scan's second call is gated on one that also has an edge. Both halves are
+/// asserted: the count is what a lane notices when a bd call is added, and the absent
+/// `dep list` is the gate that keeps the common repo at one call rather than two.
+/// Every claim also ends where the per-bead loop put it: the closed bead released as
+/// `closed`, the reopened one as `reconciled`, the awaiting_review one kept and marked
+/// handed over. Outputs, not only the count.
 fn probe_status_reconcile_is_one_show() -> Probe {
     let res = (|| -> Result<(bool, bool), String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -5964,7 +5985,12 @@ fn probe_status_reconcile_is_one_show() -> Probe {
             && shows
                 .first()
                 .is_some_and(|s| ids.iter().all(|id| s.split(' ').any(|w| w == *id)));
-        let three_processes = log.len() == 3;
+        // air-btz added the fourth: the unfinished list the deadlock scan reads. The fifth,
+        // `dep list`, must NOT be here — nothing in this repo has a parent, so the gate holds
+        // and the scan costs one process rather than two.
+        let four_processes = log.len() == 4
+            && log.iter().filter(|l| l.starts_with("list ")).count() == 2
+            && !log.iter().any(|l| l.starts_with("dep "));
         let conn = rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
             .map_err(|e| e.to_string())?;
         let row = |bead: &str| -> Result<(Option<String>, Option<String>), String> {
@@ -5983,7 +6009,7 @@ fn probe_status_reconcile_is_one_show() -> Probe {
             && reopened.0.as_deref() == Some("reconciled")
             && handed.0.is_none()
             && handed.1.is_some();
-        Ok((red, one_show && three_processes && outputs))
+        Ok((red, one_show && four_processes && outputs))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
@@ -8030,6 +8056,86 @@ fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
             // Unmeasured is not zero.
             && empty.rate.is_none()
             && render_churn(&empty).contains("Not zero: unmeasured"),
+    }
+}
+
+/// air-btz (owner, 2026-09-06: "I just don't want that deadlock again"). A bead blocked by one
+/// of its own ancestors waits forever: the ancestor cannot finish until its descendants do,
+/// which is bd's hierarchy rather than an edge. An adopter lost a night to it — every P1 in
+/// their queue unreachable, 42 beads offered and not one of them a P1 — because the tracker
+/// renders it as "not ready yet", exactly like ordinary queueing.
+///
+/// **bd does not prevent this**, measured 2026-09-06 against 1.2.2, the pinned version
+/// (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`). Its guard is two rules and
+/// neither is an ancestor walk: an existing `parent-child` row on the same pair, which always
+/// catches the DIRECT parent, and a dotted-id prefix test, which catches deeper ancestors only
+/// when the id encodes the chain. `bd create --graph` assigns flat ids and links by
+/// `parent_key`, so a wave filed from a plan file slips both without printing anything.
+///
+/// Red (declared mutation: the walk stops at the parent, `1..=1`): the grandparent case is
+/// missed, which is the ONLY shape that is actually reachable — bd itself already refuses
+/// depth 1, so a check that only sees depth 1 sees nothing that can happen. Green: a
+/// `parent-child` edge is never named (it is the hierarchy, so naming it would report every
+/// child in the repo), a sibling `blocks` edge is not named, an empty repo is silent, the line
+/// names both beads and a `bd dep remove` that fixes it, and the two bd calls keep their
+/// shapes — one comma-separated `--status`, because a repeated `-s` silently overwrites in bd
+/// 1.2.2, and one process for every id.
+fn probe_ancestor_deadlock_is_named() -> Probe {
+    use crate::cmd::status::{AncestorDeadlock, Snapshot, ancestor_deadlocks, render_for_probe};
+
+    let dep = |from: &str, to: &str, ty: &str| air_bd::Dep {
+        issue_id: from.into(),
+        depends_on_id: to.into(),
+        dep_type: ty.into(),
+    };
+    // E -> M -> C, the shape `bd create --graph` produces with ids that hide the chain.
+    let parents: std::collections::BTreeMap<String, String> = [("C", "M"), ("M", "E"), ("S", "M")]
+        .iter()
+        .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+        .collect();
+
+    // RED: C blocked by its GRANDparent E, at depth 2. bd refuses depth 1 already, so this is
+    // the whole reachable subject; a check that misses it is a check that never fires.
+    let found = ancestor_deadlocks(&parents, &[dep("C", "E", air_bd::BLOCKS)]);
+    let red = found
+        == vec![AncestorDeadlock {
+            bead: "C".into(),
+            ancestor: "E".into(),
+            depth: 2,
+        }];
+
+    // The hierarchy edge itself is never a deadlock, and a sibling is not an ancestor.
+    let hierarchy = ancestor_deadlocks(&parents, &[dep("C", "M", air_bd::PARENT_CHILD)]);
+    let sibling = ancestor_deadlocks(&parents, &[dep("C", "S", air_bd::BLOCKS)]);
+    let none = ancestor_deadlocks(&Default::default(), &[dep("C", "E", air_bd::BLOCKS)]);
+    let line = render_for_probe(&Snapshot {
+        ancestor_deadlocks: Some(vec![AncestorDeadlock {
+            bead: "zz-1".into(),
+            ancestor: "zz-e".into(),
+            depth: 2,
+        }]),
+        ..Snapshot::default()
+    });
+    let silent = render_for_probe(&Snapshot::default());
+    // One bd process per call, and the status list in ONE argument: repeating `-s` overwrites.
+    let statuses = air_bd::by_statuses_argv(&["open", "in_progress"]);
+    let deps = air_bd::dep_list_argv(&["a".into(), "b".into(), "c".into()]);
+    let green = hierarchy.is_empty()
+        && sibling.is_empty()
+        && none.is_empty()
+        && line.contains("deadlock: zz-1 is blocked by zz-e, its own ancestor")
+        && line.contains("bd dep remove zz-1 zz-e")
+        && !silent.contains("deadlock:")
+        && statuses.iter().filter(|a| *a == "--status").count() == 1
+        && statuses.contains(&"open,in_progress".to_string())
+        && statuses.windows(2).any(|w| w == ["-n", "0"])
+        && deps.starts_with(&["dep".to_string(), "list".to_string()])
+        && deps.iter().filter(|a| *a == "dep").count() == 1;
+
+    Probe {
+        name: "status: a bead blocked by its own ancestor is named with the edge and the fix; the hierarchy edge and a sibling are not, and bd is asked once per call",
+        red_fires: red,
+        green_passes: green,
     }
 }
 

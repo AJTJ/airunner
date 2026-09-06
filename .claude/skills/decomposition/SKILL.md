@@ -191,10 +191,33 @@ An adopter did this to four children on 2026-09-05 and every P1 in their queue w
 for a night; 42 beads were offered to workers and none was a P1. The tracker rendered it as
 "not ready yet", indistinguishable from ordinary queueing.
 
-So, after filing a wave and before opening it: run `bd dep cycles` (it must print none), and
-read `bd dep tree <epic> --json` for an edge from a child to any ancestor. Both are one call
-each and both are cheap next to a night of unreachable work. Air names this shape in
-`air status` (air-btz), which is the failsafe, not the check.
+**bd will usually stop you, and the case it misses is the one you are most likely to hit.**
+Measured against bd 1.2.2 on nine routes, 2026-09-06 (every command and output in
+`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`). bd's guard is two rules and neither
+is an ancestor walk:
+
+1. **An existing `parent-child` row on the same pair**, so any other edge type between them is
+   refused. That covers the DIRECT parent, always, by every route — `bd dep add`, the
+   `bd dep X --blocks Y` spelling, `--no-cycle-check`, bulk `--file`, and `--graph`.
+2. **A dotted-id prefix test**, which catches deeper ancestors only when the id encodes the
+   chain, as `air-80x.1.1` does under `air-80x`.
+
+So the hole is an ancestor **two or more levels up whose id does not encode the chain**, and
+**`bd create --graph` produces exactly that**: it assigns flat ids and links by `parent_key`.
+Filing a wave from a graph plan is the one ordinary route that builds this deadlock, and it
+prints nothing at all when it does. `bd create --parent <child> --deps <grandparent>` in a
+single invocation does the same. The pair that proves it is the id shape rather than the depth:
+
+    bd dep add air-80x.1.1 air-80x     # dotted ids:   refused, naming the deadlock
+    bd dep add zz-72f zz-3yf           # flat ids:     ✓ Added dependency … (blocks)
+
+both being a grandchild pointing at its grandparent.
+
+So, after filing a wave and before opening it — and above all after a `--graph` file: run
+`bd dep cycles` (it must print none, and it will print none for this shape, so it is the weaker
+check), and read `bd dep tree <epic> --json` for an edge from a child to ANY ancestor, not just
+its parent. Both are one call each and both are cheap next to a night of unreachable work.
+Air names this shape in `air status` (air-btz), which is the failsafe, not the check.
 
 `bd create --validate` stays on. Note: in bd 1.2.1 it checks required description sections
 from the beads config, not `--acceptance`; Air's triage check is what refuses an empty
