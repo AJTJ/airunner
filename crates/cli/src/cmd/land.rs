@@ -301,7 +301,7 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
     if !f.contains_main {
         return Err(format!(
             "refused: `{}` does not contain main, so the recorded green is not a green of what \
-             would land (fix: in {w}'s worktree, `{}`)",
+             would land (fix: in {w}'s worktree, {})",
             branch_for(w),
             remerge_command()
         ));
@@ -309,24 +309,30 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
     match f.green_at {
         Some(sha) if sha == f.branch_head => Ok(true),
         Some(sha) => Err(format!(
-            "refused: {w}'s recorded green is at {}, not the branch head {} (fix: in {w}'s \
-             worktree, `air record verify -- make verify`)",
+            "refused: {w}'s recorded green is at {}, not the branch head {} (fix: a green \
+             at {w}'s branch head; `air handover` in their worktree names what it needs)",
             sha.get(..8).unwrap_or(sha),
             f.branch_head.get(..8).unwrap_or(f.branch_head)
         )),
         None => Err(format!(
-            "refused: no recorded green for {w} at {} (fix: in {w}'s worktree, `air record \
-             verify -- make verify`)",
+            "refused: no recorded green for {w} at {} (fix: a green at that head; \
+             `air handover` in their worktree names what it needs)",
             f.branch_head.get(..8).unwrap_or(f.branch_head)
         )),
     }
 }
 
-/// What a branch behind main has to do before it can land. The command `air status` prints
-/// instead of `air land` for such a branch (air-y3v), and the same
-/// one `branch_check`'s refusal names, so the list and the refusal say the same thing.
+/// What a branch behind main has to do before it can land. `air status` prints it instead of
+/// `air land` for such a branch (air-y3v), and `branch_check`'s refusal names the same one, so
+/// the list and the refusal say the same thing.
+///
+/// air-155w: this was character-for-character the string that taught an adopter's worker to
+/// record a green under a verify lane, on the COORDINATOR's surface — which is why it was easy
+/// to miss. The coordinator may record a verify; this line is advice about a WORKER, and under
+/// a lane that worker must not. The merge is required under both flows and stays a command; the
+/// green becomes the condition it always was.
 pub fn remerge_command() -> String {
-    "git merge main && air record verify -- make verify".to_string()
+    "`git merge main`, then a green at the new head (the worker's own, or their lane's)".to_string()
 }
 
 /// What one branch's landing did.
@@ -876,7 +882,7 @@ fn land_one(
         return Outcome::Refused(format!(
             "refused: main is at {} and `{branch}` does not contain it, so its green is not a \
              green of what would land. Main moved between the landable list and this merge. \
-             Nothing was changed (fix: in {}'s worktree, `{}`)",
+             Nothing was changed (fix: in {}'s worktree, {})",
             tip_now.get(..8).unwrap_or(&tip_now),
             batch.worker,
             remerge_command()
@@ -1069,7 +1075,10 @@ mod tests {
         let mut f = ok_facts("abc", Some("abc"));
         f.contains_main = false;
         let e = check(&here(), &f).unwrap_err();
-        assert!(e.contains("git merge main && air record verify"), "{e}");
+        // air-155w: the merge is required under both flows and stays a command; recording
+        // a green is the clause a verify lane forbids and is now a condition.
+        assert!(e.contains("`git merge main`"), "{e}");
+        assert!(!e.contains("air record verify"), "{e}");
         // air-y3v: and it is the same string the landable list offers, so the surface and the
         // refusal cannot say different things.
         assert!(e.contains(&remerge_command()), "{e}");
