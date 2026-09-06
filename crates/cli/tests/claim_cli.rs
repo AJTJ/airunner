@@ -1570,10 +1570,10 @@ fn nothing_landable_names_every_branch_and_its_fix() {
     assert!(out.contains("nothing is landable"), "{out}");
     assert!(out.contains("alpha"), "{out}");
     assert!(out.contains("green-at-head"), "{out}");
-    assert!(
-        out.contains("air record verify"),
-        "the fixing command: {out}"
-    );
+    // air-155w: the fix names a command that is safe under both flows. `air record verify`
+    // is the one a verify lane forbids that worker, and this used to require it.
+    assert!(out.contains("air handover"), "the fixing command: {out}");
+    assert!(!out.contains("air record verify"), "{out}");
 
     let (code, out, _) = air(&main, &bd, &["--json", "land", "--all"]);
     assert_eq!(code, 2, "{out}");
@@ -2357,7 +2357,10 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
         "{out}{err}"
     );
     assert!(out.contains("main is not an ancestor of HEAD"), "{out}");
-    assert!(out.contains("git merge main && air record verify"), "{out}");
+    // air-155w: merging is required under both flows and stays a command; recording a green
+    // is the clause a lane forbids and is now a condition.
+    assert!(out.contains("git merge main"), "{out}");
+    assert!(!out.contains("air record verify"), "{out}");
     // air-5wq: and names the main it compared against, which is not the one the ok line
     // named, so the pair reads as main having moved rather than as a contradiction.
     assert!(
@@ -2939,7 +2942,8 @@ fn a_branch_without_a_green_cannot_move_main_and_a_dirty_main_no_longer_refuses(
     assert_eq!(code, 2, "{out}{err}");
     assert!(
         out.contains("does not contain main")
-            && out.contains("git merge main && air record verify"),
+            && out.contains("git merge main")
+            && !out.contains("air record verify"),
         "{out}"
     );
 

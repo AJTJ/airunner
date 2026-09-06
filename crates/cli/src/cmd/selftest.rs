@@ -190,6 +190,25 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-155w. The anchor restores the exact string the adopter was given. The diagnosis,
+    // its dating and every other check survive it, so what it isolates is precisely whether
+    // a refusal hands a lane worker the clause its flow forbids.
+    (
+        "gate: no flow-dependent fix tells a worker to record a verify, and the main-moved diagnosis is unchanged",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "fix: \"git merge main, then a green at the new head (your own, or your lane's)\"",
+            to: "fix: \"git merge main && air record verify -- make verify\"",
+            // Declared from RUNNING the mutation, not from reading: both of these assert the
+            // same rule from a different surface, so they fall with it legitimately. Left
+            // undeclared they would have made this VACUOUS, which is the trap the revived
+            // `--prove` caught three times an hour before this bead (air-e21v).
+            also_red: &[
+                "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
+                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
+            ],
+        },
+    ),
     // air-dwq5. The anchor is the format string of the version LINE alone: the JSON, the four
     // surfaces and the surface version all survive it. Under it the line prints the crate
     // version and nothing else, which is what shipped for a round — and it still looks exactly
@@ -572,7 +591,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             from: "if !f.main_is_ancestor {",
             to: "if false {",
             also_red: &[
-                "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+                "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
                 // Both assert on the refusal this rule produces (air-75u, air-5wq; declared
                 // by air-8d7).
                 "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
@@ -585,7 +604,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
         Mutation {
             // Never name the landing, which is the pre-fix wording exactly (air-4up): the
             // refusal still fires and still names the fix, so `gate: main-merged` stays
@@ -1890,6 +1909,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
         probe_a_row_with_no_transcript_is_named_and_never_announced(),
         probe_selftest_json_is_only_the_array(),
+        probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
     ]
 }
 
@@ -2300,7 +2320,8 @@ fn probe_land_selection_is_never_silent() -> Probe {
         worker: "alpha".to_string(),
         check: "green-at-head",
         detail: "alpha has no recorded green at its head abc12345".to_string(),
-        fix: "in that worktree: air record verify -- <the repo's verify>".to_string(),
+        fix: "a green at that head; `air handover` in that worktree names what it needs"
+            .to_string(),
     };
     let green = !sk.fix.is_empty() && !sk.detail.is_empty() && sk.check == "green-at-head";
     Probe {
@@ -3019,7 +3040,7 @@ fn probe_land_names_a_branch() -> Probe {
         minutes,
         command: match blocked {
             None => format!("air land --worker {worker}"),
-            Some(_) => "git merge main && air record verify -- make verify".into(),
+            Some(_) => crate::cmd::land::remerge_command(),
         },
         acceptance: Vec::new(),
         blocked: blocked.map(String::from),
@@ -4087,9 +4108,15 @@ fn probe_digest_refusal_names_the_order_only_with_a_green() -> Probe {
     let wo = fix_of(&without);
     Probe {
         name: "gate: the digest refusal says the digest commit moves HEAD off the green and names the order, only when a green is at HEAD",
+        // air-155w: this pinned `air record verify -- make verify` and `LAST` inside a check
+        // that is correctly flow_dependent: false — writing a digest IS flow-free. The
+        // forbidden repair rode in on the ORDER NOTE rather than on the check, which is why
+        // the flag could not reach it (alerts, enumerating the ten sites). What the note has
+        // to say is the ORDER and the reason, with who takes the green left to the flow.
         red_fires: w.contains("moves HEAD off")
-            && w.contains("air record verify -- make verify")
-            && w.contains("LAST"),
+            && w.contains("BEFORE the green is taken")
+            && w.contains("must do it last")
+            && !w.contains("air record verify -- make verify"),
         green_passes: !wo.is_empty() && !wo.contains("moves HEAD off"),
     }
 }
@@ -4214,8 +4241,14 @@ fn probe_enforced_gate() -> Probe {
             .map_err(|e| e.to_string())?;
         let cmd = "bd update zz-1 -s awaiting_review";
         let red = handover_gate(&l, "probe", &dir, cmd, true)?;
+        // air-155w: this asserted the refusal names `air record verify -- make verify`,
+        // which is the clause a verify lane forbids. What must be true is that the refusal
+        // names the CONDITION and the check, so a worker knows what is missing without being
+        // told to run something their flow may not allow.
         let red_fires = matches!(&red.outcome, HookOutcome::Block { reason }
-            if reason.contains("air record verify -- make verify"));
+            if reason.contains("verify-green-at-head")
+                && reason.contains("a green at this head")
+                && !reason.contains("air record verify -- make verify"));
         l.record_verify(&VerifyRun {
             id: new_id(),
             worker: "probe".into(),
@@ -5198,16 +5231,27 @@ fn probe_gate_names_the_landing_that_moved_main() -> Probe {
         && v.message
             .contains("moved 40s ago to abcdef0 (landing from lane)")
         && v.message.contains("main is not an ancestor of HEAD");
-    let fix_unchanged = v.missing.iter().any(|m| {
-        m.check == "main-merged" && m.fix == "git merge main && air record verify -- make verify"
-    });
+    // air-155w: this pinned `git merge main && air record verify -- make verify` as
+    // "unchanged", which is what kept the forbidden clause alive through air-avj. The
+    // DIAGNOSIS is the part that must not change — the adopter counts refusals by its phrase —
+    // and the fix is the part that had to. So the assertion inverts: the merge is still named,
+    // because it is required under both flows, and no fix on a flow-dependent check asserts
+    // recording a green, because a lane forbids exactly that.
+    let fix_is_flow_safe = v
+        .missing
+        .iter()
+        .any(|m| m.check == "main-merged" && m.fix.contains("git merge main") && m.flow_dependent)
+        && v.missing
+            .iter()
+            .filter(|m| m.flow_dependent)
+            .all(|m| !m.fix.contains("air record verify --"));
     let mut g = base_facts();
     g.main_is_ancestor = false;
     let plain = handover_verdict(&g);
     Probe {
-        name: "gate: a refusal after a landing names the landing that moved main, when and from whom; the fix is unchanged",
+        name: "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
         red_fires: red,
-        green_passes: fix_unchanged
+        green_passes: fix_is_flow_safe
             && plain.block
             && !plain.message.contains("landing")
             && plain.message.contains("main is at fedcba9"),
@@ -5969,7 +6013,10 @@ fn probe_env_reaches_the_hook() -> Probe {
             && recorded.iter().any(|(k, v)| k == "BEADS_ACTOR" && v == "w");
         let (code, err) = hook(&recorded)?;
         let _ = std::fs::remove_dir_all(&dir);
-        let refused = code == 2 && err.contains("air record verify");
+        // air-155w: the refusal names the CONDITION, not a command a verify lane forbids.
+        // What this probe is about is that the env reached the hook and the gate refused, so
+        // it asserts the refusal happened and names its check.
+        let refused = code == 2 && err.contains("verify-green-at-head");
         Ok((red, merged && delivered && refused))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
@@ -9387,9 +9434,14 @@ fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
         .iter()
         .all(|m| stop.contains(m.check) && stop.contains(&m.detail));
     let points_at_the_command = stop.contains("air handover");
-    // The CLI is unchanged, and it is the surface that reads the repo's own flow.
-    let cli_unchanged =
-        v.message.contains("git merge main") && v.message.contains("air record verify");
+    // air-155w: this asserted the CLI keeps printing `air record verify`, which was
+    // air-avj's design — Stop drops the flow-dependent fix, `air handover` keeps it. That left
+    // the refusal itself handing an adopter's lane worker the clause its flow forbids, so the
+    // half that survives is "the CLI prints every fix IN FULL", which is what distinguishes it
+    // from Stop, and the half that goes is the forbidden command being in the fix at all.
+    let cli_prints_every_fix_in_full = v.missing.iter().all(|m| v.message.contains(&m.fix))
+        && v.message.contains("git merge main")
+        && !v.message.contains("air record verify");
 
     // A refusal with NOTHING flow-dependent keeps its fix in full and needs no pointer: the
     // trailer is the trailer whatever the flow is.
@@ -9413,7 +9465,7 @@ fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
 
     let green = facts_kept
         && points_at_the_command
-        && cli_unchanged
+        && cli_prints_every_fix_in_full
         && flow_free_fix_kept
         && pass_unchanged;
     Probe {
@@ -9964,5 +10016,118 @@ fn probe_the_build_reaches_a_reader() -> Probe {
         name: "version: air says which binary it is — the build reaches --version, --version --json is JSON, and doctor and status carry the same object",
         red_fires: red,
         green_passes: res.unwrap_or(false),
+    }
+}
+
+/// air-155w: an adopter's w1 was refused with `git merge main && air record verify -- make
+/// verify`. Under a verify lane the first clause is right and necessary and the second is the
+/// one thing that worker must not do — the lane records greens, and a worker's competes with
+/// it.
+///
+/// **This is the nastiest shape in the family, and the reason is worth keeping.** Obeying the
+/// first clause and ignoring the second is exactly correct, so following the line WORKS: the
+/// worker gets a good outcome and learns the wrong habit, and nothing ever contradicts it. A
+/// fix that failed outright would have been found in one use. Their worker noticed and reported
+/// it rather than quietly doing the right half — a norm holding a gap, not a mechanism.
+///
+/// air-avj marked these checks `flow_dependent` and changed what the STOP HOOK prints, leaving
+/// the refusal's own fix string carrying the repair. So the class is not "a message was wrong"
+/// but **"a decision was copied to more places than anyone enumerated"**, and one of the two
+/// surfaces restating it survived the fix for itself.
+///
+/// Asserted over VERDICTS rather than over source text, because a source scan cannot see the
+/// case alerts found: the digest check's order note carries the same repair inside a check that
+/// is correctly `flow_dependent: false`, since writing a digest IS flow-free. The flag marks
+/// checks; repairs also live inside checks that are not themselves flow-dependent.
+///
+/// Red: across the fact-space that produces each flow-dependent check, no fix asserts
+/// `air record verify`, and the digest order note does not either.
+///
+/// Green: the parts that must NOT have changed. `main-merged` still names `git merge main`,
+/// which is required under both flows; the diagnosis still says "main is not an ancestor of
+/// HEAD" and still dates main's move, which is the half that works and which the adopter counts
+/// refusals by; and every refusal still names a command, since one that names none is worse
+/// than one that names the wrong one.
+fn probe_no_flow_dependent_fix_asserts_a_forbidden_repair() -> Probe {
+    use air_hooks::gate::{GateFacts, MainMove, handover_verdict};
+
+    let base = || GateFacts {
+        worker: "w1".into(),
+        head: "687ebe1aaaa".into(),
+        main_sha: "ca4fe04bbbb".into(),
+        ..GateFacts::default()
+    };
+    // Every shape that reaches a flow-dependent fix: no green; a flaky head; a tree green; a
+    // batch cut before the last commit; and main having moved under the worker.
+    let cases: Vec<GateFacts> = vec![
+        base(),
+        GateFacts {
+            runs_at_head: (1, 1),
+            ..base()
+        },
+        GateFacts {
+            tree_green: Some("this exact tree is green at deadbee".into()),
+            ..base()
+        },
+        GateFacts {
+            batch_predates: Some("the lane's batch was cut before your last commit".into()),
+            ..base()
+        },
+        GateFacts {
+            main_is_ancestor: false,
+            main_moved: Some(MainMove {
+                merge_commit: "abcdef0999".into(),
+                worker: "w4".into(),
+                at: "2026-09-06T13:00:00Z".into(),
+                ago_secs: Some(1140),
+            }),
+            ..base()
+        },
+    ];
+    let verdicts: Vec<_> = cases.iter().map(handover_verdict).collect();
+
+    // Not one flow-dependent fix, anywhere in that space, tells a worker to record a verify.
+    let none_forbidden = verdicts.iter().all(|v| {
+        v.missing
+            .iter()
+            .filter(|m| m.flow_dependent)
+            .all(|m| !m.fix.contains("air record verify"))
+    });
+    // And neither does the digest check's order note, which is not flow-dependent and carried
+    // the same repair anyway.
+    let digest = handover_verdict(&GateFacts {
+        green_at_head: true,
+        digest_dir: Some("docs/digests".into()),
+        bead: Some("air-1".into()),
+        ..base()
+    });
+    let note_clean = digest
+        .missing
+        .iter()
+        .all(|m| !m.fix.contains("air record verify -- make verify"));
+    let saw_flow_dependent = verdicts
+        .iter()
+        .any(|v| v.missing.iter().any(|m| m.flow_dependent));
+
+    // The half that had to survive untouched.
+    let moved = verdicts.last();
+    let diagnosis_intact = moved.is_some_and(|v| {
+        v.missing.iter().any(|m| {
+            m.check == "main-merged"
+                && m.detail.contains("main is not an ancestor of HEAD")
+                && m.detail.contains("(landing from w4)")
+                && m.fix.contains("git merge main")
+        })
+    });
+    // Every refusal still names something to run.
+    let names_a_command = verdicts
+        .iter()
+        .filter(|v| !v.pass)
+        .all(|v| v.missing.iter().all(|m| !m.fix.trim().is_empty()));
+
+    Probe {
+        name: "gate: no flow-dependent fix tells a worker to record a verify, and the main-moved diagnosis is unchanged",
+        red_fires: saw_flow_dependent && none_forbidden && note_clean,
+        green_passes: diagnosis_intact && names_a_command,
     }
 }
