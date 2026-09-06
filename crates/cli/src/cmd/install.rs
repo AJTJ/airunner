@@ -965,6 +965,19 @@ pub const SURFACE: &[SurfaceChange] = &[
                  not release with a reason naming the owner, the rate under-reads, which is \
                  the safe direction but worth knowing.",
     },
+    SurfaceChange {
+        id: "epic-ready-to-decompose",
+        since: "2026-09-06 (air-84u)",
+        headline: "`air status` names each ready epic that has no open child, as `epic ready \
+                   to decompose: <id> (0 open children, N closed)`, and `.air/roles.md` states \
+                   decomposition as the coordinator's standing duty rather than as a property \
+                   of a good queue. Nothing refuses and nothing pushes; the count was already \
+                   printed, this says which epic it is about.",
+        silent_break: false,
+        action: "Nothing to run; `air install --write` refreshes `.air/roles.md`. It costs one \
+                 `bd list --parent` per READY epic, so a tick with no ready epic pays nothing \
+                 and the cost only appears in the state the line exists to report.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1744,6 +1757,17 @@ mod tests {
         // air-9ij (owner, 2026-09-06): the coordinator has to know where main still costs
         // something and where it has stopped costing anything. All three halves are pinned,
         // because dropping the last one leaves the adopter's freeze-main workaround standing.
+        // air-84u (owner, 2026-09-06): decomposition is a duty in the active voice, and the
+        // old phrasing is asserted ABSENT — it read as a property of a good queue, which is
+        // exactly how air-80x sat undecomposed for hours with nobody having failed at
+        // anything. Both halves, the same shape air-97z uses.
+        assert!(ROLES_MD.contains("Decomposing an\nepic is something you go and do"));
+        assert!(ROLES_MD.contains("the `decomposition` skill"));
+        assert!(ROLES_MD.contains("The reading may be delegated to a background agent"));
+        assert!(
+            !ROLES_MD.contains("(epics decomposed;"),
+            "roles.md must state decomposition as a duty, not as a property of the queue"
+        );
         assert!(ROLES_MD.contains("What main moving costs, and what it no longer costs"));
         assert!(ROLES_MD.contains("The coordinator's own commits move main exactly as a landing"));
         assert!(ROLES_MD.contains("main moving no longer retracts a CLOSE"));

@@ -117,6 +117,23 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-84u. The anchor is the quantifier and nothing else: the rendering, the count and the
+    // ready-set filter all survive it, so a probe that stays green under `any` was checking
+    // that the line exists rather than that it names only an epic with nothing open under it.
+    // That is the one direction this line must not fail in — naming an epic somebody is
+    // working on costs the line its credibility, and nothing refuses on it to make up for that.
+    (
+        "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            // The anchor is what rustfmt LEFT, not what was typed: written as one expression
+            // it was reflowed onto three lines and the anchor matched nothing, which
+            // `air selftest --prove` calls BROKEN and `make verify` does not check at all.
+            from: "all(|c| c.status == \"closed\")",
+            to: "any(|c| c.status == \"closed\")",
+            also_red: &[],
+        },
+    ),
     // air-5nh. The anchor is the owner-gated test alone, so every count, the sort, the
     // 300 s bucket and the printed threshold survive it: what changes is only WHICH
     // population the rate reads. Under it an ordinary fast release counts as a bead the
@@ -1445,6 +1462,7 @@ fn all_probes() -> Vec<Probe> {
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
         probe_batch_green_survives_main_moving_under_it(),
+        probe_epic_with_no_open_children_is_named(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -7576,6 +7594,63 @@ fn probe_scaffolded_verify_fails_until_edited() -> Probe {
             && scaffold(Some("build:\n\t@true\n"), false)
                 .iter()
                 .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
+    }
+}
+
+/// air-84u (owner, 2026-09-06: "the coordinator isn't automatically doing that thing to turn
+/// epics into beads"). `air status` already counted the ready epics; the count is a number the
+/// coordinator then has to resolve against bd by hand, and twice on 2026-09-06 nobody did.
+/// air-80x sat undecomposed for hours and is ready again with all six children closed. The
+/// line names which epic, so the count becomes an action.
+///
+/// Red (declared mutation: `all(closed)` becomes `any(closed)`): an epic with one open child
+/// is named, which is the one thing this must never do — a line that names an epic somebody is
+/// working on costs its own credibility. Green: an epic whose children are all closed is
+/// named with the count, an epic with no children at all is named with 0, a child in any
+/// status but `closed` keeps its epic silent, and a snapshot with no such epic prints no line.
+fn probe_epic_with_no_open_children_is_named() -> Probe {
+    use crate::cmd::status::{EpicToDecompose, Snapshot, render_for_probe, to_decompose};
+
+    let kid = |status: &str| air_bd::Issue {
+        id: "zz-1".into(),
+        status: status.into(),
+        ..air_bd::Issue::default()
+    };
+    let closed = [kid("closed"), kid("closed")];
+
+    // RED: an epic with work under it stays silent, in every status that is not `closed`.
+    let red = ["open", "in_progress", "blocked", "awaiting_review"]
+        .iter()
+        .all(|s| to_decompose("zz-e", &[kid("closed"), kid(s)]).is_none());
+
+    let named = to_decompose("zz-e", &closed);
+    let never = to_decompose("zz-e", &[]);
+    let line = render_for_probe(&Snapshot {
+        epics_to_decompose: Some(vec![EpicToDecompose {
+            epic: "zz-e".into(),
+            closed_children: 6,
+        }]),
+        ..Snapshot::default()
+    });
+    let silent = render_for_probe(&Snapshot::default());
+    let green = named
+        == Some(EpicToDecompose {
+            epic: "zz-e".into(),
+            closed_children: 2,
+        })
+        // An epic nobody has ever decomposed is the same duty, and says 0.
+        && never
+            == Some(EpicToDecompose {
+                epic: "zz-e".into(),
+                closed_children: 0,
+            })
+        && line.contains("epic ready to decompose: zz-e (0 open children, 6 closed)")
+        && !silent.contains("epic ready to decompose");
+
+    Probe {
+        name: "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
