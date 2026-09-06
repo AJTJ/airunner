@@ -676,8 +676,9 @@ Something happened. See docs/rules/roles.md for the rule.
         assert!(!unreadable.refuted() && !unreadable.all_discharged());
     }
 
-    /// air-ppf: the CONTRADICTS sentence names the refuted clause alone; the row's `why` keeps
-    /// the unreadable ones beside it.
+    /// air-ppf: the reported line names the undischarged clause alone; the row's `why` keeps
+    /// the unreadable ones beside it. (It said "the CONTRADICTS sentence" until air-k6uh
+    /// removed that claim from every renderer.)
     #[test]
     fn the_contradicted_line_omits_what_air_merely_could_not_read() {
         let changed = vec!["docs/rules/roles.md".to_string()];

@@ -1474,6 +1474,15 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
     // and says it again only when the reason changes.
     //
+    // air-jy99: the sentence names no action whose permissibility depends on the repo's flow.
+    // It used to end "either reopen it or file what is left", and an adopter's CLAUDE.md says
+    // "closed is closed — never reopen": Air was instructing their coordinator to do what their
+    // own rules forbid. This is air-155w's ruling at a second surface — a flow-dependent fix
+    // states a CONDITION, not a command — and the same renderer in `land.rs` said it too, which
+    // is exactly how air-155w's own defect survived its first fix. No config key decides this:
+    // reading a repo's flow is the thing air-155w's comment calls "a claim about a decision made
+    // somewhere else". Removal: when Air is told a flow, which is not planned.
+    //
     // air-ppf: the sentence names `contradicted`, never `why`. `why` is the whole record,
     // refuted and unreadable clauses together, and rendering it here put "nothing Air can
     // look up" under a headline asserting a contradiction; two sound closes read as wrong
@@ -1488,8 +1497,10 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                  not change: {why}. That is a lookup that did not answer, NOT a contradiction \
                  (air-k6uh: six of nine such firings were clauses that held, satisfied in \
                  another commit or naming a path the clause only mentions). Read the bead: the \
-                 worker closes its own with proof, so either it is done elsewhere, or reopen \
-                 it, or file what is left. Landed from {}.",
+                 worker closes its own with proof, so either it is done elsewhere, or what is \
+                 left is untracked and must not stay that way. How a closed bead's remainder \
+                 gets tracked is this repo's flow to say; Air reads no flow and prescribes \
+                 nothing here (air-jy99). Landed from {}.",
                 o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
                 o.worker
             ),

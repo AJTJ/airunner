@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jy99. The anchor RESTORES the prescription, in `land.rs` rather than `status.rs`,
+    // deliberately: the probe checks both renderers and a mutation in either must take it red.
+    // Restoring it in the renderer that is NOT the bead's headline surface is the stronger
+    // evidence, because that is the shape air-155w's own defect came back through — one
+    // renderer corrected, the other left teaching the forbidden thing. The rest of the
+    // sentence survives, so the mutation reaches the prescription and not the whole line.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "status/land: an undischarged clause names the condition and no flow-dependent action, in both renderers",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "read the bead, then see that \\\n     nothing left over is untracked.",
+            to: "read the bead, then either reopen it or file what is left.",
+            also_red: &[],
+        },
+    ),
     // air-45pw. The anchor truncates the file route at 500 chars — a generous command line, and
     // exactly the shape of the bug: the capture is still filed, still long, still reads as a
     // capture. A probe asserting "non-empty" or "long enough" stays green here, which is why the
@@ -2126,6 +2142,7 @@ fn all_probes() -> Vec<Probe> {
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
+        probe_no_flow_dependent_prescription_when_a_clause_is_undischarged(),
         probe_capture_takes_a_file_whole(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
@@ -2857,6 +2874,93 @@ fn probe_capture_takes_a_file_whole() -> Probe {
     .unwrap_or_else(blocked);
     Probe {
         name: "capture: --file files the finding whole, byte for byte, and passing both routes or neither is refused naming both",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
+/// air-jy99: the `landed-not-closed` line ended "either reopen it or file what is left", and an
+/// adopter's CLAUDE.md says "closed is closed — never reopen". Air was instructing their
+/// coordinator to do what their own rules forbid, on a bead that was correctly closed.
+///
+/// This is air-155w's ruling at a second surface: a flow-dependent fix states a CONDITION, not a
+/// command, because whose job a thing is — and whether it is allowed at all — is the repo's flow
+/// to say and Air reads no repo's flow. What makes it worth its own probe rather than one more
+/// assertion on the sentence's existing one is the failure air-155w recorded: air-avj fixed the
+/// Stop hook and left the refusal asserting the forbidden command, so the adopter's worker read
+/// it from the refusal instead. Following such a line WORKS, so nothing ever contradicts it.
+/// Hence both renderers, checked together: the same clause reached the reader twice.
+///
+/// Red: the prescription restored anywhere it is rendered is caught. Green: neither shipped
+/// string names the action, both still say what must become true, and the two things air-k6uh
+/// established — the lookup framing, and "it is done elsewhere" as the first option — survive.
+fn probe_no_flow_dependent_prescription_when_a_clause_is_undischarged() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
+    use air_ledger::landings::{Landing, OpenBead};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        // The real attention sentence, rendered from a real row rather than quoted.
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_landing(&Landing {
+            despite_inflight: vec![],
+            members: vec![],
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "aaa".into(),
+            tip_sha: Some("bbb".into()),
+            result: "landed-refuted".into(),
+            failing_step: None,
+            verify_run_id: None,
+            attempt_no: 1,
+            beads: vec!["zz-1".into()],
+            open_beads: vec![OpenBead {
+                bead: "zz-1".into(),
+                why: "docs/absent.md says it.".into(),
+                refuted: true,
+                contradicted: "docs/absent.md says it.".into(),
+            }],
+            merge_commit: Some("ccc".into()),
+            pid: None,
+            started_at: "t0".into(),
+            finished_at: "t1".into(),
+        })
+        .map_err(|e| e.to_string())?;
+        let snap = Snapshot {
+            landed_open: l.landed_open().map_err(|e| e.to_string())?,
+            ..Default::default()
+        };
+        let att = attention(&snap, "2026-09-05T00:00:00Z", Thresholds::default());
+        let line = att
+            .iter()
+            .find(|a| a.kind == kinds::LANDED_NOT_CLOSED)
+            .map(|a| a.detail.clone())
+            .ok_or("no landed-not-closed line")?;
+
+        // `air land`'s summary is the SAME clause rendered a second time. air-155w's defect
+        // survived its first fix because one renderer was corrected and the other was not, so
+        // this probe fails unless both are clean.
+        let land_summary = crate::cmd::land::REFUTED_SUMMARY;
+
+        // No attention sentence of any kind prescribes it either: a second condition rendering
+        // this advice is the way it would come back.
+        let nothing_prescribes = att.iter().all(|a| !a.detail.contains("reopen"));
+
+        let red =
+            !line.contains("reopen") && !land_summary.contains("reopen") && nothing_prescribes;
+
+        // Saying less is only right if it still says what must be established. The line names
+        // the condition and hands the decision back, and air-k6uh's two survive.
+        let green = line.contains("untracked")
+            && line.contains("this repo's flow to say")
+            && line.contains("it is done elsewhere")
+            && line.contains("NOT a contradiction")
+            && land_summary.contains("nothing left over is untracked")
+            && !land_summary.contains("CONTRADICTS");
+        Ok((red, green))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: "status/land: an undischarged clause names the condition and no flow-dependent action, in both renderers",
         red_fires: res.0,
         green_passes: res.1,
     }
