@@ -710,10 +710,15 @@ pub fn run(
                     batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
-                // The refuted clauses only (air-ppf): the print above already showed the
-                // unreadable ones with their own `?` marker.
+                // Only the clauses naming a file the merge did not change (air-ppf): the
+                // print above already showed the unreadable ones with their own `?` marker.
+                // air-k6uh: reported as the lookup it is, never as a contradiction.
                 for o in noted.iter().filter(|o| o.refuted) {
-                    lines.push(format!("  {} REFUTED: {}", o.bead, o.contradicted));
+                    lines.push(format!(
+                        "  {} UNCONFIRMED: {} — a lookup that did not answer, not a \
+                         contradiction; read the bead",
+                        o.bead, o.contradicted
+                    ));
                 }
                 landed.extend(batch.beads.clone());
                 held_open.extend(noted);
