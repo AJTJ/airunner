@@ -95,6 +95,31 @@ real red. Air does not retry (a retry hides real reds); it makes the disagreemen
 adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
 first. Whether the gate should require N-of-M agreement is an owner policy, not built.
 
+## 0f. Your round log is being assembled from somebody's memory
+
+**[air-3xww, 2026-09-06]** Count what a round already records before adding anything: on the day
+this was written one round had **40 digests** (one per bead, what it did and the proof), **37
+captures** (things noticed outside the bead you hold, triaged by the coordinator) and **196
+agent-to-agent messages**. Three surfaces, and most of what happened is in them.
+
+The gap is narrower than "agents should keep logs", and it is real. **A finding that is not about
+the bead you hold and not worth the coordinator's inbox has nowhere to go**, so it lives in a
+message and survives only while the recipient's session does. That round's best material — four
+checks that were passing while examining nothing; a claim "true where it was used and false as
+stated"; a lookup wearing the clothes of a judgement — was messages, and reached the round log
+only because a coordinator hand-copied it. The same night, a coordinator hit an account limit.
+
+So: **one file per session, appended, under a `journal_dir` your `.claude/air.json` names.**
+`air init` scaffolds the directory with a README. The distinction to hold onto, because "put it
+in a capture" is the obvious advice and it is wrong here: a capture says somebody should act, and
+every one is triaged; these entries say **nobody** should act. Routing them to captures fills the
+inbox with things that need no triage.
+
+**Nothing gates on it and Air reads none of it.** No template, no required entry per bead, no
+check that a session wrote one. Those turn a habit into a chore, and the measure of whether it
+works is simply whether your next round log can be assembled from the files rather than from
+someone's memory.
+
 ## 0e. A check that has never had an input is not a passing check
 
 **[air-jsz, 2026-09-06]** `air adopter-check` refuses a tracked line that names an adopter. It
