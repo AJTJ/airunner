@@ -300,6 +300,46 @@ impl Ledger {
         Ok(v)
     }
 
+    /// The newest run of `kind` that was a BATCH — recorded with members — and went red
+    /// (air-cyf). Killed runs are excluded here rather than by the caller: a signalled run is
+    /// no verdict, so it must not be mistaken for a standing red.
+    ///
+    /// Asked of the whole table rather than of a window. `red_batch_standing` used to read the
+    /// last 20 verify runs and pick the red batch out of them, so a batch that stayed red for
+    /// 20 further runs silently stopped being reported and a dropped report looked exactly
+    /// like a fixed one. The row's own shape answers the question; a count of recent runs
+    /// never did.
+    pub fn latest_red_batch(&self, kind: Kind) -> Result<Option<VerifyRun>> {
+        let sql = format!(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND exit_code != 0 AND {NOT_KILLED} \
+             AND members IS NOT NULL AND members != '' AND members != '[]' \
+             ORDER BY finished_at DESC LIMIT 1"
+        );
+        let row = self
+            .conn()
+            .query_row(&sql, params![kind.as_str()], row_to_run)
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Every green run of `kind` that finished strictly after `at` (air-cyf). The supersession
+    /// half of the same question: whichever green carried the red batch's members, it happened
+    /// after the batch, and there is no bound on how many runs that took.
+    pub fn greens_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
+        let mut st = self.conn().prepare(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND exit_code=0 AND finished_at > ?2 \
+             ORDER BY finished_at DESC",
+        )?;
+        let v = st
+            .query_map(params![kind.as_str(), at], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// The most recent *green* run of `kind` for `worker` at any sha (for "peer is green at Y").
     pub fn latest_green(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         let row = self
