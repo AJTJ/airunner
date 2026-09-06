@@ -191,6 +191,25 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-33rn. ONE half, which is alerts' caution from air-kexg: a mutation taking out both
+    // goes red for the right reason by accident and cannot distinguish coverage of the
+    // constraint from coverage of the permission.
+    //
+    // My first anchor was `landings.first()`, making every worker read as landable — and it
+    // took out both halves, because a worker selection never considered then reads as landable
+    // too, which is the green half. Caught by running it, not by reading it. This one silences
+    // only the refusal lookup: the journal-only and no-green cases stop being reported, while
+    // landable, never-considered and cannot-tell all still answer correctly. What it isolates
+    // is exactly whether a worker is told its branch will NOT land, the bead's subject.
+    (
+        "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
+        Mutation {
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "    if let Some(s) = sel.skipped.iter().find(|s| s.worker == worker) {",
+            to: "    if let Some(s) = sel.skipped.iter().find(|_| false) {",
+            also_red: &[],
+        },
+    ),
     // air-i6fd. The anchor restores the defect exactly: main's tip read from the running cwd's
     // HEAD instead of from the ref. Everything else survives — the green check, the skipped
     // entries, the bead attribution, the error paths — so what it isolates is whether the
@@ -2056,6 +2075,7 @@ fn all_probes() -> Vec<Probe> {
         probe_only_a_failed_handover_counts_as_an_attempt(),
         probe_the_journal_is_scaffolded_and_nothing_reads_it(),
         probe_status_json_says_why_a_branch_cannot_land(),
+        probe_handover_says_what_the_landing_gate_would_say(),
     ]
 }
 
@@ -11075,5 +11095,93 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
         name: "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
         red_fires: carried,
         green_passes: names_what_it_compared && error_is_not_absence && quiet,
+    }
+}
+
+/// air-33rn: two workers concluded independently that a journal-only branch could land, both
+/// were wrong, and **neither surface a worker can reach said so.** Each learned it from the
+/// coordinator running `air land`, which workers are denied.
+///
+/// The fix is a read, not a second copy of the landing decision. `select` already computes the
+/// whole answer as `Skipped { check, detail, fix }`, so `landing_line` looks the worker up in
+/// that answer and renders it. Restating the decision is air-avj's shape and this round has hit
+/// it three times; the rule there is to name what knows rather than repeat it.
+///
+/// **Pure over a `Selection`, with no fixture at all**, which is deliberate. alerts hit exactly
+/// this on air-kexg: a shared fixture whose worker already carried work, so the range was
+/// genuinely mixed and the test proved the constraint while claiming to prove the permission.
+/// Most fixtures here carry work. Constructing the selection removes the possibility.
+///
+/// Red: a worker whose branch `select` skipped is told so, with the check, the detail and the
+/// fix — the journal-only case, and the no-bead-named case, each without the coordinator.
+///
+/// Green: the three answers that are not a refusal. A landable branch says so with what it
+/// carries; a worker selection never considered is told that rather than told "not landable",
+/// which would be a verdict nothing reached; and an error about that worker outranks both,
+/// because "cannot tell" and "no" are different and air-6u5 exists over that difference.
+fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
+    use crate::cmd::handover::landing_line;
+    use crate::cmd::status::{Landing, Selection, Skipped};
+
+    let skipped = |worker: &str, check: &'static str, detail: &str| Skipped {
+        worker: worker.into(),
+        check,
+        detail: detail.into(),
+        fix: "add a `Bead: <id>` trailer".into(),
+    };
+    let sel = Selection {
+        landings: vec![Landing {
+            worker: "alpha".into(),
+            bead: Some("air-1".into()),
+            head: "aaaaaaaa1111".into(),
+            minutes: 3,
+            command: "air land --worker alpha".into(),
+            acceptance: Vec::new(),
+            blocked: None,
+        }],
+        skipped: vec![
+            skipped(
+                "ledger",
+                "no-bead-named",
+                "ledger is green at aa2a9613 but no commit in main..aa2a9613 declares a bead",
+            ),
+            skipped(
+                "beta",
+                "green-at-head",
+                "beta has no recorded green at its head bbbb1111",
+            ),
+        ],
+        errors: vec!["gamma: git rev-parse HEAD: boom".to_string()],
+    };
+
+    // The journal-only branch: the case that cost two workers a round.
+    let journal = landing_line(&sel, "ledger");
+    // And a second precondition, so this is not one string's worth of coverage.
+    let nogreen = landing_line(&sel, "beta");
+    let red = journal.contains("NOT landable")
+        && journal.contains("no-bead-named")
+        && journal.contains("main..aa2a9613")
+        && journal.contains("Bead: <id>")
+        && nogreen.contains("NOT landable")
+        && nogreen.contains("green-at-head");
+
+    // Landable says so, with what it carries.
+    let ok = landing_line(&sel, "alpha");
+    // Never considered is not the same as refused.
+    let absent = landing_line(&sel, "nobody");
+    // "Cannot tell" outranks both: an error must never read as a verdict.
+    let broke = landing_line(&sel, "gamma");
+    let green = ok.contains("landable at aaaaaaaa")
+        && ok.contains("air-1")
+        && !ok.contains("NOT landable")
+        && absent.contains("not a landing candidate")
+        && !absent.contains("NOT landable")
+        && broke.contains("cannot tell")
+        && broke.contains("boom");
+
+    Probe {
+        name: "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
+        red_fires: red,
+        green_passes: green,
     }
 }
