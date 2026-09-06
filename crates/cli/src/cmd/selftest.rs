@@ -126,8 +126,11 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
-            from: "children.iter().all(|c| c.status == \"closed\")",
-            to: "children.iter().any(|c| c.status == \"closed\")",
+            // The anchor is what rustfmt LEFT, not what was typed: written as one expression
+            // it was reflowed onto three lines and the anchor matched nothing, which
+            // `air selftest --prove` calls BROKEN and `make verify` does not check at all.
+            from: "all(|c| c.status == \"closed\")",
+            to: "any(|c| c.status == \"closed\")",
             also_red: &[],
         },
     ),
