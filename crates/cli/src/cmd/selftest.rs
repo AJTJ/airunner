@@ -858,6 +858,21 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
+        Mutation {
+            // Fence the coordinator instead of the worker: one comparison, it compiles, and
+            // the fence, the path arithmetic and the message are all untouched. The worker
+            // stops being fenced (the probe's RED half falls) and the coordinator still is
+            // not, because its checkout IS the root it would be measured against — so the
+            // GREEN half survives, which is what shows the anchor reaches the role gate alone
+            // rather than taking out the check.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "    if let Some(abs) = input.edited_path()\n        && role_for(worker) == \"worker\"",
+            to: "    if let Some(abs) = input.edited_path()\n        && role_for(worker) == \"coordinator\"",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -1386,6 +1401,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_hook_records_its_own_wall_clock(),
         probe_an_unpaired_hook_is_counted_from_the_installed_matchers(),
         probe_a_notice_waits_for_the_round_and_the_release_refuses(),
+        probe_an_edit_outside_the_worktree_is_denied(),
     ]
 }
 
@@ -6911,5 +6927,119 @@ fn probe_a_notice_waits_for_the_round_and_the_release_refuses() -> Probe {
         green_passes: !verify_rows_ok(count, count.saturating_sub(1))
             && release_check(version, count).is_ok()
             && release_check(&format!("{version}-not"), count).is_err(),
+    }
+}
+
+/// air-8gj: the harness's `--worktree` isolation is off, and one PreToolUse check replaces it.
+///
+/// The flag was removed on evidence, not preference: in adopter's record it stopped no
+/// observed write to the main checkout and cost 455 refusals in five days, 388 of them (88%)
+/// with no git token in the command, plus a native build refused with no prompt and permission
+/// prompts nobody could answer unattended
+/// (`docs/notes/2026-09-06-adopter-answers-worktree-and-verify.md`, owner ruling 2026-09-06).
+/// The one gap it did close and nothing else did is a hand-written `../../main/<path>` in a
+/// file tool. That is this check, and nothing wider: a Bash `cd ../..` is out of scope on
+/// purpose, because the harness never caught it either.
+///
+/// Driven through a spawned `air hook` against a real repo and a real worktree, not through
+/// `fence::denial`: the unit tests already cover the path arithmetic, and what is under test
+/// here is that the hook actually BLOCKS — the wiring, the role gate, and the exit code the
+/// harness reads.
+///
+/// Red: the refusals fire. A worker's Edit to a path outside its worktree is blocked, so is a
+/// `..` climb out of it, and the refusal names both the path and the worktree. Green: the
+/// non-refusals do not. The same worker editing inside is allowed, and the coordinator in the
+/// main checkout is never fenced — its checkout IS the root it would be measured against, and
+/// the one session whose job is to edit main must not be stopped from doing it.
+fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ])?;
+        std::fs::create_dir_all(dir.join("src")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(wt.join("src")).map_err(|e| e.to_string())?;
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        // (exit code, stderr) of one PreToolUse Edit from `cwd` at `path`.
+        let edit = |cwd: &Path, path: &Path| -> Result<(i32, String), String> {
+            use std::io::Write;
+            let input = serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "air-8gj-probe",
+                "cwd": cwd.display().to_string(),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": path.display().to_string()},
+            });
+            let mut child = air_command(&exe, cwd)
+                .arg("hook")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            let out = child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok((
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ))
+        };
+
+        let outside = dir.join("src").join("a.rs");
+        let (out_code, out_err) = edit(&wt, &outside)?;
+        let (in_code, _) = edit(&wt, &wt.join("src").join("a.rs"))?;
+        // The gap the harness's isolation did close: a hand-written climb out of the worktree.
+        let (climb_code, _) = edit(
+            &wt,
+            &wt.join("..").join("..").join("..").join("src").join("a.rs"),
+        )?;
+        // The coordinator, in the main checkout, editing the same file the worker was refused.
+        let (main_code, _) = edit(&dir, &outside)?;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let named = out_err.contains(&outside.display().to_string())
+            && out_err.contains(&wt.display().to_string());
+        Ok((
+            out_code == 2 && climb_code == 2 && named,
+            in_code == 0 && main_code == 0,
+        ))
+    })()
+    .unwrap_or((false, false));
+
+    Probe {
+        name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
