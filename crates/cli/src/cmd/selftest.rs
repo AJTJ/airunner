@@ -145,6 +145,21 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-1n3. The anchor is the one branch that separates a stop from every other
+    // notification. Under it a permission prompt marks the session STOPPED, which is the
+    // failure that matters: `air status` would report a session as down while it sits
+    // waiting for an answer, and a coordinator acting on that wakes a session that never
+    // stopped. Installing the two events, the phrasing and the declared-field read all
+    // survive it.
+    (
+        "limit: a stopped session is recorded from the harness's own notification, and status says whether the harness is bringing it back",
+        Mutation {
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "kind == \"stop_failure\" || kind.starts_with(\"quota_auto_resume\")",
+            to: "kind == \"stop_failure\" || !kind.is_empty()",
+            also_red: &[],
+        },
+    ),
     // air-84u. The anchor is the quantifier and nothing else: the rendering, the count and the
     // ready-set filter all survive it, so a probe that stays green under `any` was checking
     // that the line exists rather than that it names only an epic with nothing open under it.
@@ -1593,6 +1608,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_gate_runs_what_the_makefile_says(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
+        probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
     ]
 }
 
@@ -4035,6 +4051,7 @@ fn probe_attention() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                stopped: None,
             }),
             ..Default::default()
         }],
@@ -4101,6 +4118,7 @@ fn probe_standstill() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                stopped: None,
             }),
             ..Default::default()
         }],
@@ -4181,6 +4199,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                stopped: None,
             }),
             ..Default::default()
         }],
@@ -7969,6 +7988,76 @@ fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
             // Unmeasured is not zero.
             && empty.rate.is_none()
             && render_churn(&empty).contains("Not zero: unmeasured"),
+    }
+}
+
+/// air-1n3: on 2026-09-06 an account limit stopped seven interactive sessions on this machine.
+/// Five had the harness's own auto-continue armed and were working again within 70 seconds of
+/// the reset; two did not, and the one that also had no scheduled task ticking sat dead for 79
+/// minutes. Air could see only "silent with a claim", which reads the same for a session the
+/// harness is bringing back and one it has abandoned — so the coordinator took it to the owner
+/// instead of acting, and the two states call for OPPOSITE actions: typing at a session with an
+/// armed wait cancels the recovery.
+///
+/// No hook fires at a limit or at its reset. `Notification` (with the `quota_auto_resume_*`
+/// types) and `StopFailure` are the nearest the harness has, and Air subscribed to neither.
+///
+/// Red: both events are installed, and a `quota_auto_resume_stale` notification marks the
+/// session stopped with that kind, so `air status` says the harness is NOT resuming it.
+///
+/// Green: the two halves that separate a recorded fact from a guess. A
+/// `quota_auto_resume_fired` reads as "leave it alone" rather than as one more stopped session,
+/// and a `Notification` that is not about a stop at all (a permission prompt) marks NOTHING —
+/// the kind is read from the harness's declared field, so a type Air has never met is logged
+/// and reported as not-a-stop rather than invented into one.
+fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
+    use crate::cmd::hook::{is_stop_kind, stop_kind};
+    use crate::cmd::install::hook_entries;
+    use crate::cmd::status::stopped_phrase;
+    use air_hooks::HookInput;
+
+    let input = |json: &str| HookInput::parse(json).unwrap_or_default();
+    let stale = input(
+        r#"{"session_id":"s","hook_event_name":"Notification",
+            "notification_type":"quota_auto_resume_stale","message":"Usage limit reset"}"#,
+    );
+    let fired = input(
+        r#"{"session_id":"s","hook_event_name":"Notification",
+            "notification_type":"quota_auto_resume_fired","message":"continuing automatically"}"#,
+    );
+    let perm = input(
+        r#"{"session_id":"s","hook_event_name":"Notification",
+            "notification_type":"permission_prompt","message":"Claude needs your permission"}"#,
+    );
+    let api = input(r#"{"session_id":"s","hook_event_name":"StopFailure"}"#);
+    // A harness that sends no type at all, and one that sends a type Air has never seen.
+    let bare = input(r#"{"session_id":"s","hook_event_name":"Notification"}"#);
+    let unknown = input(
+        r#"{"session_id":"s","hook_event_name":"Notification",
+            "notification_type":"some_future_type"}"#,
+    );
+
+    let installed: Vec<&str> = hook_entries().into_iter().map(|(e, _)| e).collect();
+    Probe {
+        name: "limit: a stopped session is recorded from the harness's own notification, and status says whether the harness is bringing it back",
+        red_fires: installed.contains(&"Notification")
+            && installed.contains(&"StopFailure")
+            && stop_kind(&stale) == "quota_auto_resume_stale"
+            && is_stop_kind(&stop_kind(&stale))
+            && stop_kind(&api) == "stop_failure"
+            && is_stop_kind(&stop_kind(&api))
+            && stopped_phrase("quota_auto_resume_stale", "T").contains("NOT resuming"),
+        green_passes: is_stop_kind(&stop_kind(&fired))
+            && stopped_phrase(&stop_kind(&fired), "T").contains("leave it alone")
+            // Not every notification is a stop: a permission prompt, a bare one, and a type
+            // from a later harness all write nothing rather than a phantom stopped session.
+            && !is_stop_kind(&stop_kind(&perm))
+            && !is_stop_kind(&stop_kind(&bare))
+            && !is_stop_kind(&stop_kind(&unknown))
+            // And the kind is the declared field, never the message text: the stale one says
+            // "Usage limit reset" and the fired one says "continuing automatically", so a
+            // reader of the words would have them backwards.
+            && stop_kind(&fired) != stop_kind(&stale),
     }
 }
 

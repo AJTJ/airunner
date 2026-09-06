@@ -720,6 +720,7 @@ mod tests {
             project: String::new(),
             model: String::new(),
             enforce: None,
+            stopped: None,
         };
         let mut known = None;
         let a = vec![("main".to_string(), "coordinator".to_string(), sess("aaaa"))];
