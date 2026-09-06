@@ -359,6 +359,12 @@ pub struct RedBatch {
     pub worker: String,
     pub at: String,
     pub members: Vec<air_ledger::landings::Member>,
+    /// Where the run's output was kept (air-hpp8). A non-green run keeps its tail
+    /// (`runlog::keeps_output`), and that file is what a member actually wants: the adopter's
+    /// worker found the batch's verdict by opening the lane's log from another worktree,
+    /// having not been told. Carried here so the answer and the evidence arrive together.
+    /// `None` when the run kept nothing.
+    pub log_path: Option<String>,
 }
 
 /// Pure: the red batches among `runs` (newest first), newest first. A run is a batch when it
@@ -373,6 +379,7 @@ pub fn red_batches_of(runs: &[air_ledger::verify::VerifyRun]) -> Vec<RedBatch> {
             worker: r.worker.clone(),
             at: r.finished_at.clone(),
             members: r.members.clone(),
+            log_path: r.log_path.clone(),
         })
         .collect()
 }
