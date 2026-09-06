@@ -204,10 +204,27 @@ fn short(sha: &str) -> &str {
 }
 
 /// The worker branches `head` contains that `tip` (main) does not, by worktree (air-80x.2):
-/// every worker worktree whose head is an ancestor of `head` and not of main, `own` (the
+/// for every worker worktree, the sha of its branch that `head` actually contains, `own` (the
 /// batch's own worker) excluded. Git ancestry only; nothing is read from commit messages.
 /// `air record` writes it on the run and `air land` on the landing, so a red batch and a
 /// landed one name their members the same way.
+///
+/// **The sha is the MERGE BASE, not the worktree's current head** (air-vsvt). It used to ask
+/// "is your head an ancestor of the batch", which is a question about where the branch is NOW,
+/// answered while recording a fact about what the batch WAS. A worker that commits between the
+/// lane's merge and the lane's `air record` — a window of minutes, and the lane's own verify is
+/// the slowest thing in the round — stops being an ancestor and drops out of the list, and
+/// because the list is recorded on the row it is then wrong for good. An adopter's lane saw
+/// exactly that five times in one night. Reproduced here before changing anything: a batch that
+/// merged alpha and beta recorded only beta, because alpha had committed once more.
+///
+/// The merge base does not move when the branch commits again: it is the sha the batch took.
+/// For a branch the batch never took it is the fork point, which is in main and so is excluded
+/// by the same test as before — so this cannot invent a member either, which the old shape
+/// could when a worktree's head happened to sit on another branch's commit.
+///
+/// One `git merge-base` per worker replaces two `merge-base --is-ancestor` calls, so it is also
+/// one spawn cheaper per worker.
 pub fn members_of(
     repo: &Path,
     own: &str,
@@ -223,13 +240,13 @@ pub fn members_of(
         let Ok(wt_head) = git::head(&path) else {
             continue;
         };
-        let in_batch = git::is_ancestor(repo, &wt_head, head).unwrap_or(false);
-        let in_main = git::is_ancestor(repo, &wt_head, tip).unwrap_or(false);
-        if in_batch && !in_main {
-            out.push(air_ledger::landings::Member {
-                worker,
-                sha: wt_head,
-            });
+        // What of this branch the batch contains. Unrelated histories share no base and are
+        // skipped, as they were before.
+        let Some(base) = git::merge_base(repo, &wt_head, head) else {
+            continue;
+        };
+        if !git::is_ancestor(repo, &base, tip).unwrap_or(false) {
+            out.push(air_ledger::landings::Member { worker, sha: base });
         }
     }
     out
