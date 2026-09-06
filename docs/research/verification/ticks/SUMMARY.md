@@ -49,7 +49,7 @@ artefact is committed on `main` with author `ajtj`; every claim carries a URL + 
 
 1. Plan 0001 §11: advisory-first (recommended yes); `bd` 1.2.2 + pin (recommended); the six plan-0002 decisions; plan-0003 crate choices.
 2. 14 external/design ledger rows remain unverified — check each only when the corresponding piece is borrowed (M1/M2).
-3. Enforcement report still repeats a retracted the adopter claim (rank 3, `--claim` reopens closed) — fix when that report is next edited.
+3. Enforcement report still repeats a retracted adopter claim (rank 3, `--claim` reopens closed) — fix when that report is next edited.
 
 ## Housekeeping
 

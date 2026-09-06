@@ -267,7 +267,7 @@ disagree deny work while reporting success.**
 The adopter ran both. `make lease-take` called `air lease take`, which writes the ledger, and
 reported success; their PreToolUse guard read `$(git --git-common-dir)/<prefix>-leases/runtime/`. So
 `make api` was refused with *"take it first: `make lease-take`"* — naming the command that had
-just succeeded. Every worker hit it, twice recorded (, capture
+just succeeded. Every worker hit it, twice recorded; capture
 `01M0NM3YSE05GTNPNGVDQB24FW`).
 
 This is worse than an ordinary overlap because of its failure direction. A lease store that fails
@@ -585,7 +585,7 @@ For a repo already running an older Air. **This section is the order**; §5a exp
 `air install` does and §5b explains the label migration, but neither has to be read first.
 Everything below is run by the owner, in the target repo, except where it says otherwise.
 
-Written for the adopter as the first customer (air-5tu). Every the adopter-specific fact here is
+Written for the adopter as the first customer (air-5tu). Every adopter-specific fact here is
 cited from this repo's `private/research/adopter-as-built.md`; nothing in this repo reads or
 writes that fleet.
 
