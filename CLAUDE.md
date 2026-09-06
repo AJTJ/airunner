@@ -173,6 +173,7 @@ descendant, air-80x.1).
     …   it opens with front matter naming the bead:  ---\n bead: <id>\n ---
     …   COMMIT it: an untracked digest is refused since air-ahl, because a file only your
     …   worktree has is a note to self rather than proof
+    … append anything the digest will not carry to docs/journal/<session>.md as you go
     git merge main
     air record verify -- make verify        # last, so the green is at the commit containing main
     bd close <id> --reason "<proof>"
@@ -184,6 +185,7 @@ which is what the adopter's 2026-08-29 round learned by parking a lane whose bat
 
     air claim <id> [--files a,b]
     … implement; write and commit the digest as above, with a `Bead: <id>` trailer on the work
+    … append anything the digest will not carry to docs/journal/<session>.md as you go
     git merge main                          # your branch now shows in `air status` as batch-ready
     … wait for the lane's green; `air handover` says when the close would pass
     bd close <id> --reason "<proof: the lane's green at <sha>, which contains your commits>"
@@ -200,6 +202,12 @@ The digest's front matter is what the hand-over gate reads (air-agq). It used to
 digest by looking for the worker's name in a filename and an mtime newer than the claim, which
 accepted a digest written for a different bead, and accepted `touch` on an old one. A gate that
 guards fails toward permitting, so it now wants the bead declared rather than guessed.
+
+**The journal is not the digest** (air-3xww). The digest is what a bead did and its proof;
+the journal is a bug you hit, a wrong turn and what corrected it, a claim you later found wrong,
+a thing you checked that was fine. It is also not a capture: a capture says somebody should act
+and the coordinator triages every one, while these say nobody should. Nothing in Air reads the
+files. `journal_dir` in `.claude/air.json` names the directory.
 
 **Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
 the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, with the
