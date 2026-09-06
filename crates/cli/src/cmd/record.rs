@@ -225,6 +225,28 @@ const SUSPICIOUS_MS: i64 = 2_000;
 /// showed — so a red run can be read after the fact. It is buffered for EVERY run because the
 /// verdict is not known until the child exits; only a non-green one is written to disk.
 pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64, Vec<u8>)> {
+    run_tee_to(prog, args, repo, std::io::stdout(), std::io::stderr())
+}
+
+/// [`run_tee`] with the two sinks named instead of hardcoded (air-e21v).
+///
+/// The sinks were `stdout()` and `stderr()` in the body, which is right for `air record verify`
+/// — a worker wants the output live — and wrong for any caller whose own stdout means
+/// something. A probe called it with a child that echoes to both streams, and that `out` landed
+/// on `air selftest`'s stdout ahead of the JSON array, so `air selftest --json` stopped being
+/// parseable and `--prove` reported every declared mutation BROKEN. Ordinary `air selftest` was
+/// unaffected and all probes passed, so the gate worked and only the mutation evidence was
+/// dead — the evidence this round leaned on repeatedly.
+///
+/// Failing loudly rather than silently is the mercy in it: the JSON did not become subtly
+/// wrong, it stopped parsing at line 1 column 1.
+pub fn run_tee_to<O: Write + Send + 'static, E: Write + Send + 'static>(
+    prog: &str,
+    args: &[String],
+    repo: &Path,
+    out_sink: O,
+    err_sink: E,
+) -> std::io::Result<(i32, i64, Vec<u8>)> {
     let mut child = Command::new(prog)
         .args(args)
         .current_dir(repo)
@@ -264,11 +286,11 @@ pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32
     let out = child
         .stdout
         .take()
-        .map(|o| pump(o, std::io::stdout(), std::sync::Arc::clone(&tail)));
+        .map(|o| pump(o, out_sink, std::sync::Arc::clone(&tail)));
     let err = child
         .stderr
         .take()
-        .map(|e| pump(e, std::io::stderr(), std::sync::Arc::clone(&tail)));
+        .map(|e| pump(e, err_sink, std::sync::Arc::clone(&tail)));
     let status = child.wait()?;
     let out_bytes = out.and_then(|h| h.join().ok()).unwrap_or(0);
     let err_bytes = err.and_then(|h| h.join().ok()).unwrap_or(0);
