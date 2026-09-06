@@ -210,6 +210,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-72t7. The anchor restores the boundary that dropped two of select's three fields.
+    // `landable` still fills, every skip still carries what it compared, and the human
+    // rendering is untouched — so what it isolates is exactly whether a reader of `--json`
+    // can tell 'nothing to land' from 'I could not tell'.
+    (
+        "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "        land_skipped: selection.skipped,",
+            to: "        land_skipped: Vec::new(),",
+            also_red: &[],
+        },
+    ),
     // air-3xww. The anchor hard-codes the journal's path, which is the one way this can go
     // wrong quietly: the directory stays scaffolded and a repo that configured another gets
     // a README in a place it does not use. The created-only-when-absent rule and the
@@ -2042,6 +2055,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
         probe_only_a_failed_handover_counts_as_an_attempt(),
         probe_the_journal_is_scaffolded_and_nothing_reads_it(),
+        probe_status_json_says_why_a_branch_cannot_land(),
     ]
 }
 
@@ -10928,5 +10942,138 @@ fn probe_a_journal_only_branch_needs_no_bead() -> Probe {
         name: "land: a branch whose only commits are session-journal entries lands with no bead, and a range mixing them with anything else still needs one",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-72t7: `air status --json` said which branches can land and never why the others cannot.
+///
+/// `select` computes all three of `landings`, `skipped` and `errors` — air-6u5 added the last
+/// two precisely so nothing is silent — and the snapshot took only the first, through a helper
+/// that existed to discard the other two. So a `select()` error the code deliberately raises
+/// rather than defaulting reached no caller at all, and `landable: []` was a well-formed answer
+/// with nothing in it saying "I could not tell".
+///
+/// **Same class as the bug it came from, one layer up**: the promise is real and lives on
+/// `select`; the surface a reader actually looks at dropped the half that keeps it.
+///
+/// Found by USE, not by reading — verify wrote another bead's probe against `--json` and could
+/// not assert on `skipped`, because the field did not exist. And the incident it explains is
+/// alerts', whose own account is the reason the shape matters: they read `landable: []`,
+/// believed it, and spent three actions that could not have helped, because an empty list gives
+/// a reader nothing to disbelieve. What ended it was reading the Rust — which is not available
+/// to most readers of `--json`.
+///
+/// Red: the snapshot carries `skipped` and `errors`, and both survive into the JSON a caller
+/// parses.
+///
+/// Green: each skip **names what was compared, not only the verdict** (alerts' caution, and
+/// air-rud0's finding one surface over: a reason-shaped string can be true-sounding and wrong
+/// when the comparison was never made). So `green-at-head` carries the head it looked at, and
+/// `no-bead-named` carries the range it searched. And an error is distinguishable from an
+/// absence: a `Selection` with an error and no landings serialises with the error present, so
+/// `landable: []` can no longer be read as "nothing to land" when it means "I could not tell".
+fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
+    use crate::cmd::status::{Selection, Skipped, Snapshot};
+
+    let skipped = |check: &'static str, detail: &str| Skipped {
+        worker: "alerts".into(),
+        check,
+        detail: detail.into(),
+        fix: "a fix".into(),
+    };
+    let selection = Selection {
+        landings: Vec::new(),
+        skipped: vec![
+            skipped(
+                "green-at-head",
+                "alerts has no recorded green at its head de0f19cf",
+            ),
+            skipped(
+                "no-bead-named",
+                "alerts is green at de0f19cf but no commit in main..de0f19cf declares a bead",
+            ),
+        ],
+        errors: vec!["alerts: git rev-parse HEAD: boom".to_string()],
+    };
+    let snap = Snapshot {
+        landable: selection.landings.clone(),
+        land_skipped: selection.skipped.clone(),
+        land_errors: selection.errors.clone(),
+        ..Default::default()
+    };
+
+    // RED drives the real path: a repo with a worktree that cannot land, `air --json status`,
+    // and the reason parsed back out of the JSON a caller actually reads. A `Snapshot` built by
+    // hand never touches the boundary between `select` and the snapshot, which is where the two
+    // fields were being dropped — that anchor would mutate code this probe does not exercise,
+    // which is air-682's wrong-path trap.
+    let carried = (|| -> Option<bool> {
+        let exe = std::env::current_exe().ok()?;
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        let main = root.join("main");
+        let wt = root.join("worktree-alpha");
+        std::fs::create_dir_all(main.join(".air")).ok()?;
+        let g = |args: &[&str]| crate::git::run(&main, args).ok();
+        g(&["init", "-q", "-b", "main", "."])?;
+        g(&["config", "user.email", "a@b"])?;
+        g(&["config", "user.name", "a"])?;
+        std::fs::write(main.join("f"), "x").ok()?;
+        g(&["add", "-A"])?;
+        g(&["commit", "-qm", "seed"])?;
+        // A worktree with no recorded green: `select` must skip it with `green-at-head`, and
+        // the JSON must carry that.
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "alpha",
+            &wt.to_string_lossy(),
+        ])?;
+        let out = air_command(&exe, &wt)
+            .args(["--json", "status"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let _ = std::fs::remove_dir_all(&root);
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let snapshot = v.get("snapshot")?;
+        let skipped = snapshot.get("land_skipped")?.as_array()?;
+        Some(
+            snapshot.get("land_errors").is_some()
+                && skipped.iter().any(|s| {
+                    s.get("check").and_then(serde_json::Value::as_str) == Some("green-at-head")
+                        // and it names WHAT IT COMPARED, not only the verdict
+                        && s.get("detail")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|d| d.contains("head"))
+                }),
+        )
+    })()
+    .unwrap_or(false);
+
+    // Green: the values compared are in the reason, not only the verdict.
+    let names_what_it_compared = snap
+        .land_skipped
+        .iter()
+        .find(|s| s.check == "green-at-head")
+        .is_some_and(|s| s.detail.contains("de0f19cf"))
+        && snap
+            .land_skipped
+            .iter()
+            .find(|s| s.check == "no-bead-named")
+            .is_some_and(|s| s.detail.contains("main..de0f19cf"));
+    // An error is not an absence: empty landings plus an error is a distinguishable state.
+    let error_is_not_absence = snap.landable.is_empty() && !snap.land_errors.is_empty();
+    // And a clean fleet says nothing, so this costs a healthy round no output.
+    let quiet = {
+        let ok = Snapshot::default();
+        ok.land_skipped.is_empty() && ok.land_errors.is_empty()
+    };
+
+    Probe {
+        name: "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
+        red_fires: carried,
+        green_passes: names_what_it_compared && error_is_not_absence && quiet,
     }
 }

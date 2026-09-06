@@ -197,6 +197,16 @@ pub struct Snapshot {
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
     pub landable: Vec<Landing>,
+    /// Branches that do NOT qualify, each naming the precondition it failed and the fix
+    /// (air-72t7). air-6u5 added this to `Selection` precisely so nothing is silent, and the
+    /// snapshot kept only `landings` — so `air status --json` said which branches can land and
+    /// never why the others cannot, which is the shape air-6u5 called the worst answer
+    /// available, one layer up.
+    pub land_skipped: Vec<Skipped>,
+    /// Real failures inside selection — git or the ledger — as distinct from "does not
+    /// qualify" (air-72t7). `select` deliberately raises these rather than defaulting, and
+    /// until now they reached no caller at all: an error read as an empty queue.
+    pub land_errors: Vec<String>,
     /// Branches the verify lane may merge into its next batch (air-80x.3): head contains
     /// main, no green at that head, and the commits name a bead the worker holds. A fact the
     /// lane reads when it cuts a batch; no condition pushes it. Before this the list lived in
@@ -901,10 +911,6 @@ pub fn select(repo: &Path) -> Selection {
 
 /// Just the landable list, for the read-only callers (`air status`).
 /// `air land` uses [`select`], because it is the caller that must not read an error as empty.
-pub fn landings_for(repo: &Path) -> Vec<Landing> {
-    select(repo).landings
-}
-
 /// Acceptance clauses for the beads of ONE branch, fetched at land time.
 ///
 /// This is the expensive call (`bd show` is ~1.4 s per id, see [`known_beads`]), and it is
@@ -1957,6 +1963,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-80x.3: the verify lane's one fact, from git and the ledger only.
     let batch = batch_ready_for(&ledger, repo);
     errors.extend(batch.2.iter().cloned());
+    // air-72t7: ONE selection, and all three of its fields reach the snapshot. Dropping
+    // `skipped` and `errors` here is what made `air status --json` say which branches can land
+    // and never why the others cannot, and made an error `select` deliberately raises reach no
+    // caller at all.
+    let selection = select(repo);
     Ok(Snapshot {
         at,
         workers: views.into_values().collect(),
@@ -1990,8 +2001,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // branch contained the merge saw nothing about work main had lost.
         rewound_carried: rewound_carried(repo, &ledger, git::main_tip(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
-        // branch is landable that the command would then skip.
-        landable: landings_for(repo),
+        // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
+        // so a reader can see why the others cannot.
+        landable: selection.landings,
+        land_skipped: selection.skipped,
+        land_errors: selection.errors,
         epics_to_decompose,
         ancestor_deadlocks,
         batch_ready: batch.0,
