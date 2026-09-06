@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-rud0. The anchor is the discharged line's format string and nothing else: the
+    // judgement, the two honest branches and `--json`'s `how` all survive it, because none of
+    // them moved. Under it the tick is bare again and a reader scanning a nine-bead landing's
+    // verdict column sees `ok` with nothing beside it — which is the defect exactly, and one
+    // that is RIGHT in most cases, so a probe that stayed green under this was checking that
+    // discharged clauses appear rather than that they say what discharged them.
+    // Anchor as rustfmt leaves it, per air-gei.
+    (
+        "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
+        Mutation {
+            file: "crates/cli/src/cmd/acceptance.rs",
+            from: "s.push_str(&format!(\"    ok ({how}) — {text}\\n\"));",
+            to: "s.push_str(&format!(\"    ok   {text}\\n         {how}\\n\"));",
+            also_red: &[],
+        },
+    ),
     // air-hgi9. The anchor is the arm that renders the reason, and nothing else: the counts in
     // `cover`, both pure renderers, the batch-predates arm and the flaky arm all survive it.
     // Under it the four not-green states collapse back into the one sentence they shared, with
@@ -1931,6 +1947,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
+        probe_a_discharged_clause_names_its_lookup(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -10518,6 +10535,79 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-rud0 (an adopter, after their batch 22, with the rendering proposed by their lane): the
+/// landing's clause report gave a REASON when it could not read a clause and a bare `ok` when
+/// it could, so the weaker claim wore the stronger form.
+///
+/// `ok` means a lookup matched — the merge touched a path the clause names, or a green is
+/// recorded at the landed sha. It does not mean anything about the clause's substance was
+/// checked. Their batch 22 printed `ok` beside a clause about sections no longer carrying a
+/// sequential number, discharged because the merge touched that file; it would have printed the
+/// same had the change renamed a variable in it. Their lane's phrase, and it is the bead's:
+/// **a lookup wearing the clothes of a judgement.** It is right in this case and right most of
+/// the time, which is what made it invisible, and a nine-bead landing is read by scanning this
+/// column.
+///
+/// Red (declared mutation: the discharged line goes back to a bare mark): a reader scanning
+/// verdicts sees `ok` with nothing beside it, which is the defect. Green: the lookup is on the
+/// SAME line as the tick and names the path that discharged it; the two honest branches are
+/// untouched, keeping their reason on the line beneath; and — the half that matters most — the
+/// JUDGEMENT is unchanged, so a clause naming a file the merge left alone is still `MISS` and
+/// prose is still `?`. Nothing here reads a clause's meaning.
+fn probe_a_discharged_clause_names_its_lookup() -> Probe {
+    use crate::cmd::acceptance::{Evidence, Verdict, judge, judge_clauses, report};
+
+    let changed = ["docs/rules/roles.md".to_string()];
+    let tree = [
+        "docs/rules/roles.md".to_string(),
+        "docs/untouched.md".to_string(),
+    ];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+        tree: &tree,
+    };
+    let touched = "docs/rules/roles.md names the rule.";
+    let left_alone = "docs/untouched.md gains a section.";
+    let prose = "The reviewer is happy with it.";
+
+    let r = report(&[judge_clauses(
+        "zz-1",
+        vec![touched.into(), left_alone.into(), prose.into()],
+        &ev,
+    )]);
+
+    // RED: the tick carries its lookup, on its own line, where the column is scanned.
+    let red = r.contains("ok (the merge changed docs/rules/roles.md) — docs/rules/roles.md")
+        && !r.contains("ok   docs/rules/roles.md");
+
+    // The judgement did not move: a lookup, never a reading of the clause.
+    let judged_the_same = matches!(judge(touched, &ev), Verdict::Discharged { .. })
+        && matches!(judge(left_alone, &ev), Verdict::Unevidenced { .. })
+        && matches!(judge(prose, &ev), Verdict::Undecidable { .. });
+    // The two honest branches are untouched, reason on the line beneath.
+    let honest_branches_untouched = r.contains(&format!("MISS {left_alone}"))
+        && r.contains("the merge did not change docs/untouched.md")
+        && r.contains(&format!("?    {prose}"));
+    // The discharged reason appears once, not twice: the second line went with the move.
+    let not_duplicated = r.matches("the merge changed docs/rules/roles.md").count() == 1;
+    // A green-backed clause names ITS lookup too, not just a path-backed one.
+    let g = report(&[judge_clauses(
+        "zz-2",
+        vec!["make verify green.".into()],
+        &ev,
+    )]);
+    let green_clause_named = g.contains("ok (a green verify is recorded at the landed sha) —");
+
+    let green =
+        judged_the_same && honest_branches_untouched && not_duplicated && green_clause_named;
+    Probe {
+        name: "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
         red_fires: red,
         green_passes: green,
     }

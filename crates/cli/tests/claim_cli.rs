@@ -2797,7 +2797,13 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     );
     // The print: every clause with its verdict, so a wrong close is visible as it lands.
     assert!(out.contains("air land closes nothing"), "{out}");
-    assert!(out.contains("ok   Verify recorded green at HEAD."), "{out}");
+    // air-rud0: the tick carries the lookup that produced it, so it cannot be read as a
+    // stronger claim than "a lookup matched".
+    assert!(
+        out.contains("ok (a green verify is recorded at the landed sha) — Verify recorded green"),
+        "{out}"
+    );
+    assert!(!out.contains("ok   Verify recorded"), "bare tick: {out}");
     assert!(out.contains("MISS docs/rule.md says the rule."), "{out}");
     assert!(
         out.contains("?    The owner rules on the counter-argument."),
