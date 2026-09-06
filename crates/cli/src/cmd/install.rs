@@ -26,6 +26,35 @@ use crate::cmd::emit;
 /// The roles document, embedded so installs are self-contained.
 pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 
+/// Appended to the COORDINATOR's role prose when Metis is attached (air-g5o), and to no other
+/// session.
+///
+/// Metis's own plugin text declares Metis the system of record and says plans do not live
+/// outside it. That is true of a repo that runs Metis alone and false here, where tasks are
+/// beads and decisions are dated files in `docs/`. A plugin's instructions arrive in the
+/// session whether or not anyone agreed with them, so the boundary is stated on Air's side of
+/// the prompt rather than argued with afterwards (analysis 2026-09-05, air-ate).
+///
+/// Pinned by `install::tests::the_metis_split_states_the_boundary`, because the failure it
+/// prevents is a paragraph quietly going missing and the coordinator taking a tool's word for
+/// where the plan lives.
+pub const METIS_SPLIT: &str = "\
+## Metis, and what it is not the system of record for
+
+Metis is attached to this session for **vision and initiatives**: the long-lived shape of the
+work, and the phases an initiative moves through. Plan there, and cut work from an initiative
+at its decompose phase.
+
+It is not the task tracker and it is not the decision log. **Tasks are beads** — filed with
+`bd create --validate`, claimed with `air claim`, closed with proof — and each one's
+description declares the initiative it came from on a line reading `initiative: <CODE>`.
+**Decisions are dated entries in `docs/`.** Metis's own instructions say otherwise, because
+they are written for a repo that runs Metis alone; this is not one.
+
+`air status` prints how many open beads declare no initiative. It is a count, not a gate:
+nothing is refused for lacking one.
+";
+
 /// The coordinator's procedures, embedded and installed as skills in the target repo so every
 /// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21).
 ///
@@ -847,6 +876,25 @@ pub const SURFACE: &[SurfaceChange] = &[
                  never caught that either — so if your repo needs it, that is a cwd-scoped \
                  command guard of your own.",
     },
+    SurfaceChange {
+        id: "metis-on-the-coordinator",
+        since: "2026-09-06 (air-g5o)",
+        headline: "`air coordinator` attaches Metis when `.claude/air.json` says \
+                   `\"metis\": true`, which `air init` now writes by default: `--mcp-config` \
+                   with metis's own server declaration, and `--plugin-dir` when \
+                   `metis_plugin_dir` names a directory that exists. Workers never get it. \
+                   The coordinator's appended prose gains a paragraph stating that Metis \
+                   holds vision and initiatives while tasks stay beads and decisions stay in \
+                   `docs/`, and `air status` prints how many beads declare no \
+                   `initiative: <CODE>` line.",
+        silent_break: false,
+        action: "Nothing is refused: the count is a count, and a missing `metis` binary is one \
+                 printed line, not a failed launch. Set `\"metis\": false` in \
+                 `.claude/air.json` if your repo plans elsewhere. To get the plugin as well as \
+                 the tools, set `metis_plugin_dir` to the `plugins/metis` directory of a metis \
+                 checkout; Air will not guess that path, and a `--plugin-dir` pointing at \
+                 nothing loads nothing silently.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1587,6 +1635,12 @@ mod tests {
         // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
         // `claude --worktree` and is false without it.
         assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
+        // states that the count attached to it refuses nothing. Both halves are pinned: a
+        // rules file that names a count without saying it is not a gate is how a measurement
+        // becomes a rule nobody decided on.
+        assert!(ROLES_MD.contains("initiative: <CODE>"));
+        assert!(ROLES_MD.contains("It is a count and there is no refusal attached to it"));
         assert!(
             !ROLES_MD.contains("Editing\nthe main checkout is blocked natively")
                 && !ROLES_MD.contains("the main checkout is blocked natively"),
@@ -1679,6 +1733,30 @@ mod tests {
                 _ => true,
             }),
             "RELEASES must never decrease: append rows, never edit them"
+        );
+    }
+
+    /// air-g5o: the split paragraph the coordinator's session carries when Metis is attached
+    /// states the boundary Metis's own text denies. Pinned because the failure it prevents is
+    /// the paragraph going missing and the coordinator taking a plugin's word for where the
+    /// plan lives: Metis's instructions say it is the system of record, and here it is not.
+    ///
+    /// Each half is asserted separately. "Tasks are beads" without "decisions are dated
+    /// entries" leaves the decision log to Metis; either without the declared field leaves
+    /// `air status`'s count with nothing to read.
+    #[test]
+    fn the_metis_split_states_the_boundary() {
+        assert!(METIS_SPLIT.contains("vision and initiatives"));
+        assert!(METIS_SPLIT.contains("**Tasks are beads**"));
+        assert!(METIS_SPLIT.contains("**Decisions are dated entries in `docs/`.**"));
+        assert!(METIS_SPLIT.contains("initiative: <CODE>"));
+        // It must say the count is not a gate, in the same breath as naming the count. A
+        // session told about a number and not about its force will treat it as one.
+        assert!(METIS_SPLIT.contains("It is a count, not a gate"));
+        // And it must NOT reproduce Metis's claim, which is what it exists to contradict.
+        assert!(
+            !METIS_SPLIT.contains("system of record for tasks"),
+            "the split must not restate the claim it corrects"
         );
     }
 

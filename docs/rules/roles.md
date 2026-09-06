@@ -142,8 +142,18 @@ acceptance, a resource conflict), by filing a bead labelled `owner` with your re
 its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
 workers, and `air status` counts them on its `ready:` line.
 
+**Where a bead came from is a declared field, not a memory.** Where the repo attaches a
+planning tool to this session (`"metis": true` in `.claude/air.json` attaches Metis, and no
+worker ever gets it), plan there and file beads from it: each bead's description carries a line
+reading `initiative: <CODE>`. Air reads that line and nothing else — a mention of an initiative
+in prose declares nothing. **[fact]** `air status` prints how many beads declare none, over the
+set it already asked bd about. It is a count and there is no refusal attached to it; a gate
+comes only if the count shows the rule is ignored (owner, 2026-09-06, air-g5o). Removed when
+`bd create --validate` can require the field.
+
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
-landable branches, ready depth with the owner-labelled count, leases, inbox depth),
+landable branches, ready depth with the owner-labelled count, beads without an initiative,
+leases, inbox depth),
 `air holdings`, the channel (idle or silent with a claim, idle without a claim, hand-over
 not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
 condition pushes only when the SET changes, not while it ages; the facts themselves are always

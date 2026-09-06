@@ -2,11 +2,12 @@
 //! this terminal with the role applied (decisions 2026-08-20: a human is always in the loop;
 //! launchers never start headless sessions).
 //!
-//! Worker: `claude --worktree <name>` (native isolation from main), the roles prose appended
-//! to the system prompt, a deny list that holds in every permission mode, and env that used
-//! to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
+//! Worker: `claude` started IN the worktree Air made (air-fdz, air-8gj; no `--worktree`, and
+//! the isolation is the cwd plus the PreToolUse fence in `air_hooks::fence`), the roles prose
+//! appended to the system prompt, a deny list that holds in every permission mode, and env
+//! that used to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
 //! Coordinator: `claude` in the main checkout with the Air channel attached so attention
-//! conditions are delivered into the session.
+//! conditions are delivered into the session, plus Metis when the repo declares it (air-g5o).
 //!
 //! A `--task` never rides in argv. It is written to `<main>/.air/tasks/<name>.md` and the
 //! prompt claude receives is a fixed sentence naming that path (air-er0: adopter's seven
@@ -126,6 +127,31 @@ pub fn task_prompt(path: &Path) -> String {
         "Your task is in {}. Read that file and carry it out.",
         path.display()
     )
+}
+
+/// The coordinator's own appended file: the role prose, plus the Metis split when Metis is
+/// attached (air-g5o).
+///
+/// A SECOND file rather than a line in `.air/roles.md`, for two reasons. `roles.md` is
+/// rewritten by whichever role launches last, so a paragraph put there for the coordinator
+/// would be stripped by the next worker launch. And it says only what Air records and refuses
+/// — a paragraph about one planning tool does not belong in a file every adopting repo gets,
+/// including the ones with no Metis.
+///
+/// The split itself exists because Metis's own instruction text declares Metis the only system
+/// of record and forbids plans outside it, which contradicts this repo (analysis 2026-09-05,
+/// air-ate). Injecting a plugin's prose unchanged is how a tool's opinion becomes a rule
+/// nobody chose.
+fn coordinator_roles_file(repo: &Path, metis: bool) -> Result<std::path::PathBuf, String> {
+    if !metis {
+        return roles_file(repo);
+    }
+    let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("coordinator.md");
+    let text = format!("{ROLES_MD}\n{}", super::install::METIS_SPLIT);
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
 }
 
 fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
@@ -295,10 +321,16 @@ fn worker_argv_for(
 }
 
 /// Pure: the argv for the coordinator session.
+///
+/// `metis` is whatever [`super::metis::argv`] returned: the MCP server, and the plugin
+/// directory when the repo declared one that exists (air-g5o). It is placed BEFORE `extra`, so
+/// a caller passing its own `--mcp-config` is last and wins, the same ordering every other
+/// pass-through here already has. Workers get none of it: the coordinator plans, workers work.
 pub fn coordinator_argv(
     project: &str,
     roles: &Path,
     channels_flag: &str,
+    metis: &[String],
     extra: &[String],
 ) -> Vec<String> {
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
@@ -314,6 +346,7 @@ pub fn coordinator_argv(
         "--disallowed-tools".into(),
     ];
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
+    v.extend(metis.iter().cloned());
     v.extend(extra.iter().cloned());
     v
 }
@@ -322,10 +355,11 @@ fn coordinator_argv_for(
     repo: &Path,
     roles: &Path,
     flag: &str,
+    metis: &[String],
     extra: &[String],
 ) -> Result<Vec<String>, String> {
     let (extra, theirs) = split_settings(extra)?;
-    let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, &[]);
+    let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
     base.extend(repo_deny(repo, "coordinator_deny"));
     base.extend(extra);
@@ -663,7 +697,17 @@ pub fn worker(
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
-    let roles = match roles_file(repo) {
+    // Metis first, because its split paragraph goes into the file the next line writes
+    // (air-g5o). Every note is printed and nothing refuses: a missing planning tool must not
+    // cost the owner their coordinator session.
+    let cfg = super::metis::config(repo);
+    let (metis_argv, notes) = super::metis::attach(&cfg, super::metis::on_path());
+    for note in notes {
+        eprintln!("{note}");
+    }
+    // Keyed on what was ATTACHED, not on what the config asked for: the split opens "Metis is
+    // attached to this session", and a session that got nothing must not be told it did.
+    let roles = match coordinator_roles_file(repo, !metis_argv.is_empty()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("air coordinator: {e}");
@@ -675,7 +719,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
     // channels allowlist (use --dangerously-load-development-channels for local dev)").
     let flag = std::env::var("AIR_CHANNELS_FLAG")
         .unwrap_or_else(|_| "--dangerously-load-development-channels".into());
-    let argv = match coordinator_argv_for(repo, &roles, &flag, extra) {
+    let argv = match coordinator_argv_for(repo, &roles, &flag, &metis_argv, extra) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air coordinator: {e}");
@@ -867,7 +911,7 @@ mod tests {
 
     #[test]
     fn coordinator_argv_attaches_the_channel() {
-        let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+        let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[], &[]);
         assert_eq!(&v[..2], ["--channels", "server:air"]);
         // The remote is the boundary, not main (air-iy1): push denied, commit allowed.
         assert!(v.contains(&"Bash(git push *)".to_string()));
