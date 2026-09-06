@@ -873,6 +873,32 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "launch: metis is attached to the coordinator and to no worker; a plugin dir that is not a directory is dropped, not passed",
+        Mutation {
+            // Pass a declared plugin dir whether or not it exists, which is the shape that
+            // loads nothing and says nothing. The MCP half and the worker half are untouched,
+            // so the probe's RED half (a real directory IS passed) survives and only the
+            // dropped-path half falls.
+            file: "crates/cli/src/cmd/metis.rs",
+            from: "        Some(d) if Path::new(d).is_dir() => (Some(d.to_string()), None),",
+            to: "        Some(d) if !d.is_empty() => (Some(d.to_string()), None),",
+            also_red: &[],
+        },
+    ),
+    (
+        "status: an initiative is a declared line, not a mention, and the count that reads it is not a gate",
+        Mutation {
+            // Read the initiative out of prose instead of off a declared line: any description
+            // containing the word counts as declaring one. It compiles, the count still runs,
+            // and a bead that merely mentions an initiative stops being counted — the
+            // permitting direction, and the one the anti-brittleness skill names.
+            file: "crates/cli/src/cmd/metis.rs",
+            from: "        let rest = l.trim().strip_prefix(\"initiative:\")?;",
+            to: "        let rest = l.trim().split_once(\"initiative\").map(|(_, r)| r)?;",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -1402,6 +1428,8 @@ fn all_probes() -> Vec<Probe> {
         probe_an_unpaired_hook_is_counted_from_the_installed_matchers(),
         probe_a_notice_waits_for_the_round_and_the_release_refuses(),
         probe_an_edit_outside_the_worktree_is_denied(),
+        probe_metis_is_the_coordinators_and_never_a_workers(),
+        probe_an_initiative_is_declared_and_counted_without_a_gate(),
     ]
 }
 
@@ -1726,7 +1754,7 @@ fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
 fn probe_coordinator_may_commit_never_push() -> Probe {
     use crate::cmd::launch::{coordinator_argv, worker_argv};
 
-    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[], &[]);
     let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
     let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
 
@@ -5958,7 +5986,7 @@ fn probe_worker_cannot_ask_the_owner_directly() -> Probe {
     use crate::cmd::install::hook_entries;
     use crate::cmd::launch::{coordinator_argv, worker_argv};
 
-    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+    let coord = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[], &[]);
     let worker = worker_argv("w", "air", Path::new("/r/.air/roles.md"), &[]);
     let denies = |v: &[String], pat: &str| v.iter().any(|a| a == pat);
     let matcher_counts_it = hook_entries().iter().any(|(event, m)| {
@@ -7041,5 +7069,142 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
         name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
         red_fires: res.0,
         green_passes: res.1,
+    }
+}
+
+/// air-g5o: Metis reaches the coordinator's session and no worker's.
+///
+/// The owner asked whether making the planning rule programmatic is "what metis does
+/// basically". It is not: Metis enforces forward-only phases on its own documents and does not
+/// enforce that anyone plans in it (`docs/research/metis-deep-dive.md` §4-5). The harness has
+/// no per-ROLE MCP configuration either — a `.mcp.json` in the repo reaches every session,
+/// workers included — so the attach is Air's, per role, per launch.
+///
+/// Red: the coordinator's argv carries `--mcp-config` with metis's own server declaration, and
+/// `--plugin-dir` when the repo declared a directory that exists. Green: a worker's argv
+/// carries neither, ever, and a declared plugin directory that is NOT a directory is dropped
+/// rather than passed — `--plugin-dir` at a path that does not exist loads nothing and says
+/// nothing, which is the one direction this must not fail in.
+fn probe_metis_is_the_coordinators_and_never_a_workers() -> Probe {
+    use crate::cmd::launch::{coordinator_argv, worker_argv};
+    use crate::cmd::metis::{Config, MCP_CONFIG, argv, attach, plugin_dir_for};
+
+    let roles = Path::new("/r/.air/coordinator.md");
+    let dir = std::env::temp_dir();
+    let real = dir.to_string_lossy().to_string();
+    let (resolved, _) = plugin_dir_for(&Config {
+        on: true,
+        plugin_dir: Some(real.clone()),
+    });
+    let on = coordinator_argv(
+        "air",
+        roles,
+        "--channels",
+        &argv(true, resolved.as_deref()),
+        &[],
+    );
+    let pair = |v: &[String], flag: &str| -> Option<String> {
+        v.iter()
+            .position(|a| a == flag)
+            .and_then(|i| v.get(i.saturating_add(1)).cloned())
+    };
+    let red = pair(&on, "--mcp-config").as_deref() == Some(MCP_CONFIG)
+        && pair(&on, "--plugin-dir") == Some(real)
+        && MCP_CONFIG.contains("\"metis\"");
+    // A server that cannot start is not attached at all: nothing is passed and one line says
+    // why. Handing the harness a command that is not there buys a failed server and no more.
+    let (absent_argv, absent_notes) = attach(
+        &Config {
+            on: true,
+            plugin_dir: None,
+        },
+        false,
+    );
+    let absent = absent_argv.is_empty()
+        && absent_notes
+            .first()
+            .is_some_and(|n| n.contains("not on PATH"));
+
+    // A worker: the same repo, the same config, and none of it.
+    let w = worker_argv("w1", "air", Path::new("/r/.air/roles.md"), &[]);
+    let worker_clean = !w.iter().any(|a| a == "--mcp-config" || a == "--plugin-dir");
+    // Off, and a declared directory that is not one.
+    let off = coordinator_argv("air", roles, "--channels", &argv(false, Some("/x")), &[]);
+    let (missing, note) = plugin_dir_for(&Config {
+        on: true,
+        plugin_dir: Some("/nonexistent-zz/plugins/metis".into()),
+    });
+    let unusable = coordinator_argv(
+        "air",
+        roles,
+        "--channels",
+        &argv(true, missing.as_deref()),
+        &[],
+    );
+
+    Probe {
+        name: "launch: metis is attached to the coordinator and to no worker; a plugin dir that is not a directory is dropped, not passed",
+        red_fires: red,
+        green_passes: worker_clean
+            && absent
+            && !off.iter().any(|a| a == "--mcp-config")
+            && pair(&unusable, "--mcp-config").as_deref() == Some(MCP_CONFIG)
+            && !unusable.iter().any(|a| a == "--plugin-dir")
+            && note.is_some_and(|n| n.contains("not a directory")),
+    }
+}
+
+/// air-g5o: which initiative a bead came from is a DECLARED field, and the number Air prints
+/// about it refuses nothing.
+///
+/// The alternative was to look for an initiative code anywhere in the description. That reads
+/// a fact out of prose somebody wrote freely (the `anti-brittleness` skill), and it fails
+/// toward counting a bead as compliant because its text happened to mention one — the
+/// permitting direction.
+///
+/// Red: a bead with an `initiative: <CODE>` line declares one; a bead that merely mentions an
+/// initiative in a sentence does not, and neither does the key with nothing after it. Green:
+/// `air status` prints the count with its denominator and the words "not a gate", and says
+/// nothing at all when every bead declares one.
+fn probe_an_initiative_is_declared_and_counted_without_a_gate() -> Probe {
+    use crate::cmd::metis::{initiative_of, without_initiative};
+    use crate::cmd::status::{Snapshot, render_for_probe};
+
+    let declared =
+        initiative_of("air-g5o does the thing\ninitiative: PLAT-3\n") == Some("PLAT-3".into());
+    let mention = initiative_of("this is part of the PLAT-3 initiative").is_none();
+    let empty = initiative_of("initiative:  ").is_none();
+    let sentence = initiative_of("initiative: the one we agreed on").is_none();
+
+    let issue = |id: &str, ty: &str, desc: &str| air_bd::Issue {
+        id: id.into(),
+        issue_type: ty.into(),
+        description: desc.into(),
+        ..Default::default()
+    };
+    let pool = vec![
+        issue("a", "task", "initiative: PLAT-1"),
+        issue("b", "task", "nothing declared"),
+        issue("c", "epic", "nothing declared, and an epic is a container"),
+    ];
+    let counted = without_initiative(&pool) == (1, 2);
+
+    let shown = Snapshot {
+        without_initiative: Some((1, 2)),
+        ..Default::default()
+    };
+    let text = render_for_probe(&shown);
+    let says = text.contains("beads without initiative: 1 of 2") && text.contains("not a gate");
+
+    let none = Snapshot {
+        without_initiative: Some((0, 9)),
+        ..Default::default()
+    };
+    let quiet = !render_for_probe(&none).contains("beads without initiative");
+
+    Probe {
+        name: "status: an initiative is a declared line, not a mention, and the count that reads it is not a gate",
+        red_fires: declared && mention && empty && sentence && counted,
+        green_passes: says && quiet,
     }
 }
