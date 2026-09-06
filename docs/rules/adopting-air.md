@@ -285,7 +285,9 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
 ## 5. Keeping the integration current
 
 - **Air version**: `air selftest` after every `cargo install`; every check proves it fires.
-  `air doctor` shows the ledger version (schema migrates forward automatically). When Air's own
+  `air doctor` shows the ledger version (schema migrates forward automatically), and both it
+  and `air status` print one line when `.air/installed.json` lags the binary the hooks run
+  (air-d61: the versions, the unread notice count, `air install --write`). When Air's own
   surface has moved — new commands, changed `--json` shapes, a default that became a refusal —
   §5c is the checklist to run, §5a the detail behind it, and `air install` prints the diff.
 - **Repo changes**: a new publish or destructive target goes into `.claude/air.json` deny
