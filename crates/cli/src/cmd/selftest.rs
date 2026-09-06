@@ -175,6 +175,20 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-3xww. The anchor hard-codes the journal's path, which is the one way this can go
+    // wrong quietly: the directory stays scaffolded and a repo that configured another gets
+    // a README in a place it does not use. The created-only-when-absent rule and the
+    // no-gate assertion both survive it, so what it isolates is whether the location is
+    // really the repo's.
+    (
+        "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
+        Mutation {
+            file: "crates/cli/src/cmd/init.rs",
+            from: "                path: format!(\"{}/README.md\", journal.0),\n                create: true,",
+            to: "                path: format!(\"{DEFAULT_JOURNAL_DIR}/README.md\"),\n                create: true,",
+            also_red: &[],
+        },
+    ),
     // air-rud0. The anchor is the discharged line's format string and nothing else: the
     // judgement, the two honest branches and `--json`'s `how` all survive it, because none of
     // them moved. Under it the tick is bare again and a reader scanning a nine-bead landing's
@@ -1990,6 +2004,7 @@ fn all_probes() -> Vec<Probe> {
         probe_selftest_json_is_only_the_array(),
         probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
         probe_only_a_failed_handover_counts_as_an_attempt(),
+        probe_the_journal_is_scaffolded_and_nothing_reads_it(),
     ]
 }
 
@@ -8285,16 +8300,16 @@ fn probe_scaffolded_verify_fails_until_edited() -> Probe {
         name: "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
         red_fires: !placeholder_passed
             && written.contains("Makefile:verify")
-            && scaffold(None, false)
+            && scaffold(None, false, ("docs/journal", false))
                 .iter()
                 .any(|i| i.path == "Makefile" && i.create),
         // Present means untouched, both ways round: a Makefile with a verify target and one
         // without are both left alone, and only the printed sentence differs.
         green_passes: edited_passed
-            && scaffold(Some("verify:\n\t@true\n"), true)
+            && scaffold(Some("verify:\n\t@true\n"), true, ("docs/journal", true))
                 .iter()
                 .all(|i| !i.create)
-            && scaffold(Some("build:\n\t@true\n"), false)
+            && scaffold(Some("build:\n\t@true\n"), false, ("docs/journal", true))
                 .iter()
                 .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
     }
@@ -10610,5 +10625,65 @@ fn probe_a_discharged_clause_names_its_lookup() -> Probe {
         name: "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-3xww: the round log is assembled from the coordinator's memory of messages, and a
+/// coordinator that hits a limit, compacts or ends loses it. One did on 2026-09-06.
+///
+/// The gap is narrower than "agents should keep logs", which is why this is a directory and a
+/// habit rather than a mechanism. That round already carried 40 digests, 37 captures and 196
+/// agent-to-agent messages; what had nowhere to go was a finding that is neither about the bead
+/// you hold nor worth the coordinator's inbox. A capture says somebody should act and every one
+/// is triaged; these say nobody should.
+///
+/// **So this probe asserts the scaffolding and NOT the habit.** Air reads none of these files,
+/// nothing refuses without one, and no condition counts them — a probe that checked a session
+/// had written one would be the chore the bead rules out.
+///
+/// Red: `air init` scaffolds the journal's README under the configured directory, created only
+/// when absent, exactly as the other scaffolded items are.
+///
+/// Green: the three things that keep it from becoming a mechanism. The directory is CONFIGURED,
+/// so a repo that names another gets that one and no hard-coded path survives; a present README
+/// is left alone; and `journal_dir` is absent from every gate fact, so no refusal can depend on
+/// it.
+fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
+    use crate::cmd::init::{DEFAULT_JOURNAL_DIR, scaffold};
+
+    let fresh = scaffold(None, false, (DEFAULT_JOURNAL_DIR, false));
+    let readme = format!("{DEFAULT_JOURNAL_DIR}/README.md");
+    let scaffolds = fresh
+        .iter()
+        .any(|i| i.path == readme && i.create && i.note.contains("nothing in Air reads them"));
+    // Alongside the others, not instead of them: the bead asks for it where `digest_dir`'s
+    // neighbours are.
+    let alongside = fresh.iter().any(|i| i.path == "Makefile" && i.create)
+        && fresh
+            .iter()
+            .any(|i| i.path == ".worktreeinclude" && i.create);
+
+    // Configured, not hard-coded.
+    let elsewhere = scaffold(None, false, ("log.d", false));
+    let honours_config = elsewhere
+        .iter()
+        .any(|i| i.path == "log.d/README.md" && i.create)
+        && !elsewhere
+            .iter()
+            .any(|i| i.path.starts_with(DEFAULT_JOURNAL_DIR));
+    // Present is present: created only when absent, the rule every scaffolded item follows.
+    let untouched = scaffold(None, false, (DEFAULT_JOURNAL_DIR, true))
+        .iter()
+        .any(|i| i.path == readme && !i.create);
+
+    // Nothing gates on it: the gate's facts carry no journal, so no refusal can read one.
+    let gate_facts =
+        serde_json::to_string(&air_hooks::gate::GateFacts::default()).unwrap_or_default();
+    let no_gate = !gate_facts.contains("journal");
+
+    Probe {
+        name: "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
+        red_fires: scaffolds && alongside,
+        green_passes: honours_config && untouched && no_gate,
     }
 }

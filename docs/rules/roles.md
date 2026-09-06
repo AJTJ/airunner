@@ -99,6 +99,23 @@ missed fires, so a stopped session accrues one wake, not a stack. Say nothing wh
 nothing to do; a wake that reports is noise 288 times a day. Removed when the harness arms its
 own wait for every session it stops, for a whole round (air-1n3). **[fact]**
 
+**Keep your own journal, and put in it the things nothing else will carry.** One file per
+session under the repo's `journal_dir` (`.claude/air.json`; `docs/journal` where `air init`
+scaffolded it), appended as you go, a timestamp and a line. What belongs: a bug you hit and how
+it presented, a wrong turn and what corrected it, a claim you later found was wrong, a thing you
+checked that turned out fine.
+
+**How it differs from a capture, which is the distinction that matters** (alerts, 2026-09-06):
+a capture says somebody should do something, and the coordinator triages every one. These entries
+say **nobody** should do anything — they are for whoever is next, not for the queue. Sending them
+as captures fills the inbox with things that need no triage; sending them as messages means they
+survive only while the recipient's session does. On 2026-09-06 a coordinator hit an account limit
+and the round's best material existed only in its memory of messages.
+
+**Nothing gates on it.** Air reads none of these files, nothing refuses without one, and no
+condition counts them. **[fact]** Removed when a round log can be written from digests and
+captures alone.
+
 Things that need a shared resource (a port, the simulator, Docker, the browser):
 `air lease take <resource> --reason "<why>"`; release when done. A held lease names its holder;
 do not route around it. **[Air enforces: a healthy holder is not broken by `take`]**
@@ -195,6 +212,13 @@ not green, landable branch, lease held by a dead session, session joined or left
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
 in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
 under which it goes: `air audit`.
+
+**Keep the same journal a worker does, and you are the reason it exists.** The round log is
+assembled from your memory of messages, and a coordinator that hits a limit, compacts or ends
+loses it — one did on 2026-09-06. Write what the next coordinator would want and the beads will
+not carry: a claim of yours that turned out wrong, a ruling and what changed it, a thing you
+nearly filed and why you did not. Same file shape, same `journal_dir`, and nothing reads it.
+**[fact]**
 
 **You need the same recurring wake a worker does, for the same reason and more urgently.**
 On 2026-09-06 Air detected the stopped lane and pushed `silent-with-claim` to every session at
