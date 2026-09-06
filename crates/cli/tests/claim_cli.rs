@@ -3143,3 +3143,132 @@ fn a_bead_already_in_main_closes_on_its_landing() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["pass"], false, "{out}");
 }
+
+/// air-vsvt, end to end: a batch's recorded members are the shas the batch TOOK, not where the
+/// branches happen to be when the lane gets round to recording.
+///
+/// The lane merges alpha and beta, then alpha commits again before the lane's `air record`
+/// finishes — a window of minutes in a real round, since the lane's verify is the slowest thing
+/// in it. Alpha's head stops being an ancestor of the batch, and the old shape dropped alpha
+/// from the list entirely and wrote that to the row, where it was wrong for good. An adopter's
+/// lane saw it five times in one night.
+///
+/// The recorded member for alpha must be the sha the lane merged, never alpha's later head.
+#[test]
+fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_to() {
+    let (_tmp, main, alpha) = land_repo("false"); // a RED batch: that is what gets reported
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    let root = main.parent().unwrap().to_path_buf();
+
+    std::fs::write(alpha.join("a.txt"), "a\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: alpha\n\nBead: fd-1\n"],
+    );
+    let alpha_taken = git(&alpha, &["rev-parse", "HEAD"]);
+
+    let beta = root.join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let beta = beta.canonicalize().unwrap();
+    std::fs::write(beta.join("b.txt"), "b\n").unwrap();
+    git(&beta, &["add", "b.txt"]);
+    git(&beta, &["commit", "-q", "-m", "feat: beta\n\nBead: fd-2\n"]);
+    let beta_taken = git(&beta, &["rev-parse", "HEAD"]);
+
+    // A worker the lane does NOT merge: it must not appear, then or now.
+    let gamma = root.join("gamma");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-gamma",
+            gamma.to_str().unwrap(),
+        ],
+    );
+    let gamma = gamma.canonicalize().unwrap();
+    std::fs::write(gamma.join("g.txt"), "g\n").unwrap();
+    git(&gamma, &["add", "g.txt"]);
+    git(
+        &gamma,
+        &["commit", "-q", "-m", "feat: gamma\n\nBead: fd-3\n"],
+    );
+
+    let lane = root.join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    for w in ["alpha", "beta"] {
+        git(
+            &lane,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                &format!("worktree-{w}"),
+                "-m",
+                &format!("batch: {w}"),
+            ],
+        );
+    }
+
+    // THE WINDOW: alpha commits after the lane merged it and before the lane records.
+    std::fs::write(alpha.join("late.txt"), "late\n").unwrap();
+    git(&alpha, &["add", "late.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: after the cut\n\nBead: fd-1\n"],
+    );
+    let alpha_now = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_ne!(alpha_now, alpha_taken, "the window has to be real");
+
+    air_env(&lane, &bd, &["record", "verify", "--", "false"], dead);
+
+    let conn = rusqlite::Connection::open(main.join(".air").join("ledger.db")).unwrap();
+    let members: String = conn
+        .query_row(
+            "SELECT members FROM verify_runs WHERE worker='lane' ORDER BY finished_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&members).unwrap();
+    let by = |w: &str| -> Option<String> {
+        v.as_array()?.iter().find(|m| m["worker"] == w)?["sha"]
+            .as_str()
+            .map(str::to_string)
+    };
+    // alpha is a member, at the sha the batch took, NOT where it has since moved to.
+    assert_eq!(by("alpha"), Some(alpha_taken), "members: {members}");
+    assert_ne!(by("alpha"), Some(alpha_now), "members: {members}");
+    assert_eq!(by("beta"), Some(beta_taken), "members: {members}");
+    // A branch the batch never took is not invented into it.
+    assert_eq!(by("gamma"), None, "members: {members}");
+
+    // And the line the lane reads names both members it actually carried.
+    let (_, out, _) = air_env(&main, &bd, &["--json", "status"], dead);
+    assert!(out.contains("alpha"), "{out}");
+    assert!(out.contains("beta"), "{out}");
+}
