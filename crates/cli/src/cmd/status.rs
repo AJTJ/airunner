@@ -535,7 +535,17 @@ pub fn batch_ready_for(
             return (ready, not, errors);
         }
     };
-    let main_tip = git::head(repo).unwrap_or_default();
+    // air-i6fd: from the ref, not the running cwd's HEAD. This path is where the defect was
+    // VISIBLE — running from its own worktree, alerts' branch compared against itself and was
+    // reported batch-ready in the same snapshot where `select` said `landable: []`. One bug in
+    // two paths, disagreeing because being wrong the same way surfaces differently.
+    let main_tip = match git::main_tip(repo) {
+        Ok(t) => t,
+        Err(e) => {
+            errors.push(format!("git rev-parse main: {e}"));
+            return (ready, not, errors);
+        }
+    };
     let claims = ledger.open_claims().unwrap_or_default();
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
@@ -696,6 +706,23 @@ pub fn select(repo: &Path) -> Selection {
             return out;
         }
     };
+    // air-i6fd: main's tip, from the REF and once for the whole scan, never from the running
+    // cwd's HEAD. From a worktree this used to be that worktree's own head, so the running
+    // worker's branch was compared against ITSELF — `is_ancestor(head, head)` is always true,
+    // so it took the already-in-main path and left through `Ok(false) => continue`, the one
+    // exit here that says nothing, appearing in neither `landable` nor `skipped`. Every other
+    // branch had `contains_main` measured against a commit that was never main.
+    //
+    // An error RETURNS rather than defaulting. `unwrap_or_default()` turned a git failure into
+    // an empty sha that silently disqualified every branch as "does not contain main" — a
+    // failure reading as an absence, which is the one thing air-6u5 says this must never do.
+    let main_tip = match git::main_tip(repo) {
+        Ok(t) => t,
+        Err(e) => {
+            out.errors.push(format!("git rev-parse main: {e}"));
+            return out;
+        }
+    };
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         if super::hook::role_for(&worker) != "worker" {
@@ -738,7 +765,6 @@ pub fn select(repo: &Path) -> Selection {
         // for every other branch and the surfaces offered `air land <bead>` for branches that
         // would be refused. `Site` is deliberately not built here: `air status` may be running
         // from a worktree and has no business asserting where a future `air land` will run.
-        let main_tip = git::head(repo).unwrap_or_default();
         let facts = super::land::Facts {
             worker: &worker,
             branch_exists: true, // the head above came from this worktree
@@ -1895,7 +1921,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         landings_in_flight: landings_in_flight(&ledger),
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
-        rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
+        // air-i6fd, third site: the parameter is named `main_head` and was fed the running
+        // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
+        // the worktree's own branch, and the answer suppresses the warning — so a worker whose
+        // branch contained the merge saw nothing about work main had lost.
+        rewound_carried: rewound_carried(repo, &ledger, git::main_tip(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.

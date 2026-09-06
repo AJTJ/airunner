@@ -280,6 +280,12 @@ One file per session, appended as it goes: `<session>.md`, whatever name the ses
 a bug you hit and how it presented, a wrong turn and what corrected it, a claim you later found
 was wrong, a thing you checked that turned out fine. A timestamp and a line is enough.
 
+**The pull is toward the fix; write the state you were in instead.** By the time you write, the
+fix is the part you understand best, so an entry drifts into explaining it. What the next session
+needs is what you believed when you were wrong, and why it was reasonable: that is the part you
+have least reason to record and they have most use for. The first worker to keep one took three
+attempts to stop narrating outcomes.
+
 **What does not**: anything already in a digest (what a bead did, and its proof), anything worth
 the coordinator's inbox (`air capture`), and any work journal of what you did in order.
 
