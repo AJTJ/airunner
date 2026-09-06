@@ -256,31 +256,98 @@ fn short(sha: &str) -> &str {
 ///
 /// One `git merge-base` per worker replaces two `merge-base --is-ancestor` calls, so it is also
 /// one spawn cheaper per worker.
+/// The shas a batch commit was built from: the non-first parents of every merge it contains,
+/// bounded by the main the run recorded (air-vsvt).
+///
+/// This is the commit's own account of what it took, and it does not move when branches do.
+/// The bound is `tip`, which callers pass from the run's recorded `main_sha` — a fact written
+/// before the verify started, not a read of where main is now.
+pub fn merged_shas(repo: &Path, head: &str, tip: &str) -> Vec<String> {
+    let range = format!("{tip}..{head}");
+    let text =
+        git::run(repo, &["rev-list", "--min-parents=2", "--parents", &range]).unwrap_or_default();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        // `<commit> <parent1> <parent2>...`: the first parent is the lane's own line, the rest
+        // are what it merged in.
+        for p in line.split_whitespace().skip(2) {
+            let p = p.to_string();
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    // `rev-list` walks newest-first; report in the order the lane merged them. Not cosmetic —
+    // an existing probe pins the member order, and reversing here keeps that contract rather
+    // than rewriting its assertion to fit a new one.
+    out.reverse();
+    out
+}
+
+/// The members a batch took, from the batch commit rather than from where branches are now
+/// (air-vsvt).
+///
+/// **What changed and why.** This used to enumerate the worktrees, read each one's CURRENT
+/// head, and keep the merge-base if it was not yet in main. Reproduced in a fixture: a member
+/// that resets to main **drops out**, with main held still, and so does one whose work lands.
+/// Both are the same fact — the branch no longer contains the work the batch took — and the
+/// row that results looks complete: plausible workers, plausible shas, nothing saying a member
+/// is missing. An adopter's red batch named the two members who had stopped and omitted the
+/// one who was fixing the failure.
+///
+/// **What inference cannot do, proven rather than assumed.** The parent set gives the exact
+/// shas. It cannot say which BRANCH offered one: if w4 forks off w3 and the lane merges only
+/// w3, both branches present w3's sha to the batch, and the tie-break — w3's head still
+/// equalling that sha — is gone the moment w3 commits again. So the shas are recoverable from
+/// the commit and the names are not, which is the argument for the lane recording its own
+/// merges. Until it does, this resolves names best-effort.
+///
+/// **A sha the batch demonstrably took is never dropped for want of a name.** An unattributed
+/// member is honest and visible; an omission is neither, and every symptom on this bead is an
+/// omission wearing a complete-looking row.
+///
+/// **Known limitation, found by running the probe rather than reasoning about it.** A name can
+/// migrate to a fork. Once w3 abandons its work, w4 is the only branch still containing w3's
+/// sha, so it becomes the unambiguous holder and inherits the entry. No amount of ancestry
+/// fixes this — it is the same fact as above, that ancestry recovers shas and not names — and
+/// it is the second reason the lane should record what it merged. The SHA stays correct in
+/// every case, which is the half a report about a historical event actually needs.
 pub fn members_of(
     repo: &Path,
     own: &str,
     head: &str,
     tip: &str,
 ) -> Vec<air_ledger::landings::Member> {
-    let mut out = Vec::new();
+    // Who each worktree is, and what it currently contains. Used ONLY to put a name to a sha
+    // the batch commit already named; never to decide membership.
+    let mut branches: Vec<(String, String)> = Vec::new();
     for (path, _) in git::worktrees(repo).unwrap_or_default() {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         if worker == own || super::hook::role_for(&worker) != "worker" {
             continue;
         }
-        let Ok(wt_head) = git::head(&path) else {
-            continue;
-        };
-        // What of this branch the batch contains. Unrelated histories share no base and are
-        // skipped, as they were before.
-        let Some(base) = git::merge_base(repo, &wt_head, head) else {
-            continue;
-        };
-        if !git::is_ancestor(repo, &base, tip).unwrap_or(false) {
-            out.push(air_ledger::landings::Member { worker, sha: base });
+        if let Ok(wt_head) = git::head(&path) {
+            branches.push((worker, wt_head));
         }
     }
-    out
+    merged_shas(repo, head, tip)
+        .into_iter()
+        // Main's own merge is not a member, and neither is anything already in main.
+        .filter(|sha| !git::is_ancestor(repo, sha, tip).unwrap_or(false))
+        .map(|sha| {
+            // The branch that offered this sha, when exactly one still contains it. Two
+            // candidates means a fork off another worker's branch and no way to tell them
+            // apart; zero means the branch has moved off its own work. Both keep the sha.
+            let mut holders = branches
+                .iter()
+                .filter(|(_, h)| git::is_ancestor(repo, &sha, h).unwrap_or(false));
+            let worker = match (holders.next(), holders.next()) {
+                (Some((w, _)), None) => w.clone(),
+                _ => String::new(),
+            };
+            air_ledger::landings::Member { worker, sha }
+        })
+        .collect()
 }
 
 /// A red verify at a batch head (air-80x.4): the run, and the members it was recorded with.
