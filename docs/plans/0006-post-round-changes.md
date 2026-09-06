@@ -115,7 +115,7 @@ yet or depends on data).
 | D4 | guard inventory, no incident | | **defer** | no worker fought it; revisit if one does |
 | D5 | UNCLEAR | | **owner** | recommend counters where a fact exists, delete the rest |
 | D6 | UNCLEAR, no incident | | **drop** | holdings already derive files touched |
-| D7 | the adopter's | | **the adopter** | Air's view: delete; `air lease` covers it |
+| D7 | The adopter's | | **The adopter** | Air's view: delete; `air lease` covers it |
 | E1-E7 | | process | **record** in adopting-air §2 as lessons, one line each; no mechanism |
 | F | | | **unchanged** | |
 
