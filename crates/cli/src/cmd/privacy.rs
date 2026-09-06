@@ -12,9 +12,22 @@
 //! one line at a time in a digest nobody re-reads.
 //!
 //! **The names are private, so the check reads them from the private file.** `private/`
-//! is ignored, so a clone without it has no list, and the check SKIPS rather than failing —
-//! that is the open-source contributor's case and it is deliberate. The alternative, a list of
-//! names compiled into the binary, would publish exactly what it exists to hide.
+//! is ignored, so a clone without it has no list. The alternative, a list of names compiled
+//! into the binary, would publish exactly what it exists to hide.
+//!
+//! **The skip is the hole this had, and a declaration closes it** (air-jsz). Skipping on an
+//! absent list is right for a clone that works with no adopter and wrong for the repo that
+//! wrote the rule — and the two were indistinguishable, so the check ran for a whole round
+//! having never once had an input, printing `Skipped` under every green `make verify`,
+//! air-bpj's own included. That is `do-less` case 3a exactly: the count of firings was zero
+//! and the zero said nothing about the world, because the input never arrived.
+//!
+//! So the repo DECLARES whether it has an adopter, in tracked config (`"adopters": true` in
+//! `.claude/air.json`), and the names stay private. Declared with no list is a REFUSAL naming
+//! the file to write; undeclared with no list is the contributor's skip, unchanged. The
+//! declaration is read, never inferred: guessing "this repo probably has an adopter" from the
+//! presence of a `private/` directory would fail toward permitting again the first time
+//! somebody cleaned one up.
 //!
 //! Removal: when no adopter is worked with intimately enough to be quoted.
 
@@ -22,8 +35,65 @@ use std::path::Path;
 
 use serde::Serialize;
 
-/// Where the names live. Ignored by git, so its absence is normal and not an error.
+/// Where the names live. Ignored by git, so its absence is normal in a clone and a defect in
+/// a repo that declares an adopter.
 pub const ADOPTERS: &str = "private/adopters.md";
+
+/// What the check should do, decided before it reads anything (air-jsz). Separated from `run`
+/// so a probe can drive every case without a filesystem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum Verdict {
+    /// Names to check against.
+    Check(Vec<String>),
+    /// No adopter declared and no list: the open-source contributor's case, and the only one
+    /// where silence is correct.
+    SkipUndeclared,
+    /// The repo says it has an adopter and the list is missing or names nobody. Refuse: this
+    /// is the state that let a whole round pass unchecked.
+    RefuseDeclaredButNoNames,
+}
+
+/// Pure: what to do, given the tracked declaration and the private list.
+///
+/// `declared` is `.claude/air.json`'s `"adopters"`. `adopters_md` is the file's text, `None`
+/// when it is absent — and absent and present-but-empty are deliberately the same answer,
+/// since a list that declares no `name:` line checks exactly as much as no list at all.
+pub fn verdict(declared: bool, adopters_md: Option<&str>) -> Verdict {
+    let found = adopters_md.map(names).unwrap_or_default();
+    match (declared, found.is_empty()) {
+        (_, false) => Verdict::Check(found),
+        (true, true) => Verdict::RefuseDeclaredButNoNames,
+        (false, true) => Verdict::SkipUndeclared,
+    }
+}
+
+/// `"adopters"` from `.claude/air.json`: does this repo work with an adopter whose names must
+/// never be published? Absent reads as `false`, which is the right default for every repo that
+/// is not this one.
+/// The main checkout, where both the declaration and the names live. `None` outside a repo
+/// Air knows.
+///
+/// **One source, deliberately** (air-jsz). The list could also be read from the worktree, since
+/// `.worktreeinclude` copies `private/` in — and then two copies could disagree, which is the
+/// two-lease-stores failure (air-uae) with the privacy rule as its subject. The declaration is
+/// already read from the main checkout, so the names are read from beside it, and a worktree
+/// whose copy is missing or stale changes nothing about what the check sees.
+pub fn main_checkout(repo: &Path) -> Option<std::path::PathBuf> {
+    Some(
+        air_ledger::paths::air_dir_for(repo)
+            .ok()?
+            .parent()?
+            .to_path_buf(),
+    )
+}
+
+pub fn declares_adopters(repo: &Path) -> bool {
+    crate::cmd::handover::air_json(repo)
+        .as_ref()
+        .and_then(|v| v.get("adopters"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
 
 /// Pure: the adopter names declared in `private/adopters.md`.
 ///
@@ -107,23 +177,34 @@ fn tracked(repo: &Path) -> Result<Vec<(String, String)>, String> {
 }
 
 pub fn run(repo: &Path, json: bool) -> i32 {
-    let list = repo.join(ADOPTERS);
-    let Ok(md) = std::fs::read_to_string(&list) else {
-        if !json {
-            println!(
-                "adopter-check: no {ADOPTERS}, so no names to check. Skipped, which is the \
-                 case for a clone that works with no adopter."
+    let list = main_checkout(repo)
+        .unwrap_or_else(|| repo.to_path_buf())
+        .join(ADOPTERS);
+    let md = std::fs::read_to_string(&list).ok();
+    let names = match verdict(declares_adopters(repo), md.as_deref()) {
+        Verdict::Check(n) => n,
+        Verdict::SkipUndeclared => {
+            if !json {
+                println!(
+                    "adopter-check: no adopter declared in .claude/air.json and no {ADOPTERS}. \
+                     Skipped, which is the case for a clone that works with no adopter."
+                );
+            }
+            return 0;
+        }
+        Verdict::RefuseDeclaredButNoNames => {
+            eprintln!(
+                "adopter-check: .claude/air.json says `\"adopters\": true` but {} \
+                 names nobody, so this check has nothing to check and would pass on any leak \
+                 (air-jsz). Write {}, one `name: <x>` line per adopter; `private/` is ignored, \
+                 so it stays out of every clone. Set `\"adopters\": false` if this repo \
+                 quotes nobody.",
+                list.display(),
+                list.display()
             );
+            return 2;
         }
-        return 0;
     };
-    let names = names(&md);
-    if names.is_empty() {
-        if !json {
-            println!("adopter-check: {ADOPTERS} declares no `name:` line. Nothing to check.");
-        }
-        return 0;
-    }
     let files = match tracked(repo) {
         Ok(f) => f,
         Err(e) => {
