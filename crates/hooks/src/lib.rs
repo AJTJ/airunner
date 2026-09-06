@@ -10,7 +10,7 @@ pub mod gate;
 pub mod input;
 pub mod journal;
 
-pub use gate::{GateFacts, MainMove, Verdict, handover_verdict, stop_nudge};
+pub use gate::{GateFacts, MainMove, Verdict, handover_verdict, stop_message, stop_nudge};
 pub use input::{HookEvent, HookInput};
 
 /// What the hook binary writes to stdout / returns as exit code.
