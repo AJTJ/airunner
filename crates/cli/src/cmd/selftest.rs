@@ -1266,7 +1266,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        "status: landed-not-closed names only the clauses whose file the merge did not change, claims no contradiction, and stays silent about a bead Air merely could not read",
         Mutation {
             // Render the row's whole `why` again, which is exactly the pre-fix line (air-ppf):
             // every unreadable clause back under the CONTRADICTS headline. One binding, it
@@ -3171,8 +3171,15 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
         let names_the_refuted_alone = landed.len() == 1
             && landed.first().is_some_and(|a| {
                 a.worker == "zz-1"
-                    && a.detail
-                        .contains("CONTRADICTS: \"docs/absent.md says it.\"")
+                    // air-k6uh: the split air-ppf established is unchanged — only the
+                    // clauses whose named file the merge did not change are here. What
+                    // changed is the CLAIM: the sentence reports the lookup and says in as
+                    // many words that it is not a contradiction, because six of nine such
+                    // firings on 2026-09-06 were clauses that held.
+                    && a.detail.contains("naming a file this merge did not change")
+                    && a.detail.contains("\"docs/absent.md says it.\"")
+                    && a.detail.contains("NOT a contradiction")
+                    && !a.detail.contains("CONTRADICTS")
                     && !a.detail.contains("nothing Air can look up")
                     && !a.detail.contains("owner rules")
                     && !a.detail.contains("Docs are updated")
@@ -3195,7 +3202,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     let (red_fires, green_passes) = res;
 
     Probe {
-        name: "status: landed-not-closed names only the clauses the merge contradicts; a bead Air merely could not read makes no CONTRADICTS claim",
+        name: "status: landed-not-closed names only the clauses whose file the merge did not change, claims no contradiction, and stays silent about a bead Air merely could not read",
         red_fires,
         green_passes,
     }

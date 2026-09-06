@@ -1457,9 +1457,12 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             worker: bead.clone(),
             kind: kinds::LANDED_NOT_CLOSED,
             detail: format!(
-                "{bead} landed in {} with an acceptance clause this merge CONTRADICTS: {why}. \
-                 The worker closes its own bead with proof, so read the bead: either reopen it \
-                 or file what is left. Landed from {}.",
+                "{bead} landed in {} with an acceptance clause naming a file this merge did \
+                 not change: {why}. That is a lookup that did not answer, NOT a contradiction \
+                 (air-k6uh: six of nine such firings were clauses that held, satisfied in \
+                 another commit or naming a path the clause only mentions). Read the bead: the \
+                 worker closes its own with proof, so either it is done elsewhere, or reopen \
+                 it, or file what is left. Landed from {}.",
                 o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
                 o.worker
             ),
