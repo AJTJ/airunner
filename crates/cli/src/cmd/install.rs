@@ -1340,6 +1340,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-06, the round's last landing: a discharged acceptance clause names the lookup
     // that discharged it, so the report is symmetric with the unreadable branch (air-rud0).
     ("0.3.2", 26, 60),
+    // 2026-09-06, owner-ordered after the round: every session keeps a journal of what it hit,
+    // for findings that imply no action and so have no home in a bead or a capture (air-3xww).
+    ("0.3.3", 27, 61),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
