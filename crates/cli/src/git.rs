@@ -149,6 +149,18 @@ pub fn is_ancestor(cwd: &Path, anc: &str, desc: &str) -> Result<bool> {
     }
 }
 
+/// The best common ancestor of two commits, or `None` when they share none (air-vsvt).
+///
+/// For a branch a batch merged, this is the sha the batch actually took: it does not move when
+/// the branch commits again afterwards, which is the whole reason it is used instead of the
+/// branch's current head.
+pub fn merge_base(cwd: &Path, a: &str, b: &str) -> Option<String> {
+    run(cwd, &["merge-base", a, b])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Files with uncommitted changes (staged or not) plus untracked, repo-relative.
 pub fn dirty_files(cwd: &Path) -> Result<Vec<String>> {
     let out = run(cwd, &["status", "--porcelain=v1", "--untracked-files=all"])?;

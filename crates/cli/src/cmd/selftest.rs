@@ -175,6 +175,27 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-vsvt. The anchor is the git call that PRODUCES the recorded sha, because that is
+    // what the probe exercises: it asserts over `git::merge_base` on a real history, not over
+    // `members_of`, whose worktree enumeration a probe cannot cheaply stand up. Under this the
+    // answer is the branch's head again — where it is now, rather than what the batch took —
+    // which is exactly the adopter's symptom: a branch that commits after the lane merges it
+    // drops out of its own batch's record, for good.
+    //
+    // Anchored here rather than on `members_of`'s own line on purpose: a mutation must reach
+    // what the probe asserts (air-682), and mutating `members_of` would have left this probe
+    // green while looking like it covered it. `members_of` end to end is pinned by
+    // `a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_to`.
+    // Anchor as rustfmt leaves it, per air-gei.
+    (
+        "batch: a run records the sha the batch TOOK from each branch, which does not move when that branch does, and the red line reports exactly what was recorded",
+        Mutation {
+            file: "crates/cli/src/git.rs",
+            from: "run(cwd, &[\"merge-base\", a, b])",
+            to: "run(cwd, &[\"rev-parse\", a])",
+            also_red: &[],
+        },
+    ),
     // air-zqmi. The anchor restores the unconditional stamp, which is the defect exactly:
     // every hand-over command the gate saw counted, passes included. The refusal still
     // counts and the gate still decides, so what it isolates is whether a SUCCESS is
@@ -1294,14 +1315,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     (
         "batch: a landing records exactly the branches its batch merged, once each, and never one already in main",
         Mutation {
-            // Stop excluding a worker whose head has reached main. The batch it merged is
+            // Stop excluding a worker whose branch has reached main. The batch it merged is
             // unchanged, so the RED half still names the two it merged; what falls is the
             // green half, where w1 has landed and would be re-listed on every landing after
             // its own. One condition, and the wrong one to lose quietly: the members row is
             // what a red batch is reported by.
+            //
+            // air-vsvt re-anchored this: the test is now on the MERGE BASE rather than on the
+            // worktree's head, and the two `is_ancestor` calls collapsed into one. The
+            // condition being neutralised is the same one — "already in main" — and the
+            // anchor is the line as rustfmt leaves it, per air-gei.
             file: "crates/cli/src/cmd/batch.rs",
-            from: "        if in_batch && !in_main {",
-            to: "        if in_batch {",
+            from: "if !git::is_ancestor(repo, &base, tip).unwrap_or(false) {",
+            to: "if true {",
             also_red: &[],
         },
     ),
@@ -1888,6 +1914,7 @@ fn all_probes() -> Vec<Probe> {
         probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_the_build_reaches_a_reader(),
+        probe_batch_members_are_the_shas_the_batch_took(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -10148,6 +10175,108 @@ fn probe_no_flow_dependent_fix_asserts_a_forbidden_repair() -> Probe {
         name: "gate: no flow-dependent fix tells a worker to record a verify, and the main-moved diagnosis is unchanged",
         red_fires: saw_flow_dependent && none_forbidden && note_clean,
         green_passes: diagnosis_intact && names_a_command,
+    }
+}
+
+/// air-vsvt (an adopter's verification lane, 2026-09-06): its batch-red lines named members
+/// that were not in the batch and omitted members that were, five times in one night.
+///
+/// The reporting path was NOT the defect and this probe pins that too: `red_batches_of` copies
+/// `VerifyRun.members` off the row and `red_batch_line` renders exactly those, so the line has
+/// always read what was recorded. The defect is one step earlier, in what gets recorded.
+/// `members_of` asked "is this worktree's head an ancestor of the batch" — a question about
+/// where a branch is NOW, answered while recording a fact about what the batch WAS. A worker
+/// that commits between the lane's merge and the lane's `air record` stops being an ancestor
+/// and drops out, and because the list goes on the row it is then wrong for good.
+///
+/// Red (declared mutation: the member sha is the worktree's head again instead of the merge
+/// base): a branch that moved after the batch took it is recorded at the wrong sha, which is
+/// the defect. Green: the recorded sha is the one the batch contains and does not move when the
+/// branch does; a branch the batch never took has its fork point in main and is excluded, so
+/// this cannot invent a member either; and the rendered line reports exactly the recorded
+/// members, unchanged.
+fn probe_batch_members_are_the_shas_the_batch_took() -> Probe {
+    use crate::cmd::batch::{red_batch_line, red_batches_of};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let out = (|| -> Result<(bool, bool), String> {
+            let g = |args: &[&str]| probe_git(&dir, args);
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            // A worker branch, and the sha a batch would take from it.
+            g(&["checkout", "-q", "-b", "w"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "work"])?;
+            let taken = g(&["rev-parse", "HEAD"])?;
+            // The batch merges it.
+            g(&["checkout", "-q", "-b", "lane", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "batch: w"])?;
+            let batch = g(&["rev-parse", "HEAD"])?;
+            // The worker commits again: its head is no longer an ancestor of the batch.
+            g(&["checkout", "-q", "w"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "after the cut"])?;
+            let moved = g(&["rev-parse", "HEAD"])?;
+            let still_ancestor =
+                probe_git(&dir, &["merge-base", "--is-ancestor", &moved, &batch]).is_ok();
+            // A branch the batch never took.
+            g(&["checkout", "-q", "-b", "other", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "untaken"])?;
+            let untaken = g(&["rev-parse", "HEAD"])?;
+
+            let base_of = |sha: &str| crate::git::merge_base(&dir, sha, &batch);
+            let in_main = |sha: &str| crate::git::is_ancestor(&dir, sha, "main").unwrap_or(false);
+
+            // RED: the branch really has moved off the batch, and the sha the batch took is
+            // recoverable anyway. Both halves, or the case is not the one that bit the adopter.
+            let red = !still_ancestor && base_of(&moved).as_deref() == Some(taken.as_str());
+
+            // The recorded sha does not move when the branch does.
+            let stable = base_of(&moved) == base_of(&taken);
+            // A branch the batch never took resolves into main and is excluded by the same
+            // test as before, so nothing is invented.
+            let not_invented = base_of(&untaken).is_some_and(|b| in_main(&b));
+            // The taken branch is NOT excluded by that test.
+            let kept = base_of(&moved).is_some_and(|b| !in_main(&b));
+            // The renderer reports exactly what was recorded — never recomputed.
+            let run = air_ledger::verify::VerifyRun {
+                id: new_id(),
+                worker: "lane".into(),
+                sha: batch.clone(),
+                kind: Kind::Verify,
+                exit_code: 2,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: None,
+                members: vec![air_ledger::landings::Member {
+                    worker: "w".into(),
+                    sha: taken.clone(),
+                }],
+                main_sha: None,
+            };
+            let reported = red_batches_of(std::slice::from_ref(&run));
+            let line_is_the_record = reported.first().is_some_and(|b| {
+                b.members.len() == 1
+                    && b.members.first().is_some_and(|m| m.sha == taken)
+                    && red_batch_line(b).contains(taken.get(..8).unwrap_or(&taken))
+            });
+
+            Ok((red, stable && not_invented && kept && line_is_the_record))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "batch: a run records the sha the batch TOOK from each branch, which does not move when that branch does, and the red line reports exactly what was recorded",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
