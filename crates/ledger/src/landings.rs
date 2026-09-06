@@ -112,6 +112,17 @@ pub struct Landing {
     /// override, which is the measurement: a round of empty ones means the refusal is only
     /// ever waited out.
     pub despite_inflight: Vec<String>,
+    /// The worker branch heads this landing's branch contained that were not yet in main
+    /// (air-80x.2): a verify lane's batch lands once and this says which branches rode in
+    /// it. Empty on a single-branch landing. A red batch's report reads the same list.
+    pub members: Vec<Member>,
+}
+
+/// One branch a batch contained at landing time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub worker: String,
+    pub sha: String,
 }
 
 impl Landing {
@@ -138,16 +149,18 @@ impl Ledger {
         let beads = serde_json::to_string(&l.beads)?;
         let open_beads = serde_json::to_string(&l.open_beads)?;
         let despite = serde_json::to_string(&l.despite_inflight)?;
+        let members = serde_json::to_string(&l.members)?;
         self.conn.execute(
             "INSERT INTO landings (id, worker, sha, tip_sha, result, failing_step, \
              verify_run_id, attempt_no, beads, merge_commit, started_at, finished_at, \
-             open_beads, pid, despite_inflight) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
+             open_beads, pid, despite_inflight, members) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) \
              ON CONFLICT(id) DO UPDATE SET result=excluded.result, \
              failing_step=excluded.failing_step, verify_run_id=excluded.verify_run_id, \
              beads=excluded.beads, merge_commit=excluded.merge_commit, \
              finished_at=excluded.finished_at, open_beads=excluded.open_beads, \
-             pid=excluded.pid, despite_inflight=excluded.despite_inflight",
+             pid=excluded.pid, despite_inflight=excluded.despite_inflight, \
+             members=excluded.members",
             params![
                 l.id,
                 l.worker,
@@ -163,7 +176,8 @@ impl Ledger {
                 l.finished_at,
                 open_beads,
                 l.pid,
-                despite
+                despite,
+                members
             ],
         )?;
         Ok(())
@@ -260,8 +274,8 @@ impl Ledger {
     pub fn landings(&self) -> Result<Vec<Landing>> {
         let mut st = self.conn.prepare(
             "SELECT id, worker, sha, tip_sha, result, failing_step, verify_run_id, attempt_no, \
-             beads, merge_commit, started_at, finished_at, open_beads, pid, despite_inflight \
-             FROM landings ORDER BY finished_at DESC",
+             beads, merge_commit, started_at, finished_at, open_beads, pid, despite_inflight, \
+             members FROM landings ORDER BY finished_at DESC",
         )?;
         let v = st
             .query_map([], |r| {
@@ -290,6 +304,10 @@ impl Ledger {
                         .get::<_, Option<String>>(14)?
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
+                    members: r
+                        .get::<_, Option<String>>(15)?
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -305,6 +323,7 @@ mod tests {
     fn row(id: &str, result: &str) -> Landing {
         Landing {
             despite_inflight: vec![],
+            members: vec![],
             id: id.into(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -474,6 +493,31 @@ mod tests {
         rewound.finished_at = "t4".into();
         l.record_landing(&rewound).unwrap();
         assert_eq!(l.landed_open().unwrap().len(), 1, "nor a rewind");
+    }
+
+    /// air-80x.2: a batch's members round-trip through the row, and a single-branch landing
+    /// has none.
+    #[test]
+    fn a_batch_records_its_members_and_a_single_branch_has_none() {
+        let l = Ledger::open_in_memory().unwrap();
+        let mut r = row("1", "landed");
+        r.worker = "lane".into();
+        r.members = vec![
+            Member {
+                worker: "alpha".into(),
+                sha: "a1".into(),
+            },
+            Member {
+                worker: "beta".into(),
+                sha: "b2".into(),
+            },
+        ];
+        l.record_landing(&r).unwrap();
+        assert_eq!(l.landings().unwrap()[0].members, r.members);
+        let mut plain = row("2", "landed");
+        plain.finished_at = "t9".into();
+        l.record_landing(&plain).unwrap();
+        assert!(l.landings().unwrap()[0].members.is_empty());
     }
 
     /// air-1bm: the runs a `--despite-inflight` landing destroyed round-trip through the row,
