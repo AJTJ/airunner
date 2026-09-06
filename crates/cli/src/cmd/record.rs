@@ -90,16 +90,23 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         eprintln!("air record: could not publish the in-flight row: {e}");
     }
     let t0 = std::time::Instant::now();
-    let (exit_code, output_bytes) = match run_tee(prog, args, repo) {
+    let (exit_code, output_bytes, tail) = match run_tee(prog, args, repo) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("air record: could not run {prog}: {e}");
-            (-1, 0)
+            (-1, 0, Vec::new())
         }
     };
     let duration_ms = i64::try_from(t0.elapsed().as_millis()).unwrap_or(i64::MAX);
     let finished_at = now();
     let _ = ledger.verify_finished(&id);
+    // air-5ik: keep what a NON-GREEN run printed. Red and killed both: a kill is not a verdict
+    // (air-ppm), but its output is exactly what somebody wants to see, and it is the run most
+    // likely to be a machine under load rather than a defect. A green leaves nothing.
+    let log_path = super::runlog::keeps_output(exit_code)
+        .then(|| super::runlog::write(ledger.dir(), &id, &tail))
+        .flatten()
+        .map(|p| p.display().to_string());
     let run = VerifyRun {
         id,
         worker: worker.clone(),
@@ -110,7 +117,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         failing_step: None,
         started_at,
         finished_at,
-        log_path: None,
+        log_path: log_path.clone(),
         command: Some(command_line.clone()),
         duration_ms: Some(duration_ms),
         output_bytes: Some(output_bytes),
@@ -188,8 +195,14 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         } else {
             ""
         };
+        // air-5ik: the path, on the line the person who just ran it reads, so nobody has to
+        // know the layout or that the store exists.
+        let log = log_path
+            .as_deref()
+            .map(|p| format!("; output kept at {p}"))
+            .unwrap_or_default();
         format!(
-            "recorded {} {} for {} at {}: exit {}{note}",
+            "recorded {} {} for {} at {}: exit {}{note}{log}",
             decision,
             kind.as_str(),
             worker,
@@ -205,7 +218,13 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
 const SUSPICIOUS_MS: i64 = 2_000;
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).
-pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64)> {
+/// Run the check, mirroring its output, and answer `(exit, bytes, tail)`.
+///
+/// air-5ik: the tail is the last [`super::runlog::TAIL_BYTES`] of what the child printed,
+/// stdout and stderr interleaved in the order they arrived — the same order the terminal
+/// showed — so a red run can be read after the fact. It is buffered for EVERY run because the
+/// verdict is not known until the child exits; only a non-green one is written to disk.
+pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64, Vec<u8>)> {
     let mut child = Command::new(prog)
         .args(args)
         .current_dir(repo)
@@ -213,9 +232,16 @@ pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    // One buffer for both streams, so the kept tail reads in arrival order rather than as two
+    // transcripts a reader has to interleave by hand. The lock is held per 8 KiB chunk, which
+    // is the same granularity the writes already have.
+    let tail = std::sync::Arc::new(std::sync::Mutex::new(super::runlog::Tail::new(
+        super::runlog::TAIL_BYTES,
+    )));
     fn pump<R: Read + Send + 'static, W: Write + Send + 'static>(
         mut r: R,
         mut w: W,
+        tail: std::sync::Arc<std::sync::Mutex<super::runlog::Tail>>,
     ) -> std::thread::JoinHandle<i64> {
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
@@ -224,20 +250,36 @@ pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32
                 if n == 0 {
                     break;
                 }
-                let _ = w.write_all(buf.get(..n).unwrap_or(&[]));
+                let chunk = buf.get(..n).unwrap_or(&[]);
+                let _ = w.write_all(chunk);
                 let _ = w.flush();
+                if let Ok(mut t) = tail.lock() {
+                    t.push(chunk);
+                }
                 n_total = n_total.saturating_add(i64::try_from(n).unwrap_or(0));
             }
             n_total
         })
     }
-    let out = child.stdout.take().map(|o| pump(o, std::io::stdout()));
-    let err = child.stderr.take().map(|e| pump(e, std::io::stderr()));
+    let out = child
+        .stdout
+        .take()
+        .map(|o| pump(o, std::io::stdout(), std::sync::Arc::clone(&tail)));
+    let err = child
+        .stderr
+        .take()
+        .map(|e| pump(e, std::io::stderr(), std::sync::Arc::clone(&tail)));
     let status = child.wait()?;
     let out_bytes = out.and_then(|h| h.join().ok()).unwrap_or(0);
     let err_bytes = err.and_then(|h| h.join().ok()).unwrap_or(0);
     let bytes = out_bytes.saturating_add(err_bytes);
-    Ok((exit_of(&status), bytes))
+    // Both pumps have joined, so the only other Arc is gone and the lock is uncontended.
+    let kept = std::sync::Arc::try_unwrap(tail)
+        .ok()
+        .and_then(|m| m.into_inner().ok())
+        .map(super::runlog::Tail::into_bytes)
+        .unwrap_or_default();
+    Ok((exit_of(&status), bytes, kept))
 }
 
 /// The child's exit as a shell would report it: its code, or 128 + the signal that killed it

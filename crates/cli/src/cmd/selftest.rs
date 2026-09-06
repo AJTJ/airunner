@@ -145,6 +145,20 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
+    // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
+    // Under it a green writes one too, and since the store is bounded by COUNT rather than by
+    // age, a fleet's greens evict the reds the store exists for. Anchor taken from the file
+    // AFTER rustfmt, per air-gei.
+    (
+        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        Mutation {
+            file: "crates/cli/src/cmd/runlog.rs",
+            from: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code != 0\n}",
+            to: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code == exit_code\n}",
+            also_red: &[],
+        },
+    ),
     // air-btz. The anchor is the walk's bound, so the `blocks` filter, the rendering and the
     // two bd calls all survive it: what changes is only how far up the check looks. Under it
     // the parent case is still found — and bd already refuses that one on every route, so a
@@ -1654,6 +1668,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_green_survives_main_moving_under_it(),
         probe_epic_with_no_open_children_is_named(),
         probe_ancestor_deadlock_is_named(),
+        probe_a_red_runs_output_is_kept(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -5213,7 +5228,7 @@ fn probe_killed_is_no_verdict() -> Probe {
     let dir = std::env::temp_dir();
     // The real signal path: the child kills itself with TERM, and Air sees 128 + 15.
     let signalled = run_tee("sh", &["-c".into(), "kill -TERM $$".into()], &dir)
-        .map(|(code, _)| code)
+        .map(|(code, _, _)| code)
         .unwrap_or(-1);
     let res = (|| -> Result<(bool, bool), String> {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -8422,6 +8437,95 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
     }
 }
 
+/// air-5ik: `verify_runs.log_path` has existed since schema v1 and was `None` on every row ever
+/// written, so the one run anybody reads — the red one — was the one Air kept nothing for. Four
+/// load-related flakes on 2026-09-06 (alerts' red at 37b15cb, `install_and_launch`'s tmux test,
+/// the `SubagentStop` probe, the land acceptance-budget probe: each red once, green on re-run,
+/// all under load 66-67) are undiagnosable now for exactly that reason.
+///
+/// Red (declared mutation: `exit_code != 0` becomes `true`): a GREEN run keeps its output too.
+/// That is not untidiness — the store is bounded by COUNT, so greens would evict the reds it
+/// exists to keep, and a fleet's greens outnumber its reds by an order of magnitude.
+///
+/// Green: the tail keeps the END of a stream and never exceeds its cap, because a verify fails
+/// at the end; `prune` drops the OLDEST by run id whatever order the directory listed them in,
+/// which is the difference between a bound and a lottery; the store's ceiling is a number this
+/// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
+/// out of a child that writes to each.
+fn probe_a_red_runs_output_is_kept() -> Probe {
+    use crate::cmd::record::run_tee;
+    use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
+
+    // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
+    // and a killed run is the one most likely to be the loaded machine this bead is about.
+    let red = !keeps_output(0)
+        && keeps_output(2)
+        && keeps_output(1)
+        && air_ledger::verify::KILLED_EXITS
+            .iter()
+            .all(|c| keeps_output(*c));
+
+    // The tail is the end of the stream, and one write bigger than the cap keeps its own end.
+    let tail_of = |cap: usize, chunks: &[&[u8]]| -> Vec<u8> {
+        let mut t = Tail::new(cap);
+        for c in chunks {
+            t.push(c);
+        }
+        t.into_bytes()
+    };
+    let keeps_the_end = tail_of(4, &[b"abc", b"de"]) == b"bcde"
+        && tail_of(3, &[b"abcdefgh"]) == b"fgh"
+        && tail_of(0, &[b"x"]).is_empty();
+
+    // Age order is id order (ULIDs), never listing order. Shuffled on purpose.
+    let names: Vec<String> = ["03.log", "01.log", "04.log", "02.log"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let bounded = prune(&names, 5).is_empty()
+        && prune(&names, 4) == vec!["01.log".to_string()]
+        && prune(&names, 2).len() == 3
+        // Whatever it deletes, exactly `keep - 1` are left for the new one to join.
+        && names.len().saturating_sub(prune(&names, 3).len()) == 2;
+
+    // The ceiling is a number, not a hope: 20 x 64 KiB.
+    let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
+
+    // End to end: a child that writes to BOTH streams, and the tail carries both.
+    let both = run_tee(
+        "sh",
+        &["-c".into(), "echo out; echo err >&2".into()],
+        &std::env::temp_dir(),
+    )
+    .map(|(code, _, tail)| {
+        let s = String::from_utf8_lossy(&tail).to_string();
+        code == 0 && s.contains("out") && s.contains("err")
+    })
+    .unwrap_or(false);
+
+    // A write really lands and really prunes, in a scratch dir of this probe's own.
+    let stored = (|| -> Option<bool> {
+        let air = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&air).ok()?;
+        let p = write(&air, "01ZZZ", b"the failure")?;
+        let read_back = std::fs::read(&p).ok()? == b"the failure";
+        let kept = std::fs::read_dir(crate::cmd::runlog::dir(&air))
+            .ok()?
+            .count()
+            == 1;
+        std::fs::remove_dir_all(&air).ok();
+        Some(read_back && kept)
+    })()
+    .unwrap_or(false);
+
+    let green = keeps_the_end && bounded && ceiling && both && stored;
+    Probe {
+        name: "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// Condition kinds that once existed and no longer do (air-wfd).
 ///
 /// Declared, because it cannot be derived: a deleted kind leaves no trace in `kinds::ALL`, and
@@ -8657,6 +8761,7 @@ fn probe_docs_name_real_flags_and_kinds() -> Probe {
         green_passes: live.is_empty() && nested && absence_ok,
     }
 }
+
 /// air-jsz: `air adopter-check` ran for a whole round having never once had an input.
 ///
 /// It reads the names it forbids from `private/adopters.md`, which is gitignored by design, and
