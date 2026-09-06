@@ -190,7 +190,7 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 // rather than against memory. `review-waiting` left with air-okc,
                 // `owner-decision-waiting` with air-uef. A surface describing something
                 // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -674,17 +674,23 @@ mod tests {
     #[test]
     fn pushes_new_then_escalates_then_clears() {
         let mut p = Pushed::new();
-        let first = select_new(&mut p, &[att("a", "stuck", 5)]);
+        let first = select_new(&mut p, &[att("a", "silent-with-claim", 5)]);
         assert_eq!(first.len(), 1);
         // Same condition a little later: silent.
-        assert!(select_new(&mut p, &[att("a", "stuck", 9)]).is_empty());
+        assert!(select_new(&mut p, &[att("a", "silent-with-claim", 9)]).is_empty());
         // Doubled (and +10): pushed again.
-        assert_eq!(select_new(&mut p, &[att("a", "stuck", 15)]).len(), 1);
+        assert_eq!(
+            select_new(&mut p, &[att("a", "silent-with-claim", 15)]).len(),
+            1
+        );
         // Condition gone: map empties; nothing pushed.
         assert!(select_new(&mut p, &[]).is_empty());
         assert!(p.is_empty());
         // Reappears: new again.
-        assert_eq!(select_new(&mut p, &[att("a", "stuck", 5)]).len(), 1);
+        assert_eq!(
+            select_new(&mut p, &[att("a", "silent-with-claim", 5)]).len(),
+            1
+        );
     }
 
     #[test]
@@ -723,7 +729,7 @@ mod tests {
         let mut p = Pushed::new();
         for tick in 0..10_000i64 {
             let cur = vec![
-                att("a", "stuck", tick),
+                att("a", "silent-with-claim", tick),
                 att("b", "idle-with-claim", tick / 2),
                 att(
                     if tick % 2 == 0 { "c" } else { "d" },

@@ -219,7 +219,7 @@ mod emission_tests {
     #[test]
     fn conditions_open_touch_and_clear() {
         let l = Ledger::open_in_memory().unwrap();
-        let cur = vec![("a".to_string(), "stuck", "x".to_string())];
+        let cur = vec![("a".to_string(), "idle-with-claim", "x".to_string())];
         assert_eq!(l.record_conditions(&cur, "t1").unwrap(), (1, 0));
         assert_eq!(l.record_conditions(&cur, "t2").unwrap(), (0, 0));
         assert_eq!(l.record_conditions(&[], "t3").unwrap(), (0, 1));
