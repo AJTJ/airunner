@@ -88,7 +88,7 @@ pub fn facts(
         super::batch::describe(ledger, repo, &targets)
     };
     let digest_dir = digest_dir(repo);
-    let digest_present = digest_dir.as_deref().and_then(|d| {
+    let digest = digest_dir.as_deref().and_then(|d| {
         // Newer than this worker's oldest open claim, or than the branch point from main,
         // whichever is earlier: a re-claim after a bd timeout must not postdate a digest
         // that was written between the first claim and the re-claim (air-y8m).
@@ -108,14 +108,19 @@ pub fn facts(
         // handing on". No bead at all means nothing to declare, and the check is skipped
         // rather than failed.
         let beads = digest_beads(bead, &held_beads, &carried_beads)?;
+        let dir = repo.join(d);
         Some(digest_for_bead(
-            &repo.join(d),
+            &dir,
             worker,
             &beads,
             since.as_deref(),
             frontmatter_cutoff(),
+            &tracked_in(repo, &dir),
         ))
     });
+    // air-ahl: `Untracked` is a refusal like `Missing`, with its own sentence.
+    let digest_untracked = digest == Some(Digest::Untracked);
+    let digest_present = digest.map(|d| d == Digest::Tracked);
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
     Ok(GateFacts {
         worker: worker.to_string(),
@@ -134,6 +139,7 @@ pub fn facts(
         carried_beads,
         runs_at_head,
         digest_present,
+        digest_untracked,
         digest_dir,
         advisory,
     })
@@ -284,18 +290,37 @@ pub fn declared_bead(text: &str) -> Option<String> {
 /// before [`FRONTMATTER_SINCE`]. It let a digest for a DIFFERENT bead satisfy the gate, and
 /// let `touch` on any old one do the same; it guards, so it failed toward permitting, and
 /// nothing proved it had fired (air-agq, and `docs/research/prose-parsing-survey.md` §3).
+/// What the directory holds for these beads (air-ahl): nothing, a file git does not track, or
+/// a tracked one. Three states because the fixes are three different sentences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Digest {
+    /// No file in the directory declares any of the beads.
+    Missing,
+    /// One does, and git does not track it — so it exists for nobody but this worktree. An
+    /// adopter's worker used exactly this to satisfy the gate without a commit, and told them
+    /// (air-ahl, 2026-09-06).
+    Untracked,
+    Tracked,
+}
+
+/// `tracked` is the set of file NAMES git tracks in the digest directory, supplied by the
+/// caller. Passed in rather than looked up here so this stays pure over the filesystem: a
+/// probe can drive every state without a git repo, and the one `git ls-files` happens once at
+/// the call site instead of once per candidate file.
 pub fn digest_for_bead(
     dir: &Path,
     worker: &str,
     beads: &[String],
     since: Option<&str>,
     cutoff: jiff::Timestamp,
-) -> bool {
+    tracked: &std::collections::BTreeSet<String>,
+) -> Digest {
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return false;
+        return Digest::Missing;
     };
     let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
-    rd.flatten().any(|e| {
+    let mut untracked = false;
+    let declares = |e: &std::fs::DirEntry| -> bool {
         let name = e.file_name().to_string_lossy().to_string();
         if !name.ends_with(".md") {
             return false;
@@ -321,7 +346,35 @@ pub fn digest_for_bead(
                     }
             }
         }
-    })
+    };
+    for e in rd.flatten() {
+        if !declares(&e) {
+            continue;
+        }
+        if tracked.contains(&e.file_name().to_string_lossy().to_string()) {
+            return Digest::Tracked;
+        }
+        // Keep looking: another file may declare the same bead and be tracked. Only report
+        // untracked when no tracked one exists, or a stray scratch copy would mask a real
+        // digest sitting beside it.
+        untracked = true;
+    }
+    if untracked {
+        Digest::Untracked
+    } else {
+        Digest::Missing
+    }
+}
+
+/// The file names git tracks in `dir`, for [`digest_for_bead`]. Empty when git cannot answer,
+/// which reads as "nothing is tracked" and refuses — the direction a guard must fail in.
+pub fn tracked_in(repo: &Path, dir: &Path) -> std::collections::BTreeSet<String> {
+    crate::git::run(repo, &["ls-files", "--", &dir.to_string_lossy()])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.rsplit('/').next())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Is there a `*<worker>*.md` in `dir` modified after `since` (RFC 3339)? Pure over the fs.
