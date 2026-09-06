@@ -36,6 +36,36 @@ use crate::cmd::hook::{handover_gate, is_handover_command};
 /// [`probe_every_air_spawn_pins_identity`] reads this file and fails if a raw
 /// `Command::new(exe)` appears anywhere else, so the class does not come back one probe at a
 /// time.
+/// A `Write` a probe can read back (air-e21v). `run_tee` pumps a child's streams to two
+/// sinks; a probe must never pass this process's stdout, because `air selftest --json` writes
+/// its array there and anything else on that stream stops it parsing.
+#[derive(Debug, Clone, Default)]
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Shared {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn text(&self) -> String {
+        self.0
+            .lock()
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .unwrap_or_default()
+    }
+}
+
+impl std::io::Write for Shared {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut b) = self.0.lock() {
+            b.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn air_command(exe: &Path, cwd: &Path) -> Command {
     let mut c = Command::new(exe);
     c.current_dir(cwd)
@@ -160,6 +190,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-dwq5. The anchor is the format string of the version LINE alone: the JSON, the four
+    // surfaces and the surface version all survive it. Under it the line prints the crate
+    // version and nothing else, which is what shipped for a round — and it still looks exactly
+    // like a version, which is why nobody noticed that two binaries with different behaviour
+    // were reporting the same string. Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "version: air says which binary it is — the build reaches --version, --version --json is JSON, and doctor and status carry the same object",
+        Mutation {
+            file: "crates/cli/src/cmd/install.rs",
+            from: "        \"air {} (built from {}, surface {})\",\n        env!(\"CARGO_PKG_VERSION\"),\n        BUILD,\n        SURFACE_VERSION",
+            to: "        \"air {}\",\n        env!(\"CARGO_PKG_VERSION\")",
+            also_red: &[],
+        },
+    ),
     // air-x1ha. The anchor is the arm for "bd never had this id", and nothing else: recording
     // the resolved id at claim time, releasing a bead bd knows and no longer holds, and the
     // reported line all survive it. Under it that arm releases the row again, which is the
@@ -171,6 +215,26 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/status.rs",
             from: "Some(None) => unresolved.push(format!(\"{} ({})\", c.bead, c.worker)),",
             to: "Some(None) => {\n                        let _ = ledger.release_claim(&c.bead, &c.worker, \"reconciled\", &at);\n                        continue;\n                    }",
+            also_red: &[],
+        },
+    ),
+    // air-e21v. The anchor puts a probe's output back on this process's stdout, which is
+    // exactly what broke `--prove`: the tail still carries both streams, every other probe
+    // still passes, and only the machine-readable output stops parsing. A probe that stayed
+    // green under it would be reading the array out of the middle of the stream rather than
+    // from its first byte, which is not what a parser does.
+    (
+        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        Mutation {
+            file: "crates/cli/src/cmd/selftest.rs",
+            // NOT `std::io::stdout(), std::io::stderr()`, which is the original bug: it
+            // pollutes the child's `--json`, so `build_and_run` cannot parse it and the row
+            // reads BROKEN rather than PROVEN. **A mutation that breaks the channel `--prove`
+            // reads cannot be proven by `--prove`** — measured, 2026-09-06, and the reason the
+            // anchor is this one instead. Both streams into ONE sink breaks the same rule (each
+            // stream reaches its own sink and not the other's) and leaves the reader intact.
+            from: "        out_sink.clone(),\n        err_sink.clone(),",
+            to: "        out_sink.clone(),\n        out_sink.clone(),",
             also_red: &[],
         },
     ),
@@ -494,6 +558,10 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // Its "with neither digest nor green it is still refused" half is this rule
                 // (air-60x; declared by air-8d7).
                 "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
+                // air-e21v, declared from a `--prove` run rather than by reading: the
+                // Stop advisory (air-avj) renders this same refusal, so it falls with the
+                // rule legitimately. Undeclared it made this mutation VACUOUS.
+                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
         },
     ),
@@ -509,6 +577,10 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // by air-8d7).
                 "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
                 "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
+                // air-e21v, declared from a `--prove` run rather than by reading: the Stop
+                // advisory (air-avj) renders the same refusal, so it goes red with this rule
+                // legitimately. Undeclared it made this mutation VACUOUS.
+                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
         },
     ),
@@ -1219,7 +1291,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/privacy.rs",
             from: "            let low = line.to_ascii_lowercase();",
             to: "            let low = line.to_string();",
-            also_red: &[],
+            // air-e21v, from a `--prove` run: air-jsz's probe runs the real command against a
+            // repo whose leak is upper-case, so it reads this rule too. Undeclared it made this
+            // mutation VACUOUS — the mutation was fine and the DECLARATION was stale.
+            also_red: &[
+                "privacy: adopter-check refuses a leak when run from a worktree, and refuses a repo that declares an adopter with no names instead of skipping",
+            ],
         },
     ),
 ];
@@ -1335,6 +1412,26 @@ pub fn prove(repo: &Path, json: bool) -> i32 {
             "air: selftest --prove edits tracked files and needs a clean tree; commit or set your work aside first"
         );
         return 2;
+    }
+
+    // air-e21v: the UNMUTATED child must parse before a single mutation is applied. It did not
+    // once, and `--prove` spent its whole run reporting every mutation BROKEN — 82 rebuilds to
+    // learn nothing, and the mutation evidence this repo leans on was dead in the meantime.
+    // One child run against 82 is a rounding error on this command and nothing at all on
+    // `make verify`, which is why the check lives here rather than in the suite.
+    match build_and_run(repo) {
+        Ok(v) if v.is_empty() => {
+            eprintln!("air: selftest --prove: the baseline run reported no probes");
+            return 2;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "air: selftest --prove stopped before applying any mutation: {e}. Every \
+                 mutation would have reported BROKEN and proved nothing."
+            );
+            return 2;
+        }
     }
 
     for (probe, m) in MUTATIONS {
@@ -1753,6 +1850,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_red_runs_output_is_kept(),
         probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
+        probe_the_build_reaches_a_reader(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -1791,6 +1889,7 @@ fn all_probes() -> Vec<Probe> {
         probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
         probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
         probe_a_row_with_no_transcript_is_named_and_never_announced(),
+        probe_selftest_json_is_only_the_array(),
     ]
 }
 
@@ -5192,7 +5291,13 @@ fn command_mentions(source: &str) -> Vec<(usize, String)> {
                 .chars()
                 .take_while(|c| c.is_ascii_lowercase() || *c == '-')
                 .collect();
-            if !word.is_empty() {
+            // air-dwq5: a leading `-` is a FLAG, not a subcommand, and belongs to a namespace
+            // this scanner does not enumerate. It first mattered when `air --version` became
+            // advice worth shipping; before that no shipped string named a flag in command
+            // position, so the scanner never had to tell the two apart. Validating flags too
+            // would be a bigger check than the failure asks for (air-w91 was a subcommand that
+            // did not exist), and it is not built until one is shipped that does not exist.
+            if !word.is_empty() && !word.starts_with('-') {
                 out.push((i.saturating_add(1), word));
             }
         }
@@ -8567,7 +8672,7 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
 /// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
 /// out of a child that writes to each.
 fn probe_a_red_runs_output_is_kept() -> Probe {
-    use crate::cmd::record::run_tee;
+    use crate::cmd::record::run_tee_to;
     use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
 
     // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
@@ -8605,15 +8710,32 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     // The ceiling is a number, not a hope: 20 x 64 KiB.
     let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
 
-    // End to end: a child that writes to BOTH streams, and the tail carries both.
-    let both = run_tee(
+    // End to end: a child that writes to BOTH streams, and the tail carries both — and the
+    // two sinks get them too, which is what `run_tee` exists for and what the tail alone never
+    // showed. The sinks are in-memory, not this process's stdout: the version of this probe
+    // that used the real ones put `out` on `air selftest`'s stdout ahead of the JSON array and
+    // made `air selftest --json` unparseable, so `--prove` called every mutation BROKEN
+    // (air-e21v).
+    let out_sink = Shared::new();
+    let err_sink = Shared::new();
+    let both = run_tee_to(
         "sh",
         &["-c".into(), "echo out; echo err >&2".into()],
         &std::env::temp_dir(),
+        out_sink.clone(),
+        err_sink.clone(),
     )
     .map(|(code, _, tail)| {
         let s = String::from_utf8_lossy(&tail).to_string();
-        code == 0 && s.contains("out") && s.contains("err")
+        code == 0
+            && s.contains("out")
+            && s.contains("err")
+            // Each stream reached ITS OWN sink, and neither reached the other's: a pump wired
+            // to one stream twice would still fill the tail with both.
+            && out_sink.text().contains("out")
+            && !out_sink.text().contains("err")
+            && err_sink.text().contains("err")
+            && !err_sink.text().contains("out")
     })
     .unwrap_or(false);
 
@@ -9722,5 +9844,125 @@ fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
         name: "sessions: a row no session is behind is named in status and never announced as a worker joining, and a real one still is",
         red_fires: red,
         green_passes: announced && never_late && leave && still_rendered && quiet,
+    }
+}
+
+/// air-e21v: `air selftest --json` emitted a stray `out` before the array, so it failed to
+/// parse at line 1 column 1 — and `--prove` parses exactly that stream, so **every declared
+/// mutation reported BROKEN and the suite's mutation evidence was dead** for as long as it took
+/// anyone to run a 30-minute command. Ordinary `air selftest` was unaffected and all probes
+/// passed, which is why nothing noticed: the gate worked, only the evidence behind it did not.
+///
+/// This probe is the CONTRACT half, and it is pure. The end-to-end half — spawn
+/// `air selftest --json` and parse it — was written, measured and NOT kept: it costs a second
+/// full suite, 51 s on a quiet machine and 117 s under a round's load, against a 17 s suite and
+/// a 56-85 s `make verify`. "Tests are optimized for speed, always. Per-test cost is a
+/// first-class constraint" (CLAUDE.md) settles that. What replaces it costs nothing: `prove`
+/// checks the UNMUTATED child parses before it applies a single mutation, so the 82 runs that
+/// would each have reported BROKEN cannot happen, and the one that fails names the cause.
+///
+/// Red: the shape `--prove` requires is accepted, and a stream with anything before the array
+/// is refused — `serde_json` refuses `out\n[…]` at line 1, which is precisely what happened.
+/// Green: an empty array is not evidence of a suite either, and `baseline_defect` says what is
+/// wrong rather than only that something is.
+fn probe_selftest_json_is_only_the_array() -> Probe {
+    let good = r#"[{"name":"n","red_fires":true,"green_passes":true}]"#;
+    let polluted = "out\n[{\"name\":\"n\",\"red_fires\":true,\"green_passes\":true}]";
+    Probe {
+        name: "selftest: --prove refuses a polluted baseline instead of calling every mutation broken",
+        red_fires: baseline_defect(polluted)
+            .is_some_and(|d| d.contains("before the array") || d.contains("column 1"))
+            && baseline_defect(good).is_none(),
+        green_passes: baseline_defect("[]").is_some_and(|d| d.contains("no probes"))
+            && baseline_defect("").is_some(),
+    }
+}
+
+/// What is wrong with a child's `--json` stream, or `None` when it is what `--prove` needs
+/// (air-e21v). Pure, so the check costs nothing and the message is testable.
+fn baseline_defect(text: &str) -> Option<String> {
+    match serde_json::from_str::<Vec<ProbeOut>>(text) {
+        Ok(v) if v.is_empty() => Some("no probes in the array".to_string()),
+        Ok(_) => None,
+        Err(e) => {
+            let head: String = text.trim_start().chars().take(40).collect();
+            Some(format!(
+                "{e}; something is written before the array. `air selftest --json` must emit \
+                 ONLY the array, and a probe that writes to this process's stdout breaks it \
+                 (air-e21v: a probe passed `run_tee` the real stdout). Stream begins: {head:?}"
+            ))
+        }
+    }
+}
+
+/// air-dwq5 (an adopter's w2 via verify, 2026-09-06): Air embeds the commit it was built from,
+/// writes it into `installed.json`, reads it for the install-lag check — and told nobody.
+///
+/// One crate version covered a round of behaviour changes, because lanes cut no release rows
+/// (air-mir, a deliberate trade). Measured that night: the installed binary and a branch build
+/// both printed `air 0.2.19` while emitting different Stop-hook advice, one corrected by
+/// air-avj and one not. The cost lands on a reader rather than a lane: someone reconstructing
+/// the round sees 0.2.19 everywhere, looks up what 0.2.19 fixed, and concludes three workers
+/// ignored advice that had already been corrected. The fix is not to reverse the trade; it is
+/// to say the fact Air already has.
+///
+/// Red (declared mutation: the line drops the build and prints the version alone): the string
+/// stops distinguishing two binaries, which is the defect exactly — and it still LOOKS like a
+/// version, which is why it survived a round unnoticed.
+///
+/// Green, against the REAL binary rather than the functions it calls, because the bug was that
+/// four surfaces did not reach the fact: `--version` carries the build, `--version --json` is
+/// parseable JSON rather than the bare string it used to print, and `doctor --json` and
+/// `status --json` carry the same object — the same, not a second copy that can drift.
+fn probe_the_build_reaches_a_reader() -> Probe {
+    use crate::cmd::install::{BUILD, SURFACE_VERSION, version_json, version_line};
+
+    // RED: the one thing a crate version cannot say.
+    let red = version_line().contains(BUILD)
+        && !BUILD.is_empty()
+        && version_json()
+            .get("surface_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(u64::from(SURFACE_VERSION));
+
+    let res = (|| -> Result<bool, String> {
+        let dir = probe_repo()?;
+        let out = (|| -> Result<bool, String> {
+            probe_git(&dir, &["init", "-q", "-b", "main"])?;
+            probe_git(&dir, &["commit", "-q", "--allow-empty", "-m", "a"])?;
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let run = |args: &[&str]| -> Result<String, String> {
+                let o = air_command(&exe, &dir)
+                    .args(args)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                Ok(String::from_utf8_lossy(&o.stdout).to_string())
+            };
+            let want = version_json();
+            // `--version --json` is JSON. It printed the plain string, which is the one shape
+            // a JSON reader cannot parse.
+            let vj: serde_json::Value = serde_json::from_str(run(&["--version", "--json"])?.trim())
+                .map_err(|e| e.to_string())?;
+            // The text line names the build a reader has to attribute a log line to.
+            let vt = run(&["--version"])?;
+            // Both diagnostic surfaces carry the SAME object.
+            let doc: serde_json::Value =
+                serde_json::from_str(&run(&["--json", "doctor"])?).map_err(|e| e.to_string())?;
+            let st: serde_json::Value =
+                serde_json::from_str(&run(&["--json", "status"])?).map_err(|e| e.to_string())?;
+            Ok(vj == want
+                && vt.contains(BUILD)
+                && vt.contains(env!("CARGO_PKG_VERSION"))
+                && doc.get("air") == Some(&want)
+                && st.get("air") == Some(&want))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+
+    Probe {
+        name: "version: air says which binary it is — the build reaches --version, --version --json is JSON, and doctor and status carry the same object",
+        red_fires: red,
+        green_passes: res.unwrap_or(false),
     }
 }

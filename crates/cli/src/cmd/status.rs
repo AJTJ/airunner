@@ -2397,9 +2397,17 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
         });
         return 0;
     }
+    // air-dwq5: which binary produced this snapshot. `air status --json` is what a reader
+    // reconstructing a round parses, and a snapshot that cannot be attributed to a build is a
+    // snapshot whose behaviour cannot be looked up — a whole round of changes shipped under
+    // one crate version tonight, because lanes cut no release rows.
     emit(
         json,
-        &serde_json::json!({"snapshot": snap, "attention": att}),
+        &serde_json::json!({
+            "snapshot": snap,
+            "attention": att,
+            "air": super::install::version_json(),
+        }),
         || render(&snap, &att),
     );
     0
