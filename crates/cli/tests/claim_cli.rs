@@ -483,6 +483,81 @@ fn bd_refusal_writes_nothing() {
     assert!(claims(&repo).is_empty());
 }
 
+/// air-45pw: through the real argv, because the argv is where this bug lives. `air capture`
+/// took one positional and nothing else, so a finding long enough to be worth writing went
+/// through the harness's command classifier as a command line and was refused for its shape;
+/// an adopter's worker shortened a finding in order to file it.
+///
+/// The assertion is byte-for-byte against the file. A truncation is what the bug produces, and
+/// the capture it produces is still filed, still long, and still reads like a capture — so a
+/// test asserting "non-empty" would pass over the exact failure.
+#[test]
+fn capture_takes_a_whole_file_and_refuses_both_routes_or_neither() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+
+    // Far longer than any command line anyone would type, with the quoting and blank lines that
+    // make a classifier refuse, and a sentinel last sentence a truncation eats first.
+    let mut finding = String::new();
+    for i in 0..60 {
+        finding.push_str(&format!(
+            "Paragraph {i}: the worker's own words, with \"quotes\", a $dollar and a `tick`, \
+             running well past what belongs in a shell argument.\n\n"
+        ));
+    }
+    finding.push_str("SENTINEL: the last sentence.");
+    let path = repo.join("finding.md");
+    std::fs::write(&path, &finding).unwrap();
+
+    let (code, out, err) = air(
+        &repo,
+        &bd,
+        &["--json", "capture", "--file", path.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+
+    // Read it back through `air inbox`, which is what the coordinator actually triages from.
+    let (_, out, _) = air(&repo, &bd, &["--json", "inbox"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let stored = v["captures"][0]["text"].as_str().unwrap();
+    assert_eq!(
+        stored, finding,
+        "the capture must be the file, byte for byte"
+    );
+    assert_eq!(stored.len(), finding.len());
+    assert!(stored.ends_with("SENTINEL: the last sentence."), "{stored}");
+
+    // Neither route, and both at once: each refusal names both ways in, because the person
+    // reading it has just had a capture refused.
+    for args in [
+        vec!["capture"],
+        vec!["capture", "a line", "--file", path.to_str().unwrap()],
+    ] {
+        let (code, out, err) = air(&repo, &bd, &args);
+        let said = format!("{out}{err}");
+        assert_eq!(code, 2, "{said}");
+        assert!(said.contains("--file"), "{said}");
+        assert!(said.contains("text"), "{said}");
+    }
+
+    // A missing path is named, never filed as an empty capture.
+    let (code, out, err) = air(&repo, &bd, &["capture", "--file", "nope.md"]);
+    let said = format!("{out}{err}");
+    assert_eq!(code, 2, "{said}");
+    assert!(said.contains("nope.md"), "{said}");
+
+    // Still one capture: nothing above filed anything.
+    let (_, out, _) = air(&repo, &bd, &["--json", "inbox"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["captures"].as_array().unwrap().len(), 1, "{out}");
+
+    // `--help` names the file route: it is where the person whose capture was just refused
+    // looks next, and it named only the positional before this bead.
+    let (_, out, _) = air(&repo, &bd, &["capture", "--help"]);
+    assert!(out.contains("--file"), "{out}");
+}
+
 #[test]
 fn capture_inbox_triage_round_trip() {
     let dir = scratch_repo();

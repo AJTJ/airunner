@@ -107,9 +107,15 @@ enum Cmd {
         #[arg(long)]
         worker: Option<String>,
     },
-    /// One line into the inbox. Workers capture; the coordinator triages. Never blocks you.
+    /// One line into the inbox, or a whole finding with --file. Workers capture; the
+    /// coordinator triages. Never blocks you.
     Capture {
-        text: String,
+        /// The capture text. Exactly one of this or --file.
+        text: Option<String>,
+        /// Read the capture from this file instead, whole and untruncated — for a finding too
+        /// long to survive a command line (air-45pw). Exactly one of this or the positional.
+        #[arg(long)]
+        file: Option<PathBuf>,
         /// Hidden since air-uef: `coordinator` is the only audience. `--for owner` is refused
         /// with the replacement named; the owner's queue is beads labelled `owner`.
         #[arg(long = "for", default_value = "coordinator", hide = true)]
@@ -411,7 +417,11 @@ fn main() -> ExitCode {
             reason,
             worker,
         } => cmd::claim::release(&repo, &bead, &reason, worker.as_deref(), cli.json),
-        Cmd::Capture { text, audience } => cmd::capture::capture(&repo, &text, &audience, cli.json),
+        Cmd::Capture {
+            text,
+            file,
+            audience,
+        } => cmd::capture::capture(&repo, text.as_deref(), file.as_deref(), &audience, cli.json),
         Cmd::Inbox => cmd::capture::inbox(&repo, cli.json),
         Cmd::Lease { op } => match op {
             LeaseOp::Take { resource, reason } => {
