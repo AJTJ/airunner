@@ -123,6 +123,18 @@ pub const MECHANISMS: &[Mechanism] = &[
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },
     Mechanism {
+        id: "edit-outside-worktree",
+        class: "refusal",
+        what: "A worker's Edit/Write whose resolved path leaves its worktree is denied; the \
+               harness's --worktree isolation it replaces is off.",
+        added: "2026-09-06 (air-8gj)",
+        source: "crates/hooks/src/fence.rs; docs/notes/2026-09-06-adopter-answers-worktree-and-verify.md",
+        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-outside-worktree")]),
+        removal: Removal::Judgement(
+            "the harness keys its isolation on the cwd rather than the flag; or a round records zero refuse-outside-worktree firings AND the owner prefers the harness block back",
+        ),
+    },
+    Mechanism {
         id: "handover-would-refuse",
         class: "refusal",
         what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",

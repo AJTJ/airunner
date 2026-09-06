@@ -27,6 +27,7 @@ verify:
 release:
 	@test -z "$$(git status --porcelain)" || { echo "release: tree is dirty; commit first"; exit 1; }
 	@test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "release: cut releases from main"; exit 1; }
+	cargo run -q -p air -- release-check
 	$(MAKE) verify
 	@v=$$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2); \
 	git tag -a "v$$v" -m "air v$$v"; \
