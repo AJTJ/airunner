@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-kexg. The anchor is the permitting half alone: under it no range is ever
+    // journal-only, so a branch of journal entries is refused again and the defect returns.
+    // The CONSTRAINT survives it untouched - a mixed range still needs a bead either way -
+    // which is deliberate, because the constraint is the half that would still look right if
+    // it rotted, and a mutation taking out both would not tell the two apart. The refusal
+    // wording, the Option on Landing and every other branch's behaviour also survive.
+    // Anchor as rustfmt leaves it, per air-gei.
+    (
+        "land: a branch whose only commits are session-journal entries lands with no bead, and a range mixing them with anything else still needs one",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: ".all(|p| p.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))",
+            to: ".all(|_| false)",
+            also_red: &[],
+        },
+    ),
     // air-i6fd. The anchor restores the defect exactly: main's tip read from the running cwd's
     // HEAD instead of from the ref. Everything else survives — the green check, the skipped
     // entries, the bead attribution, the error paths — so what it isolates is whether the
@@ -1994,6 +2010,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
         probe_a_discharged_clause_names_its_lookup(),
+        probe_a_journal_only_branch_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -3163,7 +3180,7 @@ fn probe_land_names_a_branch() -> Probe {
     use crate::cmd::status::Landing;
 
     let landing = |worker: &str, bead: &str, minutes: i64, blocked: Option<&str>| Landing {
-        bead: bead.into(),
+        bead: Some(bead.into()),
         worker: worker.into(),
         head: format!("{worker}0000"),
         minutes,
@@ -3368,7 +3385,7 @@ fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
     use crate::cmd::status::Landing;
 
     let landing = |worker: &str, bead: &str| Landing {
-        bead: bead.into(),
+        bead: Some(bead.into()),
         worker: worker.into(),
         head: format!("{worker}0000"),
         minutes: 5,
@@ -3381,7 +3398,7 @@ fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
     ready.push(landing("other", "zz-zzz"));
     let none: Vec<String> = Vec::new();
     fn beads_of(v: &[Landing]) -> Vec<&str> {
-        let mut b: Vec<&str> = v.iter().map(|l| l.bead.as_str()).collect();
+        let mut b: Vec<&str> = v.iter().filter_map(|l| l.bead.as_deref()).collect();
         b.sort_unstable();
         b
     }
@@ -3769,7 +3786,7 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
         landable: beads
             .iter()
             .map(|b| Landing {
-                bead: (*b).to_string(),
+                bead: Some((*b).to_string()),
                 worker: "alpha".into(),
                 head: head.to_string(),
                 minutes,
@@ -10869,6 +10886,62 @@ fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
         name: "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
         red_fires: scaffolds && alongside,
         green_passes: honours_config && untouched && no_gate,
+    }
+}
+
+/// air-kexg: a session journal commit names no bead, and a branch of them could not land.
+///
+/// The journal (air-3xww) is per session, ungated, and explicitly not work on a bead, so a
+/// journal commit is the one commit a worker legitimately writes that names none. **Two
+/// workers concluded independently that such a branch could land, by different reasoning** —
+/// alerts from air-7kp's rule that a trailerless commit attributes to nothing, verify from
+/// having no bead in flight — and no surface a worker can reach said otherwise. The
+/// coordinator's workaround was to amend with `Bead: air-3xww`, honest while that bead was
+/// hours old and a lie the moment it was not.
+///
+/// Red (declared mutation: the permitting half always answers false): a journal-only range is
+/// refused again, which is the defect.
+///
+/// Green is mostly the CONSTRAINT, because that is the half that would still look right if it
+/// rotted: a range mixing journal commits with anything else needs a bead exactly as before,
+/// in either order and however lopsided; a repo declaring no `journal_dir` has no journal case
+/// at all; an empty range is not journal-only; and a path that merely starts with the
+/// directory's name (`docs/journalism/x.md` against `docs/journal`) is not inside it. A
+/// declared field is read, never a guess about which paths look like a journal.
+fn probe_a_journal_only_branch_needs_no_bead() -> Probe {
+    use crate::cmd::status::journal_only;
+
+    let j = Some("docs/journal");
+    let entry = "docs/journal/alerts-22.md".to_string();
+    let other = "docs/journal/ledger-2c.md".to_string();
+    let work = "crates/cli/src/cmd/land.rs".to_string();
+
+    // RED: the case the bead is about — a branch of journal entries alone.
+    let red = journal_only(std::slice::from_ref(&entry), j)
+        && journal_only(&[entry.clone(), other.clone()], j);
+
+    // THE CONSTRAINT. A range that mixes still needs a bead, whichever way round and however
+    // lopsided; this is a name for one legitimate commit, never a bypass for work that forgot
+    // its trailer.
+    let mixed = !journal_only(&[entry.clone(), work.clone()], j)
+        && !journal_only(&[work.clone(), entry.clone()], j)
+        && !journal_only(std::slice::from_ref(&work), j);
+    // A repo that declares no journal_dir has no journal case; nothing changes for it.
+    let undeclared = !journal_only(std::slice::from_ref(&entry), None)
+        && !journal_only(std::slice::from_ref(&entry), Some(""));
+    // An empty range is not journal-only: nothing to land is a different answer.
+    let empty = !journal_only(&[], j);
+    // A prefix is not a parent. `docs/journalism` is not inside `docs/journal`.
+    let not_a_prefix = !journal_only(&["docs/journalism/x.md".to_string()], j)
+        && !journal_only(&["docs/journal.md".to_string()], j);
+    // A trailing slash in the declared value means the same directory.
+    let slash_tolerant = journal_only(std::slice::from_ref(&entry), Some("docs/journal/"));
+
+    let green = mixed && undeclared && empty && not_a_prefix && slash_tolerant;
+    Probe {
+        name: "land: a branch whose only commits are session-journal entries lands with no bead, and a range mixing them with anything else still needs one",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
