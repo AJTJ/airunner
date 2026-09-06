@@ -1098,10 +1098,66 @@ pub const SURFACE: &[SurfaceChange] = &[
                  releases anything either, which it used to for every claim not in the \
                  in-progress list.",
     },
+    SurfaceChange {
+        id: "version-says-the-build",
+        since: "2026-09-06 (air-dwq5)",
+        headline: "`air --version` now prints the commit the binary was built from and its \
+                   surface version, `air --version --json` emits JSON instead of the same \
+                   plain string, and `air doctor` and `air status --json` carry the same \
+                   object. Air embedded the build, stored it in `installed.json` and read it \
+                   for the install-lag check, and told nobody — so one crate version covered a \
+                   whole round of behaviour changes and two binaries with different behaviour \
+                   reported the same string.",
+        silent_break: true,
+        action: "If anything of yours parses `air --version --json`, it was getting `air \
+                 0.2.19` and now gets `{\"name\":\"air\",\"version\":…,\"built_from\":…,\
+                 \"surface_version\":…}`; the plain `air --version` gained a suffix on the \
+                 same line. `air status --json` gains a third top-level key, `air`, beside \
+                 `snapshot` and `attention`. Attribute a log line or a session to a build with \
+                 `built_from`, not with the version: lanes cut no release rows mid-round, so \
+                 the version does not move when behaviour does.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
 pub const BUILD: &str = env!("AIR_BUILD");
+
+/// What this binary IS, for a reader who has to attribute a log line or a session to a build
+/// (air-dwq5). Pure, so the probe asserts on the string rather than on a process.
+///
+/// The crate version alone cannot do it, and tonight is why. A round's worth of behaviour
+/// changes shipped under `0.2.19` because lanes cut no release rows (air-mir, a deliberate
+/// trade: the exact-count check moved to `make release`), so the installed binary and every
+/// branch build report the same string while behaving differently. Measured 2026-09-06: the
+/// installed `air` and a branch build both said `air 0.2.19` while emitting different
+/// Stop-hook advice, one corrected by air-avj and one not.
+///
+/// That trade is not being reversed here. What was wrong is that Air already RECORDS the
+/// distinguishing fact — `build.rs` embeds it, `installed.json` stores it, the install-lag
+/// check reads it — and told nobody. This says it.
+///
+/// The surface version rides along because it is the number that actually moves when
+/// behaviour changes mid-round, which is the question a reader is really asking.
+pub fn version_line() -> String {
+    format!(
+        "air {} (built from {}, surface {})",
+        env!("CARGO_PKG_VERSION"),
+        BUILD,
+        SURFACE_VERSION
+    )
+}
+
+/// The same fact as JSON, for `air --version --json` and `air status --json` (air-dwq5).
+/// `--version --json` used to print the plain string, which is the one shape a JSON reader
+/// cannot parse.
+pub fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "name": "air",
+        "version": env!("CARGO_PKG_VERSION"),
+        "built_from": BUILD,
+        "surface_version": SURFACE_VERSION,
+    })
+}
 
 /// What `.air/installed.json` records, so the diff has a baseline.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
