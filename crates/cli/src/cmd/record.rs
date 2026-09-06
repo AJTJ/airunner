@@ -1,6 +1,6 @@
 //! `air record <kind> -- <command…>`: run the check, record (worker, HEAD, kind, exit).
 //!
-//! The exit is the fact. Around it Air records what adopter's captures 4d1e52/9de453/38b0c1
+//! The exit is the fact. Around it Air records what the adopter's captures 4d1e52/9de453/38b0c1
 //! showed a human cannot see in a log: the exact command, how long it took, how much it
 //! printed, and whether the tree was dirty. A run is flagged `suspicious` when it was too
 //! fast or printed nothing, and `command-changed` when this worker's previous run of the same
@@ -72,7 +72,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         .unwrap_or(false);
     let started_at = now();
     // air-4cr: publish the run BEFORE it starts, so "someone is mid-verify" is a lookup.
-    // adopter's coordinator invalidated three workers' verifies by landing under them and
+    // The adopter's coordinator invalidated three workers' verifies by landing under them and
     // had no way to know; their fix was a hand protocol where the worker warns first. A full
     // verify is ~420 s and the landing rate is faster, so no cadence works — only the fact.
     let id = new_id();
@@ -201,7 +201,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     if exit_code == 0 { 0 } else { 1 }
 }
 
-/// A green faster than this, or with no output, is flagged (adopter capture 38b0c1).
+/// A green faster than this, or with no output, is flagged (the adopter's capture 38b0c1).
 const SUSPICIOUS_MS: i64 = 2_000;
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).

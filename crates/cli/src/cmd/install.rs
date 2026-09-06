@@ -26,6 +26,35 @@ use crate::cmd::emit;
 /// The roles document, embedded so installs are self-contained.
 pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 
+/// Appended to the COORDINATOR's role prose when Metis is attached (air-g5o), and to no other
+/// session.
+///
+/// Metis's own plugin text declares Metis the system of record and says plans do not live
+/// outside it. That is true of a repo that runs Metis alone and false here, where tasks are
+/// beads and decisions are dated files in `docs/`. A plugin's instructions arrive in the
+/// session whether or not anyone agreed with them, so the boundary is stated on Air's side of
+/// the prompt rather than argued with afterwards (analysis 2026-09-05, air-ate).
+///
+/// Pinned by `install::tests::the_metis_split_states_the_boundary`, because the failure it
+/// prevents is a paragraph quietly going missing and the coordinator taking a tool's word for
+/// where the plan lives.
+pub const METIS_SPLIT: &str = "\
+## Metis, and what it is not the system of record for
+
+Metis is attached to this session for **vision and initiatives**: the long-lived shape of the
+work, and the phases an initiative moves through. Plan there, and cut work from an initiative
+at its decompose phase.
+
+It is not the task tracker and it is not the decision log. **Tasks are beads** — filed with
+`bd create --validate`, claimed with `air claim`, closed with proof — and each one's
+description declares the initiative it came from on a line reading `initiative: <CODE>`.
+**Decisions are dated entries in `docs/`.** Metis's own instructions say otherwise, because
+they are written for a repo that runs Metis alone; this is not one.
+
+`air status` prints how many open beads declare no initiative. It is a count, not a gate:
+nothing is refused for lacking one.
+";
+
 /// The coordinator's procedures, embedded and installed as skills in the target repo so every
 /// coordinator carries the same reasoning, versioned with `air` (owner, 2026-08-21).
 ///
@@ -41,7 +70,7 @@ pub const SKILLS: &[(&str, &str)] = &[
     // `beads` was considered and deliberately left out. A target repo does need the bd
     // vocabulary, but that skill's own frontmatter says it covers "the bd 1.2.1 CLI surface",
     // and Air pins 1.2.2 because 1.2.1 corrupted the Dolt schema (`doctor::BD_PINNED`;
-    // adopter adoption 2026-08-21). Installing it would ship a document describing the
+    // The adopter's adoption 2026-08-21). Installing it would ship a document describing the
     // version Air refuses — the same "surface describes something untrue" failure this bead
     // exists to fix. Add it when it is rewritten against the pinned version.
     (
@@ -81,7 +110,24 @@ pub fn skill_with_name(text: &str, name: &str) -> String {
     out
 }
 
-const HOOK_TIMEOUT_SECS: u64 = 5;
+/// The wall-clock cap written into `settings.json` for `air hook`.
+///
+/// **Fail direction: OPEN, and silently.** Claude Code KILLS the hook at this cap; a killed
+/// process writes no event line, so a gate that never ran is indistinguishable in the record
+/// from a gate that allowed. Every other budget here fails toward a message; this one fails
+/// toward nothing at all.
+///
+/// **Not derived, and it cannot be from its own distribution.** A budget whose overrun deletes
+/// its own sample is censored at exactly the value you would want to size against, so
+/// `air audit` pairs the `hook` percentiles with an unpaired-hook count: the PreToolUse
+/// invocations with no PostToolUse to match them. That count, not the p99, is what moves this
+/// number — a non-zero one means hooks are being killed and the cap is short. The design
+/// budget is p99 ≤ 150 ms (tick 0315), so 5 s is ~33x it; raising the cap raises the price of
+/// every wedged hook the fleet waits on, which is why it is not simply generous.
+///
+/// `hook::HOOK_BUDGET` mirrors this so the process measures itself against the number
+/// actually installed.
+pub const HOOK_TIMEOUT_SECS: u64 = 5;
 
 /// The hook table (plan 0001 §5): one command for every event, short timeout.
 pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {
@@ -225,7 +271,7 @@ fn read_json(path: &Path) -> Result<Value, String> {
 /// One change to Air's OWN surface that a repo already running Air has to be told about
 /// (air-6g1).
 ///
-/// The incident: this round moved five things under adopter, which has Air installed, and
+/// The incident: this round moved five things under the adopter, which has Air installed, and
 /// nothing told it. `air install` already dry-runs; this is that dry run made honest about
 /// version-to-version change.
 ///
@@ -247,7 +293,9 @@ pub struct SurfaceChange {
     pub action: &'static str,
 }
 
-/// Every surface change since Air started recording them. Append; never edit an id.
+/// Every surface change since Air started recording them. Append; never edit an id. A lane
+/// appends the notice only; the release row that covers it is appended by the coordinator at
+/// round end (air-mir), and `make release` refuses until the two agree.
 pub const SURFACE: &[SurfaceChange] = &[
     SurfaceChange {
         id: "land",
@@ -313,7 +361,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    landing prints each bead beside its acceptance and Air's verdict.",
         silent_break: true,
         action: "A repo whose landing pass assumed \"merged means closed\" will now find beads \
-                 merged and still open, because closing moved to the worker. adopter closed \
+                 merged and still open, because closing moved to the worker. The adopter closed \
                  99 beads on branch containment alone, 14 partial and 1 not done. The close \
                  reason is PROOF - a command and its output, a file:line, a passing test - and \
                  the hand-over gate already covers `bd close`.",
@@ -508,7 +556,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                  workers that fast-forward onto it. Who ran it is still on the row. (2) The \
                  tree key is NOT on by default and must not be turned on by reflex: a green \
                  transfers to an identical tree only if your verify is a function of the tree \
-                 alone. adopter's is not - `make verify` runs `git log main..HEAD` to pick \
+                 alone. The adopter's is not - `make verify` runs `git log main..HEAD` to pick \
                  the beads it checks (scripts/lib/bead_citations.py:140), so two commits over \
                  one tree verify differently there and a tree-keyed gate would pass beads it \
                  never checked. Ten-minute check before declaring it: grep your verify for \
@@ -531,7 +579,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                  signalled, make exits 2 and Air records a red, because 2 is a real failure's \
                  code too and Air does not parse make's \"Terminated\" line to tell them \
                  apart. A wrapper that knows a stage was signalled should exit 143 to say so \
-                 (adopter's run-logged.sh does).",
+                 (the adopter's run-logged.sh does).",
     },
     SurfaceChange {
         id: "task-by-file",
@@ -543,7 +591,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "Nothing to change in how workers are launched. What changes is what `ps` \
                  shows: a worker's argv no longer contains its prompt, so a `pkill -f` over \
                  ordinary command text (`air record verify`, `git status`) stops matching \
-                 every peer. adopter lost seven workers to that on 2026-08-30. Anything \
+                 every peer. The adopter lost seven workers to that on 2026-08-30. Anything \
                  that reads a worker's task out of `ps` or the tmux command line reads the \
                  file instead; anything that cleans `.air/` leaves `tasks/` alone.",
     },
@@ -586,7 +634,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "A landing that used to print a warning and proceed now exits 2 with the runs \
                  named. Wait (`air status` shows when they exit), stop one by pid (`kill \
                  <pid>`, never `pkill -f`), or pass `--despite-inflight` knowing it destroys \
-                 those runs. adopter lost 1,199 s of finished verify to the warning on \
+                 those runs. The adopter lost 1,199 s of finished verify to the warning on \
                  2026-08-30 and an operational rule did not hold; the override count is what \
                  decides whether the refusal stays.",
     },
@@ -613,7 +661,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: true,
         action: "Check every launch of yours for a second `--settings`: `air worker … -- \
                  --settings '{…}'` used to REPLACE Air's env block and switch the one refusal \
-                 off with no message (adopter ran five hours unenforced after adding one to \
+                 off with no message (the adopter ran five hours unenforced after adding one to \
                  disable Remote Control, and found out from a close that should have been \
                  refused). Inline JSON now merges; a `--settings <file>` in pass-through is \
                  refused with the four names. Relaunch every worker through `air worker` and \
@@ -656,7 +704,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    the Stop nudge (no bd call, no idle mark).",
         silent_break: true,
         action: "Any number derived by summing `bd_calls` over the event log is wrong for \
-                 every day before this: adopter's 2026-08-30 summed to 570,989 while the \
+                 every day before this: the adopter's 2026-08-30 summed to 570,989 while the \
                  largest total any process reached was 1,661, and one-shot commands cost \
                  1 to 4. Re-derive from lines written by this version; for older days, take \
                  the max `bd_calls` per command as that process's lifetime total. The bead's \
@@ -771,13 +819,114 @@ pub const SURFACE: &[SurfaceChange] = &[
         since: "2026-09-06 (air-d61)",
         headline: "`air doctor` and `air status` print one line when `.air/installed.json` \
                    records an older crate or surface version than the running binary: both \
-                   versions, the count of unread notices, and the fix. adopter's hooks ran \
+                   versions, the count of unread notices, and the fix. The adopter's hooks ran \
                    0.2.18 for days on a record that said 0.1.0 / surface 2, with the ledger \
                    already migrated and the installed skills stale, and nothing said so. \
                    Printed, never refused; a repo with no record at all stays silent.",
         silent_break: false,
         action: "If the line appears, run `air install` to read the notices, then \
                  `air install --write`; the line goes away with the record.",
+    },
+    SurfaceChange {
+        id: "stuck-deleted",
+        since: "2026-09-06 (air-12k)",
+        headline: "The `stuck` session state and attention condition are gone: no session \
+                   reads it, no condition raises it, `air audit` no longer lists it, and \
+                   `AIR_ATTENTION_STUCK_MIN` does nothing. It was set only by the \
+                   PermissionRequest \
+                   hook, which never arrives in auto mode — zero in 39,071 event lines.",
+        silent_break: true,
+        action: "A script or dashboard that filters `air status --json` for `stuck` now reads \
+                 an empty set and says nobody is stuck, which is true and useless: it was \
+                 already always empty. Replace it with the coordinator's heartbeat — \
+                 `air status` on a timer — which is what actually caught every wedged worker; \
+                 `.air/roles.md` says so, and `air install --write` refreshes it.",
+    },
+    SurfaceChange {
+        id: "budgets-measured",
+        since: "2026-09-06 (air-d75)",
+        headline: "Every timing budget Air waits on records its elapsed time and whether it \
+                   was hit, in a `budgets` object on the event line; `air audit` prints per \
+                   budget the count, p50/p90/p99/max, hits and near misses with the fail \
+                   direction beside each, plus an unpaired-hook count for the one budget that \
+                   cannot record its own overruns. The SQLite busy timeout moves 200 ms -> 1 s \
+                   and is now a recording `busy_handler`.",
+        silent_break: false,
+        action: "Nothing to run. Event lines gain one optional key, so a reader that ignores \
+                 unknown fields is unaffected. Read `air audit`'s budget rows once a round: a \
+                 non-zero `hits` on `git` or `sqlite-lock` is a hook that failed open, which \
+                 is a refusal that did not happen. The harness's own Bash timeout is the one \
+                 budget Air cannot record; see adopting-air.md §1 step 5.",
+    },
+    SurfaceChange {
+        id: "no-harness-worktree-flag",
+        since: "2026-09-06 (air-8gj)",
+        headline: "`air worker` no longer passes `--worktree` (or `--tmux`) to claude. Air \
+                   creates the worktree and starts claude IN it, so the harness's own worktree \
+                   isolation is off; one PreToolUse check replaces it, denying an \
+                   Edit/Write/MultiEdit whose RESOLVED path leaves the worker's worktree. In \
+                   The adopter's record the harness block stopped no observed write to the main \
+                   checkout and cost 455 refusals in five days, 388 of them (88%) with no git \
+                   token in the command.",
+        silent_break: false,
+        action: "Nothing to run. Workers gain back the operations the harness was refusing \
+                 (native builds, unattended commands) and lose one block; the tmux path is \
+                 Air's on both routes, so `AIR_TMUX_MODE` and the iTerm2 native pane are gone \
+                 with the flag. A Bash `cd ../..` is deliberately out of scope — the harness \
+                 never caught that either — so if your repo needs it, that is a cwd-scoped \
+                 command guard of your own.",
+    },
+    SurfaceChange {
+        id: "metis-on-the-coordinator",
+        since: "2026-09-06 (air-g5o)",
+        headline: "`air coordinator` attaches Metis when `.claude/air.json` says \
+                   `\"metis\": true`, which `air init` now writes by default: `--mcp-config` \
+                   with metis's own server declaration, and `--plugin-dir` when \
+                   `metis_plugin_dir` names a directory that exists. Workers never get it. \
+                   The coordinator's appended prose gains a paragraph stating that Metis \
+                   holds vision and initiatives while tasks stay beads and decisions stay in \
+                   `docs/`, and `air status` prints how many beads declare no \
+                   `initiative: <CODE>` line.",
+        silent_break: false,
+        action: "Nothing is refused: the count is a count, and a missing `metis` binary is one \
+                 printed line, not a failed launch. Set `\"metis\": false` in \
+                 `.claude/air.json` if your repo plans elsewhere. To get the plugin as well as \
+                 the tools, set `metis_plugin_dir` to the `plugins/metis` directory of a metis \
+                 checkout; Air will not guess that path, and a `--plugin-dir` pointing at \
+                 nothing loads nothing silently.",
+    },
+    SurfaceChange {
+        id: "adopter-check",
+        since: "2026-09-06 (air-bpj)",
+        headline: "`air adopter-check` refuses a tracked line naming an adopter. Names are \
+                   read from `private/adopters.md` (one `name: <x>` line each), never from \
+                   the binary, and the check SKIPS when that file is absent. Air's own tracked \
+                   text now says \"an adopter\": an incident keeps its date, its count and its \
+                   `air-` bead, and anything that quotes an adopter's files lives in an \
+                   ignored `private/`.",
+        silent_break: false,
+        action: "Nothing to run, and nothing changes for a repo that does not use it. If YOUR \
+                 repo is quoted in someone else's, the same shape works: `private/` in \
+                 `.gitignore`, the names in `private/adopters.md`, and `air adopter-check` in \
+                 your verify. Air will not tell you a name is missing — a check whose list is \
+                 public would publish what it exists to hide.",
+    },
+    SurfaceChange {
+        id: "init-scaffold",
+        since: "2026-09-06 (air-ej4)",
+        headline: "`air init --write` now scaffolds four empty-but-ready things a fresh repo \
+                   needs and Air used to assume: a `Makefile` with a `verify` target that \
+                   FAILS until it is edited, a `.worktreeinclude` with a comment header, and \
+                   in the `CLAUDE.md` stub the hand-over sequence and the `Bead: <id>` trailer \
+                   rule. Each is created ONLY when absent and never edited, and `air init` \
+                   without `--write` lists what it would create.",
+        silent_break: false,
+        action: "Nothing changes for a repo that already has these: a present `Makefile`, \
+                 `.worktreeinclude` or `CLAUDE.md` is not touched, and a `Makefile` with no \
+                 `verify` target is REPORTED and still not edited. If you scaffold a new repo, \
+                 know that its `make verify` exits 1 on purpose until you put a real check in \
+                 it; that is what stops the first `air record verify` recording a green for an \
+                 empty check.",
     },
     SurfaceChange {
         id: "close-asks-the-recorded-main",
@@ -843,17 +992,31 @@ pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
 /// binaries apart while its own doc claimed it could. A surface version that moves on nobody's
 /// authority is the same defect one level up.
 ///
-/// The three columns are checked against each other and against the crate by
-/// `install::tests::a_release_row_matches_the_crate_and_the_surface`, which runs in
-/// `make verify`. So:
+/// **Releases are cut per round, not per notice** (owner, 2026-09-06, air-mir). A lane
+/// appending a notice appends NO row; the coordinator appends one row at round end covering
+/// every notice since the last. What that ruling moved is WHEN the count has to match, not
+/// whether: the invariant — a surface notice never ships without a row, so `Installed` never
+/// claims a version it cannot identify (air-w9d) — is unchanged.
 ///
-/// * appending a surface notice **forces a release** — the count stops matching until a row
-///   is added;
-/// * bumping the crate version **forces a decision** about the surface version;
-/// * neither can drift from the other, because both read this table rather than each other.
+/// So the check is split across two moments:
+///
+/// * `make verify` (`tests::a_release_row_matches_the_crate_and_the_surface`) asks only that
+///   nothing went BACKWARDS ([`verify_rows_ok`]) and that the crate version matches the last
+///   row. Notices beyond that row are the normal mid-round state.
+/// * `make release` (`air release-check`, [`release_check`]) asks that the count and the crate
+///   version agree with the last row exactly, and names the row to append when they do not.
+///
+/// The cost of asking at every verify was measured, not guessed: nineteen releases between
+/// 17:22Z and 00:50Z on 2026-09-06, five release-row number collisions between lanes
+/// re-numbered by coordinator message, and a tag/verify/install cycle of several minutes on
+/// main for every landing that carried a notice.
 ///
 /// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing — which
-/// is the one direction a guard must not fail in, and is why this is a test and not a comment.
+/// is the one direction a guard must not fail in, and is why the release half is a refusal and
+/// not a comment.
+///
+/// Removal condition for the release-time check: when notices are generated from the release
+/// rows rather than written by hand, at which point they cannot outrun them.
 pub const RELEASES: &[(&str, u32, usize)] = &[
     // The surface as it stood before 2026-08-29: nine notices, no release ever cut.
     ("0.0.1", 1, 9),
@@ -908,6 +1071,56 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.19", 23, 42),
 ];
 
+/// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
+/// Yes while nothing went backwards (air-mir): a lane appends notices during a round and the
+/// coordinator appends the row at round end, so `len > last` is the normal state mid-round.
+pub fn verify_rows_ok(last: usize, len: usize) -> bool {
+    len >= last
+}
+
+/// Pure: the release-time check (air-mir; owner ruling 2026-09-06, releases per round). The
+/// invariant is unchanged, a notice never ships without a row; what moved is WHEN it is
+/// asked: here, from `make release`, instead of on every verify. Nineteen releases in one
+/// day and five row collisions between lanes was the cost of asking every time. Returns the
+/// message naming the count and the row to append.
+pub fn release_check(cargo_version: &str, surface_len: usize) -> Result<(), String> {
+    let (version, surface, count) = RELEASES.last().copied().unwrap_or(("", 0, 0));
+    if version != cargo_version {
+        return Err(format!(
+            "Cargo.toml is at {cargo_version} but RELEASES' last row is {version}: append a \
+             row for {cargo_version} (or set Cargo.toml to {version})."
+        ));
+    }
+    if surface_len != count {
+        return Err(format!(
+            "SURFACE has {surface_len} notices but RELEASES' last row ({version}, {surface}, \
+             {count}) covers {count}: append (\"<next version>\", {}, {surface_len}) and set \
+             Cargo.toml to the same version, then re-run.",
+            surface.saturating_add(1)
+        ));
+    }
+    Ok(())
+}
+
+/// `air release-check`: exit 2 with the row to append when the surface has outrun the
+/// releases. Run by `make release`, never by `make verify`.
+pub fn release_check_cmd() -> i32 {
+    match release_check(env!("CARGO_PKG_VERSION"), SURFACE.len()) {
+        Ok(()) => {
+            println!(
+                "release-check ok: {} notices, last row {:?}",
+                SURFACE.len(),
+                RELEASES.last()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("release-check: {e}");
+            2
+        }
+    }
+}
+
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
 /// it**. Bumped by cutting a release, never on its own.
 ///
@@ -929,7 +1142,7 @@ pub const SURFACE_VERSION: u32 = match RELEASES.last() {
 ///
 /// `None` recorded means a repo installed before this existed: allowed, and deliberately so.
 /// The file already treats a missing record as "told about nothing", and refusing here would
-/// lock out every repo running Air today, adopter included.
+/// lock out every repo running Air today, the adopter included.
 pub fn may_install(mine: u32, theirs: Option<u32>) -> bool {
     theirs.is_none_or(|t| mine >= t)
 }
@@ -946,7 +1159,7 @@ pub fn read_installed(air_dir: &Path) -> Installed {
 /// The install record is older than the running binary (air-d61).
 ///
 /// The downgrade refusal (air-w9d) guards one direction: an old binary may not write over a
-/// newer record. Nothing stated the other: adopter's `.air/installed.json` said 0.1.0 /
+/// newer record. Nothing stated the other: the adopter's `.air/installed.json` said 0.1.0 /
 /// surface 2 while its hooks had run 0.2.18 for days (the ledger already at schema v16, the
 /// installed `air-*` skills still telling workers to run a refused command), and `air doctor`
 /// said nothing. A repo whose hooks run a binary newer than the one it installed is exactly
@@ -1438,6 +1651,9 @@ mod tests {
         assert!(ROLES_MD.contains("Once you have work, finishing a bead is not a stop."));
         assert!(ROLES_MD.contains("Starting a session is not being given work."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
+        // air-12k: the heartbeat is the failsafe, and roles.md promises no `stuck` condition.
+        assert!(ROLES_MD.contains("the heartbeat is the failsafe"));
+        assert!(!ROLES_MD.contains("the channel (stuck,"));
         // air-97z: roles.md states landing as a role boundary and as facts Air records, and
         // names no landing command. A repo with its own lander keeps it, so the prose that used
         // to prescribe `air land --all` here is asserted ABSENT, the same shape as the
@@ -1458,7 +1674,7 @@ mod tests {
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
         // air-8zu: roles.md states what Air records and refuses, never one repo's closing
-        // procedure. adopter closes with proof and was being told to set awaiting_review by
+        // procedure. The adopter closes with proof and was being told to set awaiting_review by
         // a file it cannot edit. `awaiting_review` may appear only where the refusal lists
         // what the gate matches, never as an instruction.
         assert!(
@@ -1466,6 +1682,33 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+        // air-8gj: the worktree fence is Air's, not the harness's. Both halves are pinned,
+        // because dropping either leaves roles.md promising a block that is not there — which
+        // is the direction a rules file must not fail in. The claim that used to stand here
+        // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
+        // `claude --worktree` and is false without it.
+        assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
+        // states that the count attached to it refuses nothing. Both halves are pinned: a
+        // rules file that names a count without saying it is not a gate is how a measurement
+        // becomes a rule nobody decided on.
+        assert!(ROLES_MD.contains("initiative: <CODE>"));
+        assert!(ROLES_MD.contains("It is a count and there is no refusal attached to it"));
+        // air-zth: the coordinator's context is the channel, so the reading is delegated by
+        // default. Pinned with its removal condition, because a roles line with no way out is
+        // the throttle the do-less rule exists to prevent (air-s7c).
+        assert!(ROLES_MD.contains("Your context is the channel the owner and every worker reach"));
+        // One line's worth: roles.md is hard-wrapped, so an assertion spanning a wrap fails on
+        // the wrap rather than on the rule.
+        assert!(ROLES_MD.contains(
+            "round shows zero owner or worker messages waiting more than five minutes on the \
+             coordinator."
+        ));
+        assert!(
+            !ROLES_MD.contains("Editing\nthe main checkout is blocked natively")
+                && !ROLES_MD.contains("the main checkout is blocked natively"),
+            "roles.md must not promise the harness's block once the flag is gone (air-8gj)"
+        );
         // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
         assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
         assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
@@ -1478,7 +1721,7 @@ mod tests {
             "the owner audience is gone (air-uef)"
         );
         assert!(!ROLES_MD.contains("owner decision waiting"));
-        // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
+        // Two facts from the adopter's round, riding on the same file (owner, 2026-09-05).
         assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
         assert!(ROLES_MD.contains("reads the tree alone and not git history"));
         // air-9ij (owner, 2026-09-06): the coordinator has to know where main still costs
@@ -1523,15 +1766,15 @@ mod tests {
         assert!(ROLES_MD.find("### Verification lane") < ROLES_MD.find("## Coordinator"));
     }
 
-    /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for
-    /// what a release IS here, and this is what makes it a line rather than a comment:
+    /// The verify-time half of the release line in the sand (owner, 2026-08-29; narrowed to
+    /// this half by air-mir, 2026-09-06). What it still holds:
     ///
-    /// * append a surface notice and the count stops matching, so a release is forced;
+    /// * a notice REMOVED, or a row edited to say less, stops matching — rows are appended;
     /// * bump the crate version and the last row stops matching, so the surface version has
     ///   to be decided rather than drift.
     ///
-    /// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing —
-    /// which is the one direction a guard must not fail in.
+    /// What moved to `air release-check`: notices beyond the last row's count. Mid-round that
+    /// is the normal state, not a defect, since a lane appends a notice and no row.
     #[test]
     fn a_release_row_matches_the_crate_and_the_surface() {
         let (version, surface, count) = RELEASES.last().copied().unwrap_or(("", 0, 0));
@@ -1542,12 +1785,13 @@ mod tests {
              appending a row here; see CLAUDE.md \"Releases\".",
             env!("CARGO_PKG_VERSION")
         );
-        assert_eq!(
-            (SURFACE_VERSION, SURFACE.len()),
-            (surface, count),
-            "SURFACE has {} notices at version {SURFACE_VERSION}, but RELEASES' last row says \
-             ({surface}, {count}). Appending a notice means cutting a release: add a row with \
-             the new crate version, the next surface version, and the new count.",
+        // air-mir: notices beyond the last row are allowed here and refused at release time
+        // (`release_check`, run by `make release`). A count going BACKWARDS is still a lie.
+        assert_eq!(SURFACE_VERSION, surface);
+        assert!(
+            verify_rows_ok(count, SURFACE.len()),
+            "SURFACE has {} notices but RELEASES' last row says {count}: a notice was removed \
+             or a row edited; rows are appended, never edited.",
             SURFACE.len()
         );
         // Monotonic in both machine-read columns, so `may_install` compares a total order
@@ -1558,6 +1802,30 @@ mod tests {
                 _ => true,
             }),
             "RELEASES must never decrease: append rows, never edit them"
+        );
+    }
+
+    /// air-g5o: the split paragraph the coordinator's session carries when Metis is attached
+    /// states the boundary Metis's own text denies. Pinned because the failure it prevents is
+    /// the paragraph going missing and the coordinator taking a plugin's word for where the
+    /// plan lives: Metis's instructions say it is the system of record, and here it is not.
+    ///
+    /// Each half is asserted separately. "Tasks are beads" without "decisions are dated
+    /// entries" leaves the decision log to Metis; either without the declared field leaves
+    /// `air status`'s count with nothing to read.
+    #[test]
+    fn the_metis_split_states_the_boundary() {
+        assert!(METIS_SPLIT.contains("vision and initiatives"));
+        assert!(METIS_SPLIT.contains("**Tasks are beads**"));
+        assert!(METIS_SPLIT.contains("**Decisions are dated entries in `docs/`.**"));
+        assert!(METIS_SPLIT.contains("initiative: <CODE>"));
+        // It must say the count is not a gate, in the same breath as naming the count. A
+        // session told about a number and not about its force will treat it as one.
+        assert!(METIS_SPLIT.contains("It is a count, not a gate"));
+        // And it must NOT reproduce Metis's claim, which is what it exists to contradict.
+        assert!(
+            !METIS_SPLIT.contains("system of record for tasks"),
+            "the split must not restate the claim it corrects"
         );
     }
 

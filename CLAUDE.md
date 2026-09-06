@@ -9,7 +9,7 @@ Index items are 1–3 lines; detail lives behind the link.
   decisions live here and in `docs/`. If memory files exist for this project, delete them and
   move the content into `docs/decisions.md`.
 - **Source trail always.** Every research claim cites a primary source — URL with access date,
-  or `path:line-range`. Claims derived from adopter notes cite the note *and* the source it
+  or `path:line-range`. Claims derived from the adopter's notes cite the note *and* the source it
   cited. No "mysterious bunch of claims".
 - **Do less. Nothing is sacred.** The goal is the model's productivity, not the framework's
   completeness. Air removes friction (relayed facts, drift, collisions); it does not direct the
@@ -36,16 +36,20 @@ Index items are 1–3 lines; detail lives behind the link.
   launchers start interactive sessions, never headless ones, and nothing Air builds may take the
   owner out of the loop or hide what an agent is doing. Introspection into live state
   (`air status`, the event stream) is part of the same requirement.
-- **Productive sooner than later.** Improve adopter's current process incrementally; every early
-  milestone is something adopter can run. Prefer replacing one prose rule with one enforced
+- **Productive sooner than later.** Improve the adopter's current process incrementally; every early
+  milestone is something the adopter can run. Prefer replacing one prose rule with one enforced
   check over designing a platform.
 - **Releases are the line in the sand, and the surface version moves with them.** Air is
   installed into other repos, so "what this binary is" has to be answerable by the binary. One
   release = one appended row in `install::RELEASES` (crate version, surface version, notice
   count) + the same version in `Cargo.toml` + `make release`, which refuses a dirty tree or a
-  non-main branch, runs `make verify`, and tags what it verified. **Appending a surface-change
-  notice forces a release**: the notice count stops matching and `make verify` fails until a row
-  is added. Never edit a row; append. The reason it is enforced rather than written down is that
+  non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
+  **Releases are cut per round, not per notice** (owner, 2026-09-06, air-mir): a lane appends
+  its surface notice and no row; the coordinator appends one row at round end covering every
+  notice since the last, and `air release-check` refuses the release until the count and the
+  version agree. `make verify` refuses only a count going backwards. Nineteen releases and
+  five row collisions in one day was the cost of checking at every verify. Never edit a row;
+  append. The reason it is enforced rather than written down is that
   forgetting fails toward *permitting* — `air install`'s downgrade refusal quietly stops
   noticing, and a stale binary shows an adopting repo none of the notices telling it to upgrade
   (owner, 2026-08-29; air-w9d). Before that ruling Air had no release concept at all: `0.0.1`
@@ -57,7 +61,12 @@ Index items are 1–3 lines; detail lives behind the link.
   2026-08-20).
 - **Rust.** Prefer using or borrowing from an existing good project; research must show why not
   before we build. Never make a target repo's tooling depend on Air's *build* — install a binary.
-- **Steal avidly** from `~/projects/adopter` and `~/projects/metis` (and cite what was taken).
+- **Steal avidly** from the adopters we work with and from `~/projects/metis` (and cite what was
+  taken). **Cite them as "an adopter", never by name** (air-bpj, owner 2026-09-06: the Air
+  project is separate from theirs). The incident keeps its date, its count and its `air-` bead;
+  the name, their paths, their bead ids and anything that copies their files live in `private/`,
+  which is ignored. `make verify` runs `air adopter-check`, which reads the names from
+  `private/adopters.md` and skips cleanly when that file is absent.
 - **Tests are optimized for speed, always.** They run constantly; per-test cost is a first-class
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
 - **Talking to the owner.** Plain language, short. Lead with the thing the owner has to know or
@@ -66,12 +75,16 @@ Index items are 1–3 lines; detail lives behind the link.
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
+  **Being reachable is part of it**: the coordinator's context is the channel the owner and
+  every worker reach, so long reads, dry runs and analyses go to a background agent with a file
+  deliverable while the filing and the deciding stay with the coordinator (roles.md, Coordinator
+  section; owner, 2026-09-06, air-zth).
 - **A claim that crosses between projects is checked by the receiver before it is acted on.**
   Not hedged harder by the sender: a derived statement and an observed one have identical
   grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
   read the line cited. Applies in both directions and to commands most of all. **Check even
   when you agree. Agreement is when checking feels least necessary and is most valuable.**
-  Owner, via the 2026-08-22 ai_runner/adopter exchange: three corrections, all caught by the
+  Owner, via the 2026-08-22 exchange with an adopter's coordinator: three corrections, all caught by the
   receiver opening the file, none by the sender flagging; and a fourth that both sides held and
   neither checked, plausibly *because* the other had said it.
   **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
@@ -90,11 +103,11 @@ Index items are 1–3 lines; detail lives behind the link.
 | What Claude Code itself already provides (live inventory, dated, with the limits that matter) | [`docs/research/claude-code-control-surfaces.md`](docs/research/claude-code-control-surfaces.md) §0 |
 | Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
 | Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
-| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it on adopter | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
+| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it in an adopter's repo | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
 | Integrating Air into a target repo (install, rules to change, self-maintenance) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | What comes next, in order | [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md) |
-| The whole change list from the 2026-08-24/25 audit and adopter's round logs, ruled item by item, with a path for each | [`docs/plans/0008-consolidated-changes.md`](docs/plans/0008-consolidated-changes.md) |
-| What the adopter round proposes, and the do-less verdict on each | [`docs/plans/0006-post-round-changes.md`](docs/plans/0006-post-round-changes.md) |
+| The whole change list from the 2026-08-24/25 audit and the adopter's round logs, ruled item by item, with a path for each | [`docs/plans/0008-consolidated-changes.md`](docs/plans/0008-consolidated-changes.md) |
+| What the adopter's round proposes, and the do-less verdict on each | [`docs/plans/0006-post-round-changes.md`](docs/plans/0006-post-round-changes.md) |
 | Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
 | Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
@@ -131,7 +144,7 @@ of it and was stale by 14, air-jc0). Next (after round-one data): `next`, `peer`
   denial of a `tmux` command naming another project's session (air-0lk, narrowed by air-3oq)
   fired zero times ever and was deleted on 2026-08-29 (air-9u6), so on the tmux half this line
   IS the rule rather than a description of a check. Other fleets run on this machine
-  (`~/projects/adopter`).
+  (`the adopter's checkout`).
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 - Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
   with `air record verify -- make verify` (owner, 2026-08-22).
@@ -161,7 +174,7 @@ descendant, air-80x.1).
 
 **Variant B, a verify lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
 The worker does **not** run verify: the batch only forms if workers stop verifying individually,
-which is what adopter's 2026-08-29 round learned by parking a lane whose batch never came.
+which is what the adopter's 2026-08-29 round learned by parking a lane whose batch never came.
 
     air claim <id> [--files a,b]
     … implement; write and commit the digest as above, with a `Bead: <id>` trailer on the work

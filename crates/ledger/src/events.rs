@@ -28,6 +28,11 @@ pub struct Event<'a, T: Serialize> {
     pub bd_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bd_calls: Option<u64>,
+    /// What every timing budget this command waited on actually cost, and whether it was hit
+    /// (air-d75). Absent when the command waited on none, so "no wait" and "a fast wait" stay
+    /// distinct — the same distinction `bd_ms` draws, for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budgets: Option<&'a std::collections::BTreeMap<String, crate::budgets::Waits>>,
 }
 
 /// Where today's events file lives: `<air_dir>/events/YYYY-MM-DD.ndjson`.
@@ -68,7 +73,17 @@ mod tests {
     #[test]
     fn appends_one_json_line_per_event() {
         let dir = tempfile::tempdir().unwrap();
-        let inputs = serde_json::json!({"bead": "fd-1"});
+        let inputs = serde_json::json!({"bead": "zz-1"});
+        let mut waits = std::collections::BTreeMap::new();
+        waits.insert(
+            crate::budgets::GIT.to_string(),
+            crate::budgets::Waits {
+                budget_ms: 1500,
+                n: 1,
+                hits: 0,
+                ms: vec![9],
+            },
+        );
         let ev = Event {
             at: "2026-08-18T10:00:00Z",
             worker: "w1",
@@ -79,6 +94,7 @@ mod tests {
             denominator: "1 run checked",
             bd_ms: Some(1350),
             bd_calls: Some(1),
+            budgets: Some(&waits),
         };
         append(dir.path(), "2026-08-18", &ev).unwrap();
         append(dir.path(), "2026-08-18", &ev).unwrap();
@@ -87,16 +103,20 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(v["decision"], "refuse");
-        assert_eq!(v["inputs"]["bead"], "fd-1");
+        assert_eq!(v["inputs"]["bead"], "zz-1");
         assert_eq!(v["bd_ms"], 1350);
-        // A command that never touched bd leaves the fields off entirely.
+        assert_eq!(v["budgets"]["git"]["ms"][0], 9);
+        assert_eq!(v["budgets"]["git"]["budget_ms"], 1500);
+        // A command that never touched bd or waited on a budget leaves the fields off entirely.
         let quiet = Event {
             bd_ms: None,
             bd_calls: None,
+            budgets: None,
             ..ev
         };
         append(dir.path(), "2026-08-19", &quiet).unwrap();
         let text = std::fs::read_to_string(events_path(dir.path(), "2026-08-19")).unwrap();
         assert!(!text.contains("bd_ms"), "{text}");
+        assert!(!text.contains("budgets"), "{text}");
     }
 }

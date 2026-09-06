@@ -75,7 +75,7 @@ blank line, which is dropped rather than continued.
 **Structured source: it already exists, and this parse is the fallback.** bd has
 `--acceptance`, and `Issue.acceptance_criteria` reads it. The section parse exists only because
 beads filed with `-d` alone put the criteria in the description — this repo is section-only (0
-of 33 carry the field), adopter is field-mostly (647 of 711).
+of 33 carry the field), the adopter is field-mostly (647 of 711).
 
 So the fix here is **not a better parser**. It is filing discipline: `bd create --acceptance`.
 Until that holds everywhere, the parse is load-bearing for exactly the beads that skipped the

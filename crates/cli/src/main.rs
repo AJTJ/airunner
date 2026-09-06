@@ -157,7 +157,7 @@ enum Cmd {
     ///
     /// **The branch is the unit, and `--worker <name>` names it** (air-09b). A bead id names a
     /// branch only while exactly one branch carries it; a bead on two branches (a batching
-    /// lane and the worker it batched, adopter 2026-08-30) is refused with every carrier and
+    /// lane and the worker it batched, the adopter 2026-08-30) is refused with every carrier and
     /// the `--worker` command for each, never resolved by ordering or by which one happens to
     /// be landable. `--worker` lands that branch with every bead its merge range names, and
     /// so does naming a bead: the argument SELECTS the branch, it does not filter what the
@@ -195,7 +195,10 @@ enum Cmd {
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
     /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
-    /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills. Dry run by default.
+    /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills, and the
+    /// empty-but-ready scaffold (a failing Makefile verify target, .worktreeinclude, and a
+    /// CLAUDE.md stub carrying the work flow and the `Bead:` trailer rule), each created only
+    /// when absent and never edited. Dry run by default.
     Init {
         /// Beads issue prefix (default: from the directory name).
         #[arg(long)]
@@ -210,12 +213,13 @@ enum Cmd {
         write: bool,
     },
     /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
-    /// from `.worktreeinclude`), then `claude --worktree <name>` with role prose, deny list, env.
+    /// from `.worktreeinclude`), then runs claude IN it with role prose, deny list, env. No
+    /// `--worktree` (air-8gj): Air's PreToolUse hook is the fence.
     ///
-    /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
-    /// Bash tool, `</dev/null`) it starts a detached tmux session named <project>-<name>
-    /// instead, prints `tmux attach -t <project>-<name>`, and exits 0. AIR_CLAUDE_BIN overrides
-    /// the claude binary; AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
+    /// With --tmux or --task and a tty, opens a tmux session here. Without a tty (the
+    /// coordinator's Bash tool, `</dev/null`) it starts a detached tmux session named
+    /// <project>-<name> instead, prints `tmux attach -t <project>-<name>`, and exits 0.
+    /// AIR_CLAUDE_BIN overrides the claude binary; AIR_TMUX_SOCKET selects a tmux socket.
     Worker {
         /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
         name: Option<String>,
@@ -267,6 +271,12 @@ enum Cmd {
     /// command exists to surface (air-ha8). Every backticked name in this help is a field the
     /// command prints, and air selftest checks the containment, so the drift cannot come back
     /// quietly.
+    ///
+    /// It also prints `budgets`: every timing budget Air waits on, with which way each fails
+    /// when it is hit, and `hits` — a budget reached, meaning a decision taken on less than
+    /// was asked for. Three of them fail toward permitting, and the hook's own cap cannot
+    /// record its overruns at all, so `hook pairing` counts what a killed hook leaves instead
+    /// (air-d75).
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
@@ -291,6 +301,15 @@ enum Cmd {
     /// whether `bd` is the pinned version. (It printed one pragma while the help said
     /// "pragmas"; air-ha8.)
     Doctor,
+    /// The release-time check: every surface notice is covered by a RELEASES row and
+    /// Cargo.toml matches the last row. Run by `make release`; exit 2 names the row to append.
+    #[command(hide = true)]
+    ReleaseCheck,
+    /// No tracked file names an adopter (air-bpj). Names are read from `private/adopters.md`,
+    /// which is ignored, so a clone without it skips cleanly. Run by `make verify`; exit 2
+    /// names every offending line.
+    #[command(hide = true)]
+    AdopterCheck,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest {
         /// air-682: run each probe's DECLARED mutation and report any probe that stays green.
@@ -420,6 +439,8 @@ fn main() -> ExitCode {
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
+        Cmd::ReleaseCheck => cmd::install::release_check_cmd(),
+        Cmd::AdopterCheck => cmd::privacy::run(&repo, cli.json),
         Cmd::Selftest { prove } => {
             if prove {
                 cmd::selftest::prove(&repo, cli.json)

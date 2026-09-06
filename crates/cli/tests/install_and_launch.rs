@@ -164,7 +164,7 @@ fn install_reports_the_surface_diff_to_an_already_installed_repo() {
     assert_eq!(code, 0, "{out}");
     assert!(!out.contains("SURFACE DIFF"), "{out}");
 
-    // Now the adopter case: Air is installed, but from before any of this was recorded.
+    // Now the adopter's case: Air is installed, but from before any of this was recorded.
     std::fs::remove_file(repo.join(".air/installed.json")).unwrap();
     let (code, out, _) = air(&repo, Some(&path), &["install"]);
     assert_eq!(code, 0, "{out}");
@@ -200,7 +200,7 @@ fn launchers_print_the_exact_command() {
     // the blob; `zz` is scratch_repo's prefix.
     assert!(
         out.starts_with(
-            "AIR_ROLE=worker BEADS_ACTOR=frontend AIR_ENFORCE=1 AIR_PROJECT=zz claude --worktree frontend "
+            "AIR_ROLE=worker BEADS_ACTOR=frontend AIR_ENFORCE=1 AIR_PROJECT=zz claude --append-system-prompt-file "
         ),
         "{out}"
     );
@@ -645,7 +645,7 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     let lines: Vec<&str> = argv.lines().collect();
     // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule),
     // and it names the task file rather than carrying the task (air-er0: the text in argv is
-    // what `pkill -f` matched on adopter, seven workers in a day).
+    // what `pkill -f` matched on the adopter, seven workers in a day).
     let task_path = repo.join(".air").join("tasks").join("w.md");
     assert_eq!(
         lines.first().copied(),
@@ -664,7 +664,14 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
         "hello there\n"
     );
     assert!(lines.iter().all(|l| !l.starts_with("--tmux")), "{argv}");
-    assert_eq!(&lines[1..3], ["--worktree", "w"]);
+    // air-8gj: no `--worktree`; claude was started in the worktree Air made.
+    assert!(!lines.contains(&"--worktree"), "{argv}");
+    assert_eq!(
+        lines.get(1).copied(),
+        Some("--append-system-prompt-file"),
+        "{argv}"
+    );
+    assert!(repo.join(".claude/worktrees/w/.git").is_file());
 }
 
 #[test]
@@ -755,7 +762,7 @@ fn worker_with_no_name_picks_the_next_free_lane() {
     assert!(stderr.contains("no name given; using w1"), "{stderr}");
     assert!(stdout.contains("new-session -d -s zz-w1 -e "), "{stdout}");
     assert!(
-        stdout.contains("--worktree w1"),
-        "the lane name reaches claude: {stdout}"
+        stdout.contains("/.claude/worktrees/w1 "),
+        "the lane's worktree is claude's cwd: {stdout}"
     );
 }

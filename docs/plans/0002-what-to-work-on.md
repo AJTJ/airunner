@@ -72,16 +72,16 @@ What refuses what:
   re-implement it (`decisions.md` 2026-08-20 "Acceptance is required by beads, not Air").
 - Content of the acceptance is the coordinator's: one observable condition runnable inside
   the worktree by the agent, written so that satisfying it *is* the work
-  (adopter `task-specification-research.md:526-545, 634-637`, via research §5).
+  (the adopter `task-specification-research.md:526-545, 634-637`, via research §5).
 - **Two questions per clause, asked of the template before it is applied ten times** (air-j88):
   (1) what settles this, a command, a file state, or a **person**? A person is legitimate and
   often the only true answer, so write it that way and label the bead `owner`; the defect is a
   human judgement written as a fact. (2) If it were satisfied, would anything be **different**?
-  Eleven of adopter's 99 auto-closed beads had acceptance no rule could ever settle, and the
+  Eleven of the adopter's 99 auto-closed beads had acceptance no rule could ever settle, and the
   nine worst were one copied template across ten siblings, not drift. This is where `air land`'s
   unreadable-clause verdicts come from; the fix is here, at filing. Detail and the third question
   ("could the instrument satisfy this instead of the code?") are in the `decomposition` skill.
-  **No mechanical check**: a prose regex measured 80% false positives on adopter's queue and
+  **No mechanical check**: a prose regex measured 80% false positives on the adopter's queue and
   was dropped (`decisions.md` 2026-08-29).
 - `--estimate <minutes>` is recorded and compared with actual (measurement spec §2.7); never a
   gate.
@@ -124,7 +124,7 @@ or the worker would have to choose an approach. Not below one reviewable diff. R
 `--estimate`; the ledger calibrates the coordinator (spec §2.7).
 
 **3.5 Edges.** Between children, never on the epic (an epic edge propagates to every child,
-adopter `bead-dedup-audit-2026-08-17.md:99-100`). Shared file between siblings means a
+The adopter `bead-dedup-audit-2026-08-17.md:99-100`). Shared file between siblings means a
 `blocks` edge, cut by whoever has the whole tree in view. `bd dep cycles` must be empty.
 
 **3.6 Exit criteria per derived state** (full table in `phase-transitions/SKILL.md` "Epic"):
@@ -200,13 +200,13 @@ command (`crates/hooks/src/gate.rs`) **[built]**:
 
 Flakiness is named, not retried: runs at one sha that disagree print
 `flaky-at-head: N green / M red`; gate semantics stay latest-wins; fix or quarantine the test
-(`decisions.md` 2026-08-21 ad-jklh) **[built]**. `air record` also flags `suspicious`
+(`decisions.md` 2026-08-21) **[built]**. `air record` also flags `suspicious`
 (green under 2 s or no output), `command-changed`, `dirty-tree`, and refuses backgrounded
 commands **[built]**. WIP commits and merges are never refused; no hook blocks on a question.
 
 **Review and landing.** `awaiting_review` is not closed. Landing is piecemeal to `main`, no
 per-epic integration branch (`decisions.md` 2026-08-18 item 6). **`land` stays the repo's
-(`make land` in adopter) until `air land` ships [roadmap]**; when it does it is land.sh
+(`make land` in the adopter) until `air land` ships [roadmap]**; when it does it is land.sh
 behaviour-for-behaviour with a `landings` receipt (plan 0001 §4; plan 0005 §3). The
 coordinator lands; workers never land or push (launcher deny list).
 
@@ -254,11 +254,11 @@ the single list; a new metric is added there first (`decisions.md` 2026-08-20).
 |---|---|
 | Per-worker or fleet-wide WIP cap | Rejected 2026-08-21 ("there is no cap; we set our goals and finish them"); reverses the `awaiting-review-over-cap` condition built that day and retires plan 0001 check 9. Measurement only. |
 | Stored epic phase (label or field) | Tabled 2026-08-18 item 4; derive and display. |
-| Metis hierarchy as a third tracker, fourth level, Ralph decompose loop | Rejected (research §4 "Reject" 1, 2, 5; adopter 0022:227-231). |
+| Metis hierarchy as a third tracker, fourth level, Ralph decompose loop | Rejected (research §4 "Reject" 1, 2, 5; the adopter 0022:227-231). |
 | Sprints, points, velocity, ceremonies | Rejected (research §4, §10); a stand-up is `air status`. |
-| Auto-retry of a red verify | Rejected 2026-08-21 (ad-jklh): hides real reds; flakiness is named instead. N-of-M agreement is an open owner policy. |
+| Auto-retry of a red verify | Rejected 2026-08-21 : hides real reds; flakiness is named instead. N-of-M agreement is an open owner policy. |
 | Headless or looped workers | Rejected 2026-08-20: a human is always in the loop; launchers start interactive sessions. |
-| Lane forms / auto-declared lanes via PreToolUse | Subsumed 2026-08-21 (ad-uwdg): holdings derive from the edit journal; `air claim --files` is intent, measured not required. |
+| Lane forms / auto-declared lanes via PreToolUse | Subsumed 2026-08-21 : holdings derive from the edit journal; `air claim --files` is intent, measured not required. |
 | Claims derived by watching `bd` commands | Rejected 2026-08-20 ("no flimsy watchers"); wrapped instead. |
 | Separate triage session; auto-file `triage-needed` when captures outrun triage | Not now (2026-08-18 item 2, 2026-08-20); §2.8 is the trigger. |
 | Per-epic integration branches | Not pursued 2026-08-18 item 6; revisit on a measured cross-sibling breakage. |
@@ -283,13 +283,13 @@ the single list; a new metric is added there first (`decisions.md` 2026-08-20).
 Air: `docs/decisions.md` (2026-08-17 to 2026-08-21); `docs/plans/0001-first-slice.md` §2-§4;
 `docs/plans/0004-first-round-surface.md`; `docs/plans/0005-roadmap.md`; `docs/rules/roles.md`;
 `docs/rules/adopting-air.md`; `docs/research/metis-decomposition-and-agile.md` (§2 agile
-sources with access dates, §4 steal/adapt/reject, §5 adopter evidence, §6-§9 procedure,
+sources with access dates, §4 steal/adapt/reject, §5 the adopter's evidence, §6-§9 procedure,
 sizing, exit criteria, queues); `docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`;
 `.claude/skills/{decomposition,phase-transitions,beads}/SKILL.md`; code:
 `crates/hooks/src/gate.rs`, `crates/cli/src/cmd/{capture,claim,lease,record,status,launch}.rs`
 (read 2026-08-21).
 
-Metis (`~/projects/metis` at `6745810`) and adopter (`~/projects/adopter`
+Metis (`~/projects/metis` at `6745810`) and the adopter (`the adopter's checkout`
 at `71191e0`) paths as cited in the research report §13. Primary agile texts (Scrum Guide 2020,
 Kanban Guide v2025.5, Wake 2003, Lawrence and Green, Patton, Cockburn via Adzic, Kaltenecker and
 Leopold), all accessed 2026-08-20, URLs in research §13. The 2026-08-18 draft's external

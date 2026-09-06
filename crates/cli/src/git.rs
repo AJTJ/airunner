@@ -1,5 +1,10 @@
-//! Thin, timeout-bounded `git` calls. Shelling to `git` costs ~10 ms per call on this Mac
-//! (tick 0315); we call it only from CLI paths and once per hook at most.
+//! Thin, timeout-bounded `git` calls, made from CLI paths and once per hook at most.
+//!
+//! This said "~10 ms per call on this Mac (tick 0315)" until air-d75 measured it. Over 88
+//! recorded waits with the fleet running (four workers, a coordinator, verifies in flight) the
+//! p50 is 55 ms and the p99 is 170 ms — five to seventeen times the quiet-machine number, and
+//! the number every reader of this file had been reasoning from. Re-derive it from
+//! `air audit`'s `git` row rather than from this sentence.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,9 +28,28 @@ pub enum GitError {
 
 pub type Result<T> = std::result::Result<T, GitError>;
 
+/// How long any `git` call may take, hooks included.
+///
+/// **Fail direction: OPEN on the path that matters.** Every hook resolves its worktree root
+/// through here, and `air hook` turns an error into exit 0 with a `fail-open` line — so a
+/// `git` process that runs past this makes the one refusal Air makes silently not refuse. Off
+/// a hook path it fails closed: the command errors and says so.
+///
+/// **Not derived, deliberately.** Deriving it the way `status_bd_budget` derives from bd's
+/// median needs a measured distribution, and until air-d75 nothing recorded a single `git`
+/// wait: the event log's zero timeouts were the absence of a measurement. The first
+/// measurement (see the module doc: p50 55 ms, p99 170 ms under a busy fleet) leaves 1500 ms
+/// at roughly 9x the p99 — comfortable, and much less comfortable than the 150x the stale
+/// 10 ms figure implied. That is the shape a budget meant to catch a hang should have, so it
+/// stays; what changed is that it is now a number with a margin somebody can check.
+///
+/// Moved by: `air audit`'s `git` row. A p99 within an order of magnitude of this means the
+/// margin is gone and the number should follow the measurement; a non-zero `hits` count is a
+/// hook that failed open, and each one is a refusal that did not happen.
 const TIMEOUT: Duration = Duration::from_millis(1500);
 
 pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
+    let t0 = std::time::Instant::now();
     let child = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -35,7 +59,14 @@ pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(GitError::Spawn)?;
-    let (status, stdout, stderr) = match wait_drained(child, TIMEOUT).map_err(GitError::Spawn)? {
+    let drained = wait_drained(child, TIMEOUT).map_err(GitError::Spawn);
+    air_ledger::budgets::record(
+        air_ledger::budgets::GIT,
+        t0.elapsed(),
+        TIMEOUT,
+        matches!(&drained, Ok(None)),
+    );
+    let (status, stdout, stderr) = match drained? {
         Some(x) => x,
         None => return Err(GitError::Timeout(TIMEOUT)),
     };
@@ -134,7 +165,7 @@ pub fn dirty_files(cwd: &Path) -> Result<Vec<String>> {
 // `dirty_tracked` was here until air-odv (2026-08-29). Its only caller was `air land`'s
 // refusal of a dirty main, and that refusal existed only because the rollback was
 // `git reset --hard`, which restores tracked files and would have discarded uncommitted work
-// (adopter `land.sh:504-514`). There is no rollback now — main is fast-forwarded onto a
+// (the adopter `land.sh:504-514`). There is no rollback now — main is fast-forwarded onto a
 // commit that is already green — and `git merge --ff-only` declines on its own when a local
 // change is genuinely in the way. `git::dirty_files` is a different function and still used
 // by `air record` for the dirty-tree flag.

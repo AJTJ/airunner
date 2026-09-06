@@ -40,7 +40,7 @@
 ### Conclusion
 
 **"3–5 concurrent workers is the practical Max ceiling" is an ESTIMATE,** not derivable from primary documentation. The estimate likely rests on:
-- Empirical observation: adopter's fleet ran 4 workers (SESSION_SOFT=4) without hitting a documented ceiling
+- Empirical observation: the adopter's fleet ran 4 workers (SESSION_SOFT=4) without hitting a documented ceiling
 - Extrapolation: "3–5 concurrent is sustainable; beyond that, API billing"
 - No calculation shown; no published per-seat budget to work backward from
 
@@ -124,7 +124,7 @@ support.claude.com article 15036540 (re-fetched 2026-08-18):
 Minimal updates needed:
 
 1. **Section 5, line 105:** Change "Practical limit: 3–5 concurrent agents sustainable on Max; beyond that, switch to API key billing" to:
-   > "Practical limit: **~4 concurrent agents observed on Max** (ESTIMATE based on adopter 4-agent fleet, SESSION_SOFT=4); measurement via `rate_limits.five_hour.used_percentage` recommended before scaling beyond 5."
+   > "Practical limit: **~4 concurrent agents observed on Max** (ESTIMATE based on the adopter 4-agent fleet, SESSION_SOFT=4); measurement via `rate_limits.five_hour.used_percentage` recommended before scaling beyond 5."
 
 2. **Section 1, line 2:** Update verification date:
    > **Verified 2026-08-17 (re-verified 2026-08-18) | Primary Anthropic Sources Only**

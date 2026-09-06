@@ -48,7 +48,7 @@ pub type Result<T> = std::result::Result<T, BdError>;
 /// [`stats::snapshot`], the running total, on the assumption that `air` is one short-lived
 /// process per command. `air mcp` is not: its poll thread emits an event every tick for the
 /// life of the server, and every one of those lines carried the whole lifetime total again.
-/// adopter's 2026-08-30 log summed to 570,989 bd calls that way; the largest total any
+/// The adopter's 2026-08-30 log summed to 570,989 bd calls that way; the largest total any
 /// process ever reached was 1,661, and a one-shot command costs 1 to 4 (air-bp0). A derived
 /// number that reads like an observed one, and it was read as one.
 pub mod stats {
@@ -93,11 +93,11 @@ pub struct Issue {
     pub description: String,
     /// bd's first-class acceptance field, set by `bd create/update --acceptance`. bd OMITS
     /// THE KEY ENTIRELY when it is unset, which is why a key listing on beads that never set
-    /// it reads as "there is no such field" — twice, in two projects, before adopter's
+    /// it reads as "there is no such field" — twice, in two projects, before the adopter's
     /// survey of all 711 of its beads inverted the conclusion (air-ayp, 2026-08-22).
     ///
     /// Which shape a repo uses depends on how it files beads, so both are real: this repo is
-    /// section-only (0 of 33 carry the field), adopter is field-mostly (647 of 711 field,
+    /// section-only (0 of 33 carry the field), the adopter is field-mostly (647 of 711 field,
     /// 57 section, 0 both, 7 neither). `air land` runs in both, so it reads the union.
     #[serde(default)]
     pub acceptance_criteria: String,
@@ -174,6 +174,12 @@ pub struct BdCli {
     pub bin: PathBuf,
     pub cwd: PathBuf,
     pub timeout: Duration,
+    /// Which budget this bd is spending, for the record (air-d75). Five call sites set five
+    /// different timeouts on the same struct — the status reconcile derives one from bd's
+    /// measured median, the acceptance read grows one with the id count — and a single `bd`
+    /// row would report the largest of them as if it were the budget every wait ran against.
+    /// One of [`air_ledger::budgets`]'s `BD*` names.
+    pub label: &'static str,
 }
 
 impl BdCli {
@@ -182,13 +188,21 @@ impl BdCli {
             bin: PathBuf::from("bd"),
             cwd: cwd.to_path_buf(),
             timeout: Duration::from_secs(10),
+            label: air_ledger::budgets::BD,
         }
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
         let t0 = std::time::Instant::now();
         let out = self.run_inner(args);
-        stats::record(u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX));
+        let elapsed = t0.elapsed();
+        stats::record(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
+        air_ledger::budgets::record(
+            self.label,
+            elapsed,
+            self.timeout,
+            matches!(out, Err(BdError::Timeout(_))),
+        );
         out
     }
 
@@ -356,7 +370,7 @@ mod tests {
     /// air-bp0: one id through `show_all` gets bd's single-object answer, which is one issue.
     #[test]
     fn parses_a_bare_single_issue_as_one() {
-        let one = r#"{"id":"fd-1","title":"a","status":"awaiting_review","labels":[]}"#;
+        let one = r#"{"id":"zz-1","title":"a","status":"awaiting_review","labels":[]}"#;
         let got = parse_issues(one).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].status, "awaiting_review");
@@ -367,17 +381,17 @@ mod tests {
 
     #[test]
     fn parses_bare_array_and_wrapped_object() {
-        let bare = r#"[{"id":"fd-1","title":"a","status":"open","priority":1,"labels":["x"]}]"#;
+        let bare = r#"[{"id":"zz-1","title":"a","status":"open","priority":1,"labels":["x"]}]"#;
         let wrapped =
-            r#"{"issues":[{"id":"fd-2","title":"b","status":"in_progress","assignee":"w1"}]}"#;
+            r#"{"issues":[{"id":"zz-2","title":"b","status":"in_progress","assignee":"w1"}]}"#;
         let a = parse_issues(bare).unwrap();
-        assert_eq!(a[0].id, "fd-1");
+        assert_eq!(a[0].id, "zz-1");
         assert_eq!(a[0].labels, vec!["x"]);
         let b = parse_issues(wrapped).unwrap();
         assert_eq!(b[0].assignee.as_deref(), Some("w1"));
         // Unknown fields and missing ones are tolerated.
-        let c = parse_issues(r#"[{"id":"fd-3","weird":true}]"#).unwrap();
-        assert_eq!(c[0].id, "fd-3");
+        let c = parse_issues(r#"[{"id":"zz-3","weird":true}]"#).unwrap();
+        assert_eq!(c[0].id, "zz-3");
         assert_eq!(c[0].priority, 0);
     }
 }

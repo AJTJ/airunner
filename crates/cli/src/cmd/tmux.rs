@@ -1,6 +1,6 @@
 //! tmux naming for worker panes (air-5lg).
 //!
-//! `tmux ls` is machine-wide, not per directory. With adopter's fleet and ai_runner's
+//! `tmux ls` is machine-wide, not per directory. With the adopter's fleet and ai_runner's
 //! running at once the list said nothing about which project a pane belonged to and the owner
 //! had to attach to find out (owner, 2026-08-22). So Air names the session
 //! `<project>-<worker>` and puts the name in `air status`, and `air claim` renames the window
@@ -22,7 +22,7 @@ fn main_checkout(repo: &Path) -> PathBuf {
 
 /// The project's beads prefix: `issue-prefix:` in `.beads/config.yaml` when set, else the
 /// Dolt database name in `.beads/metadata.json` (what bd 1.2.2 derives ids from: `air` here,
-/// `fd` in adopter), else the main checkout's directory name.
+/// `fd` in the adopter), else the main checkout's directory name.
 pub fn project_prefix(repo: &Path) -> String {
     let main = main_checkout(repo);
     if let Some(p) = config_prefix(&main.join(".beads/config.yaml")) {
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn session_name_joins_project_and_worker_and_strips_tmux_separators() {
         assert_eq!(session_name("air", "alpha"), "air-alpha");
-        assert_eq!(session_name("fd", "first-agent"), "ad-first-agent");
+        assert_eq!(session_name("zz", "first-agent"), "zz-first-agent");
         // `:` and `.` address windows and panes; whitespace breaks `attach -t`.
         assert_eq!(session_name("my.proj", "a b:c"), "my-proj-a-b-c");
         // No prefix resolved: the worker name alone, as before air-5lg.
@@ -218,7 +218,7 @@ mod tests {
         // (air-7ah): calling `sessions()` here made the answer depend on whatever tmux
         // happened to be running.
         assert_eq!(
-            free_worker_name(&[], &["air-w1".to_string(), "fd-w2".to_string()], "air"),
+            free_worker_name(&[], &["air-w1".to_string(), "zz-w2".to_string()], "air"),
             "w2",
             "another project's pane does not reserve our name"
         );

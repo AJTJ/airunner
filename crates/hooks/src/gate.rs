@@ -69,7 +69,7 @@ pub struct GateFacts {
     pub advisory: bool,
 }
 
-/// A landing that moved main (air-4up). adopter ad-cqcr, 2026-08-30: eight refusals in one
+/// A landing that moved main (air-4up). The adopter, 2026-08-30: eight refusals in one
 /// round, all four workers, every one caused by a coordinator landing, and the wording
 /// described the worker's tree. Two workers read it as their own defect and merged again
 /// without asking why. The instruction was right and the diagnosis was misleading.
@@ -149,7 +149,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     }
     if !f.main_is_ancestor {
         // air-4up: the cause is outside the worker's tree, so say so. "main is not an
-        // ancestor of HEAD" stays in every form: adopter counts refusals by that phrase.
+        // ancestor of HEAD" stays in every form: the adopter's counts refusals by that phrase.
         // The fix is unchanged; this is wording, not behaviour.
         let at_main = if f.main_sha.is_empty() {
             String::new()
@@ -179,13 +179,13 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     }
     // air-xbl: the ids a refusal names. The named bead first; else every bead the worker
     // holds or carries. Never a placeholder: the printed fix is the one line in the flow a
-    // worker copies verbatim, and adopter's w3 was handed `air claim <bead>` while holding
+    // worker copies verbatim, and the adopter's w3 was handed `air claim <bead>` while holding
     // one.
     let beads = beads_to_name(f);
     if !f.bead_claimed_or_carried {
         // air-60x: the fix is the trailer, never `air claim <id>`. A claim reserves OPEN work
         // and is the roles flow's business; the bead named here may be closed and another
-        // worker's (supersession), and claiming a closed bead is not a fix. the adopter was
+        // worker's (supersession), and claiming a closed bead is not a fix. The adopter was
         // right to refuse to test that command rather than let the gap read as cleared.
         let (detail, fix) = match beads.as_slice() {
             [bead] => (
@@ -260,7 +260,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         };
         // air-yol: the fix above is right and following it created the next refusal.
         // Committing the digest moves HEAD off the sha the green was recorded at, so the very
-        // next check refuses on verify-green-at-head (adopter ad-8m9b, two workers hit it
+        // next check refuses on verify-green-at-head (the adopter, two workers hit it
         // independently on 2026-08-31). Say so HERE, where a worker is reading, and only when
         // there is a green to invalidate: with no green at HEAD the order is already the
         // standard one and the note would be the unconditional noise air-5wq was left open
@@ -284,7 +284,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     let pass = missing.is_empty();
     let block = !pass && !f.advisory;
     let message = if pass {
-        // air-5wq: a snapshot that reads as a clearance. the adopter measured 88 refusals in
+        // air-5wq: a snapshot that reads as a clearance. The adopter measured 88 refusals in
         // four days arriving within 120 s of that same worker's own `handover ok`: an answer
         // expiring before it could be used. Naming the main it was true of lets a reader see
         // at a glance whether it still applies, and the refusal (which names main too, air-4up)
@@ -313,7 +313,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             .map(|m| format!("{}: {} — run `{}`", m.check, m.detail, m.fix))
             .collect();
         // air-75u: whose tree, as the ok line already says. A refusal shown in a session that
-        // is not the one it is about (ad-fv4z) is otherwise a true statement with no scope.
+        // is not the one it is about is otherwise a true statement with no scope.
         format!(
             "handover {mode} for {} at {}: {}",
             f.worker,
@@ -391,8 +391,8 @@ mod tests {
             runs_at_head: (1, 0),
             digest_present: None,
             digest_dir: None,
-            bead: Some("ad-o5fi".into()),
-            held_beads: vec!["ad-o5fi".into()],
+            bead: Some("zz-o5fi".into()),
+            held_beads: vec!["zz-o5fi".into()],
             carried_beads: vec![],
             advisory: false,
         }
@@ -405,14 +405,14 @@ mod tests {
         let mut f = facts();
         f.green_at_head = false;
         f.batch_green =
-            Some("green at abc12345 (batch by lane) contains every commit of ad-o5fi".into());
+            Some("green at abc12345 (batch by lane) contains every commit of zz-o5fi".into());
         let v = handover_verdict(&f);
         assert!(v.pass, "{}", v.message);
         assert!(v.message.contains("batch by lane"), "{}", v.message);
 
         let mut f = facts();
         f.green_at_head = false;
-        f.batch_predates = Some("the batch's green at abc12345 (by lane) predates your commit deadbeef \"more work\" for ad-o5fi: it does not contain it".into());
+        f.batch_predates = Some("the batch's green at abc12345 (by lane) predates your commit deadbeef \"more work\" for zz-o5fi: it does not contain it".into());
         let v = handover_verdict(&f);
         assert!(v.block);
         assert!(
@@ -434,39 +434,39 @@ mod tests {
     #[test]
     fn the_claim_refusal_offers_the_trailer_never_a_claim() {
         let mut f = facts();
-        f.bead = Some("ad-closed".into());
+        f.bead = Some("zz-closed".into());
         f.held_beads = vec![];
         f.bead_claimed_or_carried = false;
         let v = handover_verdict(&f);
         let m = &v.missing[0];
         assert_eq!(m.check, "claim");
-        assert!(m.detail.contains("ad-closed"), "{}", m.detail);
-        assert!(m.fix.contains("Bead: ad-closed"), "{}", m.fix);
+        assert!(m.detail.contains("zz-closed"), "{}", m.detail);
+        assert!(m.fix.contains("Bead: zz-closed"), "{}", m.fix);
         assert!(!v.message.contains("air claim"), "{}", v.message);
     }
 
-    /// air-xbl: adopter's w3 held exactly one claim, had not written its digest, and was
+    /// air-xbl: the adopter's w3 held exactly one claim, had not written its digest, and was
     /// handed `bead: <bead>` to copy. The id was in the ledger and `air status` printed it;
     /// the refusal did not. With no bead named, the held beads are what the message names.
     #[test]
     fn a_refusal_names_the_held_bead_when_none_was_named() {
         let mut f = facts();
         f.bead = None;
-        f.held_beads = vec!["ad-251z".into()];
+        f.held_beads = vec!["zz-251z".into()];
         f.digest_present = Some(false);
         f.digest_dir = Some("docs/log.d".into());
         let v = handover_verdict(&f);
         let d = &v.missing[0];
         assert_eq!(d.check, "digest-present");
-        assert!(d.detail.contains("bead: ad-251z"), "{}", d.detail);
-        assert!(d.fix.contains("bead: ad-251z"), "{}", d.fix);
+        assert!(d.detail.contains("bead: zz-251z"), "{}", d.detail);
+        assert!(d.fix.contains("bead: zz-251z"), "{}", d.fix);
         assert!(!v.message.contains("<bead>"), "{}", v.message);
 
         // Several held: every id is named and none is invented.
-        f.held_beads = vec!["fd-1".into(), "fd-2".into()];
+        f.held_beads = vec!["zz-1".into(), "zz-2".into()];
         let v = handover_verdict(&f);
         assert!(
-            v.message.contains("fd-1") && v.message.contains("fd-2"),
+            v.message.contains("zz-1") && v.message.contains("zz-2"),
             "{}",
             v.message
         );
@@ -485,16 +485,16 @@ mod tests {
     #[test]
     fn a_named_bead_is_what_the_refusal_names() {
         let mut f = facts();
-        f.bead = Some("ad-named".into());
-        f.held_beads = vec!["ad-other".into()];
+        f.bead = Some("zz-named".into());
+        f.held_beads = vec!["zz-other".into()];
         f.bead_claimed_or_carried = false;
         let v = handover_verdict(&f);
         assert!(
-            v.missing[0].fix.contains("Bead: ad-named"),
+            v.missing[0].fix.contains("Bead: zz-named"),
             "{}",
             v.missing[0].fix
         );
-        assert!(!v.message.contains("ad-other"), "{}", v.message);
+        assert!(!v.message.contains("zz-other"), "{}", v.message);
     }
 
     #[test]
@@ -531,7 +531,7 @@ mod tests {
     }
 
     /// air-4up: a refusal caused by a landing names the landing, when, and from whom, keeps
-    /// the phrase adopter counts by, and keeps the fix. Without a landing to name it still
+    /// the phrase the adopter's counts by, and keeps the fix. Without a landing to name it still
     /// refuses and names main.
     #[test]
     fn a_refusal_after_a_landing_names_the_landing_that_moved_main() {
@@ -697,14 +697,14 @@ mod nudge_tests {
     use super::stop_nudge;
 
     fn ids() -> Vec<String> {
-        vec!["fd-1".to_string(), "fd-2".to_string()]
+        vec!["zz-1".to_string(), "zz-2".to_string()]
     }
 
     #[test]
     fn nudges_only_a_claimless_worker_with_ready_beads_on_a_fresh_stop() {
         let r = stop_nudge("worker", false, &ids(), false).unwrap();
-        assert!(r.contains("ready: fd-1, fd-2"));
-        assert!(r.contains("air claim fd-1"));
+        assert!(r.contains("ready: zz-1, zz-2"));
+        assert!(r.contains("air claim zz-1"));
         // air-ouw: there is no staleness caveat any more, in either direction. The caller
         // confirms the list against bd before this is reached, so the nudge either names
         // beads `air claim` accepts or is not called at all.

@@ -1,7 +1,7 @@
 //! Landings: what `air land` did, and what it undid (air-3pz; plan 0001 §2 row 5).
 //!
 //! One row per attempt on one branch, `landed` or `rewound`, with the verify run that decided
-//! it and the beads it carried. A rewind is as much a fact as a landing: adopter's land.sh
+//! it and the beads it carried. A rewind is as much a fact as a landing: the adopter's land.sh
 //! resets main and says so (`land.sh:504-514`), and without a row the only trace is scrollback.
 
 use rusqlite::params;
@@ -78,7 +78,7 @@ pub struct Landing {
     ///
     /// `in-flight` is written the moment the merge lands in main, before the verify that
     /// decides whether it stays. The merge commit exists for minutes with the rollback armed,
-    /// and adopter's coordinator called a land done three times inside that window, then
+    /// and the adopter's coordinator called a land done three times inside that window, then
     /// fell back to `pgrep` — which misled them twice, because `pgrep` printing nothing makes
     /// the `ps` after it list every process they own.
     pub result: String,
@@ -99,7 +99,7 @@ pub struct Landing {
     /// The merge commit, when one was made (absent on a refusal).
     pub merge_commit: Option<String>,
     /// The `air land` process that wrote the row (air-bxe). An `in-flight` row whose pid is
-    /// gone is a land that was killed — adopter lost one to a closed pipe (`air land | head`)
+    /// gone is a land that was killed — the adopter lost one to a closed pipe (`air land | head`)
     /// that merged, verified and never recorded anything, leaving main green at a sha with no
     /// landing. Liveness is the reader's to probe, as it is for leases and sessions.
     pub pid: Option<i64>,
@@ -332,7 +332,7 @@ mod tests {
             failing_step: None,
             verify_run_id: Some("v1".into()),
             attempt_no: 1,
-            beads: vec!["fd-1".into()],
+            beads: vec!["zz-1".into()],
             open_beads: vec![],
             merge_commit: Some("ccc".into()),
             pid: Some(4242),
@@ -365,7 +365,7 @@ mod tests {
     }
 
     /// A land killed mid-verify leaves the row saying so. Under the old shape it left nothing,
-    /// and adopter ended up with main green at a sha no landing row mentioned.
+    /// and the adopter ended up with main green at a sha no landing row mentioned.
     #[test]
     fn a_killed_land_leaves_a_row_that_says_in_flight() {
         let l = Ledger::open_in_memory().unwrap();
@@ -389,18 +389,18 @@ mod tests {
     fn only_a_refuted_clause_is_reported_and_only_until_the_bead_is_dealt_with() {
         let l = Ledger::open_in_memory().unwrap();
         let mut r = row("1", "landed-refuted");
-        r.beads = vec!["fd-1".into(), "fd-2".into(), "fd-3".into()];
+        r.beads = vec!["zz-1".into(), "zz-2".into(), "zz-3".into()];
         r.open_beads = vec![
             // Air could not read this one. Not a wrong close, so not reported.
             OpenBead {
-                bead: "fd-2".into(),
+                bead: "zz-2".into(),
                 why: "\"the owner rules on X\": nothing Air can look up".into(),
                 refuted: false,
                 contradicted: String::new(),
             },
             // This one the merge contradicts.
             OpenBead {
-                bead: "fd-3".into(),
+                bead: "zz-3".into(),
                 why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
                 refuted: true,
                 contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
@@ -412,7 +412,7 @@ mod tests {
         let open = l.landed_open().unwrap();
         assert_eq!(
             open.iter().map(|o| o.bead.as_str()).collect::<Vec<_>>(),
-            vec!["fd-3"],
+            vec!["zz-3"],
             "unreadable is not the same signal as contradicted"
         );
         assert_eq!(
@@ -426,13 +426,13 @@ mod tests {
         // air-dlw: the claim's lifetime decides nothing here. Under close-with-proof the
         // worker closes at once and the reconcile releases the claim on the next tick, so a
         // report keyed on the claim could never fire — which is how this went silent.
-        l.record_claim("fd-3", "alpha", &[], "t0").unwrap();
+        l.record_claim("zz-3", "alpha", &[], "t0").unwrap();
         assert_eq!(
             l.landed_open().unwrap().len(),
             1,
             "an open claim changes nothing"
         );
-        l.release_claim("fd-3", "alpha", "closed", "t2").unwrap();
+        l.release_claim("zz-3", "alpha", "closed", "t2").unwrap();
         assert_eq!(
             l.landed_open().unwrap().len(),
             1,
@@ -442,7 +442,7 @@ mod tests {
         // A LATER landing that names the bead without refuting it is what clears it: newest
         // landing wins, and an older row saying otherwise is history.
         let mut again = row("2", "landed");
-        again.beads = vec!["fd-3".into()];
+        again.beads = vec!["zz-3".into()];
         again.open_beads = vec![];
         again.finished_at = "t9".into();
         l.record_landing(&again).unwrap();
@@ -456,7 +456,7 @@ mod tests {
     fn a_refused_attempt_decides_nothing_about_the_beads_it_carried() {
         let l = Ledger::open_in_memory().unwrap();
         let refuted = OpenBead {
-            bead: "fd-1".into(),
+            bead: "zz-1".into(),
             why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
             refuted: true,
             contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
@@ -556,7 +556,7 @@ mod tests {
         let l = Ledger::open_in_memory().unwrap();
         let mut r = row("1", "landed-refuted");
         r.open_beads = vec![OpenBead {
-            bead: "fd-1".into(),
+            bead: "zz-1".into(),
             why: why.into(),
             refuted: true,
             contradicted: String::new(),
@@ -587,6 +587,6 @@ mod tests {
             vec!["landed", "rewound"],
             "newest first"
         );
-        assert_eq!(all[0].beads, vec!["fd-1".to_string()]);
+        assert_eq!(all[0].beads, vec!["zz-1".to_string()]);
     }
 }

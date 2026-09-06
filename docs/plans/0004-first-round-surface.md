@@ -4,17 +4,17 @@ Status: decided and built, 2026-08-20 (owner decisions in [`../decisions.md`](..
 under that date). Extends [`0001-first-slice.md`](0001-first-slice.md); supersedes its §4 check 4
 ("CAS owned by the ledger") and its §9 non-goal on MCP.
 
-## 1. What the first adopter round needs, and why each piece exists
+## 1. What the first the adopter's round needs, and why each piece exists
 
 | Piece | Named pain it removes | Probe |
 |---|---|---|
 | One event line per hook invocation, session transitions included | First round is for information; in-place rows lose the sequence | `hook.rs` test: seven hooks, seven lines |
-| Stop hook nudge (worker, no claim, ready beads, `stop_hook_active` false → `decision=block` with the ids, once) | Workers ended their turn after hand-over with beads ready and sat idle ~20 min until messaged (ai_runner 2026-08-22, air-09i; adopter needs the same prompt by hand). Ready list is the cache `status`/`handover` write (`.air/ready.json`): `bd ready` is 1.1 s, the hook budget 100 ms; older than 5 min says "may be stale". Removal: a round where nudges followed by a claim ≤ nudges ignored, or >90% of hand-overs claim unprompted (event field `claim_followed_last_nudge`) | `stop_nudge` unit tests; `hook.rs` Stop test; selftest `stop` |
+| Stop hook nudge (worker, no claim, ready beads, `stop_hook_active` false → `decision=block` with the ids, once) | Workers ended their turn after hand-over with beads ready and sat idle ~20 min until messaged (ai_runner 2026-08-22, air-09i; the adopter needs the same prompt by hand). Ready list is the cache `status`/`handover` write (`.air/ready.json`): `bd ready` is 1.1 s, the hook budget 100 ms; older than 5 min says "may be stale". Removal: a round where nudges followed by a claim ≤ nudges ignored, or >90% of hand-overs claim unprompted (event field `claim_followed_last_nudge`) | `stop_nudge` unit tests; `hook.rs` Stop test; selftest `stop` |
 | `air claim` / `air release` (wrap `bd update --claim`) | Claim history bd does not keep (attempts, release reason); no watchers ("a missed event must not be possible") | fake-bd test: order and nothing-on-refusal; selftest `claim` |
 | `air capture` / `inbox` / `triage` | Workers must not file beads; the inbox is not `ready` | CLI round-trip test |
 | `air status [--attention]` | The coordinator re-derives fleet state from chat; needs one screen and a deterministic "needs a human" list | pure `attention()` tests; selftest `attention` |
 | `air mcp` = channel + tools + resources | The coordinator was woken by cron; it should be informed when a condition holds. Channels are the only documented push into a session | stdio test: handshake, garbage line, push, EOF exit, RSS canary |
-| `air land [--all]` | Two green hand-overs sat on 2026-08-22 because only the owner may commit on main and nothing else could merge. Port of adopter's `land.sh`: main checkout, on main, clean tracked tree, branch contains main, recorded green at the branch head; `--no-ff`, verify the *merged* result, `git reset --hard` on red. One merge per branch, one `bd close` for every bead at the end (air-869: bd costs per process). Removal: none — this is the landing path. The `waiting on owner` landings line (air-6p5) drops to `N landings ready` here | `land_*` fake-bd tests: green lands and closes, red rewinds, dirty main and stale branch refused; selftest `land` |
+| `air land [--all]` | Two green hand-overs sat on 2026-08-22 because only the owner may commit on main and nothing else could merge. Port of the adopter's `land.sh`: main checkout, on main, clean tracked tree, branch contains main, recorded green at the branch head; `--no-ff`, verify the *merged* result, `git reset --hard` on red. One merge per branch, one `bd close` for every bead at the end (air-869: bd costs per process). Removal: none — this is the landing path. The `waiting on owner` landings line (air-6p5) drops to `N landings ready` here | `land_*` fake-bd tests: green lands and closes, red rewinds, dirty main and stale branch refused; selftest `land` |
 | `air install` | Hook wiring by hand drifts; the binary the hooks resolve to must be this one | merge idempotence test; PATH refusal test |
 | `air worker` / `air coordinator` | Per-worktree settings files drifted (`BEADS_ACTOR` wrong in two worktrees); deny rules must hold in every permission mode; sessions must stay interactive | argv tests; `--print` test |
 
@@ -55,10 +55,10 @@ still costs turns. `--agent` launcher form, Bash sandbox, headless workers: see
 Role-based deny inside `air hook` for shapes the pattern matcher misses: when the launcher's
 deny list is seen to be bypassed.
 
-## 5. Operating it (adopter side; the owner does these, never this repo)
+## 5. Operating it (the adopter's side; the owner does these, never this repo)
 
 1. `cargo install --path crates/cli` so `air` on PATH is this binary.
-2. In the adopter main checkout: `air install` (read the plan), then `air install --write`.
+2. In the adopter's main checkout: `air install` (read the plan), then `air install --write`.
 3. Always `bd create --validate --estimate <min>`: bd already refuses a task/feature/bug whose
    description lacks `## Acceptance Criteria` (compiled in per type, `bd lint --help`; it is a
    heading grep, not a content check). No config change needed. Pin bd at 1.2.2 (this machine
@@ -70,5 +70,5 @@ deny list is seen to be bypassed.
 Verified 2026-08-20 on Claude Code 2.1.238: `--append-system-prompt-file`, `--disallowed-tools`,
 `--settings`, `--worktree` are listed in `--help`; `--channels` and
 `--dangerously-load-development-channels` are accepted by the parser (not listed; research
-preview). adopter's `.claude/settings.json` today has only `bd prime` on `SessionStart` and
+preview). The adopter's `.claude/settings.json` today has only `bd prime` on `SessionStart` and
 no `.mcp.json`, so `air install` adds rather than conflicts.

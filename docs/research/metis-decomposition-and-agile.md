@@ -5,7 +5,7 @@ through phases, stealing from Metis's decomposition and phase-transition reasoni
 agile methodology Metis draws on. Deliverable: material the coordinator runs, not a survey.
 
 **Accessed:** 2026-08-20. Metis paths are relative to `~/projects/metis` at `6745810`.
-adopter paths are relative to `~/projects/adopter` at `71191e0` (read-only). Air paths are
+The adopter paths are relative to `the adopter's checkout` at `71191e0` (read-only). Air paths are
 relative to this repo. Anything marked *(inference)* is my reading, not something a source says.
 
 Extends, does not repeat: `metis-deep-dive.md` (what Metis is; §4 borrow list; §5 gaps),
@@ -19,7 +19,7 @@ and 2026-08-20.
 
 Sub-questions: (1) which agile concepts Metis encodes and where; (2) what the agile primary
 sources say; (3) what Air already has; (4) what decomposition did well or badly in the live
-adopter fleet; (5) steal / adapt / reject; (6) where ceremony is overhead for one coordinator
+The adopter's fleet; (5) steal / adapt / reject; (6) where ceremony is overhead for one coordinator
 plus three workers.
 
 Priors: Metis is a Flight-Levels/Kanban shape (hierarchy + phases + pull), not Scrum; INVEST
@@ -27,7 +27,7 @@ and vertical slicing map cleanly onto bead sizing; sprints, points, and stand-up
 their keep. Falsifiers: Metis source carrying sprint or estimation machinery that the adopter
 record says was missed; retrospectives showing failures that need ceremony rather than a check.
 
-Inclusion: Metis source, Air docs, adopter notes, primary agile texts (Scrum Guide, Kanban
+Inclusion: Metis source, Air docs, the adopter's notes, primary agile texts (Scrum Guide, Kanban
 Guide, Leopold/Kaltenecker, Patton, Wake, Cockburn, Lawrence). Secondary summaries only where
 the original is unreachable, and marked as such.
 
@@ -165,7 +165,7 @@ Two findings that change the picture relative to the prior:
    (ADR-007). One coordinator and three workers have no cross-team value stream to visualise.
 3. **Sprints, velocity, points, story-point estimation.** Not in Metis, not in the record as a
    pain. The Scrum Guide's relevant sentence (doers size) is kept; the ceremony is not.
-4. **Checkbox acceptance criteria (three per task).** adopter's record says acceptance is the
+4. **Checkbox acceptance criteria (three per task).** the adopter's record says acceptance is the
    weak link when it is prose (plan 0002 §2.2 row 1). One runnable condition per bead.
 5. **Ralph decompose loop** as machinery. The coordinator is a live session; a Stop-hook loop
    adds nothing until decomposition is observed to stall.
@@ -176,7 +176,7 @@ Two findings that change the picture relative to the prior:
 
 ---
 
-## 5. What the live adopter fleet says (evidence for the cut rules)
+## 5. What the live the adopter's fleet says (evidence for the cut rules)
 
 Read via a fan-out over the retrospectives, baselines, audits, and plan 0022 (file list in §13).
 Numbers are the notes' own.
@@ -187,7 +187,7 @@ Numbers are the notes' own.
   files touched in the overnight run, 86% were touched by exactly one branch; seven files ever
   conflicted across 63 merges (`docs/notes/overnight-fleet-retrospective.md:326-331`). "What
   prevented the rest was the file split agreed in the first ten minutes, peer-to-peer, not the
-  barrier" (`:341-343`). Epics partitioned by screen group (`ad-l09e.8-.16`, `ad-kycu.15.1-.10`)
+  barrier" (`:341-343`). Epics partitioned by screen group (`.8-.16`, `.15.1-.10`)
   were "split by disjoint file sets so two agents never touch one file. Correct as filed"
   (`docs/notes/bead-dedup-audit-2026-08-17.md:125-126`). This is why "Lanes" is a required
   heading in `--design` (§6) and why lane is one of the four triage requirements.
@@ -214,7 +214,7 @@ Numbers are the notes' own.
 | Compound beads that were epics: "nine numbered items spanning client and backend", acceptance "satisfiable by deferring all nine" | `task-specification-research.md:571-581`; "five that are epics wearing task clothes" (`:24-25`) | Checklist in a description = uncut epic (§7). |
 | Epics claimable from `bd ready`; non-epics with `.N` children | `task-specification-research.md:582`; `bead-dedup-audit-2026-08-17.md:107-108` | `bd ready --exclude-type epic`; type correction at triage. |
 | Two children whose **acceptances** owned the same edit while their prose respected the boundary | `bead-dedup-audit-2026-08-17.md:48-60` | Lane is checked on the acceptance, not the description (§6 step 4). |
-| The missing edge "nobody had seen": `ad-lf99` rewrites the literals nine i18n slices move; "Whichever lands second rewrites the other's work" | `bead-dedup-audit-2026-08-17.md:70`; "not findable by the agent doing the filing. They require the corpus in view" (`0022:100-102`) | Edges are cut by whoever has the epic's whole tree in view; shared file → `blocks` edge (§9 step 4). |
+| The missing edge "nobody had seen": `` rewrites the literals nine i18n slices move; "Whichever lands second rewrites the other's work" | `bead-dedup-audit-2026-08-17.md:70`; "not findable by the agent doing the filing. They require the corpus in view" (`0022:100-102`) | Edges are cut by whoever has the epic's whole tree in view; shared file → `blocks` edge (§9 step 4). |
 | "Record a dependency whenever two beads touch the same file" was prose, "NOT ENFORCED", and absent from the not-enforced inventory | `overnight-fleet-retrospective.md:546-552` | Air's check 6 (lane at claim) and the stale-citation flag. |
 | 12 of 49 beads with acceptance no agent could reach; four of the five ready P1s among them: "a queue-shape defect, not a writing defect" | `task-specification-research.md:526-545` | Triage requirement 1: acceptance runnable inside the worktree by the agent. |
 | Description and acceptance disagreeing: "Neither will ask" | `task-specification-research.md:550-570` | Triage requirement 4; `bd human` on contradiction. |
@@ -225,7 +225,7 @@ Numbers are the notes' own.
 | `bd create` writes straight into `bd ready`: "every observation an agent has is instantly committed work" | `0022:60-62` | Capture → triage split (adopted, `decisions.md` 2026-08-18). |
 | Owner-only work filed faster than it clears: 27 of 152, then 9 of 39 | `bead-admission-control.md:29-31`; `round-2026-08-15-evening-retrospective.md:86` | `owner`/`human` labels at filing; withheld from `next`. |
 | `bd ready` silently caps at 100; a wrong conclusion about five beads | `bead-dedup-audit-2026-08-17.md:134-144` | Always `bd ready -n 0` or `--json` with a count in the procedure. |
-| An edge placed on an epic propagated to every child (`ad-24r0`) | `bead-dedup-audit-2026-08-17.md:99-100` | Edges between children, never on the epic. |
+| An edge placed on an epic propagated to every child (``) | `bead-dedup-audit-2026-08-17.md:99-100` | Edges between children, never on the epic. |
 
 ### Recommendations in the notes that bear on this research
 
@@ -370,7 +370,7 @@ points. Reasons:
   single-agent success rate per bead (plan 0001 §8).
 - Metis's "2-3 iterations ideal, not 15" (`ralph-loops.md:142`) is the same unit in Ralph terms.
 - Metis's XS-XL on initiatives is never read by anything; a stored size that is not consumed
-  is the `exit_criteria_met` pattern again. adopter's retrospective names the opposite gap:
+  is the `exit_criteria_met` pattern again. The adopter's retrospective names the opposite gap:
   "the missing instrument is a size estimate at filing time"
   (`overnight-fleet-retrospective.md:726`). The reconciliation: record a guess that something
   *consumes*. `bd create --estimate <minutes>` exists in 1.2.1; the ledger already has session
@@ -466,7 +466,7 @@ Town over-engineers").
   Ready, enforced by a check rather than a meeting (Scrum Guide: "deemed ready for selection").
 - Refinement with the doers: partly holds. The doer cannot attend, but its predecessor's
   evidence can: single-agent success per bead and stale-citation counts are the refinement
-  feedback. The round retrospective notes in adopter are the human half and cost one page.
+  feedback. The round retrospective notes in the adopter are the human half and cost one page.
 - Resuming a coordinator session: holds as a need, but the fix is `air status` deriving the
   epic state from facts, not storing a phase a stale session could leave wrong.
 
@@ -488,7 +488,7 @@ Town over-engineers").
 
 **Verdict.** The counter-position is right about *what* is needed (shared understanding,
 readiness, feedback, resumability) and wrong about *how* at this size: each need is met by a
-fact Air already records or a check it already runs, and the adopter evidence (§5) points at
+fact Air already records or a check it already runs, and the adopter's evidence (§5) points at
 missing edges and prose acceptance, not at missing meetings. Keep the two skills as procedures
 and checklists; add no ceremony until a ledger number says a specific one is missing.
 
@@ -525,7 +525,7 @@ and checklists; add no ceremony until a ledger number says a specific one is mis
    was the single most effective mechanism measured (86% of files single-branch, 7 files ever
    conflicted). **Type:** confirmatory. **Confidence:** established (measured, §5).
    **Relationship to priors:** confirms; the ceremony falsifier did not fire.
-8. **Claim:** adopter 0022 and the owner disagree on who triages (dispatched agent on a
+8. **Claim:** the adopter 0022 and the owner disagree on who triages (dispatched agent on a
    cadence vs coordinator inline). **Type:** exploratory. **Confidence:** contested. **Sources:**
    `0022:145-158`; `decisions.md` 2026-08-18 item 2. Resolution proposed: inline until the
    ledger's capture depth or time-to-triage crosses a number the owner sets.
@@ -568,7 +568,7 @@ Air: `CLAUDE.md`; `docs/decisions.md` (2026-08-18, 2026-08-20); `docs/plans/0001
 `.claude/skills/PROVENANCE.md`; `bd --help` output for `create`, `ready`, `update`, `dep`, `epic`
 (bd 1.2.1, Homebrew).
 
-adopter (read-only, `~/projects/adopter`): `docs/notes/overnight-fleet-retrospective.md`;
+The adopter (read-only, `the adopter's checkout`): `docs/notes/overnight-fleet-retrospective.md`;
 `docs/notes/round-2026-08-15-evening-retrospective.md`; `docs/notes/round-2026-08-15-baseline.md`;
 `docs/notes/round-2026-08-17-baseline.md`; `docs/notes/bead-admission-control.md`;
 `docs/notes/bead-dedup-audit-2026-08-17.md`; `docs/notes/defer-sweep-2026-08-17.md`;

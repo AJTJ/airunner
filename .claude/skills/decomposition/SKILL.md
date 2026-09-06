@@ -23,7 +23,7 @@ Where the text says "epic" or "bead", Metis says "initiative" or "task". Researc
 | Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`decisions.md` 2026-08-18 item 3). |
 | Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. See `phase-transitions`. |
 | "decompose phase is a visible buffer" | same | Ledger metric: time from `--design` to first child claim. |
-| `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | adopter: "the missing instrument is a size estimate at filing time" (`overnight-fleet-retrospective.md:726`). |
+| `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | the adopter: "the missing instrument is a size estimate at filing time" (`overnight-fleet-retrospective.md:726`). |
 
 ## When to decompose (Metis)
 
@@ -49,7 +49,7 @@ Filing-time signals:
 
 - Acceptance needs "and" → split (`beads` skill).
 - Checklist in the description → an epic that was not cut (`bd ready` cannot see or claim items;
-  adopter `task-specification-research.md:571-581`; the phrase "epics wearing task clothes"
+  The adopter `task-specification-research.md:571-581`; the phrase "epics wearing task clothes"
   is that file's own, at `:25`).
 - Touches two lanes → split by lane, or record the edge and accept serial landing.
 - Worker would have to pick an approach → spike first, or decide it in the description.
@@ -116,7 +116,7 @@ not the list. Pick the split that lets you throw a child away, then the one with
 
 Horizontal cuts (schema / API / UI) only when each layer is a different lane and the edges are
 recorded; otherwise two workers meet in one file. The cut by **disjoint file sets** is the most
-effective mechanism adopter measured (86% of files touched by one branch; 7 files ever
+effective mechanism the adopter measured (86% of files touched by one branch; 7 files ever
 conflicted across 63 merges, `overnight-fleet-retrospective.md:326-331`).
 
 ### 4. Write each child (INVEST + the four triage requirements)
@@ -127,12 +127,12 @@ Before filing, every answer is yes:
 - **Valuable**: moves "Done when" closer or retires a named risk.
 - **Small**: one session, one diff (table above).
 - **Testable**: acceptance is one command or test name runnable inside the worktree by the
-  agent (12 of 49 adopter beads had "acceptance no agent can reach",
+  agent (12 of 49 the adopter's beads had "acceptance no agent can reach",
   `task-specification-research.md:526-545`). Where it cannot be, say so in the clause and label
   the bead `owner` — see the two questions below, which refine this bullet rather than repeat
   it: a person is a legitimate settler, an unlabelled one is the defect.
 - **Lane named** on the bead, and **checked against the acceptance, not the description**: two
-  adopter children had prose that respected a boundary and acceptances that both required the
+  The adopter children had prose that respected a boundary and acceptances that both required the
   same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
   closes."
 - **Citations** (`file:line`) open and match now.
@@ -141,7 +141,7 @@ Before filing, every answer is yes:
 
 #### The two questions, asked of the TEMPLATE before it is applied
 
-Eleven of adopter's 99 auto-closed beads had acceptance criteria **no closing rule could ever
+Eleven of the adopter's 99 auto-closed beads had acceptance criteria **no closing rule could ever
 have settled**: nine were browser judgements, two needed a live system or a person to record
 evidence. Their finding: *"That is not a failure of the closing rule. Such a criterion reads as
 rigour, passes review, and makes any rule that closes on it look correct."*
@@ -156,7 +156,7 @@ siblings**. So ask these of the template, once, before it becomes ten beads:
    worthless. `+html.tsx exists` is trivially checkable and the file is inert, so satisfying it
    ships nothing.
 
-And one level down, which caught four clauses in a single adopter session: **could the
+And one level down, which caught four clauses in a single the adopter's session: **could the
 INSTRUMENT satisfy this instead of the code?** A clause the test harness, the fixture, or the
 probe can make true on its own is not a clause about the work.
 
@@ -164,7 +164,7 @@ This is where `air land`'s unreadable-clause verdicts come from, and **the fix i
 at landing**. Air discharges a clause only by lookup and reports the rest as unreadable; it
 cannot judge prose, and nothing downstream will.
 
-**No mechanical check, deliberately.** adopter attempted a prose regex for this and measured
+**No mechanical check, deliberately.** the adopter attempted a prose regex for this and measured
 it at **80% false positives** on their own queue before dropping it; the distinction here is
 finer than the one that failed. If anyone proposes one again, the discriminator is the absence
 of a named observer or artefact, and **the rate must be measured and reported before it is
@@ -178,11 +178,23 @@ echo "<what and why; cites file:line>" | bd create "<verb-first title>" --type=t
 bd create "Spike: <question>" --type=spike --parent <epic> -p 1 \
   --acceptance "bd comment on this bead names the chosen approach and the rejected ones, with reasons"
 # order and shared files: edges between CHILDREN, never on the epic
-# (an edge on an epic propagates to every child; adopter ad-24r0)
+# (an edge on an epic propagates to every child; the adopter)
 bd dep add <later> <earlier>
-bd dep cycles
+bd dep cycles                      # must print none BEFORE the wave is opened
 bd dep tree <epic> --json
 ```
+
+**Never point a child at its own epic.** An epic finishes when its children finish, so a child
+that waits on its epic waits on itself: the pair can never move and `bd dep cycles` does NOT
+report it, because the epic's dependence on its children is definitional rather than an edge.
+An adopter did this to four children on 2026-09-05 and every P1 in their queue was unreachable
+for a night; 42 beads were offered to workers and none was a P1. The tracker rendered it as
+"not ready yet", indistinguishable from ordinary queueing.
+
+So, after filing a wave and before opening it: run `bd dep cycles` (it must print none), and
+read `bd dep tree <epic> --json` for an edge from a child to any ancestor. Both are one call
+each and both are cheap next to a night of unreachable work. Air names this shape in
+`air status` (air-btz), which is the failsafe, not the check.
 
 `bd create --validate` stays on. Note: in bd 1.2.1 it checks required description sections
 from the beads config, not `--acceptance`; Air's triage check is what refuses an empty
@@ -199,7 +211,7 @@ frontier thins.
 
 - A spike closes → cut its dependents now, from the finding.
 - A landed sibling already satisfies a child's acceptance → close it with the evidence (six of
-  ten beads on one adopter lane were already fixed on `main`; checking took 20 minutes,
+  ten beads on one adopter's lane were already fixed on `main`; checking took 20 minutes,
   `overnight-fleet-retrospective.md:509-517`).
 - A landed sibling moved a cited file → `air next` prints "stale since <sha>"; re-verify or
   re-file with `supersedes`.
@@ -242,7 +254,7 @@ increase completion count").
 
 Air additions: an acceptance that cannot be written as one runnable condition is not ready to
 file; a checklist description is an uncut epic; `--design` empty on an epic is a defect (zero of
-49 adopter beads used it, `task-specification-research.md:584-594`); `bd ready` output must
+49 the adopter's beads used it, `task-specification-research.md:584-594`); `bd ready` output must
 be read with `-n 0` (the default cap of 100 produced a wrong conclusion about five beads,
 `bead-dedup-audit-2026-08-17.md:134-144`).
 
@@ -257,7 +269,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 
 - `references/decomposition-patterns.md`: Metis's pattern catalog (verbatim, vocabulary note on top).
 - `docs/research/metis-decomposition-and-agile.md`: sources for every rule above, the agile
-  mapping, adopter evidence, and the dialectic on ceremony.
+  mapping, the adopter's evidence, and the dialectic on ceremony.
 - `phase-transitions` for when an epic or bead may move; `scoping-workstreams` for the
   read → explore → design → plan → file → graph → self-check loop; `beads` for `bd` quoting and traps.
 
@@ -277,11 +289,11 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 - Adaptations (v1.1.0): added the coordinator procedure (the `--design` heading template mapped
   to Metis exit criteria; walking skeleton from Patton/Cockburn; Lawrence's splitting-pattern
   order and selection rule; INVEST-shaped child checklist; one-wave rule; re-cut rules from
-  Metis's feature-creep rule), Air's sizing unit with adopter's floor and `--estimate`,
-  per-worker queue cutting per `docs/decisions.md` 2026-08-20, and adopter evidence lines
+  Metis's feature-creep rule), Air's sizing unit with the adopter's floor and `--estimate`,
+  per-worker queue cutting per `docs/decisions.md` 2026-08-20, and the adopter's evidence lines
   (file:line). Metis reasoning kept and labelled. Full sources and access dates:
   `docs/research/metis-decomposition-and-agile.md §13`.
 - Citations of the form `task-specification-research.md:<lines>` are into this repo's copy at
-  `docs/research/adopter-notes/notes/task-specification-research.md`, not into
-  adopter's tree: adopter's copy pinned here at `f2ca891` (`docs/research/adopter-notes/PROVENANCE.md`). the adopter is consolidating `docs/notes/` and the original will be
+  `private/research/adopter-notes/notes/task-specification-research.md`, not into
+  The adopter's tree: the adopter's copy pinned here at `f2ca891` (`private/research/adopter-notes/PROVENANCE.md`). The adopter is consolidating `docs/notes/` and the original will be
   deleted, so the line numbers above were re-checked against our copy on 2026-08-22 (air-xsj).

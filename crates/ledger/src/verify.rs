@@ -73,7 +73,7 @@ pub struct VerifyRun {
 
 /// Exit codes that mean the run was KILLED rather than that it failed (air-ppm): 128 + SIGKILL
 /// and 128 + SIGTERM, which is what `make` exits with when it is the process signalled, what
-/// a wrapper that declares a kill emits (adopter's `run-logged.sh`, ad-drud), and what
+/// a wrapper that declares a kill emits (the adopter's `run-logged.sh`,), and what
 /// `air record` itself records when its child died by that signal. Nothing in a normal verify
 /// exits either. A child of make that was signalled makes make exit 2, which is
 /// indistinguishable from a real failure by exit code alone; Air does not parse make's
@@ -192,7 +192,7 @@ impl Ledger {
     }
 
     /// (green, red) counts of `kind` at `sha`, every worker: disagreement at one sha is
-    /// flakiness made visible (adopter adoption log §9, ad-jklh). Counted at the commit,
+    /// flakiness made visible (the adopter's adoption log §9,). Counted at the commit,
     /// not the tree (air-7wf): two commits over one tree that disagree could be flakiness OR
     /// a verify that reads history, and only at the commit is the disagreement unambiguous.
     pub fn runs_at(&self, sha: &str, kind: Kind) -> Result<(i64, i64)> {

@@ -87,6 +87,10 @@ pub struct Audit {
     pub traffic: Vec<Traffic>,
     /// What `peer-warning` changed, per warning (air-1ra).
     pub peer: PeerEffect,
+    /// What every timing budget Air waits on actually cost, and which way each fails when it
+    /// is hit (air-d75). Three of them fail toward permitting and none of them was measured;
+    /// the owner ruled on 2026-09-06 that all of them are, so this is the whole set.
+    pub budgets: super::budgets::Budgets,
     pub duration_ms: u64,
 }
 
@@ -621,6 +625,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         latency: latency_of(days),
         traffic: traffic_of(days, since),
         peer: peer_effect(&warns, &edits),
+        budgets: super::budgets::budgets_of(days, since),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -762,7 +767,7 @@ pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
 /// The reason is not a guess: `air status` shells out to bd once for `in_progress`, once more
 /// per claim the reconcile has to resolve, and again for `ready` and `awaiting_review`. bd
 /// costs about a second and a half per *process* here whatever the query, so a handful of
-/// processes is the floor and the ledger reads are nowhere in it. adopter's took ~20 s and
+/// processes is the floor and the ledger reads are nowhere in it. The adopter's took ~20 s and
 /// they wrapped it in a 60 s timeout in `reclaim.py`; the number belongs where the mechanisms
 /// are priced, not in each reader's head.
 pub fn latency_lines(l: &Latency) -> String {
@@ -805,6 +810,7 @@ pub fn render(a: &Audit) -> String {
     );
     s.push_str(&latency_lines(&a.latency));
     s.push_str(&traffic_lines(&a.traffic));
+    s.push_str(&super::budgets::render(&a.budgets));
     for r in &a.rows {
         s.push_str(&format!(
             "\n{} [{}]  evaluated {} in window over {} subject(s), {} repeat(s); pushed {}\n",

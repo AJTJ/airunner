@@ -3,5 +3,6 @@
   "worker_deny": [
     "Bash(cargo publish *)"
   ],
-  "verify_key": "tree"
+  "verify_key": "tree",
+  "metis": true
 }

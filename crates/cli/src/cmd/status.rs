@@ -28,7 +28,8 @@ use crate::git;
 /// invisible to `air audit` entirely, because the audit could only count what the registry
 /// already named. An unregistered condition is not "uncounted", it is unseeable.
 pub mod kinds {
-    pub const STUCK: &str = "stuck";
+    // `STUCK` was first here. Deleted 2026-09-06 (air-12k): its state was set only by a
+    // permission prompt auto mode never shows. The deletion record is in `mechanisms.rs`.
     pub const IDLE_WITH_CLAIM: &str = "idle-with-claim";
     pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
     pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
@@ -46,7 +47,6 @@ pub mod kinds {
 
     /// The whole set, compared against the registry by `air selftest`.
     pub const ALL: &[&str] = &[
-        STUCK,
         IDLE_WITH_CLAIM,
         IDLE_WITHOUT_CLAIM,
         SILENT_WITH_CLAIM,
@@ -140,6 +140,17 @@ pub struct Snapshot {
     /// claim and the coordinator has to decompose. Shown, not dropped, so the coordinator
     /// does not have to ask bd for the number the line used to hide inside "claimable".
     pub epic_depth: Option<usize>,
+    /// How many beads declare no `initiative: <CODE>` line, and how many were looked at
+    /// (air-g5o). `None` when bd did not answer this tick.
+    ///
+    /// **A count, not a gate.** Nothing is refused for lacking one; the owner's shape is that
+    /// a gate comes only if the number shows the rule is ignored.
+    ///
+    /// The denominator is the beads bd already told this tick about — the ready set plus the
+    /// in-progress set, epics excluded — and NOT every open bead, because asking for those is
+    /// another `bd` process at ~1.4 s on a command that is already seconds. The number is
+    /// printed with its denominator so nobody reads it as a count of everything.
+    pub without_initiative: Option<(usize, usize)>,
     /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
@@ -155,7 +166,7 @@ pub struct Snapshot {
     /// Branches the verify lane may merge into its next batch (air-80x.3): head contains
     /// main, no green at that head, and the commits name a bead the worker holds. A fact the
     /// lane reads when it cuts a batch; no condition pushes it. Before this the list lived in
-    /// messages, and in adopter's 2026-08-29 round the batch never formed.
+    /// messages, and in the adopter's 2026-08-29 round the batch never formed.
     pub batch_ready: Vec<BatchReady>,
     /// Every worker branch that is NOT batch-ready, with the fact it lacks (`--json`).
     pub not_batch_ready: Vec<NotBatchReady>,
@@ -185,7 +196,6 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thresholds {
-    pub stuck_min: i64,
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
@@ -198,7 +208,6 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            stuck_min: 5,
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             launch_grace_min: 3,
@@ -217,7 +226,6 @@ impl Thresholds {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
-        t.stuck_min = get("AIR_ATTENTION_STUCK_MIN", t.stuck_min);
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
@@ -231,7 +239,7 @@ pub struct Attention {
     /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
-    /// stuck | idle-with-claim | silent-with-claim | handover-not-green |
+    /// idle-with-claim | silent-with-claim | handover-not-green |
     /// lease-held-by-dead-session | lease-stale | idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
     /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
@@ -253,7 +261,7 @@ pub struct Attention {
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
 /// is `air land`: the coordinator's one allowed path onto main. It names the BRANCH (air-09b):
 /// `air land <bead>` is refused the moment two branches carry the bead, and the batching lane
-/// adopter runs makes that the normal case, so the command a surface offers is the one that
+/// The adopter runs makes that the normal case, so the command a surface offers is the one that
 /// cannot be ambiguous.
 pub fn land_command(worker: &str) -> String {
     format!("air land --worker {worker}")
@@ -457,7 +465,7 @@ fn sort_by_wait(v: &mut [Landing]) {
 ///
 /// **Claimed by this worker, and not already landed.** Both halves come from tables Air
 /// writes, so neither moves when git does. There used to be a third: claimed since the branch
-/// point. It was the bug that made `air land` unusable in adopter (air-6u5) — **merging main
+/// point. It was the bug that made `air land` unusable in the adopter (air-6u5) — **merging main
 /// moves the branch point forward past the claim that started the work, and landing requires
 /// merging main**, so preparing to land was what destroyed the attribution. air-4re had
 /// already taken that narrowing off declared ids for the same reason; this takes it off the
@@ -544,7 +552,7 @@ pub struct Selection {
 /// precondition it failed and the command that fixes it, and every git or ledger failure is an
 /// error rather than an absence. `air land --all` returning `{"landed": [], "ok": true}` was
 /// the worst answer available: there was no output to disbelieve, so a caller concluded the
-/// queue was empty. adopter hit it with every precondition verified by hand and fell back to
+/// queue was empty. The adopter hit it with every precondition verified by hand and fell back to
 /// their own `make land`; this repo hit it twice the same day.
 pub fn select(repo: &Path) -> Selection {
     let mut out = Selection::default();
@@ -696,9 +704,76 @@ pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>,
     if beads.is_empty() {
         return Ok(Vec::new());
     }
-    let bd = super::claim::bd_for(repo);
-    let issues = air_bd::WorkLedger::show_all(&bd, beads)
-        .map_err(|e| format!("bd show for {}: {e}", beads.join(" ")))?;
+    let mut bd = super::claim::bd_for(repo);
+    // Labelled whether or not the budget is overridden: the label names the SITE, and the
+    // recorded `budget_ms` names whatever budget was actually in force there.
+    bd.label = air_ledger::budgets::BD_ACCEPTANCE;
+    let overridden = std::env::var_os("AIR_BD_TIMEOUT_MS").is_some();
+    if !overridden {
+        bd.timeout = acceptance_budget(beads.len());
+    }
+    acceptance_with(&bd, beads, overridden)
+}
+
+/// The bd budget for one acceptance read (air-fzv): a base for the process plus an allowance
+/// per id. It was the client's flat 10 s whatever the id count, which a fourteen-bead batch
+/// under the verify lane exceeded on the adopter (2026-09-06) until they set
+/// `AIR_BD_TIMEOUT_MS=120000` by hand. Batching makes many ids the normal case. Owner ruled:
+/// size by the id count, not by reading in one process (which `show_all` already does).
+///
+/// The per-id figure is air-bp0's measurement of what bd costs per id here (~2 s). Neither
+/// number is tuned yet: air-d75 records every read's elapsed time against its budget, and
+/// the sizes follow from those numbers.
+pub const ACCEPTANCE_BASE: std::time::Duration = std::time::Duration::from_secs(10);
+pub const ACCEPTANCE_PER_ID: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub fn acceptance_budget(ids: usize) -> std::time::Duration {
+    acceptance_budget_with(ids, ACCEPTANCE_BASE, ACCEPTANCE_PER_ID)
+}
+
+/// Pure: `base + per_id × ids`, saturating.
+pub fn acceptance_budget_with(
+    ids: usize,
+    base: std::time::Duration,
+    per_id: std::time::Duration,
+) -> std::time::Duration {
+    let n = u32::try_from(ids).unwrap_or(u32::MAX);
+    base.saturating_add(per_id.saturating_mul(n))
+}
+
+/// `38 s`, `0.5 s`: whole seconds where they are whole, one decimal otherwise.
+pub fn duration_line(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    match ms.checked_rem(1000) {
+        Some(0) => format!("{} s", ms.checked_div(1000).unwrap_or(0)),
+        _ => format!("{:.1} s", d.as_secs_f64()),
+    }
+}
+
+/// The read itself, against a client whose timeout IS the budget. The error names the id
+/// count, the budget and the override, so a refusal built on it says what was hit and how to
+/// raise it.
+pub fn acceptance_with(
+    bd: &air_bd::BdCli,
+    beads: &[String],
+    overridden: bool,
+) -> Result<Vec<Vec<String>>, String> {
+    let issues = air_bd::WorkLedger::show_all(bd, beads).map_err(|e| {
+        format!(
+            "bd show for {} id(s) within a budget of {}{}: {e}",
+            beads.len(),
+            duration_line(bd.timeout),
+            if overridden {
+                " (AIR_BD_TIMEOUT_MS, set in this environment)".to_string()
+            } else {
+                format!(
+                    " ({} + {} per id; AIR_BD_TIMEOUT_MS overrides it, in milliseconds)",
+                    duration_line(ACCEPTANCE_BASE),
+                    duration_line(ACCEPTANCE_PER_ID)
+                )
+            }
+        )
+    })?;
     Ok(beads
         .iter()
         .map(|b| match issues.iter().find(|i| &i.id == b) {
@@ -802,7 +877,7 @@ pub fn carrying(repo: &Path, sha: &str) -> Vec<String> {
 
 /// Rewound landings whose merge is still carried by somebody (air-ob0), newest first.
 ///
-/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// The adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
 /// anyone who took it."* A worker who merged main during the armed window — the documented
 /// thing to do when main moves — keeps the rewound commits. That is a recorded green for a tree
 /// main will never have, with `air handover` passing and `air land` merging it back in.
@@ -867,7 +942,7 @@ pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> 
 }
 
 /// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
-/// a verify is ~420 s in adopter's repo, so a minutes-only reading rounds most of it to 0.
+/// a verify is ~420 s in the adopter's repo, so a minutes-only reading rounds most of it to 0.
 pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
     let elapsed = seconds_between(&f.started_at, at)
         .map(|s| format!("{s}s"))
@@ -910,35 +985,11 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
-                // `stuck` has never fired in any recorded day, and that is a fact about the
-                // FLEET'S CONFIGURATION rather than about this arm (air-dqw, corrected by
-                // diligence during air-byw before the deletion it nearly justified shipped).
-                //
-                // The state is set only by `HookEvent::PermissionRequest` (hook.rs:188), and
-                // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days.
-                // The hook is real and correctly registered. It never fires because the fleet
-                // runs in auto mode: `~/.claude/settings.json` has `permissions.defaultMode:
-                // auto` with `skipAutoPermissionPrompt: true` and an `autoMode` classifier, so
-                // no permission prompt is ever shown and nothing ever waits on one. Every
-                // `hook.PermissionDenied` event says "Blocked by classifier" — that classifier
-                // deciding instead of asking.
-                //
-                // So the silence is DORMANCY, not death: turn auto mode off and this works
-                // immediately, with no code change. A zero is evidence only when the subject
-                // occurred and the mechanism stayed silent; here the subject never occurred.
-                // Deleting on that silence and keeping on that silence rest on the same
-                // nothing, which is why air-dqw closed on the finding instead of the deletion.
+                // A `"stuck"` arm stood first here until 2026-09-06 (air-12k). Its state was
+                // written only by `HookEvent::PermissionRequest`, which auto mode never sends,
+                // so the arm matched nothing in any recorded day; the deletion record and the
+                // zero's cause (case 3b, air-byw) are in `mechanisms.rs`.
                 match sess.state.as_str() {
-                    "stuck" if age >= t.stuck_min => out.push(Attention {
-                        worker: w.worker.clone(),
-                        kind: kinds::STUCK,
-                        detail: format!(
-                            "waiting on a permission prompt{} for {age} min; answer it in their terminal",
-                            sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
-                        ),
-                        for_minutes: age,
-                        fingerprint: String::new(),
-                    }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
                         kind: kinds::IDLE_WITH_CLAIM,
@@ -1030,13 +1081,13 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             None => {}
         }
         // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
-        // every claim it holds is not-green for the SAME reason and the same fix; adopter's
+        // every claim it holds is not-green for the SAME reason and the same fix; the adopter's
         // status printed eleven lines for one worker, which is one fact eleven times. The
         // single-claim wording is unchanged, because that is the case that reads well already.
         //
         // Removal: when no worker ever holds two claims at once, this collapses nothing and
         // the loop above can go back to pushing per claim.
-        let stuck: Vec<&Claim> = if w.green_at_head == Some(false) {
+        let red: Vec<&Claim> = if w.green_at_head == Some(false) {
             w.claims
                 .iter()
                 .filter(|c| c.handover_attempts > 0)
@@ -1046,12 +1097,12 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         };
         // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
         // one, and the beads read in the order they have been waiting.
-        let oldest = stuck
+        let oldest = red
             .iter()
             .filter_map(|c| c.last_handover_at.as_deref())
             .min()
             .unwrap_or(now);
-        let detail = match stuck.as_slice() {
+        let detail = match red.as_slice() {
             [] => None,
             [c] => Some(format!(
                 "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
@@ -1082,8 +1133,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     }
     // A lease defect is addressed to whoever WANTS the resource, and never to the holder
     // (air-q9c). It used to name the holder and tell them to `air lease break` the lease they
-    // were using; adopter saw six of those in a day while the simulator and API were
-    // genuinely running (their ad-m07x). Staleness is a signal for other agents by
+    // were using; the adopter saw six of those in a day while the simulator and API were
+    // genuinely running (their). Staleness is a signal for other agents by
     // construction — the holder knows perfectly well they hold it.
     //
     // No audience, no condition: `lease_take` takes a defective lease automatically
@@ -1335,19 +1386,20 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // Open claims, reconciled against bd first: a bead that bd no longer holds as
     // in_progress (closed, awaiting_review, reopened) is not "held" by anyone, whatever the
     // ledger row says. The row is released with the bd status as reason so the history is
-    // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
+    // honest and no condition ever fires on it (the adopter's round: ~38 noise pushes, A3).
     //
     // bd is enrichment, not the spine. It gets a short budget (`AIR_BD_TIMEOUT_MS` overrides)
     // and after one timeout no further bd call is made this tick; the counts fall back to the
     // last answer cached in the ledger. Under load bd took 20 s, the same as the MCP tool
-    // budget, so the channel got nothing exactly when the fleet was busiest (adopter
+    // budget, so the channel got nothing exactly when the fleet was busiest (the adopter
     // 2026-08-22, air-19u).
     //
     // The budget is DERIVED from what bd costs here today, not a constant (air-p61): a flat
-    // 2 s left 356 ms of headroom over bd's measured p99 and sat below adopter's median
+    // 2 s left 356 ms of headroom over bd's measured p99 and sat below the adopter's median
     // entirely. `status_bd_budget` reads the same measurement `air status` prints.
     let today_latency = super::bd_latency::for_day(ledger.dir(), &super::today());
     let mut bd = super::claim::bd_for(repo);
+    bd.label = air_ledger::budgets::BD_STATUS;
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
         bd.timeout = super::bd_latency::status_bd_budget(today_latency.map(|l| l.median_ms));
     }
@@ -1364,14 +1416,16 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ));
         bd_skipped = true;
     }
-    let in_progress: Option<std::collections::BTreeSet<String>> = bd_try(
+    let in_progress_issues: Option<Vec<air_bd::Issue>> = bd_try(
         &bd,
         &mut bd_slow,
         &mut errors,
         "in_progress (claims not reconciled)",
         air_bd::WorkLedger::in_progress,
-    )
-    .map(|v| v.into_iter().map(|i| i.id).collect());
+    );
+    let in_progress: Option<std::collections::BTreeSet<String>> = in_progress_issues
+        .as_ref()
+        .map(|v| v.iter().map(|i| i.id.clone()).collect());
     let mut reconciled = 0usize;
     let open_claims = ledger.open_claims().map_err(|e| e.to_string())?;
     // Every claim bd no longer holds in_progress, looked up in ONE `bd show a b c` rather
@@ -1490,10 +1544,20 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
     let mut epic_depth: Option<usize> = None;
+    // air-g5o: counted over the answers bd has ALREADY given this tick (ready plus
+    // in-progress), so the number costs no extra bd process. `None` until `ready` answers, and
+    // the in-progress half joins it only if that answered too, so a partial tick reports
+    // nothing rather than a denominator that quietly shrank.
+    let mut without_initiative: Option<(usize, usize)> = None;
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
+            let mut pool: Vec<air_bd::Issue> = v.clone();
+            if let Some(ip) = &in_progress_issues {
+                pool.extend(ip.iter().cloned());
+            }
+            without_initiative = Some(super::metis::without_initiative(&pool));
             back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             // air-f10: one partition of one answer; the counts are its lengths.
             let split = super::ready_cache::split(&v);
@@ -1595,6 +1659,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ready_depth,
         claimable_depth,
         epic_depth,
+        without_initiative,
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
@@ -1904,6 +1969,18 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             _ => "",
         }
     ));
+    // air-g5o: a count with its denominator beside it, and no verdict. Printed only when
+    // there is something to say — a fleet that declares every initiative should not carry a
+    // line saying so on every tick.
+    if let Some((missing, considered)) = s.without_initiative
+        && missing > 0
+    {
+        out.push_str(&format!(
+            "beads without initiative: {missing} of {considered} bd named this tick (ready + \
+             in progress, epics excluded) declare no `initiative: <CODE>` line. A count, not \
+             a gate.\n"
+        ));
+    }
     out.push_str(&format!("inbox: {} open\n", s.inbox_depth));
     if let Some(l) = &s.bd_latency {
         out.push_str(&super::bd_latency::line(l));
@@ -2044,10 +2121,9 @@ mod tests {
         t.checked_sub(span).unwrap().to_string()
     }
 
-    fn every_line() -> [i64; 5] {
+    fn every_line() -> [i64; 4] {
         let t = Thresholds::default();
         [
-            t.stuck_min,
             t.idle_with_claim_min,
             t.silent_with_claim_min,
             t.launch_grace_min,
@@ -2091,7 +2167,7 @@ mod tests {
                     "a",
                     Some("working"),
                     &under(),
-                    vec![claim("fd-1", "a", &past(), 0)],
+                    vec![claim("zz-1", "a", &past(), 0)],
                     Some(true),
                 ),
                 worker("b", Some("idle"), &past(), vec![], Some(true)), // idle without claim is fine
@@ -2105,33 +2181,32 @@ mod tests {
     fn each_condition_fires_with_its_threshold() {
         let s = Snapshot {
             workers: vec![
-                worker("stuck", Some("stuck"), &past(), vec![], None),
                 worker(
                     "idle",
                     Some("idle"),
                     &past(),
-                    vec![claim("fd-2", "idle", &past(), 0)],
+                    vec![claim("zz-2", "idle", &past(), 0)],
                     None,
                 ),
                 worker(
                     "silent",
                     Some("running"),
                     &past(),
-                    vec![claim("fd-3", "silent", &past(), 0)],
+                    vec![claim("zz-3", "silent", &past(), 0)],
                     None,
                 ),
                 worker(
                     "gone",
                     None,
                     &past(),
-                    vec![claim("fd-4", "gone", &past(), 0)],
+                    vec![claim("zz-4", "gone", &past(), 0)],
                     None,
                 ),
                 worker(
                     "red",
                     Some("working"),
                     &under(),
-                    vec![claim("fd-5", "red", &under(), 2)],
+                    vec![claim("zz-5", "red", &under(), 2)],
                     Some(false),
                 ),
             ],
@@ -2144,7 +2219,6 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                ("stuck", "stuck"),
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
@@ -2157,7 +2231,6 @@ mod tests {
         // fires.
         let beyond = past_every_line_min().saturating_add(1);
         let loose = Thresholds {
-            stuck_min: beyond,
             idle_with_claim_min: beyond,
             silent_with_claim_min: beyond,
             launch_grace_min: Thresholds::default().launch_grace_min,
@@ -2174,7 +2247,7 @@ mod tests {
     #[test]
     fn a_bead_waiting_on_review_is_not_a_claim_in_progress() {
         let mut w = worker("w", Some("idle"), &past(), vec![], Some(false));
-        w.handed_over = vec![claim("fd-1", "w", &past(), 1)];
+        w.handed_over = vec![claim("zz-1", "w", &past(), 1)];
         let s = Snapshot {
             workers: vec![w.clone()],
             ready_depth: Some(0),
@@ -2206,7 +2279,7 @@ mod tests {
                 "new",
                 None,
                 &under(),
-                vec![claim("fd-1", "new", &under(), 0)],
+                vec![claim("zz-1", "new", &under(), 0)],
                 None,
             )],
             ..Default::default()
@@ -2217,7 +2290,7 @@ mod tests {
             "w",
             Some("idle"),
             &under(),
-            vec![claim("fd-2", "w", &past(), 0)],
+            vec![claim("zz-2", "w", &past(), 0)],
             None,
         );
         idle.session.as_mut().unwrap().pid = Some(1);
@@ -2434,7 +2507,13 @@ mod tests {
     #[test]
     fn unparseable_timestamps_never_panic_or_fire() {
         let s = Snapshot {
-            workers: vec![worker("x", Some("stuck"), "garbage", vec![], None)],
+            workers: vec![worker(
+                "x",
+                Some("idle"),
+                "garbage",
+                vec![claim("zz-9", "x", "garbage", 0)],
+                None,
+            )],
             ..Default::default()
         };
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());

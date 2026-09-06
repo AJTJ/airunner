@@ -142,7 +142,7 @@ pub fn facts(
 /// Is the named bead this worker's to hand over (air-60x)? Yes when nothing was named (the
 /// check is not applicable), when the worker holds an open claim on it, or when a commit in
 /// `main..HEAD` declares it in a `Bead:` trailer. The trailer is what `air land` reads, so a
-/// branch Air would land is a branch Air lets its author hand over: adopter's w1 built a
+/// branch Air would land is a branch Air lets its author hand over: the adopter's w1 built a
 /// better instrument for a defect w3 had already fixed and closed, on a branch carrying the
 /// closed bead by trailer, green with main merged, and had no route through this gate. Their
 /// coordinator landed it on Air's own stated criterion; that should not have needed judgement.
@@ -165,7 +165,7 @@ pub fn handable(named: Option<&str>, claimed: bool, carried: &[String]) -> bool 
 /// against it, and the gate refused every hand-over from a worktree holding no claim, with a
 /// fix naming a literal `<bead>`. The comment above it said any digest by the worker would
 /// count. Neither was right: a digest declares a bead, and with no bead there is nothing for
-/// it to declare. adopter's batching lane (w4: claims nothing, merges other workers' green
+/// it to declare. The adopter's batching lane (w4: claims nothing, merges other workers' green
 /// shas, runs the full verify once) is the case; its work is those workers' beads, each with
 /// its own digest, and its own hand-over has no bead of its own. A worker that DOES hold a
 /// claim, or names a bead, is unchanged: it must still declare it.
