@@ -201,6 +201,41 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             ],
         },
     ),
+    // air-kexg. The anchor is the permitting half alone: under it no range is ever
+    // journal-only, so a branch of journal entries is refused again and the defect returns.
+    // The CONSTRAINT survives it untouched - a mixed range still needs a bead either way -
+    // which is deliberate, because the constraint is the half that would still look right if
+    // it rotted, and a mutation taking out both would not tell the two apart. The refusal
+    // wording, the Option on Landing and every other branch's behaviour also survive.
+    // Anchor as rustfmt leaves it, per air-gei.
+    (
+        "land: a branch whose only commits are session-journal entries lands with no bead, and a range mixing them with anything else still needs one",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: ".all(|p| p.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))",
+            to: ".all(|_| false)",
+            also_red: &[],
+        },
+    ),
+    // air-33rn. ONE half, which is alerts' caution from air-kexg: a mutation taking out both
+    // goes red for the right reason by accident and cannot distinguish coverage of the
+    // constraint from coverage of the permission.
+    //
+    // My first anchor was `landings.first()`, making every worker read as landable — and it
+    // took out both halves, because a worker selection never considered then reads as landable
+    // too, which is the green half. Caught by running it, not by reading it. This one silences
+    // only the refusal lookup: the journal-only and no-green cases stop being reported, while
+    // landable, never-considered and cannot-tell all still answer correctly. What it isolates
+    // is exactly whether a worker is told its branch will NOT land, the bead's subject.
+    (
+        "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
+        Mutation {
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "    if let Some(s) = sel.skipped.iter().find(|s| s.worker == worker) {",
+            to: "    if let Some(s) = sel.skipped.iter().find(|_| false) {",
+            also_red: &[],
+        },
+    ),
     // air-i6fd. The anchor restores the defect exactly: main's tip read from the running cwd's
     // HEAD instead of from the ref. Everything else survives — the green check, the skipped
     // entries, the bead attribution, the error paths — so what it isolates is whether the
@@ -217,6 +252,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/status.rs",
             from: "    let main_tip = match git::main_tip(repo) {\n        Ok(t) => t,\n        Err(e) => {\n            out.errors.push(format!(\"git rev-parse main: {e}\"));\n            return out;\n        }\n    };",
             to: "    let main_tip = git::head(repo).unwrap_or_default();",
+            also_red: &[],
+        },
+    ),
+    // air-72t7. The anchor restores the boundary that dropped two of select's three fields.
+    // `landable` still fills, every skip still carries what it compared, and the human
+    // rendering is untouched — so what it isolates is exactly whether a reader of `--json`
+    // can tell 'nothing to land' from 'I could not tell'.
+    (
+        "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "        land_skipped: selection.skipped,",
+            to: "        land_skipped: Vec::new(),",
             also_red: &[],
         },
     ),
@@ -2009,6 +2057,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
         probe_a_discharged_clause_names_its_lookup(),
+        probe_a_journal_only_branch_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -2054,6 +2103,8 @@ fn all_probes() -> Vec<Probe> {
         probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
         probe_only_a_failed_handover_counts_as_an_attempt(),
         probe_the_journal_is_scaffolded_and_nothing_reads_it(),
+        probe_status_json_says_why_a_branch_cannot_land(),
+        probe_handover_says_what_the_landing_gate_would_say(),
     ]
 }
 
@@ -3178,7 +3229,7 @@ fn probe_land_names_a_branch() -> Probe {
     use crate::cmd::status::Landing;
 
     let landing = |worker: &str, bead: &str, minutes: i64, blocked: Option<&str>| Landing {
-        bead: bead.into(),
+        bead: Some(bead.into()),
         worker: worker.into(),
         head: format!("{worker}0000"),
         minutes,
@@ -3383,7 +3434,7 @@ fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
     use crate::cmd::status::Landing;
 
     let landing = |worker: &str, bead: &str| Landing {
-        bead: bead.into(),
+        bead: Some(bead.into()),
         worker: worker.into(),
         head: format!("{worker}0000"),
         minutes: 5,
@@ -3396,7 +3447,7 @@ fn probe_land_by_bead_carries_the_whole_branch() -> Probe {
     ready.push(landing("other", "zz-zzz"));
     let none: Vec<String> = Vec::new();
     fn beads_of(v: &[Landing]) -> Vec<&str> {
-        let mut b: Vec<&str> = v.iter().map(|l| l.bead.as_str()).collect();
+        let mut b: Vec<&str> = v.iter().filter_map(|l| l.bead.as_deref()).collect();
         b.sort_unstable();
         b
     }
@@ -3784,7 +3835,7 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
         landable: beads
             .iter()
             .map(|b| Landing {
-                bead: (*b).to_string(),
+                bead: Some((*b).to_string()),
                 worker: "alpha".into(),
                 head: head.to_string(),
                 minutes,
@@ -11034,5 +11085,282 @@ fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
         name: "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
         red_fires: scaffolds && alongside,
         green_passes: honours_config && untouched && no_gate,
+    }
+}
+
+/// air-kexg: a session journal commit names no bead, and a branch of them could not land.
+///
+/// The journal (air-3xww) is per session, ungated, and explicitly not work on a bead, so a
+/// journal commit is the one commit a worker legitimately writes that names none. **Two
+/// workers concluded independently that such a branch could land, by different reasoning** —
+/// alerts from air-7kp's rule that a trailerless commit attributes to nothing, verify from
+/// having no bead in flight — and no surface a worker can reach said otherwise. The
+/// coordinator's workaround was to amend with `Bead: air-3xww`, honest while that bead was
+/// hours old and a lie the moment it was not.
+///
+/// Red (declared mutation: the permitting half always answers false): a journal-only range is
+/// refused again, which is the defect.
+///
+/// Green is mostly the CONSTRAINT, because that is the half that would still look right if it
+/// rotted: a range mixing journal commits with anything else needs a bead exactly as before,
+/// in either order and however lopsided; a repo declaring no `journal_dir` has no journal case
+/// at all; an empty range is not journal-only; and a path that merely starts with the
+/// directory's name (`docs/journalism/x.md` against `docs/journal`) is not inside it. A
+/// declared field is read, never a guess about which paths look like a journal.
+fn probe_a_journal_only_branch_needs_no_bead() -> Probe {
+    use crate::cmd::status::journal_only;
+
+    let j = Some("docs/journal");
+    let entry = "docs/journal/alerts-22.md".to_string();
+    let other = "docs/journal/ledger-2c.md".to_string();
+    let work = "crates/cli/src/cmd/land.rs".to_string();
+
+    // RED: the case the bead is about — a branch of journal entries alone.
+    let red = journal_only(std::slice::from_ref(&entry), j)
+        && journal_only(&[entry.clone(), other.clone()], j);
+
+    // THE CONSTRAINT. A range that mixes still needs a bead, whichever way round and however
+    // lopsided; this is a name for one legitimate commit, never a bypass for work that forgot
+    // its trailer.
+    let mixed = !journal_only(&[entry.clone(), work.clone()], j)
+        && !journal_only(&[work.clone(), entry.clone()], j)
+        && !journal_only(std::slice::from_ref(&work), j);
+    // A repo that declares no journal_dir has no journal case; nothing changes for it.
+    let undeclared = !journal_only(std::slice::from_ref(&entry), None)
+        && !journal_only(std::slice::from_ref(&entry), Some(""));
+    // An empty range is not journal-only: nothing to land is a different answer.
+    let empty = !journal_only(&[], j);
+    // A prefix is not a parent. `docs/journalism` is not inside `docs/journal`.
+    let not_a_prefix = !journal_only(&["docs/journalism/x.md".to_string()], j)
+        && !journal_only(&["docs/journal.md".to_string()], j);
+    // A trailing slash in the declared value means the same directory.
+    let slash_tolerant = journal_only(std::slice::from_ref(&entry), Some("docs/journal/"));
+
+    let green = mixed && undeclared && empty && not_a_prefix && slash_tolerant;
+    Probe {
+        name: "land: a branch whose only commits are session-journal entries lands with no bead, and a range mixing them with anything else still needs one",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-72t7: `air status --json` said which branches can land and never why the others cannot.
+///
+/// `select` computes all three of `landings`, `skipped` and `errors` — air-6u5 added the last
+/// two precisely so nothing is silent — and the snapshot took only the first, through a helper
+/// that existed to discard the other two. So a `select()` error the code deliberately raises
+/// rather than defaulting reached no caller at all, and `landable: []` was a well-formed answer
+/// with nothing in it saying "I could not tell".
+///
+/// **Same class as the bug it came from, one layer up**: the promise is real and lives on
+/// `select`; the surface a reader actually looks at dropped the half that keeps it.
+///
+/// Found by USE, not by reading — verify wrote another bead's probe against `--json` and could
+/// not assert on `skipped`, because the field did not exist. And the incident it explains is
+/// alerts', whose own account is the reason the shape matters: they read `landable: []`,
+/// believed it, and spent three actions that could not have helped, because an empty list gives
+/// a reader nothing to disbelieve. What ended it was reading the Rust — which is not available
+/// to most readers of `--json`.
+///
+/// Red: the snapshot carries `skipped` and `errors`, and both survive into the JSON a caller
+/// parses.
+///
+/// Green: each skip **names what was compared, not only the verdict** (alerts' caution, and
+/// air-rud0's finding one surface over: a reason-shaped string can be true-sounding and wrong
+/// when the comparison was never made). So `green-at-head` carries the head it looked at, and
+/// `no-bead-named` carries the range it searched. And an error is distinguishable from an
+/// absence: a `Selection` with an error and no landings serialises with the error present, so
+/// `landable: []` can no longer be read as "nothing to land" when it means "I could not tell".
+fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
+    use crate::cmd::status::{Selection, Skipped, Snapshot};
+
+    let skipped = |check: &'static str, detail: &str| Skipped {
+        worker: "alerts".into(),
+        check,
+        detail: detail.into(),
+        fix: "a fix".into(),
+    };
+    let selection = Selection {
+        landings: Vec::new(),
+        skipped: vec![
+            skipped(
+                "green-at-head",
+                "alerts has no recorded green at its head de0f19cf",
+            ),
+            skipped(
+                "no-bead-named",
+                "alerts is green at de0f19cf but no commit in main..de0f19cf declares a bead",
+            ),
+        ],
+        errors: vec!["alerts: git rev-parse HEAD: boom".to_string()],
+    };
+    let snap = Snapshot {
+        landable: selection.landings.clone(),
+        land_skipped: selection.skipped.clone(),
+        land_errors: selection.errors.clone(),
+        ..Default::default()
+    };
+
+    // RED drives the real path: a repo with a worktree that cannot land, `air --json status`,
+    // and the reason parsed back out of the JSON a caller actually reads. A `Snapshot` built by
+    // hand never touches the boundary between `select` and the snapshot, which is where the two
+    // fields were being dropped — that anchor would mutate code this probe does not exercise,
+    // which is air-682's wrong-path trap.
+    let carried = (|| -> Option<bool> {
+        let exe = std::env::current_exe().ok()?;
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        let main = root.join("main");
+        let wt = root.join("worktree-alpha");
+        std::fs::create_dir_all(main.join(".air")).ok()?;
+        let g = |args: &[&str]| crate::git::run(&main, args).ok();
+        g(&["init", "-q", "-b", "main", "."])?;
+        g(&["config", "user.email", "a@b"])?;
+        g(&["config", "user.name", "a"])?;
+        std::fs::write(main.join("f"), "x").ok()?;
+        g(&["add", "-A"])?;
+        g(&["commit", "-qm", "seed"])?;
+        // A worktree with no recorded green: `select` must skip it with `green-at-head`, and
+        // the JSON must carry that.
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "alpha",
+            &wt.to_string_lossy(),
+        ])?;
+        let out = air_command(&exe, &wt)
+            .args(["--json", "status"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let _ = std::fs::remove_dir_all(&root);
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let snapshot = v.get("snapshot")?;
+        let skipped = snapshot.get("land_skipped")?.as_array()?;
+        Some(
+            snapshot.get("land_errors").is_some()
+                && skipped.iter().any(|s| {
+                    s.get("check").and_then(serde_json::Value::as_str) == Some("green-at-head")
+                        // and it names WHAT IT COMPARED, not only the verdict
+                        && s.get("detail")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|d| d.contains("head"))
+                }),
+        )
+    })()
+    .unwrap_or(false);
+
+    // Green: the values compared are in the reason, not only the verdict.
+    let names_what_it_compared = snap
+        .land_skipped
+        .iter()
+        .find(|s| s.check == "green-at-head")
+        .is_some_and(|s| s.detail.contains("de0f19cf"))
+        && snap
+            .land_skipped
+            .iter()
+            .find(|s| s.check == "no-bead-named")
+            .is_some_and(|s| s.detail.contains("main..de0f19cf"));
+    // An error is not an absence: empty landings plus an error is a distinguishable state.
+    let error_is_not_absence = snap.landable.is_empty() && !snap.land_errors.is_empty();
+    // And a clean fleet says nothing, so this costs a healthy round no output.
+    let quiet = {
+        let ok = Snapshot::default();
+        ok.land_skipped.is_empty() && ok.land_errors.is_empty()
+    };
+
+    Probe {
+        name: "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
+        red_fires: carried,
+        green_passes: names_what_it_compared && error_is_not_absence && quiet,
+    }
+}
+
+/// air-33rn: two workers concluded independently that a journal-only branch could land, both
+/// were wrong, and **neither surface a worker can reach said so.** Each learned it from the
+/// coordinator running `air land`, which workers are denied.
+///
+/// The fix is a read, not a second copy of the landing decision. `select` already computes the
+/// whole answer as `Skipped { check, detail, fix }`, so `landing_line` looks the worker up in
+/// that answer and renders it. Restating the decision is air-avj's shape and this round has hit
+/// it three times; the rule there is to name what knows rather than repeat it.
+///
+/// **Pure over a `Selection`, with no fixture at all**, which is deliberate. alerts hit exactly
+/// this on air-kexg: a shared fixture whose worker already carried work, so the range was
+/// genuinely mixed and the test proved the constraint while claiming to prove the permission.
+/// Most fixtures here carry work. Constructing the selection removes the possibility.
+///
+/// Red: a worker whose branch `select` skipped is told so, with the check, the detail and the
+/// fix — the journal-only case, and the no-bead-named case, each without the coordinator.
+///
+/// Green: the three answers that are not a refusal. A landable branch says so with what it
+/// carries; a worker selection never considered is told that rather than told "not landable",
+/// which would be a verdict nothing reached; and an error about that worker outranks both,
+/// because "cannot tell" and "no" are different and air-6u5 exists over that difference.
+fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
+    use crate::cmd::handover::landing_line;
+    use crate::cmd::status::{Landing, Selection, Skipped};
+
+    let skipped = |worker: &str, check: &'static str, detail: &str| Skipped {
+        worker: worker.into(),
+        check,
+        detail: detail.into(),
+        fix: "add a `Bead: <id>` trailer".into(),
+    };
+    let sel = Selection {
+        landings: vec![Landing {
+            worker: "alpha".into(),
+            bead: Some("air-1".into()),
+            head: "aaaaaaaa1111".into(),
+            minutes: 3,
+            command: "air land --worker alpha".into(),
+            acceptance: Vec::new(),
+            blocked: None,
+        }],
+        skipped: vec![
+            skipped(
+                "ledger",
+                "no-bead-named",
+                "ledger is green at aa2a9613 but no commit in main..aa2a9613 declares a bead",
+            ),
+            skipped(
+                "beta",
+                "green-at-head",
+                "beta has no recorded green at its head bbbb1111",
+            ),
+        ],
+        errors: vec!["gamma: git rev-parse HEAD: boom".to_string()],
+    };
+
+    // The journal-only branch: the case that cost two workers a round.
+    let journal = landing_line(&sel, "ledger");
+    // And a second precondition, so this is not one string's worth of coverage.
+    let nogreen = landing_line(&sel, "beta");
+    let red = journal.contains("NOT landable")
+        && journal.contains("no-bead-named")
+        && journal.contains("main..aa2a9613")
+        && journal.contains("Bead: <id>")
+        && nogreen.contains("NOT landable")
+        && nogreen.contains("green-at-head");
+
+    // Landable says so, with what it carries.
+    let ok = landing_line(&sel, "alpha");
+    // Never considered is not the same as refused.
+    let absent = landing_line(&sel, "nobody");
+    // "Cannot tell" outranks both: an error must never read as a verdict.
+    let broke = landing_line(&sel, "gamma");
+    let green = ok.contains("landable at aaaaaaaa")
+        && ok.contains("air-1")
+        && !ok.contains("NOT landable")
+        && absent.contains("not a landing candidate")
+        && !absent.contains("NOT landable")
+        && broke.contains("cannot tell")
+        && broke.contains("boom");
+
+    Probe {
+        name: "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
+        red_fires: red,
+        green_passes: green,
     }
 }
