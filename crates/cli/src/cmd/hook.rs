@@ -781,9 +781,19 @@ pub fn handover_gate(
     let bead = handover_bead(cmd);
     let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
     let v = handover_verdict(&f);
-    let stamped = match &bead {
-        Some(b) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
-        None => false,
+    // air-zqmi: only a hand-over that did NOT go through is an attempt. Stamping every
+    // command the gate saw made `handover_attempts` count successes, and the condition that
+    // reads it says "handed over N times without green verify at HEAD" — so a worker whose
+    // closes all passed was reported to the whole fleet as having failed. A pass clears the
+    // counter instead, because there is then nothing outstanding: without that it is a
+    // high-water mark, and one early refusal would keep firing after a clean close.
+    let stamped = match (&bead, v.pass) {
+        (Some(b), false) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
+        (Some(b), true) => {
+            let _ = ledger.clear_handover_attempts(b, worker);
+            false
+        }
+        (None, _) => false,
     };
     let decision = if v.pass {
         "pass"
