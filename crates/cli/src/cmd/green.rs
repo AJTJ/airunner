@@ -181,6 +181,7 @@ mod tests {
             dirty: false,
             tree: Some(tree.into()),
             members: vec![],
+            main_sha: None,
         }
     }
 

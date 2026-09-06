@@ -63,6 +63,12 @@ pub struct VerifyRun {
     /// schema v18): a verify lane's batch names its members, so a red batch can be reported
     /// by member without a landing row. Empty for a verify at a worker's own head.
     pub members: Vec<crate::landings::Member>,
+    /// What `main` pointed at when the run started (v19, air-9ij): the main this tree was
+    /// built over. "Green G contains main" is the close gate's question, and asking it of
+    /// CURRENT main makes a recorded fact expire the moment anyone writes to main — a
+    /// landing, or an ordinary prose commit, which is what invalidated an adopter's whole
+    /// batch on 2026-09-06. Asking it of this sha makes it durable. `None` before v19.
+    pub main_sha: Option<String>,
 }
 
 /// Exit codes that mean the run was KILLED rather than that it failed (air-ppm): 128 + SIGKILL
@@ -160,8 +166,8 @@ impl Ledger {
         self.conn().execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, failing_step, \
              started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, \
-             members) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+             members, main_sha) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 run.id,
                 run.worker,
@@ -179,6 +185,7 @@ impl Ledger {
                 run.dirty,
                 run.tree,
                 serde_json::to_string(&run.members)?,
+                run.main_sha,
             ],
         )?;
         Ok(())
@@ -210,7 +217,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, main_sha \
                  FROM verify_runs WHERE worker=?1 AND kind=?2 ORDER BY started_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
                 row_to_run,
@@ -232,7 +239,7 @@ impl Ledger {
                 &format!(
                     "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
                      started_at, finished_at, log_path, command, duration_ms, output_bytes, \
-                     dirty, tree, members FROM verify_runs WHERE sha=?1 AND kind=?2 AND {NOT_KILLED} \
+                     dirty, tree, members, main_sha FROM verify_runs WHERE sha=?1 AND kind=?2 AND {NOT_KILLED} \
                      ORDER BY finished_at DESC LIMIT 1"
                 ),
                 params![sha, kind.as_str()],
@@ -251,7 +258,7 @@ impl Ledger {
                 &format!(
                     "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
                      started_at, finished_at, log_path, command, duration_ms, output_bytes, \
-                     dirty, tree, members FROM verify_runs WHERE tree=?1 AND kind=?2 AND {NOT_KILLED} \
+                     dirty, tree, members, main_sha FROM verify_runs WHERE tree=?1 AND kind=?2 AND {NOT_KILLED} \
                      ORDER BY finished_at DESC LIMIT 1"
                 ),
                 params![tree, kind.as_str()],
@@ -267,7 +274,7 @@ impl Ledger {
     pub fn latest_greens(&self, kind: Kind, limit: usize) -> Result<Vec<VerifyRun>> {
         let mut st = self.conn().prepare(
             "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, main_sha \
              FROM verify_runs WHERE kind=?1 AND exit_code=0 \
              ORDER BY finished_at DESC LIMIT ?2",
         )?;
@@ -283,7 +290,7 @@ impl Ledger {
     pub fn latest_runs(&self, kind: Kind, limit: usize) -> Result<Vec<VerifyRun>> {
         let mut st = self.conn().prepare(
             "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, main_sha \
              FROM verify_runs WHERE kind=?1 ORDER BY finished_at DESC LIMIT ?2",
         )?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -299,7 +306,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, main_sha \
                  FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
                  ORDER BY finished_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
@@ -417,6 +424,7 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<VerifyRun> {
             .get::<_, Option<String>>(15)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        main_sha: r.get(16)?,
     })
 }
 
@@ -455,6 +463,7 @@ mod tests {
             dirty: false,
             tree: None,
             members: vec![],
+            main_sha: None,
         }
     }
 

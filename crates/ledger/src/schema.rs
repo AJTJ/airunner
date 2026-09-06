@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 18;
+pub const CURRENT_VERSION: i64 = 19;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -280,6 +280,16 @@ const V18: &str = r#"
 ALTER TABLE verify_runs ADD COLUMN members TEXT;
 "#;
 
+/// v19 (2026-09-06, air-9ij): `main`'s sha when the run started, read by `air record` before
+/// the command ran. "The green contains main" used to be evaluated against CURRENT main at
+/// query time, so a green recorded over the main of its moment was silently disqualified the
+/// instant main moved — by a landing OR by an ordinary commit on main, which is how an
+/// adopter's coordinator invalidated a whole batch with one prose commit. This is the durable
+/// half of that fact. `NULL` on rows written before v19, which fall back to current main.
+const V19: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN main_sha TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -354,6 +364,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 18 {
         conn.execute_batch(V18)?;
         conn.pragma_update(None, "user_version", 18)?;
+    }
+    if version < 19 {
+        conn.execute_batch(V19)?;
+        conn.pragma_update(None, "user_version", 19)?;
     }
     Ok(())
 }

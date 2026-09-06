@@ -1159,6 +1159,7 @@ mod tests {
                 dirty: false,
                 tree: None,
                 members: vec![],
+                main_sha: None,
             })
             .unwrap();
         let d = stop(&ledger);
@@ -1183,6 +1184,7 @@ mod tests {
                 dirty: false,
                 tree: None,
                 members: vec![],
+                main_sha: None,
             })
             .unwrap();
         let d = stop(&ledger);
