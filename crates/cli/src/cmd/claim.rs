@@ -301,8 +301,25 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 .as_deref()
                 .filter(|a| !a.is_empty() && *a != actor)
             {
+                // air-6wv2: say that nobody is actually holding it, which is a FACT here
+                // rather than a guess, because step 1 above already refused if Air had an open
+                // claim on this bead by anyone else. Reaching this line means bd has an
+                // assignee and Air has no claim behind it.
+                //
+                // I wrote this as a conditional first — live assignee versus leftover — and
+                // running it showed the live branch is unreachable: with a claim recorded, the
+                // ledger check fires and names the holder and `air release`. Dead code stating
+                // a distinction the function had already made.
+                //
+                // bd exposes nothing that marks a reopen: no `reopened_at`, and `closed_at`
+                // cannot be observed on an open bead without creating and reopening one, which
+                // a worker may not do. So the reopen is offered as a possible cause and not
+                // asserted. That bd keeps an assignee through a CLOSE is verified (a closed
+                // bead here returns `"status":"closed","assignee":"verify"`); that it survives
+                // a REOPEN is the observed instance that filed this bead (air-vsvt came back
+                // carrying `alerts`), not a property anyone has tested in isolation.
                 let msg = format!(
-                    "refused by bd's rule: {bead} has assignee `{a}`, and in bd 1.2.x a pencilled assignee blocks every other worker's --claim. Either `{a}` claims it, or the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
+                    "refused by bd's rule: {bead} has assignee `{a}`, and in bd 1.2.x a pencilled assignee blocks every other worker's --claim. Air has no open claim behind that assignee, so it may be left over rather than live work: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. Either `{a}` claims it, or the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
                 );
                 return fail(
                     &ledger,
