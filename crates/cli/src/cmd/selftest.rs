@@ -174,6 +174,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-jsz. The anchor is the one arm that turned a silent pass into a refusal. Under
+    // it a repo that declares an adopter and has no names goes back to skipping, which is
+    // the exact state a whole round ran in; the leak refusal and the contributor's skip
+    // both survive, so a probe that stays green under it was checking that the check runs
+    // rather than that it can no longer be handed nothing.
+    (
+        ADOPTER_CHECK_PROBE,
+        Mutation {
+            file: "crates/cli/src/cmd/privacy.rs",
+            from: "        (true, true) => Verdict::RefuseDeclaredButNoNames,",
+            to: "        (true, true) => Verdict::SkipUndeclared,",
+            also_red: &[],
+        },
+    ),
     // air-1n3. The anchor is the one branch that separates a stop from every other
     // notification. Under it a permission prompt marks the session STOPPED, which is the
     // failure that matters: `air status` would report a session as down while it sits
@@ -1667,6 +1681,7 @@ fn all_probes() -> Vec<Probe> {
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
+        probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
     ]
 }
 
@@ -8489,3 +8504,101 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
         green_passes: green,
     }
 }
+
+/// air-jsz: `air adopter-check` ran for a whole round having never once had an input.
+///
+/// It reads the names it forbids from `private/adopters.md`, which is gitignored by design, and
+/// skipped cleanly when that file was absent. The file existed in no worktree, not in the main
+/// checkout, and nowhere on the machine — so every green `make verify` of the round, including
+/// the sweep's own, printed `Skipped`, and the one mechanism guarding the owner's ruling that no
+/// adopter content is public would have passed over any leak. `do-less` case 3a: the count of
+/// firings was zero and the zero said nothing, because the input never arrived.
+///
+/// The existing probe could not catch that. It exercised `names`/`leaks`/`refusal` as pure
+/// functions and never ran the command, so it proved the machinery worked while the machinery
+/// was being handed nothing. **This one runs the binary**, in a real git worktree of a real
+/// repo, which is where a worker's verify runs and where the file was missing.
+///
+/// Red: from the WORKTREE, a tracked file naming an adopter is refused with its path and line,
+/// exit 2 — which is the case that silently passed. And a repo that declares an adopter with no
+/// names is refused too, naming the file to write, instead of skipping.
+///
+/// Green: the contributor's case survives. A repo that declares no adopter and has no list
+/// skips and exits 0, because a public clone must not be refused for lacking a private file it
+/// is never given.
+fn probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list() -> Probe {
+    let Ok(exe) = std::env::current_exe() else {
+        return Probe {
+            name: ADOPTER_CHECK_PROBE,
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let res = (|| -> Result<(bool, bool), String> {
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        let main = root.join("main");
+        let wt = root.join("wt");
+        std::fs::create_dir_all(main.join(".claude")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(main.join(".air")).map_err(|e| e.to_string())?;
+        let git = |args: &[&str]| -> Result<String, String> {
+            crate::git::run(&main, args).map_err(|e| e.to_string())
+        };
+        git(&["init", "-q", "-b", "main", "."])?;
+        git(&["config", "user.email", "a@b"])?;
+        git(&["config", "user.name", "a"])?;
+        // The leak: a tracked file naming the adopter this repo declares.
+        std::fs::write(main.join("note.md"), "clean line\nas ACME measured it\n")
+            .map_err(|e| e.to_string())?;
+        std::fs::write(main.join(".gitignore"), "private/\n.air/\n").map_err(|e| e.to_string())?;
+        std::fs::write(main.join(".claude/air.json"), "{\"adopters\": true}\n")
+            .map_err(|e| e.to_string())?;
+        git(&["add", "-A"])?;
+        git(&["commit", "-qm", "seed"])?;
+        // A worktree, because that is where a worker's verify runs and where the list was
+        // missing. The list lives in the MAIN checkout and is copied in, which is what
+        // `.worktreeinclude` does for a real launch.
+        git(&["worktree", "add", "-q", "-b", "wt", &wt.to_string_lossy()])?;
+        // The list lives in the MAIN checkout only: one source, so a worktree's copy cannot
+        // disagree with it (air-jsz). The worktree deliberately gets none.
+        std::fs::create_dir_all(main.join("private")).map_err(|e| e.to_string())?;
+        std::fs::write(main.join("private/adopters.md"), "    name: acme\n")
+            .map_err(|e| e.to_string())?;
+
+        let check = |dir: &Path| -> Result<i32, String> {
+            let out = air_command(&exe, dir)
+                .args(["adopter-check"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(out.status.code().unwrap_or(-1))
+        };
+        // 1. The leak, from the worktree.
+        let refused_leak = check(&wt)? == 2;
+        // 2. Declared, list gone: refused rather than skipped. This is the state the round ran
+        //    in, and the whole point of the bead.
+        std::fs::remove_file(main.join("private/adopters.md")).map_err(|e| e.to_string())?;
+        let refused_empty = check(&wt)? == 2;
+        // 3. Undeclared and no list: the contributor's clone, which must still pass.
+        std::fs::write(main.join(".claude/air.json"), "{}\n").map_err(|e| e.to_string())?;
+        let skips = check(&wt)? == 0;
+        let _ = std::fs::remove_dir_all(&root);
+        Ok((refused_leak && refused_empty, skips))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: ADOPTER_CHECK_PROBE,
+        red_fires: red,
+        // The pure half stays asserted here too, so the declaration's three cases are covered
+        // without a spawn: an undeclared repo WITH a list still checks it.
+        green_passes: green
+            && matches!(
+                crate::cmd::privacy::verdict(false, Some("    name: acme\n")),
+                crate::cmd::privacy::Verdict::Check(_)
+            )
+            && crate::cmd::privacy::verdict(true, None)
+                == crate::cmd::privacy::Verdict::RefuseDeclaredButNoNames
+            && crate::cmd::privacy::verdict(false, None)
+                == crate::cmd::privacy::Verdict::SkipUndeclared,
+    }
+}
+
+const ADOPTER_CHECK_PROBE: &str = "privacy: adopter-check refuses a leak when run from a worktree, and refuses a repo that declares an adopter with no names instead of skipping";

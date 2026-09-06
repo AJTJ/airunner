@@ -1,0 +1,8 @@
+# Files git does not track that a fresh worktree still needs in order to build or verify.
+# `air worker` copies everything named here out of the main checkout and into the new
+# worktree. gitignore syntax, one pattern per line; `!` negations are not supported.
+#
+# `private/` holds everything that names an adopter, and `private/adopters.md` is the list
+# `air adopter-check` reads. Without this line a worker's worktree has no copy, the check has
+# nothing to check, and `make verify` goes green over a leak (air-jsz).
+private/
