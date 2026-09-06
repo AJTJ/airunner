@@ -531,7 +531,7 @@ mod tests {
     }
 
     /// air-4up: a refusal caused by a landing names the landing, when, and from whom, keeps
-    /// the phrase the adopter's counts by, and keeps the fix. Without a landing to name it still
+    /// the phrase the adopter counts by, and keeps the fix. Without a landing to name it still
     /// refuses and names main.
     #[test]
     fn a_refusal_after_a_landing_names_the_landing_that_moved_main() {

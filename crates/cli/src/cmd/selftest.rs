@@ -66,7 +66,7 @@ fn raw_air_spawns(source: &str) -> usize {
 ///
 /// Three ways a revert demonstration misleads, all three of which `prove` reports separately:
 ///
-/// 1. **A mutant that does not build.** the adopter's first run scored 15 of 15 red; two were a
+/// 1. **A mutant that does not build.** The adopter's first run scored 15 of 15 red; two were a
 ///    syntax error, so the guard crashed and both probes went red for nothing. A mutation that
 ///    fails to compile is reported BROKEN and never counted as evidence.
 /// 2. **A blanket mutant** (always-allow, always-deny) shows a probe is wired to the guard at
