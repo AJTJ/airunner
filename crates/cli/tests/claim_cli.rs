@@ -1878,6 +1878,141 @@ fn a_lane_batch_green_closes_the_bead_it_covers_and_a_stale_batch_is_named() {
     assert!(msg.contains("next batch"), "{msg}");
 }
 
+/// air-80x.2: a verify lane's batch lands as ONE landing. Three worker branches, each carrying
+/// its bead by trailer and NO green of its own; a lane worktree merges main and all three
+/// (`--no-ff`) and records the only green at the batch head; `air land --worker lane` from the
+/// main checkout lands once, attributes every bead once, records the three member heads on the
+/// row, and leaves every worker's head an ancestor of main so their next `git merge main` is
+/// a fast-forward.
+#[test]
+fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    let root = main.parent().unwrap().to_path_buf();
+    // alpha already exists from land_repo; add beta and gamma the same way.
+    let mut workers: Vec<(String, PathBuf)> = vec![("alpha".into(), alpha.clone())];
+    for name in ["beta", "gamma"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+        workers.push((name.to_string(), wt.canonicalize().unwrap()));
+    }
+    let beads = ["fd-1", "fd-2", "fd-3"];
+    let mut heads: Vec<String> = Vec::new();
+    for ((name, wt), bead) in workers.iter().zip(beads) {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air_env(wt, &bd, &["claim", bead], dead).0, 0, "{name}");
+        std::fs::write(wt.join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        git(wt, &["add", &format!("{name}.txt")]);
+        git(wt, &["commit", "-q", "-m", &bead_trailer(bead)]);
+        heads.push(git(wt, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    // The lane: main plus every branch, one merge commit each, one green at the end.
+    let lane = root.join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    for (name, _) in &workers {
+        git(
+            &lane,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                &format!("worktree-{name}"),
+                "-m",
+                &format!("batch: {name}"),
+            ],
+        );
+    }
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    acceptance(&main, "- Verify recorded green at HEAD.\n");
+    let before = git(&main, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    for bead in beads {
+        assert!(out.contains(bead), "{out}");
+    }
+    assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
+
+    // One landing row, every bead once, every member head recorded.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let rows: Vec<(String, String, String, String)> = conn
+        .prepare("SELECT worker, result, beads, members FROM landings")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let (worker, result, beads_json, members_json) = &rows[0];
+    assert_eq!((worker.as_str(), result.as_str()), ("lane", "landed"));
+    let landed: Vec<String> = serde_json::from_str(beads_json).unwrap();
+    let mut sorted = landed.clone();
+    sorted.sort();
+    assert_eq!(sorted, beads, "every bead once: {landed:?}");
+    let members: Vec<serde_json::Value> = serde_json::from_str(members_json).unwrap();
+    let mut member_pairs: Vec<(String, String)> = members
+        .iter()
+        .map(|m| {
+            (
+                m["worker"].as_str().unwrap().to_string(),
+                m["sha"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    member_pairs.sort();
+    let mut expected: Vec<(String, String)> = workers
+        .iter()
+        .map(|(n, _)| n.clone())
+        .zip(heads.iter().cloned())
+        .collect();
+    expected.sort();
+    assert_eq!(
+        member_pairs, expected,
+        "the batch's members are the three worker heads"
+    );
+    // Every worker's head is now in main: their next `git merge main` is a fast-forward.
+    for (name, _) in &workers {
+        assert_eq!(
+            git(
+                &main,
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    &format!("worktree-{name}"),
+                    "main"
+                ]
+            ),
+            "",
+            "{name}'s head is not an ancestor of main"
+        );
+    }
+}
+
 fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");
