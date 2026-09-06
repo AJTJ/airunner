@@ -105,6 +105,19 @@ pub struct Missing {
     pub check: &'static str,
     pub detail: String,
     pub fix: String,
+    /// This fix depends on the repo's own WORK FLOW, not just on the facts (air-avj).
+    ///
+    /// Merging main and recording a verify are the right repair with no verify lane and are
+    /// the two things a lane exists to stop a worker doing: merging moves the head off the sha
+    /// the lane cut at, and recording a green is the lane's job. An adopter's Stop hook printed
+    /// both to three workers under a lane in one round — w1 obeyed and lost its batch
+    /// membership, w2 ignored it at the cost of a round trip, w3 asked instead of obeying.
+    ///
+    /// The flag exists so [`stop_message`] can drop these repairs and name the command that
+    /// computes them, while `air handover` itself keeps printing them. It is set beside each
+    /// `fix` rather than derived from a list of check names, so a new check has to decide
+    /// rather than default into being advertised at Stop time.
+    pub flow_dependent: bool,
 }
 
 pub fn handover_verdict(f: &GateFacts) -> Verdict {
@@ -150,6 +163,8 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             check: "verify-green-at-head",
             detail,
             fix,
+            // Recording a verify is the lane's job, never the worker's, where one runs.
+            flow_dependent: true,
         });
     }
     if !f.main_is_ancestor {
@@ -180,6 +195,8 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             check: "main-merged",
             detail,
             fix: "git merge main && air record verify -- make verify".to_string(),
+            // Merging moves the head off the sha a lane cut its batch at.
+            flow_dependent: true,
         });
     }
     // air-xbl: the ids a refusal names. The named bead first; else every bead the worker
@@ -222,6 +239,8 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             check: "claim",
             detail,
             fix,
+            // A `Bead:` trailer is the trailer whatever the repo's flow is.
+            flow_dependent: false,
         });
     }
     if f.digest_present == Some(false) {
@@ -243,6 +262,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                       NAMES the bead, and an untrailered digest commit never joins that set, so \
                       the close still passes at the batch you were cut at."
                     .to_string(),
+                // Committing a digest is the same act under either flow; only the trailer
+                // advice is about the batching one, and it is guarded by its own sentence.
+                flow_dependent: false,
             });
         } else {
             // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
@@ -303,6 +325,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                 check: "digest-present",
                 detail,
                 fix: format!("{fix}{order_note}"),
+                // Where a repo configures digests, writing one is the same act under either
+                // flow.
+                flow_dependent: false,
             });
         }
     }
@@ -352,6 +377,58 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         missing,
         message,
     }
+}
+
+/// What the STOP HOOK says about a refusal (air-avj): the same facts, with the flow-dependent
+/// repairs replaced by the command that computes them.
+///
+/// The hook fires when a worker is choosing what to do next, and it arrives with the authority
+/// of tooling. Under a verify lane its old text told three of an adopter's workers to do the
+/// two things a lane exists to prevent — merge main, which moves the head off the sha the lane
+/// cut at, and record a green, which is the lane's job. One obeyed and lost its batch
+/// membership.
+///
+/// **The decision, recorded because it was a decision** (the bead offered three routes). Air
+/// does NOT read `verify_lane`: that key is the repo's own, for choosing its own flow, and a
+/// hook branching on it would be a second copy of a decision `air handover` already makes
+/// correctly — which is the drift that made this wrong rather than merely unhelpful. Nor is
+/// the wording made vague enough to be true under both, because the two repairs are opposite
+/// actions and a sentence covering both says nothing. Instead the hook states the fact and
+/// names the command that knows: `air handover` reads the repo's own configuration and prints
+/// the repair its flow calls for.
+///
+/// **What does not change.** `air handover` and every CLI surface still print the exact
+/// repair; a fix that does not depend on the flow — the `Bead:` trailer, the digest — is still
+/// printed here in full. Only the two flow-dependent ones become a pointer, and only at Stop.
+///
+/// Generalises past this case: any surface that restates a flow-dependent repair drifts from
+/// the one place that computes it. Name the command that knows.
+pub fn stop_message(v: &Verdict, worker: &str, head: &str) -> String {
+    if v.pass {
+        return v.message.clone();
+    }
+    let mode = if v.block { "refuses" } else { "would refuse" };
+    let items: Vec<String> = v
+        .missing
+        .iter()
+        .map(|m| {
+            if m.flow_dependent {
+                format!("{}: {}", m.check, m.detail)
+            } else {
+                format!("{}: {} — run `{}`", m.check, m.detail, m.fix)
+            }
+        })
+        .collect();
+    let pointer = if v.missing.iter().any(|m| m.flow_dependent) {
+        " — run `air handover`, which reads your repo's flow and prints the repair it calls for"
+    } else {
+        ""
+    };
+    format!(
+        "handover {mode} for {worker} at {}: {}{pointer}",
+        short(head),
+        items.join("; ")
+    )
 }
 
 fn short(sha: &str) -> &str {

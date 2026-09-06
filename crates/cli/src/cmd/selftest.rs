@@ -145,6 +145,49 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-avj. The anchor is the branch that decides what a Stop advisory prints, and nothing
+    // else: the facts, the pointer, the flow-free fix and `air handover`'s own message all
+    // survive it. Under it every repair is printed again, including the two a verify lane
+    // exists to stop a worker doing — which is the defect exactly, so a probe that stayed
+    // green under this was checking that the hook says SOMETHING rather than that it stopped
+    // saying the wrong thing. Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "            if m.flow_dependent {",
+            to: "            if false {",
+            also_red: &[],
+        },
+    ),
+    // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
+    // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
+    // Under it a green writes one too, and since the store is bounded by COUNT rather than by
+    // age, a fleet's greens evict the reds the store exists for. Anchor taken from the file
+    // AFTER rustfmt, per air-gei.
+    (
+        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        Mutation {
+            file: "crates/cli/src/cmd/runlog.rs",
+            from: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code != 0\n}",
+            to: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code == exit_code\n}",
+            also_red: &[],
+        },
+    ),
+    // air-cyf. The anchor puts the window back, at the value it had. Everything else
+    // survives: the batch is still found, supersession still decides, a plain red and a
+    // killed run are still not batches. What changes is only whether a busy day can age a
+    // standing red out of view, which is the failure the bead records and the one a probe
+    // reading fewer than 21 later runs would not have seen.
+    (
+        "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
+        Mutation {
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "let run = ledger.latest_red_batch(Kind::Verify).ok()??;",
+            to: "let run = ledger.latest_runs(Kind::Verify, 20).ok()?.into_iter().find(|r| r.verdict() == air_ledger::verify::Verdict::Red && !r.members.is_empty())?;",
+            also_red: &[],
+        },
+    ),
     // air-btz. The anchor is the walk's bound, so the `blocks` filter, the rendering and the
     // two bd calls all survive it: what changes is only how far up the check looks. Under it
     // the parent case is still found — and bd already refuses that one on every route, so a
@@ -1666,6 +1709,8 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_green_survives_main_moving_under_it(),
         probe_epic_with_no_open_children_is_named(),
         probe_ancestor_deadlock_is_named(),
+        probe_a_red_runs_output_is_kept(),
+        probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -1701,6 +1746,7 @@ fn all_probes() -> Vec<Probe> {
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
         probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
+        probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
     ]
 }
 
@@ -5249,7 +5295,7 @@ fn probe_killed_is_no_verdict() -> Probe {
     let dir = std::env::temp_dir();
     // The real signal path: the child kills itself with TERM, and Air sees 128 + 15.
     let signalled = run_tee("sh", &["-c".into(), "kill -TERM $$".into()], &dir)
-        .map(|(code, _)| code)
+        .map(|(code, _, _)| code)
         .unwrap_or(-1);
     let res = (|| -> Result<(bool, bool), String> {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -8458,6 +8504,95 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
     }
 }
 
+/// air-5ik: `verify_runs.log_path` has existed since schema v1 and was `None` on every row ever
+/// written, so the one run anybody reads — the red one — was the one Air kept nothing for. Four
+/// load-related flakes on 2026-09-06 (alerts' red at 37b15cb, `install_and_launch`'s tmux test,
+/// the `SubagentStop` probe, the land acceptance-budget probe: each red once, green on re-run,
+/// all under load 66-67) are undiagnosable now for exactly that reason.
+///
+/// Red (declared mutation: `exit_code != 0` becomes `true`): a GREEN run keeps its output too.
+/// That is not untidiness — the store is bounded by COUNT, so greens would evict the reds it
+/// exists to keep, and a fleet's greens outnumber its reds by an order of magnitude.
+///
+/// Green: the tail keeps the END of a stream and never exceeds its cap, because a verify fails
+/// at the end; `prune` drops the OLDEST by run id whatever order the directory listed them in,
+/// which is the difference between a bound and a lottery; the store's ceiling is a number this
+/// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
+/// out of a child that writes to each.
+fn probe_a_red_runs_output_is_kept() -> Probe {
+    use crate::cmd::record::run_tee;
+    use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
+
+    // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
+    // and a killed run is the one most likely to be the loaded machine this bead is about.
+    let red = !keeps_output(0)
+        && keeps_output(2)
+        && keeps_output(1)
+        && air_ledger::verify::KILLED_EXITS
+            .iter()
+            .all(|c| keeps_output(*c));
+
+    // The tail is the end of the stream, and one write bigger than the cap keeps its own end.
+    let tail_of = |cap: usize, chunks: &[&[u8]]| -> Vec<u8> {
+        let mut t = Tail::new(cap);
+        for c in chunks {
+            t.push(c);
+        }
+        t.into_bytes()
+    };
+    let keeps_the_end = tail_of(4, &[b"abc", b"de"]) == b"bcde"
+        && tail_of(3, &[b"abcdefgh"]) == b"fgh"
+        && tail_of(0, &[b"x"]).is_empty();
+
+    // Age order is id order (ULIDs), never listing order. Shuffled on purpose.
+    let names: Vec<String> = ["03.log", "01.log", "04.log", "02.log"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let bounded = prune(&names, 5).is_empty()
+        && prune(&names, 4) == vec!["01.log".to_string()]
+        && prune(&names, 2).len() == 3
+        // Whatever it deletes, exactly `keep - 1` are left for the new one to join.
+        && names.len().saturating_sub(prune(&names, 3).len()) == 2;
+
+    // The ceiling is a number, not a hope: 20 x 64 KiB.
+    let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
+
+    // End to end: a child that writes to BOTH streams, and the tail carries both.
+    let both = run_tee(
+        "sh",
+        &["-c".into(), "echo out; echo err >&2".into()],
+        &std::env::temp_dir(),
+    )
+    .map(|(code, _, tail)| {
+        let s = String::from_utf8_lossy(&tail).to_string();
+        code == 0 && s.contains("out") && s.contains("err")
+    })
+    .unwrap_or(false);
+
+    // A write really lands and really prunes, in a scratch dir of this probe's own.
+    let stored = (|| -> Option<bool> {
+        let air = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&air).ok()?;
+        let p = write(&air, "01ZZZ", b"the failure")?;
+        let read_back = std::fs::read(&p).ok()? == b"the failure";
+        let kept = std::fs::read_dir(crate::cmd::runlog::dir(&air))
+            .ok()?
+            .count()
+            == 1;
+        std::fs::remove_dir_all(&air).ok();
+        Some(read_back && kept)
+    })()
+    .unwrap_or(false);
+
+    let green = keeps_the_end && bounded && ceiling && both && stored;
+    Probe {
+        name: "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// Condition kinds that once existed and no longer do (air-wfd).
 ///
 /// Declared, because it cannot be derived: a deleted kind leaves no trace in `kinds::ALL`, and
@@ -8693,6 +8828,7 @@ fn probe_docs_name_real_flags_and_kinds() -> Probe {
         green_passes: live.is_empty() && nested && absence_ok,
     }
 }
+
 /// air-jsz: `air adopter-check` ran for a whole round having never once had an input.
 ///
 /// It reads the names it forbids from `private/adopters.md`, which is gitignored by design, and
@@ -8913,5 +9049,250 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-avj (an adopter's coordinator, 2026-09-06, after it cost three workers in one round).
+/// The Stop hook fires when a worker is choosing what to do next, and it arrives with the
+/// authority of tooling. Under a verify lane its text told them to do the two things a lane
+/// exists to prevent: `git merge main`, which moves the head off the sha the lane cut its batch
+/// at, and `air record verify`, which is the lane's job. w1 obeyed and lost its membership, w2
+/// ignored it at a round trip's cost, w3 asked instead of obeying.
+///
+/// Red (declared mutation: `flow_dependent` is always false): the Stop hook prints both repairs
+/// again, which is the defect exactly. Green: the FACTS are unchanged — every check, every
+/// detail, still there, because a worker still has to know why it will be refused; a fix that
+/// does not depend on the flow (the `Bead:` trailer) is still printed in full; the pointer to
+/// `air handover` appears only when something flow-dependent was dropped; and `air handover`'s
+/// own message keeps both repairs, since the CLI is the surface that reads the repo's flow.
+fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
+    use air_hooks::{handover_verdict, stop_message};
+
+    // A worker behind main with no green: both flow-dependent checks fire at once, which is
+    // the state the adopter's three workers were in.
+    let mut f = base_facts();
+    f.green_at_head = false;
+    f.main_is_ancestor = false;
+    f.main_sha = "aaaaaaaa".into();
+    let v = handover_verdict(&f);
+    let stop = stop_message(&v, &f.worker, &f.head);
+
+    // RED: neither repair reaches a worker at Stop.
+    let red = !stop.contains("git merge main")
+        && !stop.contains("air record verify")
+        && v.missing.iter().filter(|m| m.flow_dependent).count() == 2;
+
+    // The facts survive: a worker still has to know why it will be refused.
+    let facts_kept = v
+        .missing
+        .iter()
+        .all(|m| stop.contains(m.check) && stop.contains(&m.detail));
+    let points_at_the_command = stop.contains("air handover");
+    // The CLI is unchanged, and it is the surface that reads the repo's own flow.
+    let cli_unchanged =
+        v.message.contains("git merge main") && v.message.contains("air record verify");
+
+    // A refusal with NOTHING flow-dependent keeps its fix in full and needs no pointer: the
+    // trailer is the trailer whatever the flow is.
+    let mut g = base_facts();
+    g.bead_claimed_or_carried = false;
+    g.bead = Some("fd-1".into());
+    let cv = handover_verdict(&g);
+    let cs = stop_message(&cv, &g.worker, &g.head);
+    let flow_free_fix_kept = cv
+        .missing
+        .iter()
+        .filter(|m| !m.flow_dependent)
+        .all(|m| cs.contains(&m.fix))
+        && !cs.contains("air handover");
+
+    // A pass says what it always said.
+    let mut ok = base_facts();
+    ok.green_at_head = true;
+    let pv = handover_verdict(&ok);
+    let pass_unchanged = stop_message(&pv, &ok.worker, &ok.head) == pv.message;
+
+    let green = facts_kept
+        && points_at_the_command
+        && cli_unchanged
+        && flow_free_fix_kept
+        && pass_unchanged;
+    Probe {
+        name: "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-cyf: `red_batch_standing` read `latest_runs(Kind::Verify, 20)` and picked the red batch
+/// out of that window. Past 20 further verify runs a standing red batch stopped being reported,
+/// with nothing said — **and a report that was dropped looked exactly like one that was fixed.**
+/// The 20 had no test and no reason recorded beside it, and it failed toward permitting in the
+/// one place the fleet is told that nothing may land.
+///
+/// A round here records dozens of verify runs in an evening (`air audit` counts them), so this
+/// is not a theoretical horizon.
+///
+/// Red: a red batch with 25 later verify runs on top of it is STILL reported. That is the exact
+/// case the window dropped, and the number is one more than the window that used to exist plus
+/// margin, so a smaller window than 25 cannot pass it either.
+///
+/// Green: the only reason a standing red stops being reported is that it was fixed — a later
+/// green that carries EVERY member supersedes it, and one that carries only some does not. And
+/// two runs that are not batches are not reported as one: a red at a worker's own head carries
+/// no members, and a killed run is no verdict at all rather than a red.
+fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
+    use crate::cmd::batch::{RedBatch, red_batch_standing, superseded_by};
+    use air_ledger::landings::Member;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let l = Ledger::open_in(&dir).map_err(|e| e.to_string())?;
+        let mut at: u32 = 0;
+        let mut record = |sha: &str, exit: i32, members: Vec<Member>| -> Result<String, String> {
+            at = at.saturating_add(1);
+            let t = format!("2026-09-06T00:{at:02}:00Z");
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "lane".into(),
+                sha: sha.into(),
+                kind: Kind::Verify,
+                exit_code: exit,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: t.clone(),
+                finished_at: t.clone(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: None,
+                members,
+                main_sha: None,
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(t)
+        };
+        let m = |w: &str, sha: &str| Member {
+            worker: w.into(),
+            sha: sha.into(),
+        };
+        let members = vec![m("alpha", "a1a1a1a1a1"), m("beta", "b2b2b2b2b2")];
+
+        // The batch goes red, then the fleet keeps working: 25 ordinary runs on top of it,
+        // five past the window that used to exist.
+        let red_at = record("batch1234", 2, members.clone())?;
+        for i in 0..25 {
+            record(&format!("worker{i:04}"), i32::from(i % 3 == 0), Vec::new())?;
+        }
+        // `repo` is a directory with no git in it, so `is_ancestor` answers false for every
+        // pair: no green here carries anything, which isolates the AGE question from the
+        // supersession one.
+        let still_there = red_batch_standing(&l, &dir).is_some_and(|b| b.sha == "batch1234");
+
+        // Not a batch: a red at a worker's own head carries no members, and a killed run is no
+        // verdict. Neither may be reported as a standing red batch.
+        let dir2 = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir2).map_err(|e| e.to_string())?;
+        let l2 = Ledger::open_in(&dir2).map_err(|e| e.to_string())?;
+        l2.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "w".into(),
+            sha: "plainred1".into(),
+            kind: Kind::Verify,
+            exit_code: 2,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "2026-09-06T01:00:00Z".into(),
+            finished_at: "2026-09-06T01:00:00Z".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: Vec::new(),
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        l2.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "lane".into(),
+            sha: "killedbatch".into(),
+            kind: Kind::Verify,
+            // 137, not any non-zero: `KILLED_EXITS` is [137, 143] and a probe that used 130
+            // would be asserting that an ordinary red batch is not a batch.
+            exit_code: 137,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "2026-09-06T02:00:00Z".into(),
+            finished_at: "2026-09-06T02:00:00Z".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: members.clone(),
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        let neither_is_a_batch = red_batch_standing(&l2, &dir2).is_none();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = red_at;
+        Ok((still_there, neither_is_a_batch))
+    })();
+    let (still_there, neither_is_a_batch) = res.unwrap_or((false, false));
+
+    // Supersession, pure: only a green carrying EVERY member fixes the batch. Driven through
+    // an ancestry oracle rather than a repo, so the rule is visible instead of inferred.
+    let red = RedBatch {
+        sha: "batch1234".into(),
+        worker: "lane".into(),
+        at: "2026-09-06T00:01:00Z".into(),
+        members: vec![
+            Member {
+                worker: "alpha".into(),
+                sha: "a1".into(),
+            },
+            Member {
+                worker: "beta".into(),
+                sha: "b2".into(),
+            },
+        ],
+    };
+    let green = |sha: &str, at: &str| VerifyRun {
+        id: new_id(),
+        worker: "lane".into(),
+        sha: sha.into(),
+        kind: Kind::Verify,
+        exit_code: 0,
+        trigger: "selftest".into(),
+        failing_step: None,
+        started_at: at.into(),
+        finished_at: at.into(),
+        log_path: None,
+        command: None,
+        duration_ms: None,
+        output_bytes: None,
+        dirty: false,
+        tree: None,
+        members: Vec::new(),
+        main_sha: None,
+    };
+    // An empty directory: `is_ancestor` cannot answer, so nothing carries anything.
+    let nowhere = Path::new("/nonexistent-air-selftest");
+    let carries_nothing = !superseded_by(nowhere, &red, &[green("g1", "2026-09-06T09:00:00Z")]);
+    // A green BEFORE the batch never supersedes it, whatever it carries.
+    let earlier_never = !superseded_by(nowhere, &red, &[green("g0", "2026-09-06T00:00:00Z")]);
+
+    Probe {
+        name: "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
+        red_fires: still_there,
+        green_passes: neither_is_a_batch && carries_nothing && earlier_never,
     }
 }

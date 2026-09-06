@@ -1046,6 +1046,40 @@ pub const SURFACE: &[SurfaceChange] = &[
                  count of zero firings meant nothing, because the input never arrived. Check \
                  your own verify output for that line before assuming yours has ever run.",
     },
+    SurfaceChange {
+        id: "red-run-output-kept",
+        since: "2026-09-06 (air-5ik)",
+        headline: "`air record` keeps what a NON-GREEN run printed: the last 64 KiB, both \
+                   streams in arrival order, at `.air/logs/<run-id>.log`, with the path on \
+                   `verify_runs.log_path` — a column that has existed since schema v1 and was \
+                   NULL on every row ever written. `air record` prints the path and \
+                   `air status` puts it beside a worker's `not green`. A green run writes \
+                   nothing.",
+        silent_break: false,
+        action: "Nothing to run; `.air/` is already gitignored. The store is bounded at write \
+                 time by COUNT — 20 logs, so 1.25 MB at most, ever — and prunes itself, so \
+                 unlike `.air/events/` there is nothing to collect and no `gc` window to \
+                 choose. If your build prints more than 64 KiB you get its tail, which is \
+                 where a verify fails.",
+    },
+    SurfaceChange {
+        id: "stop-names-the-command",
+        since: "2026-09-06 (air-avj)",
+        headline: "The Stop hook no longer prints the flow-dependent repairs. It stated `git \
+                   merge main` and `air record verify -- make verify`, which under a verify \
+                   lane are the two things the lane exists to prevent — merging moves the head \
+                   off the sha the lane cut at, and recording a green is the lane's job. It \
+                   now states the same FACTS and names `air handover`, which reads your repo's \
+                   flow and prints the repair it calls for. Every other fix, and every CLI \
+                   surface, is unchanged.",
+        silent_break: false,
+        action: "Nothing to run. If anything of yours greps the Stop hook's \
+                 `additionalContext` for `git merge main`, it will not find it; the check \
+                 names and details are unchanged, and `air handover --json` still carries \
+                 every `fix` verbatim, plus a new `flow_dependent` flag per check. Air does \
+                 NOT read `verify_lane` for this: that key stays yours, and a hook branching \
+                 on it would be a second copy of a decision `air handover` already makes.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
