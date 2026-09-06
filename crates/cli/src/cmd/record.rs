@@ -39,6 +39,11 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     // landing commit `air land` builds over it. A tree that cannot be read is recorded as
     // unknown, which never matches; the exit is still the fact.
     let tree = super::green::tree_of(repo, &head).ok();
+    // air-80x.4: the worker branch heads this commit contains that main does not, recorded
+    // with the run so a red at a batch head names its members without a landing row.
+    let members = git::run(repo, &["rev-parse", "main"])
+        .map(|tip| super::batch::members_of(repo, &worker, &head, &tip))
+        .unwrap_or_default();
     let Some((prog, args)) = command.split_first() else {
         eprintln!("air record: missing command after --");
         return 1;
@@ -105,6 +110,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         output_bytes: Some(output_bytes),
         dirty,
         tree,
+        members,
     };
     if let Err(e) = ledger.record_verify(&run) {
         eprintln!("air record: could not write ledger: {e}");
@@ -151,6 +157,14 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     };
     if !flags.is_empty() {
         eprintln!("air record: {}{flaky_note}", flags.join(", "));
+    }
+    // air-80x.4: a red at a batch head is reported by member, so the lane can split by hand.
+    // Nothing else changes on a red: no landing, no close, no claim.
+    if run.verdict() == air_ledger::verify::Verdict::Red && !run.members.is_empty() {
+        let red = super::batch::red_batches_of(std::slice::from_ref(&run));
+        if let Some(b) = red.first() {
+            eprintln!("air record: {}", super::batch::red_batch_line(b));
+        }
     }
     log_event(
         &ledger,

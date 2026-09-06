@@ -182,34 +182,6 @@ pub fn acceptance_read(
     }
 }
 
-/// The worker branches `branch_head` contains that `tip` (main) does not, by worktree
-/// (air-80x.2): every worker worktree whose head is an ancestor of the branch head and not
-/// of main, the landing branch's own worker excluded. Git ancestry only; nothing is read from
-/// commit messages.
-fn members_of(
-    repo: &Path,
-    batch_worker: &str,
-    branch_head: &str,
-    tip: &str,
-) -> Vec<air_ledger::landings::Member> {
-    let mut out = Vec::new();
-    for (path, _) in git::worktrees(repo).unwrap_or_default() {
-        let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if worker == batch_worker || super::hook::role_for(&worker) != "worker" {
-            continue;
-        }
-        let Ok(head) = git::head(&path) else {
-            continue;
-        };
-        let in_batch = git::is_ancestor(repo, &head, branch_head).unwrap_or(false);
-        let in_main = git::is_ancestor(repo, &head, tip).unwrap_or(false);
-        if in_batch && !in_main {
-            out.push(air_ledger::landings::Member { worker, sha: head });
-        }
-    }
-    out
-}
-
 /// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
 fn branch_for(worker: &str) -> String {
     format!("worktree-{worker}")
@@ -821,7 +793,7 @@ fn land_one(
     // report reads the same list. Empty for an ordinary single branch.
     let members = branch_head
         .as_deref()
-        .map(|h| members_of(repo, &batch.worker, h, &tip))
+        .map(|h| super::batch::members_of(repo, &batch.worker, h, &tip))
         .unwrap_or_default();
     // air-bxe: ONE row per attempt, written more than once. The id and the attempt number are
     // fixed here so the `in-flight` write and the outcome write are the same row; deriving

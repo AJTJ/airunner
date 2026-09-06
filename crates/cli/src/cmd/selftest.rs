@@ -193,6 +193,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "record: a red at a batch head is reported by member and lands nothing; a red at a worker's own head is not a batch",
+        Mutation {
+            // Drop the members filter: every red run becomes a "batch", including a worker's
+            // red at its own head. The probe's green half is what falls.
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "        .filter(|r| !r.members.is_empty())",
+            to: "        .filter(|r| r.members.is_empty() || !r.members.is_empty())",
+            also_red: &[],
+        },
+    ),
+    (
         "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
         Mutation {
             // "every commit" becomes "any commit": a batch cut before the worker's last commit
@@ -1243,6 +1254,7 @@ fn all_probes() -> Vec<Probe> {
         probe_every_air_spawn_pins_identity(),
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
+        probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -1874,6 +1886,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 output_bytes: None,
                 dirty: false,
                 tree: None,
+                members: vec![],
             })
             .map_err(|e| e.to_string())
         };
@@ -3570,6 +3583,7 @@ fn probe_enforced_gate() -> Probe {
             output_bytes: None,
             dirty: false,
             tree: None,
+            members: vec![],
         })
         .map_err(|e| e.to_string())?;
         let green = handover_gate(&l, "probe", &dir, cmd, true)?;
@@ -4735,6 +4749,7 @@ fn probe_ledger_roundtrip() -> Probe {
             output_bytes: None,
             dirty: false,
             tree: None,
+            members: vec![],
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l
@@ -4788,6 +4803,7 @@ fn probe_killed_is_no_verdict() -> Probe {
             output_bytes: None,
             dirty: false,
             tree: Some("T".into()),
+            members: vec![],
         };
         l.record_verify(&run("aaa", 0, "t1"))
             .map_err(|e| e.to_string())?;
@@ -4896,6 +4912,7 @@ fn probe_green_follows_the_tree_only_where_declared() -> Probe {
             output_bytes: None,
             dirty: false,
             tree: Some(tree.clone()),
+            members: vec![],
         })
         .map_err(|e| e.to_string())?;
 
@@ -5563,6 +5580,84 @@ fn probe_status_reconcile_is_one_show() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-80x.4: a red at a batch head is reported by member, in `air record`'s line and in
+/// `air status`, and nothing lands on it. A red at a worker's own head (no members) is an
+/// ordinary red and is not reported as a batch.
+///
+/// Red: a red run recorded with members is a red batch whose line names each member, and
+/// `air land`'s branch check refuses a branch with no green. Green: a red run with no members
+/// and a green run with members are not red batches, and a snapshot without one prints no
+/// batch line.
+fn probe_red_batch_is_reported_by_member_and_lands_nothing() -> Probe {
+    use crate::cmd::batch::{red_batch_line, red_batches_of};
+    use crate::cmd::land::{Facts, branch_check};
+    use crate::cmd::status::{Snapshot, render_for_probe};
+    use air_ledger::landings::Member;
+
+    let run = |sha: &str, exit: i32, members: Vec<Member>| VerifyRun {
+        id: new_id(),
+        worker: "lane".into(),
+        sha: sha.into(),
+        kind: Kind::Verify,
+        exit_code: exit,
+        trigger: "selftest".into(),
+        failing_step: None,
+        started_at: "t".into(),
+        finished_at: "t".into(),
+        log_path: None,
+        command: None,
+        duration_ms: None,
+        output_bytes: None,
+        dirty: false,
+        tree: None,
+        members,
+    };
+    let m = |w: &str, sha: &str| Member {
+        worker: w.into(),
+        sha: sha.into(),
+    };
+    let red_batch = run(
+        "batch1234",
+        2,
+        vec![m("alpha", "a1a1a1a1a1"), m("beta", "b2b2b2b2b2")],
+    );
+    let reds = red_batches_of(std::slice::from_ref(&red_batch));
+    let line = reds.first().map(red_batch_line).unwrap_or_default();
+    let shown = render_for_probe(&Snapshot {
+        red_batch: reds.first().cloned(),
+        ..Default::default()
+    });
+    // Nothing lands on a red: the branch check wants a green at the head, batch or not.
+    let refused = branch_check(&Facts {
+        worker: "lane",
+        branch_exists: true,
+        already_in_main: false,
+        contains_main: true,
+        branch_head: "batch1234",
+        green_at: None,
+    })
+    .is_err();
+    let red = reds.len() == 1
+        && line.starts_with("batch red at batch123")
+        && line.contains("alpha@a1a1a1a1")
+        && line.contains("beta@b2b2b2b2")
+        && line.contains("nothing lands")
+        && shown.contains("batch red at")
+        && refused;
+
+    let plain_red = run("own1234567", 2, vec![]);
+    let green_batch = run("batch5678", 0, vec![m("alpha", "a1a1a1a1a1")]);
+    let none = red_batches_of(&[plain_red, green_batch]);
+    let quiet = render_for_probe(&Snapshot::default());
+    let green = none.is_empty() && !quiet.contains("batch red");
+
+    Probe {
+        name: "record: a red at a batch head is reported by member and lands nothing; a red at a worker's own head is not a batch",
         red_fires: red,
         green_passes: green,
     }

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 17;
+pub const CURRENT_VERSION: i64 = 18;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -273,6 +273,13 @@ const V17: &str = r#"
 ALTER TABLE landings ADD COLUMN members TEXT;
 "#;
 
+/// v18 (2026-09-05, air-80x.4): the members a verify run's commit contained, recorded by
+/// `air record` at run time (same JSON as `landings.members`). A red batch has no landing
+/// row, so this is where its members live for the report; `[]` at a worker's own head.
+const V18: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN members TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -344,6 +351,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V17)?;
         conn.pragma_update(None, "user_version", 17)?;
     }
+    if version < 18 {
+        conn.execute_batch(V18)?;
+        conn.pragma_update(None, "user_version", 18)?;
+    }
     Ok(())
 }
 
@@ -406,6 +417,32 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, CURRENT_VERSION);
+    }
+
+    /// air-80x.4: v18 adds `verify_runs.members` by ALTER; a run from before reads as none.
+    #[test]
+    fn v18_adds_run_members_and_old_rows_read_as_none() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(V1).unwrap();
+        conn.execute(
+            "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
+             finished_at) VALUES ('r1','w','aaa','verify',2,'record','t','t')",
+            [],
+        )
+        .unwrap();
+        for v in [V13, V14, V15, V16, V17] {
+            conn.execute_batch(v).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 17).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let v: Option<String> = conn
+            .query_row("SELECT members FROM verify_runs WHERE id='r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(v, None);
     }
 
     /// air-80x.2: v17 adds `landings.members` by ALTER; a row from before reads as no members.
