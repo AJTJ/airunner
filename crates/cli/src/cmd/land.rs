@@ -788,6 +788,13 @@ fn land_one(
         branch_head: branch_head.as_deref().unwrap_or(""),
         green_at: green.as_deref(),
     };
+    // air-80x.2: which worker branches this branch contains that main does not. A verify
+    // lane's batch lands once; the row says which branches rode in it, and a red batch's
+    // report reads the same list. Empty for an ordinary single branch.
+    let members = branch_head
+        .as_deref()
+        .map(|h| super::batch::members_of(repo, &batch.worker, h, &tip))
+        .unwrap_or_default();
     // air-bxe: ONE row per attempt, written more than once. The id and the attempt number are
     // fixed here so the `in-flight` write and the outcome write are the same row; deriving
     // `attempt_no` inside the closure would count the row it is about to update.
@@ -819,6 +826,7 @@ fn land_one(
             started_at: started_at.clone(),
             finished_at: now(),
             despite_inflight: despite.to_vec(),
+            members: members.clone(),
         });
     };
     let record =

@@ -159,6 +159,9 @@ pub struct Snapshot {
     pub batch_ready: Vec<BatchReady>,
     /// Every worker branch that is NOT batch-ready, with the fact it lacks (`--json`).
     pub not_batch_ready: Vec<NotBatchReady>,
+    /// The newest red verify at a batch head that no later green has superseded (air-80x.4),
+    /// with the members it was recorded with. The lane splits by hand; nothing lands on it.
+    pub red_batch: Option<super::batch::RedBatch>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
     /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
     /// red land leaves behind. The message at rewind time is not the only copy.
@@ -1593,6 +1596,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
         landings_in_flight: landings_in_flight(&ledger),
+        red_batch: super::batch::red_batch_standing(&ledger, repo),
         rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip.
@@ -1809,6 +1813,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
     for f in &s.verifies_in_flight {
         out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
+    }
+    // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
+    if let Some(b) = &s.red_batch {
+        out.push_str(&format!("{}\n", super::batch::red_batch_line(b)));
     }
     // air-bxe: the merge commit exists for minutes before the verify decides whether it stays.
     for f in &s.landings_in_flight {

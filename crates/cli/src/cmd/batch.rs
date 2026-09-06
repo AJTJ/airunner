@@ -137,6 +137,97 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// The worker branches `head` contains that `tip` (main) does not, by worktree (air-80x.2):
+/// every worker worktree whose head is an ancestor of `head` and not of main, `own` (the
+/// batch's own worker) excluded. Git ancestry only; nothing is read from commit messages.
+/// `air record` writes it on the run and `air land` on the landing, so a red batch and a
+/// landed one name their members the same way.
+pub fn members_of(
+    repo: &Path,
+    own: &str,
+    head: &str,
+    tip: &str,
+) -> Vec<air_ledger::landings::Member> {
+    let mut out = Vec::new();
+    for (path, _) in git::worktrees(repo).unwrap_or_default() {
+        let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
+        if worker == own || super::hook::role_for(&worker) != "worker" {
+            continue;
+        }
+        let Ok(wt_head) = git::head(&path) else {
+            continue;
+        };
+        let in_batch = git::is_ancestor(repo, &wt_head, head).unwrap_or(false);
+        let in_main = git::is_ancestor(repo, &wt_head, tip).unwrap_or(false);
+        if in_batch && !in_main {
+            out.push(air_ledger::landings::Member {
+                worker,
+                sha: wt_head,
+            });
+        }
+    }
+    out
+}
+
+/// A red verify at a batch head (air-80x.4): the run, and the members it was recorded with.
+/// Nothing lands, closes or claims on it; what Air adds is the report, so the lane can split
+/// by hand. Auto-bisect waits for a count of these.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RedBatch {
+    pub sha: String,
+    pub worker: String,
+    pub at: String,
+    pub members: Vec<air_ledger::landings::Member>,
+}
+
+/// Pure: the red batches among `runs` (newest first), newest first. A run is a batch when it
+/// was recorded with members; a red one with none is an ordinary red at a worker's own head
+/// and is not reported here.
+pub fn red_batches_of(runs: &[air_ledger::verify::VerifyRun]) -> Vec<RedBatch> {
+    runs.iter()
+        .filter(|r| r.verdict() == air_ledger::verify::Verdict::Red)
+        .filter(|r| !r.members.is_empty())
+        .map(|r| RedBatch {
+            sha: r.sha.clone(),
+            worker: r.worker.clone(),
+            at: r.finished_at.clone(),
+            members: r.members.clone(),
+        })
+        .collect()
+}
+
+/// The newest red batch still standing: none of its members has since been carried by a
+/// newer green run (a later batch, or the worker's own verify at that head). One list, one
+/// answer; the lane reads it in `air status` until a newer batch supersedes it.
+pub fn red_batch_standing(ledger: &Ledger, repo: &Path) -> Option<RedBatch> {
+    let runs = ledger.latest_runs(Kind::Verify, 20).ok()?;
+    let red = red_batches_of(&runs).into_iter().next()?;
+    let superseded = runs
+        .iter()
+        .filter(|r| r.is_green() && r.finished_at > red.at)
+        .any(|g| {
+            red.members
+                .iter()
+                .all(|m| git::is_ancestor(repo, &m.sha, &g.sha).unwrap_or(false))
+        });
+    (!superseded).then_some(red)
+}
+
+/// One line for a red batch, as `air record` prints it and `air status` repeats it.
+pub fn red_batch_line(b: &RedBatch) -> String {
+    let members: Vec<String> = b
+        .members
+        .iter()
+        .map(|m| format!("{}@{}", m.worker, short(&m.sha)))
+        .collect();
+    format!(
+        "batch red at {} ({}): members {}; nothing lands on it, the lane splits by hand",
+        short(&b.sha),
+        b.worker,
+        members.join(", ")
+    )
+}
+
 /// The two sentences the gate carries (air-80x.1): the ok line when every bead in `beads`
 /// is covered by a batch green, else the refusal detail from the first bead a batch predates.
 /// `(None, None)` when no bead has a batch green or a partial one.
