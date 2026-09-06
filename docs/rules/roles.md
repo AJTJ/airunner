@@ -105,6 +105,13 @@ scaffolded it), appended as you go, a timestamp and a line. What belongs: a bug 
 it presented, a wrong turn and what corrected it, a claim you later found was wrong, a thing you
 checked that turned out fine.
 
+A journal commit carries no `Bead:` trailer, because it is not work on a bead, and **a branch
+whose only commits are journal entries lands without one** (air-kexg). A branch that mixes them
+with anything else needs a trailer exactly as before: this is a name for the one commit you
+legitimately write that names no bead, not a way round the trailer. Two workers derived the
+opposite from correct premises on 2026-09-06 and were told to amend with a bead they had not
+touched. **[fact]**
+
 **How it differs from a capture, which is the distinction that matters** (alerts, 2026-09-06):
 a capture says somebody should do something, and the coordinator triages every one. These entries
 say **nobody** should do anything — they are for whoever is next, not for the queue. Sending them
