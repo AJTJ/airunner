@@ -829,6 +829,24 @@ pub const SURFACE: &[SurfaceChange] = &[
                  is a refusal that did not happen. The harness's own Bash timeout is the one \
                  budget Air cannot record; see adopting-air.md §1 step 5.",
     },
+    SurfaceChange {
+        id: "no-harness-worktree-flag",
+        since: "2026-09-06 (air-8gj)",
+        headline: "`air worker` no longer passes `--worktree` (or `--tmux`) to claude. Air \
+                   creates the worktree and starts claude IN it, so the harness's own worktree \
+                   isolation is off; one PreToolUse check replaces it, denying an \
+                   Edit/Write/MultiEdit whose RESOLVED path leaves the worker's worktree. In \
+                   adopter's record the harness block stopped no observed write to the main \
+                   checkout and cost 455 refusals in five days, 388 of them (88%) with no git \
+                   token in the command.",
+        silent_break: false,
+        action: "Nothing to run. Workers gain back the operations the harness was refusing \
+                 (native builds, unattended commands) and lose one block; the tmux path is \
+                 Air's on both routes, so `AIR_TMUX_MODE` and the iTerm2 native pane are gone \
+                 with the flag. A Bash `cd ../..` is deliberately out of scope — the harness \
+                 never caught that either — so if your repo needs it, that is a cwd-scoped \
+                 command guard of your own.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1563,6 +1581,17 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+        // air-8gj: the worktree fence is Air's, not the harness's. Both halves are pinned,
+        // because dropping either leaves roles.md promising a block that is not there — which
+        // is the direction a rules file must not fail in. The claim that used to stand here
+        // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
+        // `claude --worktree` and is false without it.
+        assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        assert!(
+            !ROLES_MD.contains("Editing\nthe main checkout is blocked natively")
+                && !ROLES_MD.contains("the main checkout is blocked natively"),
+            "roles.md must not promise the harness's block once the flag is gone (air-8gj)"
+        );
         // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
         assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
         assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
