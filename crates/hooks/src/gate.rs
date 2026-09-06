@@ -257,11 +257,13 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     "a digest in {dir} declares `bead: {one}` but git does not track it, so it \
                      exists for nobody but this worktree"
                 ),
-                fix: "commit it. If your lane has already cut a batch at this head, commit it \
-                      WITHOUT a `Bead:` trailer: the batch green must contain every commit that \
-                      NAMES the bead, and an untrailered digest commit never joins that set, so \
-                      the close still passes at the batch you were cut at."
-                    .to_string(),
+                fix: format!(
+                    "git add {dir} && git commit -m \"docs: digest for {one}\" — and if your \
+                     lane has already cut a batch at this head, that commit must carry NO \
+                     `Bead:` trailer: the batch green has to contain every commit that NAMES \
+                     the bead, and an untrailered digest commit never joins that set, so your \
+                     head moves and the close still passes at the batch you were cut at"
+                ),
                 // Committing a digest is the same act under either flow; only the trailer
                 // advice is about the batching one, and it is guarded by its own sentence.
                 flow_dependent: false,
