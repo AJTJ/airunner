@@ -146,6 +146,10 @@ pub struct Snapshot {
     /// left and their coordinator's decomposition was the bottleneck. Empty is the normal
     /// state and prints nothing; `None` when bd did not answer.
     pub epics_to_decompose: Option<Vec<EpicToDecompose>>,
+    /// Beads blocked by one of their own ancestors (air-btz): they can never become ready, and
+    /// nothing else in the fleet or the tracker says so. Empty is the normal state and prints
+    /// nothing; `None` when bd did not answer.
+    pub ancestor_deadlocks: Option<Vec<AncestorDeadlock>>,
     /// How many beads declare no `initiative: <CODE>` line, and how many were looked at
     /// (air-g5o). `None` when bd did not answer this tick.
     ///
@@ -322,6 +326,63 @@ pub fn to_decompose(epic: &str, children: &[air_bd::Issue]) -> Option<EpicToDeco
             epic: epic.to_string(),
             closed_children: children.len(),
         })
+}
+
+/// A bead that can never become ready: it is blocked by one of its own ancestors (air-btz).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AncestorDeadlock {
+    pub bead: String,
+    /// The ancestor the `blocks` edge points at.
+    pub ancestor: String,
+    /// How far up: 1 is the parent, 2 the grandparent. Printed, because bd's own guard covers
+    /// 1 and the reachable shape is 2 or more.
+    pub depth: usize,
+}
+
+/// Pure: which beads carry a `blocks` edge on one of their own ancestors (air-btz).
+///
+/// An ancestor cannot finish until its descendants do — that is bd's hierarchy, not an edge —
+/// so a descendant that waits on it waits forever. Both sides are stuck and the tracker shows
+/// the bead as "not ready yet", which is what an ordinary queued bead looks like. An adopter
+/// lost a night to this: every P1 in their queue unreachable, 42 beads offered to workers and
+/// not one of them a P1.
+///
+/// bd 1.2.2 does NOT prevent this in general, measured 2026-09-06
+/// (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`). Its guard is two rules, neither
+/// an ancestor walk: an existing `parent-child` row on the same pair, which always catches the
+/// direct parent; and a dotted-id prefix test, which catches deeper ancestors only when the id
+/// encodes the chain. `bd create --graph` assigns flat ids and links by `parent_key`, so a wave
+/// filed from a plan file slips both, silently.
+///
+/// `parents` is child -> parent over the beads that are not finished; `edges` is bd's flat
+/// dependency list. Only `blocks` counts: `parent-child` is the hierarchy itself, and naming
+/// that would report every child in the repo.
+///
+/// A closed ancestor is absent from `parents` and so is not walked through. That is a real
+/// limit and the safe direction: it under-reports rather than over-reports, and bd will not
+/// close a parent whose children are open, which is the case that would matter.
+pub fn ancestor_deadlocks(
+    parents: &std::collections::BTreeMap<String, String>,
+    edges: &[air_bd::Dep],
+) -> Vec<AncestorDeadlock> {
+    let mut out = Vec::new();
+    for e in edges.iter().filter(|e| e.dep_type == air_bd::BLOCKS) {
+        let mut at = e.issue_id.as_str();
+        // Bounded by the map, so a parent cycle bd should never allow cannot spin here.
+        for depth in 1..=parents.len() {
+            let Some(up) = parents.get(at) else { break };
+            if up == &e.depends_on_id {
+                out.push(AncestorDeadlock {
+                    bead: e.issue_id.clone(),
+                    ancestor: up.clone(),
+                    depth,
+                });
+                break;
+            }
+            at = up;
+        }
+    }
+    out
 }
 
 /// A branch ready for the verify lane's next batch (air-80x.3).
@@ -1580,6 +1641,13 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // slow bd skips it through `bd_try` and the line is silent rather than stale, which is
     // right for an invitation nobody is refused for ignoring.
     let mut epics_to_decompose: Option<Vec<EpicToDecompose>> = None;
+    // air-btz: a bead blocked by its own ancestor waits forever and reads as ordinary
+    // queueing. It is NOT in the ready set by definition, and `Issue` carries no edges, so it
+    // cannot be derived from what is already fetched — the bead said otherwise and the bead
+    // was wrong (the coordinator, 2026-09-06, on both this and air-84u). Two calls, each
+    // gated so the common repo pays one: the unfinished set, and the edges of the parented
+    // beads that bd says have any.
+    let mut ancestor_deadlocks: Option<Vec<AncestorDeadlock>> = None;
     // air-g5o: counted over the answers bd has ALREADY given this tick (ready plus
     // in-progress), so the number costs no extra bd process. `None` until `ready` answers, and
     // the in-progress half joins it only if that answered too, so a partial tick reports
@@ -1616,6 +1684,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                     })
                     .collect(),
             );
+            // air-btz, on the same branch as the ready answer so a slow bd skips both.
+            ancestor_deadlocks = deadlock_scan(&bd, &mut bd_slow, &mut errors);
             let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
             let _ = ledger.bd_cache_put("epic_depth", &split.epics.len().to_string(), &at);
             super::ready_cache::write(repo, &ids, &super::now());
@@ -1723,6 +1793,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // branch is landable that the command would then skip.
         landable: landings_for(repo),
         epics_to_decompose,
+        ancestor_deadlocks,
         batch_ready: batch.0,
         not_batch_ready: batch.1,
         overlaps,
@@ -1738,6 +1809,50 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             (false, false) => "live",
         },
     })
+}
+
+/// The ancestor-deadlock scan (air-btz), and what it costs, gated so the common repo pays one
+/// bd call and a repo with no hierarchy at all pays one.
+///
+/// Call 1, always: every bead that is not finished, for its `parent`. A repo whose beads have
+/// no parents stops here — there is no hierarchy, so there is no ancestor to be blocked by.
+/// Call 2, only when bd's own `dependency_count` says at least one PARENTED bead has an edge
+/// at all: those beads' edges, batched into one process. So the second call is paid only by a
+/// repo that has both hierarchy and edges under it, which is the only repo that can have the
+/// shape.
+///
+/// It is not derivable from what `air status` already fetches, and the bead that asked for it
+/// said otherwise: a bead blocked by its ancestor is not in the ready set — that is the whole
+/// problem — and `air_bd::Issue` carries no edges. Measured here 2026-09-06 under load 67:
+/// call 1 is 2040 ms and call 2 does not run, because none of this repo's 11 unfinished beads
+/// has a parent.
+fn deadlock_scan(
+    bd: &air_bd::BdCli,
+    slow: &mut Option<String>,
+    errors: &mut Vec<String>,
+) -> Option<Vec<AncestorDeadlock>> {
+    // Every stored status bd documents except `closed`. Comma-separated in ONE argument: bd
+    // 1.2.2's own `--help` says a repeated `-s` silently overwrites, so the repeated form
+    // would ask for `deferred` alone and answer with complete confidence.
+    let unfinished = bd_try(bd, slow, errors, "unfinished", |b| {
+        air_bd::WorkLedger::by_statuses(b, &["open", "in_progress", "blocked", "deferred"])
+    })?;
+    let parents: std::collections::BTreeMap<String, String> = unfinished
+        .iter()
+        .filter_map(|i| i.parent.clone().map(|p| (i.id.clone(), p)))
+        .collect();
+    let with_edges: Vec<String> = unfinished
+        .iter()
+        .filter(|i| i.parent.is_some() && i.dependency_count > 0)
+        .map(|i| i.id.clone())
+        .collect();
+    if with_edges.is_empty() {
+        return Some(Vec::new());
+    }
+    let edges = bd_try(bd, slow, errors, "dep-list", |b| {
+        air_bd::WorkLedger::dep_list(b, &with_edges)
+    })?;
+    Some(ancestor_deadlocks(&parents, &edges))
 }
 
 /// One bd call under the status budget. After a timeout every later call is skipped (`slow`
@@ -2029,6 +2144,17 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         out.push_str(&format!(
             "epic ready to decompose: {} (0 open children, {} closed)\n",
             e.epic, e.closed_children
+        ));
+    }
+    // air-btz: the deadlock nobody can see. Both sides wait forever, and every other reading
+    // of it — bd's, the coordinator's, the worker's — is "not ready yet".
+    for d in s.ancestor_deadlocks.iter().flatten() {
+        let rel = if d.depth == 1 { "parent" } else { "ancestor" };
+        out.push_str(&format!(
+            "deadlock: {} is blocked by {}, its own {rel}, which cannot finish until {} does. \
+             Neither side can move; bd reports this as \"not ready\". Fix: \
+             bd dep remove {} {}\n",
+            d.bead, d.ancestor, d.bead, d.bead, d.ancestor
         ));
     }
     // air-g5o: a count with its denominator beside it, and no verdict. Printed only when
