@@ -88,8 +88,11 @@ Not available to a worker, by deny rule in every permission mode: `air land`, `a
 `git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
 worktree, and `AskUserQuestion`. The owner is reached through `air capture "<question>"`: the
 coordinator files it as a bead labelled `owner`, the queue shows in `air status`, and the
-question and its answer leave a row (owner, 2026-08-30; air-bm3). Editing
-the main checkout is blocked natively. **[Air enforces]** The one refusal: the `bd` write that
+question and its answer leave a row (owner, 2026-08-30; air-bm3). An Edit or Write whose
+resolved path leaves your worktree is denied by Air's PreToolUse hook (air-8gj); the harness's
+own worktree isolation is off, since in adopter's record it stopped no observed write to
+main and cost 455 refusals in five days, 88% with no git token. **[Air enforces]** The one
+refusal: the `bd` write that
 ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
 whichever your repo uses — is denied without a recorded green at HEAD that contains `main`.
 Worker launches set `AIR_ENFORCE=1` and the hook names the fixing command. Enforced after the
