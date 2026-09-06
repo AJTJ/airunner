@@ -139,6 +139,7 @@ to **what Air records and what Air refuses**:
 | The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
 | `air handover` names what is missing | When in the loop to run it |
 | Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
+| Decomposing an epic with no open child is the coordinator's standing duty, and `air status` names each such epic with its closed count (air-84u) | How to split one, and when the queue is deep enough not to bother |
 
 **[an adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
 `bd update <id> -s awaiting_review` as the closing step. The adopter's owner had ruled that step

@@ -131,8 +131,13 @@ more than one branch; the role is a worker again.
 ## Coordinator (the main checkout, holding no lane)
 
 Two modes (owner, 2026-08-21). **Active:** every online worker has work: keep the ready list
-full of claimable tasks (epics decomposed; the reading may be delegated, the filing and deciding
-are yours), set priority, add `blocks` edges for shared files. Never set `assignee` on an open
+full of claimable tasks, set priority, add `blocks` edges for shared files. **Decomposing an
+epic is something you go and do, not a property a good queue happens to have** (owner,
+2026-09-06): when an epic has no open child, decompose it, using the `decomposition` skill.
+The reading may be delegated to a background agent; the filing and the deciding are yours.
+Nothing refuses on this and nothing pushes it — `air status` names each such epic with its
+closed count, and that is the whole mechanism.
+Never set `assignee` on an open
 bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
 flight. **Idle:** feed no one. Naming a bead at a worker reserves nothing: `air claim` is the
 reservation, and a bead named in a message and not claimed is still every worker's to take
@@ -160,8 +165,8 @@ comes only if the count shows the rule is ignored (owner, 2026-09-06, air-g5o). 
 `bd create --validate` can require the field.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
-landable branches, ready depth with the owner-labelled count, beads without an initiative,
-leases, inbox depth),
+landable branches, ready depth with the owner-labelled count, every ready epic with no open
+child and its closed count, beads without an initiative, leases, inbox depth),
 `air holdings`, the channel (idle or silent with a claim, idle without a claim, hand-over
 not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
