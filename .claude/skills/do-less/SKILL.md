@@ -68,7 +68,7 @@ first is evidence about the mechanism, and they are indistinguishable in the num
 
 Four instances in one day, 2026-08-29, all initially read as (1):
 
-- **`air lease`.** Plan 0007 recommended deleting it on zero rows in this ledger. adopter used
+- **`air lease`.** Plan 0007 recommended deleting it on zero rows in this ledger. The adopter used
   it every round: a worker read `air lease status`, saw `runtime` held by a peer, and took
   different work rather than routing around it. Case (2). The owner reversed the verdict
   (air-uae).

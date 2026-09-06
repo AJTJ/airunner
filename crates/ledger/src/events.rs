@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn appends_one_json_line_per_event() {
         let dir = tempfile::tempdir().unwrap();
-        let inputs = serde_json::json!({"bead": "fd-1"});
+        let inputs = serde_json::json!({"bead": "zz-1"});
         let mut waits = std::collections::BTreeMap::new();
         waits.insert(
             crate::budgets::GIT.to_string(),
@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(v["decision"], "refuse");
-        assert_eq!(v["inputs"]["bead"], "fd-1");
+        assert_eq!(v["inputs"]["bead"], "zz-1");
         assert_eq!(v["bd_ms"], 1350);
         assert_eq!(v["budgets"]["git"]["ms"][0], 9);
         assert_eq!(v["budgets"]["git"]["budget_ms"], 1500);

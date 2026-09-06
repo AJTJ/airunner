@@ -11,7 +11,7 @@ For each `idle-without-claim` row, this asks the only question that matters: in 
 window the alarm called idle, had the transcript moved?
 
 Result on 2026-08-29 over this repo's ledger: 18 rows, 1 with a moving transcript, 17 quiet.
-The adopter false-fire premise is not reproduced here; see
+The adopter's false-fire premise is not reproduced here; see
 docs/digests/2026-08-29-gate-air-d10.md.
 
 Do NOT measure over `first_seen -> cleared_at`: that window includes the worker resuming after

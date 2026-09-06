@@ -1,11 +1,11 @@
-# 0006 — Changes proposed from the adopter round, and the do-less pass over them
+# 0006 — Changes proposed from the adopter's round, and the do-less pass over them
 
 Status: ruled and built 2026-08-21 (owner: do A1-A4, A8, B1-B4, C1, C4, C6, C7, C9; D1 = `human`,
 D2 = tmux yes, D3 = keep the deny; A5 replaced by the hand-over order fix: digest before the
 final verify). Part 1 lists every change the record suggested, with its source. Part 1 lists every change the record suggests, with its source.
 Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the round record
 (`../notes/rounds/2026-08-21-adopter/`), `../notes/air-backlog.md`,
-`../research/guardrails-as-throttles.md`, and adopter's own notes named in the round README.
+`../research/guardrails-as-throttles.md`, and the adopter's own notes named in the round README.
 
 ## Part 1. Proposed changes (everything the record suggests)
 
@@ -13,14 +13,14 @@ Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the
 
 | # | Change | Source |
 |---|---|---|
-| A1 | `air release` reopened a closed bead: read `bd show` first; refuse on a closed bead, naming the rule; release only the ledger row (`reason closed`) when bd is already closed | backlog 14, ad-wowp |
-| A2 | Timeout message asserted "nothing recorded" when the write had landed: say "timed out; bd state unknown, check `bd show <id>`"; decision value `timeout`, not `bd-refused`; write the ledger row only after a confirmed result | backlog 2, 15, ad-b68j, ad-wowp |
+| A1 | `air release` reopened a closed bead: read `bd show` first; refuse on a closed bead, naming the rule; release only the ledger row (`reason closed`) when bd is already closed | backlog 14, |
+| A2 | Timeout message asserted "nothing recorded" when the write had landed: say "timed out; bd state unknown, check `bd show <id>`"; decision value `timeout`, not `bd-refused`; write the ledger row only after a confirmed result | backlog 2, 15, |
 | A3 | Claim rows survive `bd close` / `awaiting_review` → ~40 noise alerts: on a successful hand-over or close command, release the claim (reason `closed`/`handed-over`) or reconcile open claims against `bd show` status in `status` | backlog 4, 18; round log |
 | A4 | Coordinator cannot release a peer's claim: `air release <bead> --worker <name> --reason reassigned` from the coordinator role | backlog 5 |
-| A5 | Two verifies per hand-over: green at G carries to HEAD when `git diff --name-only G..HEAD` touches only repo-declared verify-irrelevant paths (`verify_ignores`); event says "carried over N commits (docs-only)" | backlog 1, ad-8m9b; 3 of 5 hand-over refusals |
+| A5 | Two verifies per hand-over: green at G carries to HEAD when `git diff --name-only G..HEAD` touches only repo-declared verify-irrelevant paths (`verify_ignores`); event says "carried over N commits (docs-only)" | backlog 1,; 3 of 5 hand-over refusals |
 | A6 | `status` floods with one `handover-not-green` per handed-over bead: collapse to one line per worker with a count (falls out of A3 + A5) | backlog 18 |
 | A8 | Channel noise, counted by the coordinator: ≈38 pushes, zero actionable. `handover-not-green` ×29 on beads already closed or in `awaiting_review` with green at the previous HEAD; `idle-with-claim` ×8 listing 11-13 handed-over beads every 20 min after the round ended; `gone-with-claim` ×1 on a closed bead. Three actionable pushes came through the same kinds (a worker stacking the next bead before `awaiting_review`). No subagent join/leave noise. Root causes are A3 and A5; fixing them removes the set. Rule: a kind stays pushed only while the coordinator acts on it | coordinator count, 2026-08-21 |
-| A7 | Confirm ad-lpqp (gone-with-claim on a fresh idle worker) is fixed after reinstall; drop | backlog 3 |
+| A7 | Confirm (gone-with-claim on a fresh idle worker) is fixed after reinstall; drop | backlog 3 |
 
 ### B. Text that is wrong about the tools (remove or correct)
 
@@ -28,8 +28,8 @@ Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the
 |---|---|---|
 | B1 | Remove "assign with `assignee`" from roles.md and "the assignee is the suggestion" from the decomposition skill: in bd 1.2.x a pencilled assignee blocks every other worker's `--claim`; document bd's rule; `air claim` prints bd's refusal with who is assigned | backlog 17; three collisions, ~6 messages |
 | B2 | Soften "coordinator runs this" in roles.md and the decomposition skill to "coordinator files and decides; the reading may be delegated with a file deliverable" | decomposition delegation, wave 1 found 3 epics done |
-| B3 | adopting-air.md: "deny the verb, not the tool; patterns match command tokens, never substrings" | ad-ezkr, ~16 prose-match hits |
-| B4 | adopting-air.md: "cheap checks first; a gate that reports 10 minutes after the edit is a throttle" with the 4 s vs 10 min number | ad-j99i |
+| B3 | adopting-air.md: "deny the verb, not the tool; patterns match command tokens, never substrings" |, ~16 prose-match hits |
+| B4 | adopting-air.md: "cheap checks first; a gate that reports 10 minutes after the edit is a throttle" with the 4 s vs 10 min number | |
 | B5 | adopting-air.md: coexistence default already there; add "retire only with a passed proof" examples from the round (cron deleted after channel proof) | round |
 
 ### C. Measurements to add (facts, no rules)
@@ -44,20 +44,20 @@ Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the
 | C6 | Ready-queue depth and epics-awaiting-decomposition over time | backlog 16; queue went dry |
 | C7 | Capture → bead ratio (promoted 1:1 / merged / dropped) as a standing number | 11 → 5 by hand |
 | C8 | Review wait, S1/S2, per-session claim counts surfaced (`air metrics`) | backlog 10; metrics orphaned by `bd events` removal |
-| C9 | Measurement spec rows: time-from-edit-to-red, reds-per-hand-over | ad-j99i |
+| C9 | Measurement spec rows: time-from-edit-to-red, reds-per-hand-over | |
 | C10 | Verify whether `PermissionRequest` fires under auto mode (0 events all round) | counts |
 
 ### D. Role and policy changes (judgement-shaped; need the owner)
 
 | # | Change | Source |
 |---|---|---|
-| D1 | Owner-decision beads not claimable by workers: one label or status means "awaiting the owner"; `air claim` refuses it naming the rule; settle `human` vs `owner` with adopter | owner |
+| D1 | Owner-decision beads not claimable by workers: one label or status means "awaiting the owner"; `air claim` refuses it naming the rule; settle `human` vs `owner` with the adopter | owner |
 | D2 | `--tmux` launch from the coordinator (attachable pane; interactive rule intact) | coordinator request; owner undecided |
-| D3 | Keep or drop the `bd create` deny for workers: data says 11 captures → 5 beads (dedup real); adopter's "if you raise it, file it" contradicts it | backlog/audit "decide on round-one data" |
+| D3 | Keep or drop the `bd create` deny for workers: data says 11 captures → 5 beads (dedup real); the adopter's "if you raise it, file it" contradicts it | backlog/audit "decide on round-one data" |
 | D4 | Free-text `--reason` on `air release`, enum as suggestions | guard inventory |
 | D5 | Stop conditions in roles.md as prose vs counters | boundary inventory UNCLEAR |
 | D6 | `make lanes` promised-file tracking: an Air fact or not | boundary inventory UNCLEAR |
-| D7 | adopter's lease-guard PreToolUse hook (the cargo-test denier): keep or delete (adopter's call; Air's view is delete, `air lease` covers it) | boundary inventory |
+| D7 | the adopter's lease-guard PreToolUse hook (the cargo-test denier): keep or delete (the adopter's call; Air's view is delete, `air lease` covers it) | boundary inventory |
 
 ### E. Process lessons (how we build, not Air)
 
@@ -68,7 +68,7 @@ Part 2 passes each through the `do-less` skill and gives a verdict. Sources: the
 | E3 | Three workers + coordinator + verify on one machine saturates it (load 22-25); bd timeouts were load, not contention; size the fleet to the machine | 4 claim timeouts |
 | E4 | Read before decomposing; three epics were already done on main | wave 1 |
 | E5 | A label can be a schema when a fitness check parses it; check the documented set first | research-label incident |
-| E6 | Run verify three times at one commit before adopting a gate; flakes become correctness | ad-jklh |
+| E6 | Run verify three times at one commit before adopting a gate; flakes become correctness | |
 | E7 | Queue depth over time tells you when the coordinator becomes the bottleneck | queue dry at 4 |
 
 ### F. Roadmap items confirmed by the round (unchanged)
@@ -107,7 +107,7 @@ yet or depends on data).
 | C6 | queue went dry | measurement | **do, smaller** | one number per `status` tick (`bd ready` count) on the existing bd call; no second series |
 | C7 | 11 → 5 by hand | measurement | **do** | computed from `captures` rows (promoted with/without a note) at query time; no new column |
 | C8 | metrics dark | measurement | **defer** to plan 0005 | data exists; surface when a round asks for the number |
-| C9 | ad-j99i | spec rows | **do** | two rows in the measurement spec |
+| C9 | | spec rows | **do** | two rows in the measurement spec |
 | C10 | 0 events | unknown | **do** | one manual check in the next round |
 | D1 | owner | fact about the bead | **owner** | recommend: one status or label; `air claim` refuses with the reason; smallest: reuse the owner-queue capture and a `human` label bd already understands |
 | D2 | owner | | **owner** | recommend yes: rule intact, coordinator autonomy gained |
@@ -115,7 +115,7 @@ yet or depends on data).
 | D4 | guard inventory, no incident | | **defer** | no worker fought it; revisit if one does |
 | D5 | UNCLEAR | | **owner** | recommend counters where a fact exists, delete the rest |
 | D6 | UNCLEAR, no incident | | **drop** | holdings already derive files touched |
-| D7 | adopter's | | **adopter** | Air's view: delete; `air lease` covers it |
+| D7 | the adopter's | | **the adopter** | Air's view: delete; `air lease` covers it |
 | E1-E7 | | process | **record** in adopting-air §2 as lessons, one line each; no mechanism |
 | F | | | **unchanged** | |
 

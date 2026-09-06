@@ -28,7 +28,7 @@ unavailable). Verbatim quotes are marked; everything else is paraphrase.
 | 9 | Overstory (jayminwest/overstory), README | OSS orchestrator, 2026 | Worktree per agent; FIFO merge queue "with 4-tier conflict resolution"; a "soft FILE_SCOPE violation detection" for builders/mergers; role-based tool-call guards | **No file-claim / lock registry**; per-agent *declared file scope* is checked softly after the fact; conflicts handled at merge time at git's file granularity. | https://github.com/jayminwest/overstory |
 | 10 | Gas Town (steveyegge/gastown) | OSS orchestrator, 2026 | Worktree per polecat under `.gc/worktrees/<rig>/polecats/<name>/`; Refinery merges sequentially with rebase | **No file locking**; isolation + serial merge queue; work claimed at the bead/issue level, not file level. | https://yegge.ai/gastown ; https://github.com/steveyegge/gastown |
 | 11 | Symphony (openai/symphony) | SPEC/WORKFLOW.md (re-fetched in [tick 0230](2026-08-18-0230-what-to-work-on.md)) | Worktree per issue run; claims at issue level; eligibility + sort by priority/age | **No file or directory claims**; overlap not modelled at all. | https://raw.githubusercontent.com/openai/symphony/main/elixir/WORKFLOW.md (via tick 0230) |
-| 12 | Worker interviews (adopter round 2026-08-17) | 4 workers + coordinator, one round | Declared lanes were **directories** ("I hold backend/src/events/*"); conflicts were **files** | Every reported conflict was on a specific file the lane did not predict: `log-session.tsx` (three agents), `profile.rs` (two), `course-builder.tsx` rename/modify, `queries.rs` hunk staling 8 `authorization-matrix.md` citations, `features.md` rows, `Makefile`/`.gitattributes` unmentioned. Workers asked for "who is touching which FILE right now"; `make fleet` "can't see uncommitted edits". | [worker-interviews-2026-08-17.md](../../worker-interviews-2026-08-17.md) §2–§4 |
+| 12 | Worker interviews (the adopter's round 2026-08-17) | 4 workers + coordinator, one round | Declared lanes were **directories** ("I hold backend/src/events/*"); conflicts were **files** | Every reported conflict was on a specific file the lane did not predict: `log-session.tsx` (three agents), `profile.rs` (two), `course-builder.tsx` rename/modify, `queries.rs` hunk staling 8 `authorization-matrix.md` citations, `features.md` rows, `Makefile`/`.gitattributes` unmentioned. Workers asked for "who is touching which FILE right now"; `make fleet` "can't see uncommitted edits". | [worker-interviews-2026-08-17.md](../../worker-interviews-2026-08-17.md) §2–§4 |
 
 ## 2. Synthesis
 
@@ -44,14 +44,14 @@ unavailable). Verbatim quotes are marked; everything else is paraphrase.
    file. The interviews' failure reports are per file. File is also the unit with the least
    machinery: it falls out of `git status`/`git diff <merge-base>` and the `PostToolUse` path.
 3. **Coarser units mis-predict in both directions.** Directory lanes under-predict (all four
-   adopter conflicts were files outside or across declared directories; Dias: 42.7% of conflicts
+   The adopter conflicts were files outside or across declared directories; Dias: 42.7% of conflicts
    were slice-disjoint) and over-predict (Dias: 65.3% of contributions touch >1 MVC module, so a
    module lane would flag most pairs). Greiler's gain from directories is *recall*, which for a
    warn-only signal to an agent means more warnings — the interviews already put the
    false-positive tax of guards at ~15 refusals/session. Directory aggregation therefore belongs
    at **query time as a second-rank tie-breaker**, not as the stored unit.
 4. **The cross-cutting class is real and separate.** Dias (config, `Gemfile.lock`, shared
-   classes), CAID (`__init__.py` restricted), adopter (`features.md`, `authorization-matrix.md`,
+   classes), CAID (`__init__.py` restricted), the adopter (`features.md`, `authorization-matrix.md`,
    `Makefile`, `.gitattributes`, `openapi`, `CHANGELOG`) all show conflicts concentrated in files
    *no lane owns*. No slice/lane label predicts them; a **short committed list** does. These files
    should be flagged whenever *two* live workers hold them, regardless of ranking, and land order
@@ -71,7 +71,7 @@ store directory or lane rows; derive `dirname(path)` at query time.
 
 **`air next` ranking (in order):**
 1. **Cross-cutting file held by a live peer** — a committed list in `.air/config.toml`
-   (`shared_files = [...]`, seeded from adopter's own history: `features.md`,
+   (`shared_files = [...]`, seeded from the adopter's own history: `features.md`,
    `authorization-matrix.md`, `openapi.*`, lockfiles, `Makefile`, `CHANGELOG`). Not a rank —
    an always-printed flag with the peer and sha, plus "merge <peer>@<sha> first" advice.
 2. **Same-file overlap** between the bead's cited/likely files and live holdings (uncommitted +

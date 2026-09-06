@@ -165,7 +165,7 @@ pub fn dirty_files(cwd: &Path) -> Result<Vec<String>> {
 // `dirty_tracked` was here until air-odv (2026-08-29). Its only caller was `air land`'s
 // refusal of a dirty main, and that refusal existed only because the rollback was
 // `git reset --hard`, which restores tracked files and would have discarded uncommitted work
-// (adopter `land.sh:504-514`). There is no rollback now — main is fast-forwarded onto a
+// (the adopter `land.sh:504-514`). There is no rollback now — main is fast-forwarded onto a
 // commit that is already green — and `git merge --ff-only` declines on its own when a local
 // change is genuinely in the way. `git::dirty_files` is a different function and still used
 // by `air record` for the dirty-tree flag.

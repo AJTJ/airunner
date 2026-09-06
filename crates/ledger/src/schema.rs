@@ -91,7 +91,7 @@ CREATE INDEX IF NOT EXISTS captures_status ON captures(status, captured_at);
 ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'worker';
 "#;
 
-/// v3 (2026-08-21): what a verify run actually ran. adopter captures 4d1e52/9de453: a green
+/// v3 (2026-08-21): what a verify run actually ran. The adopter's captures 4d1e52/9de453: a green
 /// exit from a command that had stopped measuring what it claimed. The exit stays the fact;
 /// the command line, duration, output size and a dirty-tree flag make a false green visible.
 const V3: &str = r#"
@@ -102,7 +102,7 @@ ALTER TABLE verify_runs ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// v4 (2026-08-21, owner rulings A and E): named-resource leases (ported from
-/// `adopter/scripts/lease.sh`: identity is the worktree, liveness is the pid + its start
+/// `the adopter's scripts/lease.sh`: identity is the worktree, liveness is the pid + its start
 /// time, stale is heartbeat age) and an audience on captures (`coordinator` | `owner`).
 const V4: &str = r#"
 CREATE TABLE IF NOT EXISTS leases (
@@ -125,13 +125,13 @@ CREATE TABLE IF NOT EXISTS lease_wants (
 ALTER TABLE captures ADD COLUMN audience TEXT NOT NULL DEFAULT 'coordinator';
 "#;
 
-/// v5 (2026-08-21, adopter ad-lpqp): the `claude` pid on the session row so "gone" can
+/// v5 (2026-08-21, the adopter): the `claude` pid on the session row so "gone" can
 /// mean the process is gone, not "no hook yet".
 const V5: &str = r#"
 ALTER TABLE sessions ADD COLUMN pid INTEGER;
 "#;
 
-/// v6 (2026-08-21, adopter: Stop advisory repeated every turn while a worker was blocked):
+/// v6 (2026-08-21, the adopter: Stop advisory repeated every turn while a worker was blocked):
 /// what each session was last told, per key, so a hook speaks only on change.
 const V6: &str = r#"
 CREATE TABLE IF NOT EXISTS hook_emissions (
@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS conditions_open ON conditions(worker, kind, cleared_a
 "#;
 
 /// v8: last successful bd answers `status` depends on, so a slow bd (20 s under load,
-/// adopter 2026-08-22, air-19u) degrades to stale counts instead of an empty status.
+/// The adopter 2026-08-22, air-19u) degrades to stale counts instead of an empty status.
 const V8: &str = r#"
 CREATE TABLE IF NOT EXISTS bd_cache (
     key      TEXT PRIMARY KEY,
@@ -186,7 +186,7 @@ ALTER TABLE landings ADD COLUMN open_beads TEXT;
 /// v11 (2026-08-29, air-4cr + air-bxe): the two facts a coordinator had to relay or `pgrep`
 /// for. `verify_inflight` is one row per verify that has STARTED and not yet exited, so
 /// "someone is mid-verify" is a lookup instead of a warning a worker has to remember to send
-/// (adopter 2026-08-23: a full verify is ~420 s and the landing rate is faster, so no
+/// (the adopter 2026-08-23: a full verify is ~420 s and the landing rate is faster, so no
 /// cadence works). `landings.pid` lets an `in-flight` landing row say whether the process that
 /// wrote it is still alive, which is what `pgrep` was being asked and answered wrongly twice.
 const V11: &str = r#"
@@ -246,7 +246,7 @@ ALTER TABLE verify_runs ADD COLUMN tree TEXT;
 CREATE INDEX IF NOT EXISTS verify_runs_tree ON verify_runs(tree, kind);
 "#;
 
-/// v15 (2026-09-05, air-9dg): whether the session's hooks see `AIR_ENFORCE=1`. the adopter ran
+/// v15 (2026-09-05, air-9dg): whether the session's hooks see `AIR_ENFORCE=1`. The adopter ran
 /// five hours believing close-with-proof was enforced while a second `--settings` had replaced
 /// the env block that carried it, and nothing either project reads said so. Written by the
 /// hook from ITS OWN environment on every session write, so it records what the gate actually

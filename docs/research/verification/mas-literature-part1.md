@@ -1,7 +1,7 @@
 # Verification: `multi-agent-systems-literature.md`, part 1 (lines 1–3500)
 
 **Scope.** Independent re-verification of the load-bearing claims in
-`docs/research/adopter-notes/notes/multi-agent-systems-literature.md` lines 1–3500 (front matter and
+`private/research/adopter-notes/notes/multi-agent-systems-literature.md` lines 1–3500 (front matter and
 "ten findings", §1 classical MAS, §2 coordination/consensus, §3 named failure modes, opening of §4),
 plus the items the corpus digest §4.1 lists as "did not survive" that fall in this range.
 

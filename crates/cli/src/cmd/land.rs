@@ -10,12 +10,12 @@
 //! worker's own green at the branch head: `air land` refuses unless the branch CONTAINS main,
 //! which makes the landing commit's tree byte-identical to the one that green describes.
 //!
-//! Ported from adopter's `scripts/land.sh` (read 2026-08-22). Taken: main checkout only and
+//! Ported from the adopter's `scripts/land.sh` (read 2026-08-22). Taken: main checkout only and
 //! on `main` (`land.sh:487-499`); already-an-ancestor is "nothing to land", not an error
 //! (`land.sh:533-535`). **Not taken any more**: merging into main and resetting it on red
 //! (`land.sh:504-526`), which air-odv replaced — with it went the dirty-tree refusal, whose
 //! only reason was that `git reset --hard` would eat uncommitted work. Not taken:
-//! adopter's three attribution rules (branch / closing trailer / containment,
+//! The adopter's three attribution rules (branch / closing trailer / containment,
 //! `land.sh:46-71`). Air knows who handed each bead over from the claim row, which is the
 //! fact those rules reconstruct from git.
 //!
@@ -110,19 +110,19 @@ pub fn where_i_am() -> Option<String> {
 /// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
 /// EVERY verify in flight is about to become worthless — not only one on the landed branch,
 /// since every other branch's contains-main precondition breaks and its tree changes on the
-/// re-merge. adopter's coordinator did this to three workers in one round with no signal
+/// re-merge. The adopter's coordinator did this to three workers in one round with no signal
 /// available (air-4cr); their fix was a protocol where the worker warns first.
 ///
 /// This used to warn and then land. air-4cr defaulted to warn ("a coordinator may still have
 /// to land, and a refusal here would be a gate over a fact") and wrote a removal condition
-/// asking for a round's data. The data came the other way (ad-fthq, adopter 2026-08-30):
+/// asking for a round's data. The data came the other way (the adopter 2026-08-30):
 /// 1,199 s of completed verify destroyed in two incidents, six more runs invalidated, and an
 /// operational rule ("check first, land later") tried three times and broken the fourth. w2's
 /// framing is the fix: the gate and the action in one call are one artefact, and one artefact
 /// cannot check another. Coordinator's ruling, 2026-09-05 (`docs/decisions.md`): refuse, with
 /// an explicit `--despite-inflight` that lands anyway and is RECORDED on the landings row —
 /// with four workers and a twelve-minute verify there is almost always a run in flight, so a
-/// refusal with no way past starves landings (adopter round note, item 1). The override is
+/// refusal with no way past starves landings (the adopter's round note, item 1). The override is
 /// the measurement.
 ///
 /// **Removal condition** (`mechanisms.rs` `land-in-flight-refusal`): a full round with zero
@@ -142,7 +142,7 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
     }
     s.push_str(
         "\n  fix: wait for it (`air status` names it until it exits), or stop it by pid: \
-         `kill <pid>` — never `pkill -f`, which reached every peer's argv (ad-ub34). To land \
+         `kill <pid>` — never `pkill -f`, which reached every peer's argv (zz-ub34). To land \
          anyway and destroy it: add `--despite-inflight`; the runs destroyed are recorded on \
          the landing.",
     );
@@ -162,7 +162,7 @@ pub fn in_flight_run_line(f: &air_ledger::verify::InFlight, at: &str) -> String 
 /// the clause lists, one per bead, empty where a bead states none. No answer is a REFUSAL,
 /// never an empty list: "could not evaluate" and "evaluated and found nothing" must not read
 /// alike, and a check that degrades to a no-op is a green over an empty population,
-/// indistinguishable from a green over a full one (adopter's w1, 2026-08-31).
+/// indistinguishable from a green over a full one (the adopter's w1, 2026-08-31).
 ///
 /// Refusing here is cheap because it happens before the merge: nothing has moved, and the fix
 /// is to run the same command again when bd answers. Pure, so the probe reaches the branch.
@@ -182,7 +182,7 @@ pub fn acceptance_read(
     }
 }
 
-/// The branch a worker's worktree is on: `worktree-<name>` in both adopter and this repo.
+/// The branch a worker's worktree is on: `worktree-<name>` in both the adopter and this repo.
 fn branch_for(worker: &str) -> String {
     format!("worktree-{worker}")
 }
@@ -233,7 +233,7 @@ pub struct Site {
 
 // A `dirty` field was here until air-odv, refusing a landing when main had uncommitted tracked
 // changes. Its only reason was that the rollback was `git reset --hard`, which would have eaten
-// them (adopter land.sh:504-514). There is no rollback now: `merge --ff-only` refuses on its
+// them (the adopter land.sh:504-514). There is no rollback now: `merge --ff-only` refuses on its
 // own if a local change is actually in the way and leaves the tree alone when it is not. The
 // refusal blocked three lands on 2026-08-29 to protect against a reset that no longer happens.
 
@@ -356,12 +356,12 @@ fn blocked_line(l: &super::status::Landing) -> String {
 }
 
 /// What `air land <bead>…` or `air land --worker <name>…` selects, out of the same list
-/// `air status` shows. Pure over the selection, so both of adopter's observed cases are
+/// `air status` shows. Pure over the selection, so both of the adopter's observed cases are
 /// probed without a repo (air-09b).
 ///
 /// A branch is the unit `air land` merges (one merge per branch, however many beads it
 /// carries), and `--worker` names that unit directly. A bead is a handle on a branch only
-/// while exactly one branch carries it. adopter, 2026-08-30, twice in one round: a bead
+/// while exactly one branch carries it. The adopter, 2026-08-30, twice in one round: a bead
 /// carried by a batching lane AND by the worker whose commits it batched. Named, the bead
 /// landed the oldest-waiting branch — the worker's — main moved, the lane was refused for
 /// main-moved, and four beads did not land. Then, with the worker's branch blocked, naming the
@@ -408,7 +408,7 @@ pub fn resolve(
     }
     // air-dnr: a bead SELECTS a branch; it does not filter the branch's beads. The merge is
     // per branch and carries everything in `main..<head>` whatever was typed, so the record
-    // has to say so too. adopter, 2026-08-30: `air land <one-bead>` on a lane carrying five
+    // has to say so too. The adopter, 2026-08-30: `air land <one-bead>` on a lane carrying five
     // recorded `beads = [that one]`, and four beads landed with no acceptance check and no
     // wrong-close detection — the external check air-ayp exists for, skipped for most of the
     // batch. Chosen branches are collected here and expanded to every ready landing on them
@@ -544,7 +544,7 @@ pub fn run(
     let sel = super::status::select(repo);
     // air-6u5: a failure during selection is NEVER an empty queue. `{"landed": [], "ok": true}`
     // is the worst answer available — there is nothing to disbelieve, so a caller concludes
-    // the queue is empty. adopter read exactly that with every precondition verified by hand
+    // the queue is empty. The adopter read exactly that with every precondition verified by hand
     // and fell back to their own `make land`.
     if !sel.errors.is_empty() {
         let msg = format!(
@@ -888,7 +888,7 @@ fn land_one(
     // bd timeout, degrade to an empty clause list: the row then said "the bead states no
     // acceptance criteria", a positive false statement about a bead Air never read, and the
     // one external check on close-with-proof recorded a clean result for a check that did
-    // not run (adopter ad-0vh3, 2026-08-31). `bd show` costs ~1.4 s per id, which is fine
+    // not run (the adopter, 2026-08-31). `bd show` costs ~1.4 s per id, which is fine
     // beside a landing and ruinous on every `air status` (air-7kp).
     let clauses = match acceptance_read(
         super::status::acceptance_for(repo, &batch.beads),

@@ -223,12 +223,12 @@ Definition: open captures at each tick (depth) and, per capture, `promoted_at - 
 `dropped_at - captured_at`. Median and p90 per round. This is the number that decides whether
 triage leaves the coordinator for a dedicated session (decisions 2026-08-20).
 
-### 2.9 Time-from-edit-to-red and reds-per-hand-over (added 2026-08-21, ad-j99i)
+### 2.9 Time-from-edit-to-red and reds-per-hand-over (added 2026-08-21,)
 
 Definition: for each red `verify_runs` row, minutes from the worker's last journaled edit
 (`edit_journal.last_seen`) to `started_at`; and per hand-over (first `handover` event per bead),
 the count of red runs at that HEAD before the first green. Both per worker per round. They say
-how late the repo's gates report, and what a late gate costs. adopter 2026-08-21: 76 of 123
+how late the repo's gates report, and what a late gate costs. The adopter 2026-08-21: 76 of 123
 verify minutes red; moving doc gates first cut a red from ~10 min to 4 s.
 
 ### 2.10 Time-to-unblock and queue depth (added 2026-08-21)

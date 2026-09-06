@@ -52,7 +52,7 @@ pub fn air_dir_for(cwd: &Path) -> Result<PathBuf> {
 }
 
 /// The worker name for a checkout: the worktree directory name for linked worktrees, or
-/// `main` for the primary checkout. Matches adopter's `.claude/worktrees/<name>` layout.
+/// `main` for the primary checkout. Matches the adopter's `.claude/worktrees/<name>` layout.
 pub fn worker_name_for(cwd: &Path) -> Result<String> {
     let top = rev_parse_memo(cwd, "--show-toplevel")?;
     let common = air_dir_for(cwd)?;

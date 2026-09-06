@@ -55,7 +55,7 @@ pub struct ReadySplit {
     /// What a worker may claim: a task with no `owner` label.
     pub claimable: Vec<String>,
     /// Containers in the ready set: not claimable, and the coordinator's to decompose. Kept
-    /// visible rather than silently dropped (adopter's reasoning, air-f10: the coordinator
+    /// visible rather than silently dropped (the adopter's reasoning, air-f10: the coordinator
     /// needed that count and had to get it from bd).
     pub epics: Vec<String>,
     /// Awaiting the owner's authority: the owner's queue (air-uef).
@@ -137,17 +137,17 @@ mod tests {
             ..Default::default()
         };
         let ready = [
-            issue("fd-1", &[], "task"),
-            issue("fd-2", &["owner"], "task"),
-            issue("fd-3", &["human"], "bug"),
-            issue("fd-4", &["runtime", "owner"], "task"),
-            issue("fd-5", &[], "epic"),
-            issue("fd-6", &["owner"], "epic"),
+            issue("zz-1", &[], "task"),
+            issue("zz-2", &["owner"], "task"),
+            issue("zz-3", &["human"], "bug"),
+            issue("zz-4", &["runtime", "owner"], "task"),
+            issue("zz-5", &[], "epic"),
+            issue("zz-6", &["owner"], "epic"),
         ];
-        assert_eq!(claimable(&ready), ["fd-1", "fd-3"]);
+        assert_eq!(claimable(&ready), ["zz-1", "zz-3"]);
         let s = split(&ready);
-        assert_eq!(s.epics, ["fd-5"]);
-        assert_eq!(s.owner, ["fd-2", "fd-4", "fd-6"]);
+        assert_eq!(s.epics, ["zz-5"]);
+        assert_eq!(s.owner, ["zz-2", "zz-4", "zz-6"]);
         assert_eq!(
             s.claimable.len() + s.epics.len() + s.owner.len(),
             ready.len()

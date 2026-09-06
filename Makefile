@@ -8,6 +8,7 @@ verify:
 	cargo fmt --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
+	cargo run -q -p air -- adopter-check
 	cargo run -q -p air -- selftest
 
 # Cut a release (owner, 2026-08-29: "enforce a good release system, so that we draw those lines

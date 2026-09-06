@@ -38,7 +38,7 @@ different question from what `$(which air)` does.
 
 **A probe is evidence only if it has been seen failing**, with the rule it names neutralised and
 the mutation reaching the code the probe exercises (`docs/decisions.md`, "the post-audit
-rulings", adopted from adopter). "There is a probe for that" is not proof.
+rulings", adopted from the adopter). "There is a probe for that" is not proof.
 
 **Say where it is true.** Closed with proof, landed on main, and in the installed binary are
 three different states. Name the one you mean.
@@ -70,6 +70,6 @@ Owner, 2026-08-29, plan [`0008`](../../../docs/plans/0008-consolidated-changes.m
 one item asked for ahead of the rest. Incidents: air-21c and air-ha8 (2026-08-22);
 [`0007-surface-audit.md`](../../../docs/plans/0007-surface-audit.md) §11; the six-error list in
 `docs/notes/rounds/2026-08-22-air/2026-08-22-round-log.md`. The binary-versus-repo rule and the
-seen-failing standard are adopter's, adopted over ours by owner ruling (`docs/decisions.md`,
-"the post-audit rulings"); adopter found the fence instance by running `strings $(which air)`
+seen-failing standard are the adopter's, adopted over ours by owner ruling (`docs/decisions.md`,
+"the post-audit rulings"); the adopter found the fence instance by running `strings $(which air)`
 on our behalf.

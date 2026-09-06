@@ -1,23 +1,23 @@
 # 0008 — The consolidated change list, ruled
 
 **What this is**: every change the 2026-08-24/25 surface audit, the harness-and-orchestrator
-landscape, and adopter's 2026-08-21/23 round logs proposed, in one list, with the owner's
+landscape, and the adopter's 2026-08-21/23 round logs proposed, in one list, with the owner's
 ruling and the path for each. Filed 2026-08-29.
 
 **Sources**: [`0007-surface-audit.md`](0007-surface-audit.md) ·
 [`../research/harness-and-orchestrator-landscape.md`](../research/harness-and-orchestrator-landscape.md) ·
-`~/projects/adopter/docs/log.d/2026-08-2{1,2,3}-*.md` (216 files, read 2026-08-29) ·
+`the adopter's docs/log.d/2026-08-2{1,2,3}-*.md` (216 files, read 2026-08-29) ·
 alpha's `air-okc` findings · [`../notes/air-backlog.md`](../notes/air-backlog.md).
 
 **Rulings**: [`../decisions.md`](../decisions.md), 2026-08-29.
 
-Two claims from adopter were checked before being carried and did **not** survive, which is
+Two claims from the adopter were checked before being carried and did **not** survive, which is
 the cross-project rule working:
 
 - "The Stop-hook nag lists the raw `bd ready`, so an `owner` bead still appears" — fixed already
   by air-ouw. `ready_cache::confirm` filters `owner`, and the cache is the gate, never the
   answer. Their own note said it was not verified empirically.
-- ad-mhb8, "the hand-over gate names a probable cause as though it were a finding" — it does
+-, "the hand-over gate names a probable cause as though it were a finding" — it does
   not. `gate.rs:73` says "no green verify recorded at HEAD <sha> (last green: <sha>)" with the
   fixing command. Their second-agent had already corrected their coordinator on this.
 
@@ -25,11 +25,11 @@ the cross-project rule working:
 
 ## 1. Delete or shrink
 
-**1. `air lease` — KEEP.** Zero rows here; used all round in adopter, where a worker read
+**1. `air lease` — KEEP.** Zero rows here; used all round in the adopter, where a worker read
 `air lease status`, saw `runtime` held by a peer, and took different work. Their bug is two
 stores that disagree (`air lease take` vs `scripts/lease.sh`), so `make api` was denied naming
 the command just run. **Path**: the adoption procedure gains a step that finds and collapses a
-second lease store; message adopter. Their repo is theirs to change.
+second lease store; message the adopter. Their repo is theirs to change.
 
 **2. The launcher goes to the harness.** `launch.rs` (555) + `tmux.rs` (226) add role prose, a
 deny list, four env vars, a worker name and a detached start. Claude Code ships `-w/--worktree`,
@@ -86,7 +86,7 @@ with a stated retention, manual first. After item 6, then re-measure before choo
 
 ## 3. Alarms that fire on correct behaviour
 
-All four are adopter's, and they are one shape: a condition computed from the absence of
+All four are the adopter's, and they are one shape: a condition computed from the absence of
 events, when correct work is often eventless.
 
 **9. `air handover` trips its own alarm.** It is documented as the way to find what is missing,
@@ -110,7 +110,7 @@ the close; a PostToolUse on success releases the claim with reason `closed`.
 
 ## 4. The landing window
 
-adopter's largest single cost, and Air has no answer today.
+The adopter's largest single cost, and Air has no answer today.
 
 **13. Every land invalidates any verify in flight**, because the gate wants a green at a HEAD
 containing main. A full verify is ~420s and the landing rate is faster, so no cadence works.
@@ -140,7 +140,7 @@ invisible from a worktree.
 
 ## 5. Latency and budgets
 
-**17. bd's median is 1760 ms over 260,601 calls** on adopter's machine; ours is 1396 ms over 9.
+**17. bd's median is 1760 ms over 260,601 calls** on the adopter's machine; ours is 1396 ms over 9.
 Their `air claim` hit the 10s cutoff repeatedly under load with the write landing anyway, and
 `air status` takes ~20s there, so their `reclaim.py` wraps it in a 60s timeout. **Path**: backlog
 items 2 and 15 together — a distinct `timeout` decision value, one internal retry, a message
@@ -178,7 +178,7 @@ untouched. Worth a probe if anyone is ever tempted to key it to Air's session mo
 
 ## 8. How Air itself gets built
 
-adopter's standards are adopted where they differ from ours.
+The adopter's standards are adopted where they differ from ours.
 
 **22. A probe must have been seen failing**, and the mutation must reach the code the probe
 exercises. They found three ways a revert demonstration misleads: a mutant that does not compile;
@@ -199,7 +199,7 @@ for hardcoded thresholds — `anti-brittleness` pointed at ourselves.
 
 **25. A project-diligence skill, loaded on every session in this repo.** Owner's proposal.
 `air doctor` and `air audit` before trusting a number; the installed binary checked against the
-repo (`strings $(which air)`, from the 2026-08-22 incident, and adopter's "a tool's behaviour
+repo (`strings $(which air)`, from the 2026-08-22 incident, and the adopter's "a tool's behaviour
 is only true where the tool is installed — on a branch it is a plan"); re-derive a number rather
 than re-read it; confirm a probe has been seen failing. **Path**: build it before the next round,
 not after. It is the only item here the owner asked for ahead of the rest.

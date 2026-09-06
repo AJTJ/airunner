@@ -12,12 +12,12 @@
 //! be part of the key; it said where a run happened, never what was verified, and the only
 //! cross-worktree difference ever recorded is a test that reads where it runs (2026-08-23),
 //! which roles.md rules is a defect to fix. So a batching lane's one verify now stands for
-//! every worker that fast-forwards onto that commit (adopter, 2026-08-30).
+//! every worker that fast-forwards onto that commit (the adopter, 2026-08-30).
 //!
 //! A green may ALSO be found by **tree**: the landing commit `air land` builds carries the
 //! branch head's exact tree under a new sha. But **a green transfers to an identical tree only
 //! if the verify is a function of the tree alone**, and that is a property of the target repo's
-//! suite, which Air cannot see. adopter's `make verify` runs `git log main..HEAD` to decide
+//! suite, which Air cannot see. The adopter's `make verify` runs `git log main..HEAD` to decide
 //! which beads to check (`scripts/lib/bead_citations.py:140`), so two commits over one tree
 //! verify differently there and a tree-keyed gate would have handed them a false green.
 //!

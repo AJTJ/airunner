@@ -1,4 +1,9 @@
 target/
+
+# Adopter content is never public (air-bpj). Everything that names an adopter, quotes
+# their files, or copies their corpus lives here; private/adopters.md holds the mapping.
+private/
+
 *.log
 .DS_Store
 .claude/worktrees/
