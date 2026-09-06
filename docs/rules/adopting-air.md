@@ -101,6 +101,21 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
    `air record verify` detached and reads the result back rather than waiting on it. This is
    the one budget in Air's world that Air does not own (air-d75).
 
+6. **Decide whether the coordinator plans in Metis.** `air init` writes `"metis": true`, which
+   makes `air coordinator` attach [Metis](https://github.com/colliery-io/metis) (its MCP server,
+   and its plugin when you set `metis_plugin_dir` to the `plugins/metis` directory of a metis
+   checkout). Workers never get it: the coordinator plans, workers work. If `metis` is not on
+   `PATH` the launch proceeds and prints one line, so this costs a repo that ignores it nothing;
+   set `"metis": false` if you plan elsewhere.
+
+   Two things to know before you leave it on. Metis's own plugin text declares Metis the system
+   of record and says plans do not live outside it, which is false in a repo that tracks tasks
+   in beads, so Air appends a paragraph to the coordinator's prose stating the split (vision and
+   initiatives in Metis, tasks in beads, decisions in `docs/`). And a bead names where it came
+   from in a **declared field** — a line reading `initiative: <CODE>` in its description — which
+   `air status` counts and nothing refuses (air-g5o). Air reads that line and nothing else: an
+   initiative mentioned in prose declares nothing.
+
 ## 2. Coexistence, not retirement (default adoption model)
 
 **[adopter, owner reframing 2026-08-21]** Do not retire the repo's make targets and

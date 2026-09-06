@@ -140,6 +140,17 @@ pub struct Snapshot {
     /// claim and the coordinator has to decompose. Shown, not dropped, so the coordinator
     /// does not have to ask bd for the number the line used to hide inside "claimable".
     pub epic_depth: Option<usize>,
+    /// How many beads declare no `initiative: <CODE>` line, and how many were looked at
+    /// (air-g5o). `None` when bd did not answer this tick.
+    ///
+    /// **A count, not a gate.** Nothing is refused for lacking one; the owner's shape is that
+    /// a gate comes only if the number shows the rule is ignored.
+    ///
+    /// The denominator is the beads bd already told this tick about — the ready set plus the
+    /// in-progress set, epics excluded — and NOT every open bead, because asking for those is
+    /// another `bd` process at ~1.4 s on a command that is already seconds. The number is
+    /// printed with its denominator so nobody reads it as a count of everything.
+    pub without_initiative: Option<(usize, usize)>,
     /// Verifies running right now, oldest first (air-4cr). A land invalidates every one of
     /// them, so the coordinator needs this before merging and the worker never has to relay it.
     /// Dead pids are pruned by the gather that reads them.
@@ -1405,14 +1416,16 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ));
         bd_skipped = true;
     }
-    let in_progress: Option<std::collections::BTreeSet<String>> = bd_try(
+    let in_progress_issues: Option<Vec<air_bd::Issue>> = bd_try(
         &bd,
         &mut bd_slow,
         &mut errors,
         "in_progress (claims not reconciled)",
         air_bd::WorkLedger::in_progress,
-    )
-    .map(|v| v.into_iter().map(|i| i.id).collect());
+    );
+    let in_progress: Option<std::collections::BTreeSet<String>> = in_progress_issues
+        .as_ref()
+        .map(|v| v.iter().map(|i| i.id.clone()).collect());
     let mut reconciled = 0usize;
     let open_claims = ledger.open_claims().map_err(|e| e.to_string())?;
     // Every claim bd no longer holds in_progress, looked up in ONE `bd show a b c` rather
@@ -1531,10 +1544,20 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
     let mut epic_depth: Option<usize> = None;
+    // air-g5o: counted over the answers bd has ALREADY given this tick (ready plus
+    // in-progress), so the number costs no extra bd process. `None` until `ready` answers, and
+    // the in-progress half joins it only if that answered too, so a partial tick reports
+    // nothing rather than a denominator that quietly shrank.
+    let mut without_initiative: Option<(usize, usize)> = None;
     let ready_depth: Option<usize> = match bd_try(&bd, &mut bd_slow, &mut errors, "ready", |b| {
         air_bd::WorkLedger::ready(b)
     }) {
         Some(v) => {
+            let mut pool: Vec<air_bd::Issue> = v.clone();
+            if let Some(ip) = &in_progress_issues {
+                pool.extend(ip.iter().cloned());
+            }
+            without_initiative = Some(super::metis::without_initiative(&pool));
             back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             // air-f10: one partition of one answer; the counts are its lengths.
             let split = super::ready_cache::split(&v);
@@ -1636,6 +1659,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ready_depth,
         claimable_depth,
         epic_depth,
+        without_initiative,
         // air-4cr. Reading is also the pruning: a crashed `air record` leaves a row and the
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
@@ -1945,6 +1969,18 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             _ => "",
         }
     ));
+    // air-g5o: a count with its denominator beside it, and no verdict. Printed only when
+    // there is something to say — a fleet that declares every initiative should not carry a
+    // line saying so on every tick.
+    if let Some((missing, considered)) = s.without_initiative
+        && missing > 0
+    {
+        out.push_str(&format!(
+            "beads without initiative: {missing} of {considered} bd named this tick (ready + \
+             in progress, epics excluded) declare no `initiative: <CODE>` line. A count, not \
+             a gate.\n"
+        ));
+    }
     out.push_str(&format!("inbox: {} open\n", s.inbox_depth));
     if let Some(l) = &s.bd_latency {
         out.push_str(&super::bd_latency::line(l));
