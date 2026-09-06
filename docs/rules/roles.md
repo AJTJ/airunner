@@ -159,7 +159,11 @@ green or red, and the landing row names the member heads the batch contained (ai
 <sha> (<beads>)`: head contains `main`, no green at that head, a `Bead:` trailer naming a bead
 the worker holds; `--json` gives the first fact each other branch lacks (air-80x.3). A red
 batch is reported by member, in `air record`'s output and in `air status`, until a newer batch
-supersedes it; nothing lands, closes or claims differently on a red (air-80x.4). **[fact]**
+supersedes it; nothing lands, closes or claims differently on a red (air-80x.4). **A member
+can look it up rather than wait to be told**: `air handover`, run in your own worktree, names
+the batch, the lane and where the lane's output is when the standing red batch has your branch
+in it (air-hpp8). Silence there is not a statement that you were not in one — Air knows the
+membership only from what the run recorded. **[fact]**
 
 **What Air refuses, and what it accepts.** The close gate accepts a green at a verified commit
 that contains `main` and every commit carrying the bead's trailer: a worker closes on the
