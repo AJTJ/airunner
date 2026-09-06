@@ -134,6 +134,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-5nh. The anchor is the owner-gated test alone, so every count, the sort, the
+    // 300 s bucket and the printed threshold survive it: what changes is only WHICH
+    // population the rate reads. Under it an ordinary fast release counts as a bead the
+    // worker could not start, and the number that refused two mechanisms inflates.
+    (
+        "audit: re-claim churn is counted from claims alone, and the rate reads the owner-gated-inside-a-minute population with its 10% threshold beside it",
+        Mutation {
+            file: "crates/cli/src/cmd/audit.rs",
+            from: "r.contains(\"owner-gated\") || r.contains(\"owner gated\")",
+            to: "r.contains(\"owner-gated\") || !r.is_empty()",
+            also_red: &[],
+        },
+    ),
     // air-ej4. The anchor is the `exit 1` alone: the echo, the target and the scaffold's
     // created-only-when-absent rule all survive it, so a probe that stays green under this
     // was testing that a Makefile exists rather than that its verify refuses.
@@ -1477,6 +1490,7 @@ fn all_probes() -> Vec<Probe> {
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
         probe_scaffolded_verify_fails_until_edited(),
+        probe_reclaim_churn_reads_the_owner_gated_population(),
     ]
 }
 
@@ -7637,5 +7651,91 @@ fn probe_epic_with_no_open_children_is_named() -> Probe {
         name: "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-5nh: `air audit` prints re-claim churn, so "a worker took a bead it could not start"
+/// is a number instead of an argument. air-69u measured it once by hand (4 of 153 claims,
+/// 2.6%) and used it to refuse two mechanisms: a filing command wrapping `bd create --after`,
+/// and a refusal on a child with no ordering edge. A number that decides that has to be
+/// re-runnable, and it has to read the right population.
+///
+/// Red: the shape air-69u found comes back out. Two workers claim one bead and release it
+/// `owner-gated` inside half a minute each; a third claim is released fast for an unrelated
+/// reason; a fourth is owner-gated but hours later; a fifth is still held. The counts separate
+/// all five, and the printed section carries the 10% threshold beside the rate.
+///
+/// Green: the RATE reads the owner-gated-inside-a-minute population and nothing wider, so a
+/// fast release for an ordinary reason cannot inflate the number that would justify the
+/// mechanism. And a window with no claims reports no rate at all rather than 0%, because
+/// unmeasured and zero are different facts.
+fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
+    use crate::cmd::audit::{churn_of, render_churn};
+
+    let row = |bead: &str, worker: &str, from: &str, to: Option<&str>, why: Option<&str>| {
+        (
+            bead.to_string(),
+            worker.to_string(),
+            from.to_string(),
+            to.map(str::to_string),
+            why.map(str::to_string),
+        )
+    };
+    let rows = vec![
+        row(
+            "air-zzj",
+            "ledger",
+            "2026-09-05T10:00:00Z",
+            Some("2026-09-05T10:00:20Z"),
+            Some("owner-gated"),
+        ),
+        row(
+            "air-zzj",
+            "verify",
+            "2026-09-05T11:00:00Z",
+            Some("2026-09-05T11:00:22Z"),
+            Some("owner-gated: waiting on air-uko"),
+        ),
+        // Fast, but handed back for an ordinary reason: churn by duration, not the population
+        // the threshold reads.
+        row(
+            "air-aaa",
+            "alerts",
+            "2026-09-05T12:00:00Z",
+            Some("2026-09-05T12:00:30Z"),
+            Some("took the wrong bead"),
+        ),
+        // Owner-gated, but discovered hours in: not a bead the worker could not START.
+        row(
+            "air-bbb",
+            "launch",
+            "2026-09-05T13:00:00Z",
+            Some("2026-09-05T16:00:00Z"),
+            Some("owner-gated"),
+        ),
+        // Still held. Not churn, and not counted against it either.
+        row("air-ccc", "ledger", "2026-09-05T14:00:00Z", None, None),
+    ];
+    let c = churn_of(&rows);
+    let out = render_churn(&c);
+    let empty = churn_of(&[]);
+
+    Probe {
+        name: "audit: re-claim churn is counted from claims alone, and the rate reads the owner-gated-inside-a-minute population with its 10% threshold beside it",
+        red_fires: (c.claims, c.released, c.within_60s, c.within_300s) == (5, 4, 3, 3)
+            && c.owner_gated == 3
+            && c.short.len() == 3
+            // Longest first, so the tail of the distribution is readable.
+            && c.short.first().is_some_and(|x| x.seconds == 30)
+            && out.contains("THRESHOLD 10%")
+            && out.contains("air-zzj"),
+        green_passes: c.owner_gated_within_60s == 2
+            && c.owner_gated_within_300s == 2
+            // 2 of 5, not 3 of 5: the ordinary fast release is in `within_60s` and out of the
+            // rate. A number that justifies a mechanism must not be inflated by Air.
+            && c.rate.is_some_and(|r| (r - 0.4).abs() < 1e-9)
+            // Unmeasured is not zero.
+            && empty.rate.is_none()
+            && render_churn(&empty).contains("Not zero: unmeasured"),
     }
 }
