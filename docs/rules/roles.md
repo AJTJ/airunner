@@ -121,7 +121,11 @@ round passes with zero `handover-not-green` events. **[Air enforces]**
 ### Verification lane (a worker whose work is verifying other branches)
 
 A lane is a worker session like any other: same launcher, same deny list, same claims. While
-it batches it holds no bead; between batches it may hold one (air-80x.6). Facts and refusals
+it batches it holds no bead; between batches it may hold one **if its worktree survives the
+cut** (air-80x.6, narrowed by air-4noi). A lane that resets hard to main on every cut — the
+simplest way to make a batch contain main and nothing else — would hold that bead in a tree it
+is about to wipe; a lane that merges main forward and integrates on a throwaway branch keeps
+it. Which of the two a repo runs is its own flow, and Air reads neither. Facts and refusals
 only, nothing about cadence or who the lane is: that is the repo's flow, in its CLAUDE.md.
 
 **What Air records.** A batch is a commit on the lane's branch that contains `main` and the
