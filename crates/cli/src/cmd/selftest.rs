@@ -2024,6 +2024,7 @@ fn probe_landed_but_open() -> Probe {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_landing(&Landing {
             despite_inflight: vec![],
+            members: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -2064,6 +2065,7 @@ fn probe_landed_but_open() -> Probe {
         // It clears when a LATER landing of the same bead stops refuting it.
         l.record_landing(&Landing {
             despite_inflight: vec![],
+            members: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "ddd".into(),
@@ -2114,6 +2116,7 @@ fn probe_refused_landing_publishes_nothing() -> Probe {
 
     let row = |id: &str, result: &str, at: &str, beads: &[&str], open: Vec<OpenBead>| Landing {
         despite_inflight: vec![],
+        members: vec![],
         id: id.into(),
         worker: "w4".into(),
         sha: "823b2fd5".into(),
@@ -2228,6 +2231,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_landing(&Landing {
             despite_inflight: vec![],
+            members: vec![],
             id: new_id(),
             worker: "alpha".into(),
             sha: "aaa".into(),
@@ -5951,6 +5955,7 @@ fn probe_landing_state() -> Probe {
     let at = "2026-08-29T12:02:00Z";
     let row = |result: &str| Landing {
         despite_inflight: vec![],
+        members: vec![],
         id: "L1".into(),
         worker: "alpha".into(),
         sha: "branchhead".into(),
