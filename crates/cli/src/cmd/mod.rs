@@ -5,6 +5,7 @@ pub mod attribution;
 pub mod audit;
 pub mod batch;
 pub mod bd_latency;
+pub mod budgets;
 pub mod capture;
 pub mod claim;
 pub mod close;
@@ -77,6 +78,8 @@ pub fn log_event<T: serde::Serialize>(
     // poll tick for the life of the server, and the total restamped on each of them summed
     // to numbers no fleet ever made (air-bp0).
     let (bd_ms, bd_calls) = air_bd::stats::take();
+    // Same take-not-snapshot semantics, and for the same reason (air-d75, air-bp0).
+    let waits = air_ledger::budgets::take();
     let ev = air_ledger::events::Event {
         at: &at,
         worker,
@@ -87,6 +90,7 @@ pub fn log_event<T: serde::Serialize>(
         denominator,
         bd_ms: (bd_calls > 0).then_some(bd_ms),
         bd_calls: (bd_calls > 0).then_some(bd_calls),
+        budgets: (!waits.is_empty()).then_some(&waits),
     };
     if let Err(e) = air_ledger::events::append(ledger.dir(), &today(), &ev) {
         eprintln!("air: could not append event: {e}");

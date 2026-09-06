@@ -794,6 +794,57 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // The budget lane's probes, 2026-09-06 (air-d75). Each anchor names ONE thing: the drain,
+    // one catalogue row, the hook's own recording, the derived pairable set.
+    (
+        "budgets: one sample per wait against its own budget, and a take drains",
+        Mutation {
+            // Stop draining and hand back a copy, which is air-bp0 exactly: every later event
+            // line in the process restamps the same waits. Compiles — the guard derefs to the
+            // map — and the probe's second `take` then still holds the first one's waits.
+            file: "crates/ledger/src/budgets.rs",
+            from: "    std::mem::take(&mut t)",
+            to: "    t.clone()",
+            also_red: &[],
+        },
+    ),
+    (
+        "budgets: every recordable budget has a catalogue row, and the row says which way it fails",
+        Mutation {
+            // Rename one row so a recordable name has no catalogue row: the budget is still
+            // measured and `air audit` reports it as uncatalogued instead of naming its fail
+            // direction. One row, and the OTHER nine are untouched.
+            file: "crates/cli/src/cmd/budgets.rs",
+            from: "        name: air_ledger::budgets::SQLITE_LOCK,",
+            to: "        name: \"sqlite-lock-renamed\",",
+            also_red: &[],
+        },
+    ),
+    (
+        "budgets: a real hook invocation records its own wall clock and the git calls it made",
+        Mutation {
+            // Record the hook's wall clock under a name nothing reads, so the invocation is
+            // still timed and the event line no longer carries `budgets.hook` — which is the
+            // state before this bead. The `git` half is untouched, so the probe's GREEN half
+            // stays green and the mutation is shown to reach the hook's own row alone.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "        air_ledger::budgets::HOOK,",
+            to: "        \"hook-unrecorded\",",
+            also_red: &[],
+        },
+    ),
+    (
+        "budgets: an unpaired hook is counted from the installed matchers, in both directions",
+        Mutation {
+            // Pair every tool the PreToolUse matcher names, whether PostToolUse covers it or
+            // not — the hardcoded-list mistake, written as code. `SendMessage` then has a Pre
+            // that nothing can ever answer and reads as a lost hook.
+            file: "crates/cli/src/cmd/budgets.rs",
+            from: "        .filter(|t| post.contains(t))",
+            to: "        .filter(|t| post.contains(t) || !t.is_empty())",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -1317,6 +1368,10 @@ fn all_probes() -> Vec<Probe> {
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
         probe_idle_without_claim_counts_claimable_only(),
+        probe_every_wait_is_recorded_once_against_its_own_budget(),
+        probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
+        probe_a_hook_records_its_own_wall_clock(),
+        probe_an_unpaired_hook_is_counted_from_the_installed_matchers(),
     ]
 }
 
@@ -6203,6 +6258,7 @@ esac
             bin: script.clone(),
             cwd: dir.clone(),
             timeout,
+            label: air_ledger::budgets::BD_ACCEPTANCE,
         };
         // The old shape: one flat budget whatever the count.
         let flat = Duration::from_millis(500);
@@ -6559,5 +6615,244 @@ fn probe_landing_state() -> Probe {
         name: "land: a landing says in-flight from the merge until it reports, a killed one says so with the rewind sha, and reporting retires the row",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-d75: Air waits on ten budgets and recorded none of them, so "zero timeouts" in the
+/// event log meant nobody was counting. The owner ruled 2026-09-06 "measure all of them from
+/// henceforth", and the recording is the deliverable.
+///
+/// Red: one wait per call, its own budget beside it, and a hit counted only when the caller
+/// says the budget was reached. A retry loop reports one sample per wait rather than one per
+/// retry, which is what keeps a single 40 ms lock from reading as four waits.
+///
+/// Green: `take` DRAINS. This is air-bp0 one level up — `bd_ms` restamped a lifetime total on
+/// every one of `air mcp`'s poll lines and summed to 570,989 calls against a real maximum of
+/// 1,661 — so the same shape gets the same probe before it can happen again.
+fn probe_every_wait_is_recorded_once_against_its_own_budget() -> Probe {
+    use air_ledger::budgets::{GIT, SQLITE_LOCK, Waits, record, record_progress, take};
+    use std::time::Duration;
+
+    let ms = Duration::from_millis;
+    let _ = take();
+    record(GIT, ms(9), ms(1500), false);
+    record(GIT, ms(1500), ms(1500), true);
+    // One wait that grows across four handler calls, then a second wait.
+    record_progress(SQLITE_LOCK, ms(1), ms(1000), true, false);
+    record_progress(SQLITE_LOCK, ms(11), ms(1000), false, false);
+    record_progress(SQLITE_LOCK, ms(40), ms(1000), false, false);
+    record_progress(SQLITE_LOCK, ms(3), ms(1000), true, false);
+    let first = take();
+
+    let got = |name: &str| first.get(name).cloned().unwrap_or_default();
+    let red = got(GIT)
+        == (Waits {
+            budget_ms: 1500,
+            n: 2,
+            hits: 1,
+            ms: vec![9, 1500],
+        })
+        && got(SQLITE_LOCK)
+            == (Waits {
+                budget_ms: 1000,
+                n: 2,
+                hits: 0,
+                ms: vec![40, 3],
+            });
+
+    // The drain: a second event line carries nothing, and a wait after it carries only itself.
+    let empty_after = take().is_empty();
+    record(GIT, ms(7), ms(1500), false);
+    let second = take();
+    let only_the_new_one = second.get(GIT).is_some_and(|w| w.n == 1 && w.ms == vec![7]);
+
+    Probe {
+        name: "budgets: one sample per wait against its own budget, and a take drains",
+        red_fires: red,
+        green_passes: empty_after && only_the_new_one,
+    }
+}
+
+/// air-d75: every budget name that can reach an event line has a row in `air audit`'s
+/// catalogue, so no budget is measured and then never reported.
+///
+/// This is air-0y9's defect one axis over: a report that silently omits a firing mechanism
+/// reads as complete when it is not, which is worse than no report. The catalogue also carries
+/// the fail direction, and that is the half a reader cannot supply — a p99 means something
+/// different for a budget whose overrun makes the one refusal fail open than for one whose
+/// overrun prints an error.
+///
+/// Red: the catalogue covers exactly the recordable names, one row each. Green: three of them
+/// fail OPEN or SILENT, so the distinction is not decorative.
+fn probe_every_budget_has_a_catalogue_row_naming_its_fail_direction() -> Probe {
+    use crate::cmd::budgets::{CATALOGUE, Fails};
+
+    let rows: std::collections::BTreeSet<&str> = CATALOGUE.iter().map(|b| b.name).collect();
+    let names: std::collections::BTreeSet<&str> =
+        air_ledger::budgets::NAMES.iter().copied().collect();
+    let permitting = CATALOGUE
+        .iter()
+        .filter(|b| matches!(b.fails, Fails::Open | Fails::Silent))
+        .count();
+
+    Probe {
+        name: "budgets: every recordable budget has a catalogue row, and the row says which way it fails",
+        red_fires: rows == names && rows.len() == CATALOGUE.len(),
+        // The three the bead is about: `git` and `sqlite-lock` fail open on a hook path, and
+        // the hook's own cap is worse than open — the process is killed and writes nothing.
+        green_passes: permitting == 3
+            && CATALOGUE
+                .iter()
+                .any(|b| b.name == air_ledger::budgets::HOOK && b.fails == Fails::Silent),
+    }
+}
+
+/// air-d75: a real `air hook` invocation records its own wall clock against the cap
+/// `air install` writes into `settings.json`, and the `git` calls it made on the way.
+///
+/// The hook is the budget that matters most and the only one Air cannot observe overrunning:
+/// Claude Code kills the process at the cap, and a killed process writes no event line. So the
+/// measurement below is of the invocations that finished, and `air audit` pairs it with the
+/// unpaired-hook count that is all a killed one leaves.
+///
+/// Driven through a spawned binary rather than `inner_env`, because what is under test is that
+/// the number reaches the file: an in-process call would pass with the append broken.
+///
+/// Red: the event line carries `budgets.hook` with one wait, the installed cap as its budget,
+/// and no hit. Green: it also carries the `git` calls the hook made, so the 1.5 s budget on
+/// every hook path is visible rather than assumed.
+fn probe_a_hook_records_its_own_wall_clock() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let input = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "air-d75-probe",
+            "cwd": dir.display().to_string(),
+            "tool_name": "Read",
+        });
+        let mut child = air_command(&exe, &dir)
+            .arg("hook")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(input.to_string().as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        child.wait_with_output().map_err(|e| e.to_string())?;
+
+        let events = dir.join(".air").join("events");
+        let mut lines: Vec<Value> = Vec::new();
+        for entry in std::fs::read_dir(&events).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            lines.extend(text.lines().filter_map(|l| serde_json::from_str(l).ok()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let cap = crate::cmd::install::HOOK_TIMEOUT_SECS.saturating_mul(1000);
+        let Some(line) = lines
+            .iter()
+            .find(|v| v.get("command").and_then(Value::as_str) == Some("hook.PreToolUse"))
+        else {
+            return Ok((false, false));
+        };
+        let at = |p: &str| line.pointer(p).and_then(Value::as_u64);
+        let recorded = at("/budgets/hook/n") == Some(1)
+            && at("/budgets/hook/budget_ms") == Some(cap)
+            && at("/budgets/hook/hits") == Some(0)
+            && line
+                .pointer("/budgets/hook/ms")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.len() == 1);
+        // The hook resolves its worktree root through `git.rs`, so the 1.5 s budget on the
+        // hook path is exercised by the same invocation.
+        let git_too = at("/budgets/git/n").is_some_and(|n| n > 0)
+            && at("/budgets/git/budget_ms") == Some(1500);
+        Ok((recorded, git_too))
+    })()
+    .unwrap_or((false, false));
+
+    Probe {
+        name: "budgets: a real hook invocation records its own wall clock and the git calls it made",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
+/// air-d75: what a hook killed at its cap leaves behind, since it cannot leave a measurement.
+///
+/// A tool call that got its PreToolUse should reach exactly one of PostToolUse,
+/// PermissionDenied or PostToolUseFailure. When it reaches none, a hook did not run. Hook
+/// payloads carry no tool-call id, so the pairing is per (session, tool) and the components
+/// are printed with the difference: this is an inference over counts, and an unexplained
+/// "2 hooks lost" is the derived-reads-like-observed failure air-21c records.
+///
+/// The pairable set is DERIVED from `install::hook_entries`, not written down here: the
+/// matchers have changed as tools were added to be counted (`SendMessage`, `AskUserQuestion`),
+/// and a hardcoded list would go on reporting confidently about tools Air no longer hooks.
+///
+/// Red: a Pre with no Post is counted; one answered by a Post, a denial or a failure is not.
+/// Green: a Post with no Pre is counted separately rather than netted away, because that is
+/// the other direction of the same loss — and a tool outside the pairable set is ignored.
+fn probe_an_unpaired_hook_is_counted_from_the_installed_matchers() -> Probe {
+    use crate::cmd::budgets::{budgets_of, paired_tools};
+
+    let paired = paired_tools();
+    let line = |command: &str, session: &str, tool: &str| {
+        format!(
+            r#"{{"at":"2026-09-06T01:00:00Z","worker":"w","command":"hook.{command}","decision":"x","inputs":{{"session_id":"{session}","tool":"{tool}"}}}}"#
+        )
+    };
+    let day = [
+        // s1/Edit: two Pre, one Post -> one unpaired.
+        line("PreToolUse", "s1", "Edit"),
+        line("PreToolUse", "s1", "Edit"),
+        line("PostToolUse", "s1", "Edit"),
+        // s2/Bash: a Pre answered by a denial, and one by a failure. Neither is a loss.
+        line("PreToolUse", "s2", "Bash"),
+        line("PermissionDenied", "s2", "Bash"),
+        line("PreToolUse", "s2", "Bash"),
+        line("PostToolUseFailure", "s2", "Bash"),
+        // s3/Write: a Post with no Pre -> the other direction.
+        line("PostToolUse", "s3", "Write"),
+        // A tool the PostToolUse matcher does not cover cannot be paired and is ignored.
+        line("PreToolUse", "s4", "SendMessage"),
+    ]
+    .join("\n");
+    let h = budgets_of(&[("2026-09-06".to_string(), day)], "2026-09-06").hooks;
+
+    Probe {
+        name: "budgets: an unpaired hook is counted from the installed matchers, in both directions",
+        red_fires: h.pre_unmatched == 1 && h.pre == 4 && h.denied == 1 && h.failed == 1,
+        green_passes: h.post_unmatched == 1
+            && paired.contains(&"Edit".to_string())
+            && !paired.contains(&"SendMessage".to_string()),
     }
 }
