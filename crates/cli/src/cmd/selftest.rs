@@ -1444,6 +1444,8 @@ fn all_probes() -> Vec<Probe> {
         probe_every_air_spawn_pins_identity(),
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
+        probe_batch_green_survives_main_moving_under_it(),
+        probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
@@ -2092,6 +2094,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 dirty: false,
                 tree: None,
                 members: vec![],
+                main_sha: None,
             })
             .map_err(|e| e.to_string())
         };
@@ -3790,6 +3793,7 @@ fn probe_enforced_gate() -> Probe {
             dirty: false,
             tree: None,
             members: vec![],
+            main_sha: None,
         })
         .map_err(|e| e.to_string())?;
         let green = handover_gate(&l, "probe", &dir, cmd, true)?;
@@ -4956,6 +4960,7 @@ fn probe_ledger_roundtrip() -> Probe {
             dirty: false,
             tree: None,
             members: vec![],
+            main_sha: None,
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l
@@ -5010,6 +5015,7 @@ fn probe_killed_is_no_verdict() -> Probe {
             dirty: false,
             tree: Some("T".into()),
             members: vec![],
+            main_sha: None,
         };
         l.record_verify(&run("aaa", 0, "t1"))
             .map_err(|e| e.to_string())?;
@@ -5119,6 +5125,7 @@ fn probe_green_follows_the_tree_only_where_declared() -> Probe {
             dirty: false,
             tree: Some(tree.clone()),
             members: vec![],
+            main_sha: None,
         })
         .map_err(|e| e.to_string())?;
 
@@ -5825,6 +5832,7 @@ fn probe_red_batch_is_reported_by_member_and_lands_nothing() -> Probe {
         dirty: false,
         tree: None,
         members,
+        main_sha: None,
     };
     let m = |w: &str, sha: &str| Member {
         worker: w.into(),
@@ -6716,6 +6724,196 @@ fn probe_landing_state() -> Probe {
         && lifecycle;
     Probe {
         name: "land: a landing says in-flight from the merge until it reports, a killed one says so with the rewind sha, and reporting retires the row",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// An empty scratch directory for a probe. The caller runs [`probe_git`] in it and removes it.
+fn probe_repo() -> Result<std::path::PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// `git -C <dir> <args>`, with an identity, failing loudly. The probes below build real
+/// histories rather than fixtures because both facts air-9ij fixed are ancestry facts.
+fn probe_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "air")
+        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+        .env("GIT_COMMITTER_NAME", "air")
+        .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// air-9ij, limb 3, the one the adopter measured: a batch green stopped covering the bead it
+/// covers the moment main moved. `contains main` was asked of CURRENT main at query time, so a
+/// green recorded over the main of its moment was disqualified by any later write to main — a
+/// landing, or the coordinator's own prose commit, which is what invalidated an adopter's
+/// whole batch on 2026-09-06. The window was not closed by the worker; it was closed by
+/// somebody else. The question is now asked of the run's recorded `main_sha`.
+///
+/// Red (the declared mutation is on the row: `main_sha: None`, exactly a pre-v19 row, which
+/// can only ask about current main): with main moved, the batch green covers nothing. Green:
+/// the same green with its recorded main covers the bead after main has moved, and a green
+/// naming a main it does not contain covers nothing, so the gate is not widened.
+fn probe_batch_green_survives_main_moving_under_it() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            let base = g(&["rev-parse", "HEAD"])?;
+            // The worker's commit for fd-1, then a lane batch over main plus that commit.
+            g(&["checkout", "-q", "-b", "w"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work\n\nBead: fd-1\n",
+            ])?;
+            g(&["checkout", "-q", "-b", "lane", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "batch: w"])?;
+            let batch = g(&["rev-parse", "HEAD"])?;
+            // Main moves after the cut by an ordinary commit: nothing landed, nothing merged.
+            g(&["checkout", "-q", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "docs: prose"])?;
+            let moved = g(&["rev-parse", "HEAD"])?;
+            g(&["checkout", "-q", "w"])?;
+            g(&["merge", "-q", "main", "-m", "merge main"])?;
+
+            let covered = |main_sha: Option<&str>| -> Result<bool, String> {
+                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+                l.record_verify(&VerifyRun {
+                    id: new_id(),
+                    worker: "lane".into(),
+                    sha: batch.clone(),
+                    kind: Kind::Verify,
+                    exit_code: 0,
+                    trigger: "selftest".into(),
+                    failing_step: None,
+                    started_at: "t".into(),
+                    finished_at: "t".into(),
+                    log_path: None,
+                    command: None,
+                    duration_ms: None,
+                    output_bytes: None,
+                    dirty: false,
+                    tree: None,
+                    members: vec![],
+                    main_sha: main_sha.map(str::to_string),
+                })
+                .map_err(|e| e.to_string())?;
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                    .covering
+                    .is_some())
+            };
+            let red = !covered(None)?;
+            let green = covered(Some(&base))? && !covered(Some(&moved))?;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: a batch green goes on covering its bead after main moves, because `contains main` is asked of the main the run was recorded over",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-9ij, limb 1, and the judgement it forced: **when every commit of a bead is already in
+/// main, the close passes.** `main..HEAD` is empty then, and reading that as "this bead has no
+/// commits" refused the close of a bead Air had itself landed, in any repo that keys green by
+/// commit. The landing gate already demanded a green at a head containing main, and the commit
+/// main is fast-forwarded onto carries that green's tree (air-odv), so the proof this gate
+/// asks for is the proof the work arrived with. Requiring a fresh green naming the merge would
+/// have Air refuse the close it nags for as `landed-not-closed`.
+///
+/// Red (declared mutation: the landing row says `refused` rather than `landed`): the work is
+/// not on main, so an empty range closes nothing. Green: the `landed` row closes it, a row
+/// that named a different bead does not, and a landing whose merge commit main no longer
+/// contains does not either — a worker that claimed a bead and committed nothing has no row
+/// and still has nothing to close on.
+fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
+    use air_ledger::landings::Landing;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            // A commit main never gets, to stand for a landing that was rewound.
+            g(&["checkout", "-q", "-b", "stray"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "stray"])?;
+            let stray = g(&["rev-parse", "HEAD"])?;
+            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work\n\nBead: fd-1\n",
+            ])?;
+            g(&["checkout", "-q", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
+            let merge = g(&["rev-parse", "HEAD"])?;
+            // The worker's next `git merge main` fast-forwards: main..HEAD is now empty.
+            g(&["checkout", "-q", "w"])?;
+            g(&["merge", "-q", "--ff-only", "main"])?;
+            let empty = crate::cmd::batch::bead_commits(&dir, "fd-1").is_empty();
+
+            let landed = |result: &str, beads: &[&str], at: &str| -> Result<bool, String> {
+                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+                l.record_landing(&Landing {
+                    id: new_id(),
+                    worker: "lane".into(),
+                    sha: "wwww".into(),
+                    tip_sha: None,
+                    result: result.into(),
+                    failing_step: None,
+                    verify_run_id: None,
+                    attempt_no: 1,
+                    beads: beads.iter().map(|b| (*b).to_string()).collect(),
+                    open_beads: vec![],
+                    merge_commit: Some(at.to_string()),
+                    pid: None,
+                    started_at: "t0".into(),
+                    finished_at: "t1".into(),
+                    despite_inflight: vec![],
+                    members: vec![],
+                })
+                .map_err(|e| e.to_string())?;
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                    .landed
+                    .is_some())
+            };
+            let red = empty && !landed("refused", &["fd-1"], &merge)?;
+            let green = landed("landed", &["fd-1"], &merge)?
+                && landed("landed-refuted", &["fd-1"], &merge)?
+                && !landed("landed", &["fd-2"], &merge)?
+                && !landed("landed", &["fd-1"], &stray)?;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
         red_fires: red,
         green_passes: green,
     }

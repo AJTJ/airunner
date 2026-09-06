@@ -204,6 +204,22 @@ identical verdict only when the repo's verify reads the tree alone and not git h
 verify that reads the log, the branch name or the reflog can pass on the branch and fail on
 main over the same bytes (the adopter; owner, 2026-09-05). **[fact]**
 
+**What main moving costs, and what it no longer costs** (air-9ij, 2026-09-06). Landability is
+the thing that expires: a branch is landable only while it contains CURRENT main, so every
+write to main takes that away from every other branch at once, and each of those workers pays a
+merge and a re-verify to get it back. Two consequences, and they are facts about the refusal,
+not advice about tempo. **Landing order:** landing several branches in a row costs the second
+one its landability the moment the first lands; a batch lands once and costs it once.
+**The coordinator's own commits move main exactly as a landing does** — an adopter's
+coordinator invalidated four workers' landability with one prose commit on 2026-09-06, with no
+landing involved — so they cost whatever a landing costs, in the same units.
+What has STOPPED being true: main moving no longer retracts a CLOSE. A green is checked against
+the main it was recorded over, not against the main of the moment somebody asks, and a bead
+whose commits are already in main closes on the landing that put them there. The workaround an
+adopter ran that night — freezing main from the batch cut until every close was confirmed — was
+buying exactly this and can go. **[Air enforces: the close asks about the recorded main, the
+landing about current main]**
+
 The `.git` shape still differs between a worktree (a FILE) and the main checkout (a DIRECTORY),
 and anything reading it, `core.hooksPath`, or the cwd can differ between the two. That was a
 reason to verify twice while a landing verified in the main checkout (air-eaw, from the adopter
