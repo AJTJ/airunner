@@ -95,6 +95,37 @@ real red. Air does not retry (a retry hides real reds); it makes the disagreemen
 adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
 first. Whether the gate should require N-of-M agreement is an owner policy, not built.
 
+## 0d. What an account limit does to your fleet, and what does not save you from it
+
+**[measured on one machine, 2026-09-06, seven sessions, two projects; air-1n3 and
+`../notes/2026-09-06-limit-reset-recovery.md`]**
+
+An account usage limit stops every session at once and **no hook fires at the limit or at the
+reset**. What happens next is not uniform, and the difference decides whether your round
+continues:
+
+- The harness arms its own wait for **some** sessions, recorded in the transcript as
+  `Usage limit reached · continuing automatically at <time>`. Those resume by themselves within
+  about a minute of the reset. Five of the seven did.
+- For the rest it does not, and nothing in the session is coming back. Two of the seven.
+- **A scheduled task inside a session keeps firing while the session is limited**, and its first
+  firing after the reset is a recovery. That is why one of those two was working four seconds
+  into the reset window and the other, which had no such task, sat dead for 79 minutes.
+
+Three consequences for a repo adopting Air:
+
+1. **Give every session a recurring wake.** `.air/roles.md` says so and Air's SessionStart hook
+   says it once per session, but only the session itself can create one: there is no settings
+   key, no launcher flag, and no file. If your launcher wraps Air's, this is the thing to make
+   sure the first prompt establishes.
+2. **A keepalive that watches for a missing or dead pane does not cover this.** A limited
+   session is neither. If you have one, it will report everything healthy through the whole
+   outage.
+3. **Never nudge on silence alone.** The pane says `esc or type to cancel`: typing at a session
+   whose wait is armed cancels the recovery the harness was about to perform. `air status` prints
+   the kind (`quota_auto_resume_fired` versus `..._stale` / `..._disabled` / `stop_failure`), and
+   that is what to branch on.
+
 ## 1. Install (owner runs; Air never writes into the target repo on its own)
 
 1. `cargo install --path crates/cli` in the Air checkout. `which air` must be that binary.
