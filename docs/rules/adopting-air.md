@@ -230,6 +230,22 @@ to **what Air records and what Air refuses**:
 | `air handover` names what is missing | When in the loop to run it |
 | Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
 | Decomposing an epic with no open child is the coordinator's standing duty, and `air status` names each such epic with its closed count (air-84u) | How to split one, and when the queue is deep enough not to bother |
+| A bead blocked by one of its own ancestors can never become ready; `air status` names it with the edge and the `bd dep remove` that clears it (air-btz) | Nothing — but read the note below before filing a wave with `bd create --graph` |
+
+**[an adopter, 2026-09-06, air-btz] `bd create --graph` can build a deadlock bd will not warn
+about.** A bead blocked by one of its own ancestors waits forever: the ancestor cannot finish
+until its descendants do, which is bd's hierarchy rather than an edge, so `bd dep cycles`
+reports nothing and the tracker shows it as "not ready yet". An adopter lost a night to it —
+every P1 unreachable, 42 beads offered and not one of them a P1.
+
+bd 1.2.2 refuses this on nine routes but not on all of them, measured 2026-09-06
+([the note](../notes/2026-09-06-bd-refuses-the-ancestor-edge.md)). Its guard is an existing
+`parent-child` row on the same pair, which always covers the direct parent, plus a dotted-id
+prefix test, which covers deeper ancestors only when the id encodes the chain. `bd create
+--graph` assigns flat ids and links by `parent_key`, so a wave filed from a plan file slips
+both silently. After any `--graph` file, read `bd dep tree <epic> --json` for an edge from a
+child to ANY ancestor; `bd dep cycles` will not tell you. `air status` names the shape as a
+failsafe, which is not a substitute for looking.
 
 **[an adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
 `bd update <id> -s awaiting_review` as the closing step. The adopter's owner had ruled that step
