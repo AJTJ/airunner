@@ -52,6 +52,29 @@ pub struct Candidate {
     pub contains: Vec<bool>,
 }
 
+/// What the scan looked at, when it found nothing (air-hgi9).
+///
+/// Four distinct states rendered as one sentence, `no green verify recorded at HEAD`: no green
+/// exists at all, none contains the main it must, none touches the bead's commits, and the bead
+/// has no commit here. An adopter's w3 met three of them in one night. They have opposite
+/// correct responses — wait for the next batch, versus stop waiting — and the reader could not
+/// tell which it was looking at.
+///
+/// Every field is counted from the loop [`cover`] already runs; nothing extra is read, and no
+/// git command is added. Only ever consulted when nothing covered the bead, which is why
+/// `covering` short-circuits without finishing the count.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Scanned {
+    /// Recorded greens considered (at most [`CANDIDATES`]).
+    pub candidates: usize,
+    /// Of those, the ones containing the main they were recorded over.
+    pub with_main: usize,
+    /// Of those, the ones containing at least one commit of the bead.
+    pub touching: usize,
+    /// The bead's commits in [`BRANCH_RANGE`].
+    pub commits: usize,
+}
+
 /// What the candidates say about one bead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Batch {
@@ -65,16 +88,24 @@ pub struct Batch {
     /// contains that merge (air-9ij). `(merge commit, the worker whose branch was merged)`.
     /// No green is looked for, because the landing already required one.
     pub landed: Option<(String, String)>,
+    /// What the scan looked at (air-hgi9). Meaningful only when nothing covered the bead.
+    pub scanned: Scanned,
 }
 
 /// Pure: which candidate, if any, covers the bead. Candidates are newest first, so the first
 /// covering one wins and the first partial one is what a refusal names.
 pub fn cover(candidates: &[Candidate], commits: &[BeadCommit]) -> Batch {
     let mut out = Batch::default();
+    out.scanned.candidates = candidates.len();
+    out.scanned.commits = commits.len();
     if commits.is_empty() {
         return out;
     }
     for c in candidates.iter().filter(|c| c.contains_main) {
+        out.scanned.with_main = out.scanned.with_main.saturating_add(1);
+        if c.contains.iter().any(|x| *x) {
+            out.scanned.touching = out.scanned.touching.saturating_add(1);
+        }
         let covers_all = c.contains.len() == commits.len() && c.contains.iter().all(|x| *x);
         if covers_all {
             out.covering = Some((c.sha.clone(), c.worker.clone()));
@@ -333,13 +364,89 @@ pub fn red_batch_line(b: &RedBatch) -> String {
 /// The two sentences the gate carries (air-80x.1): the ok line when every bead in `beads`
 /// is covered by a batch green, else the refusal detail from the first bead a batch predates.
 /// `(None, None)` when no bead has a batch green or a partial one.
-pub fn describe(
-    ledger: &Ledger,
-    repo: &Path,
-    beads: &[String],
-) -> (Option<String>, Option<String>) {
+/// What a scan found, for the refusal (air-hgi9). At most one is `Some`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Described {
+    /// A green that covers every bead: the close passes.
+    pub green: Option<String>,
+    /// A green containing main covers some of a bead's commits but not the newest.
+    pub predates: Option<String>,
+    /// Nothing covered, and WHY — which of the remaining states this is. The three it tells
+    /// apart used to be one sentence, and two of them have opposite correct responses.
+    pub absent: Option<String>,
+    /// The fixing line for [`Self::absent`]. Carried beside it rather than re-derived by the
+    /// caller, so the two cannot come from different branches of the same question.
+    pub absent_fix: Option<String>,
+}
+
+/// Why no candidate covered `bead`, in the terms a worker acts on (air-hgi9).
+///
+/// Pure over the counts, so a probe drives every branch without a ledger or a repo. The order
+/// is narrowest-cause-first: a bead with no commits here is not a verify problem at all, and a
+/// scan with no greens to look at is not a coverage problem.
+pub fn why_absent(bead: &str, s: &Scanned) -> String {
+    if s.commits == 0 {
+        return format!(
+            "no commit in `{BRANCH_RANGE}` carries a `Bead: {bead}` trailer, and no landing \
+             carries it either, so there is nothing for a green to cover"
+        );
+    }
+    if s.candidates == 0 {
+        return format!(
+            "no green verify is recorded to check: looked at the last {CANDIDATES} verify runs \
+             and found no green among them, against {} commit(s) of {bead}",
+            s.commits
+        );
+    }
+    if s.with_main == 0 {
+        return format!(
+            "{} recorded green(s) checked, and none contains the main it was recorded over, so \
+             none can stand for {bead}",
+            s.candidates
+        );
+    }
+    if s.touching == 0 {
+        return format!(
+            "{} green(s) contain main, and none contains any of the {} commit(s) of {bead}: \
+             every one was recorded before this work",
+            s.with_main, s.commits
+        );
+    }
+    format!(
+        "{} green(s) contain main and touch {bead}, none covering all {} of its commit(s)",
+        s.with_main, s.commits
+    )
+}
+
+/// The fixing line for each of those, which is the half that differs (air-hgi9). "Wait for the
+/// next batch" and "stop waiting" are opposite instructions and used to share a sentence.
+///
+/// Each states what must become TRUE rather than which command makes it so (air-155w): under a
+/// lane the worker runs no verify, and a fix naming one is followed successfully by the wrong
+/// worker.
+pub fn fix_absent(s: &Scanned) -> &'static str {
+    if s.commits == 0 {
+        // The missing trailer is a FACT and belongs in the detail; the green is still what is
+        // missing. Making the trailer the FIX here told a worker to add a trailer when their
+        // actual next step was a verify — caught by an existing probe, which asserted this
+        // line and went red. The detail gains a fact; the fix keeps its subject.
+        return "a green at this head; `air handover` names what your flow needs to produce one";
+    }
+    if s.candidates == 0 {
+        return "a green containing main and your commits; nothing has recorded one recently, \
+                and `air handover` names what your flow needs to produce one";
+    }
+    if s.with_main == 0 {
+        return "a green whose run contained main; where a lane runs, that is the next batch \
+                that merges main before it verifies";
+    }
+    "a green recorded at or after your commits: the ones on record are all older, so where a \
+     lane runs it is the next batch rather than this one"
+}
+
+pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
     let mut covered: Vec<String> = Vec::new();
-    let mut predates: Option<String> = None;
+    let mut out = Described::default();
     for bead in beads {
         let b = for_bead(ledger, repo, bead).unwrap_or_default();
         if let Some((merge, worker)) = b.landed {
@@ -357,23 +464,27 @@ pub fn describe(
                 short(&sha)
             )),
             (None, Some((sha, worker, missing, subject))) => {
-                if predates.is_none() {
-                    predates = Some(format!(
-                        "the batch's green at {} (by {worker}) predates your commit {} \
-                         \"{subject}\" for {bead}: it does not contain it",
-                        short(&sha),
-                        short(&missing)
-                    ));
-                }
-                return (None, predates);
+                out.predates = Some(format!(
+                    "the batch's green at {} (by {worker}) predates your commit {} \
+                     \"{subject}\" for {bead}: it does not contain it",
+                    short(&sha),
+                    short(&missing)
+                ));
+                return out;
             }
-            (None, None) => return (None, predates),
+            (None, None) => {
+                // air-hgi9: the state that used to be silent. The counts say which it is.
+                out.absent = Some(why_absent(bead, &b.scanned));
+                out.absent_fix = Some(fix_absent(&b.scanned).to_string());
+                return out;
+            }
         }
     }
     if beads.is_empty() || covered.len() != beads.len() {
-        return (None, predates);
+        return out;
     }
-    (Some(covered.join("; ")), None)
+    out.green = Some(covered.join("; "));
+    out
 }
 
 #[cfg(test)]
@@ -425,10 +536,33 @@ mod tests {
     #[test]
     fn a_green_that_lacks_main_never_covers_and_no_commits_means_no_batch() {
         let commits = vec![commit("c1")];
-        assert_eq!(
-            cover(&[cand("x", false, &[true])], &commits),
-            Batch::default()
-        );
-        assert_eq!(cover(&[cand("x", true, &[true])], &[]), Batch::default());
+        // The VERDICT is what this pins. `scanned` is diagnostic and is asserted separately
+        // below (air-hgi9); comparing whole `Batch` values made every new diagnostic field a
+        // false failure here, which is how a test starts resisting information.
+        let lacks_main = cover(&[cand("x", false, &[true])], &commits);
+        assert_eq!((&lacks_main.covering, &lacks_main.predates), (&None, &None));
+        let no_commits = cover(&[cand("x", true, &[true])], &[]);
+        assert_eq!((&no_commits.covering, &no_commits.predates), (&None, &None));
+    }
+
+    /// air-hgi9: the counts that let a refusal say WHICH not-green state it is, taken from the
+    /// loop `cover` already runs. Four states that were one sentence; two of them have
+    /// opposite correct responses.
+    #[test]
+    fn the_scan_counts_what_it_looked_at() {
+        let commits = vec![commit("c2"), commit("c1")];
+        // Nothing recorded to look at.
+        assert_eq!(cover(&[], &commits).scanned.candidates, 0);
+        // Recorded, but disqualified on the main it was recorded over (air-9ij): counted as a
+        // candidate, never as one containing main.
+        let s = cover(&[cand("x", false, &[true, true])], &commits).scanned;
+        assert_eq!((s.candidates, s.with_main, s.commits), (1, 0, 2));
+        // Contains main, touches nothing of this bead.
+        let s = cover(&[cand("y", true, &[false, false])], &commits).scanned;
+        assert_eq!((s.with_main, s.touching), (1, 0));
+        // Contains main and touches it, but does not cover it: that is `predates`, and the
+        // count says the candidate was reached rather than filtered out.
+        let s = cover(&[cand("z", true, &[false, true])], &commits).scanned;
+        assert_eq!((s.with_main, s.touching), (1, 1));
     }
 }
