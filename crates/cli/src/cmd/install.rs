@@ -1348,6 +1348,36 @@ mod tests {
         // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
         assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
         assert!(ROLES_MD.contains("reads the tree alone and not git history"));
+        // air-80x.6: the verification lane, under Worker, as facts Air records and refusals
+        // Air makes. Two sentences pinned the way air-03w and air-97z pinned theirs; and the
+        // section names no cadence and no worker, because those are the repo's flow.
+        let lane = ROLES_MD
+            .split("### Verification lane")
+            .nth(1)
+            .and_then(|s| s.split("\n## ").next())
+            .expect("roles.md has a Verification lane section under Worker");
+        assert!(lane.contains("A lane is a worker session like any other"));
+        assert!(lane.contains(
+            "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"
+        ));
+        assert!(
+            lane.lines().count() < 40,
+            "under 40 lines: {}",
+            lane.lines().count()
+        );
+        for word in ["cadence", "every N", "minutes", "hourly", "daily"] {
+            // "nothing about cadence" is allowed once, as the statement that it is absent.
+            let hits = lane.matches(word).count();
+            assert!(
+                hits <= usize::from(word == "cadence"),
+                "lane section names a cadence: {word}"
+            );
+        }
+        for name in ["worktree-verify", "air-verify", "verify lane is `"] {
+            assert!(!lane.contains(name), "lane section names a worker: {name}");
+        }
+        assert!(ROLES_MD.find("### Verification lane") > ROLES_MD.find("## Worker"));
+        assert!(ROLES_MD.find("### Verification lane") < ROLES_MD.find("## Coordinator"));
     }
 
     /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for
