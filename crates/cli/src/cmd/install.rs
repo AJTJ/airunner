@@ -1168,6 +1168,22 @@ pub const SURFACE: &[SurfaceChange] = &[
                  one is triaged; these entries say nobody should, which is why routing them to \
                  captures is the wrong advice.",
     },
+    SurfaceChange {
+        id: "journal-branch-lands-without-a-bead",
+        since: "2026-09-06 (air-kexg)",
+        headline: "A branch whose only commits are session-journal entries (everything under \
+                   the repo's `journal_dir`) lands with no `Bead:` trailer. A journal entry is \
+                   not work on a bead, so it is the one commit a worker legitimately writes \
+                   that names none, and such a branch was refused with \"no commit declares a \
+                   bead\". A range MIXING journal commits with anything else is unchanged and \
+                   still needs a trailer.",
+        silent_break: true,
+        action: "If anything of yours reads `air status --json`'s `landable`, its `bead` field \
+                 is now `null` for a journal-only branch rather than always a string; every \
+                 other row is unchanged. A repo that declares no `journal_dir` has no journal \
+                 case and nothing changes for it. `air land <bead-id>` cannot select a journal \
+                 branch, since there is no id to name it by — use `--worker` or `--all`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2029,6 +2045,11 @@ mod tests {
             !ROLES_MD.contains("(epics decomposed;"),
             "roles.md must state decomposition as a duty, not as a property of the queue"
         );
+        // air-kexg: two workers derived "a journal branch can land" from correct premises
+        // and were wrong, so roles.md says it. Both halves pinned: the permission and the
+        // constraint, because a reader who keeps only the first has a bypass.
+        assert!(ROLES_MD.contains("whose only commits are journal entries lands without one"));
+        assert!(ROLES_MD.contains("mixes them\nwith anything else needs a trailer"));
         assert!(ROLES_MD.contains("What main moving costs, and what it no longer costs"));
         assert!(ROLES_MD.contains("The coordinator's own commits move main exactly as a landing"));
         assert!(ROLES_MD.contains("main moving no longer retracts a CLOSE"));
