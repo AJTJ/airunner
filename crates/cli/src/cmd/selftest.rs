@@ -983,6 +983,33 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: a batch green goes on covering its bead after main moves, because `contains main` is asked of the main the run was recorded over",
+        Mutation {
+            // Ask about the main of this instant again, which is air-9ij exactly: a green that
+            // contained main when it ran is silently disqualified the moment anybody writes to
+            // main, and because cover() filters on it before the predates branch, the refusal
+            // names no batch at all. The pre-v19 fallback is untouched, so the mutation
+            // reaches the recorded-main question alone.
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "            let against = g.main_sha.clone().unwrap_or_else(|| \"main\".to_string());",
+            to: "            let against = \"main\".to_string();",
+            also_red: &[],
+        },
+    ),
+    (
+        "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        Mutation {
+            // Stop asking whether main still contains the merge, so a rewound or abandoned
+            // landing would close a bead whose work is no longer anywhere. The bead-naming and
+            // landed() conditions are untouched: this reaches the containment question alone,
+            // which is the one that makes the row evidence rather than a memory.
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "            && git::is_ancestor(repo, &merge, \"main\").unwrap_or(false))",
+            to: "            && true)",
+            also_red: &[],
+        },
+    ),
+    (
         "make: the verify target runs adopter-check and selftest, and release runs release-check before verify",
         Mutation {
             // Read the whole file instead of one target's recipe, which is the grep this probe
