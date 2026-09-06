@@ -1,6 +1,6 @@
 //! What a landing may close, and what it may only land (air-ayp).
 //!
-//! adopter measured this failure in its own closer: 99 of 532 beads (18.6%) closed on branch
+//! The adopter measured this failure in its own closer: 99 of 532 beads (18.6%) closed on branch
 //! containment alone, never reading acceptance, and accelerating — 84 of the last 172 closes,
 //! 48.8%, over two days. Verdicts on the 99: 82 done, 14 partial, 1 not done, 1 unverifiable,
 //! 1 moot. The misses are not random. They are beads carrying one clause the merging agent
@@ -9,7 +9,7 @@
 //! existing; another left a locked-out user unable to reset their password, waiting on a
 //! config write nobody knew was outstanding.
 //!
-//! Source: `~/projects/adopter/docs/plans/0029-bead-closure.md` §D.6, relayed by that
+//! Source: `the adopter's docs/plans/0029-bead-closure.md` §D.6, relayed by that
 //! project's coordinator on 2026-08-22 and recorded in air-ayp. Not read from here: a session
 //! may only touch its own project (air-0lk), so these numbers are cited, not verified.
 //!
@@ -18,7 +18,7 @@
 //! bd keeps acceptance in two places and OMITS the `acceptance_criteria` key entirely when it
 //! is unset. So a key listing taken over beads that never set it reads as "bd has no such
 //! field" — which is what this repo's beads show (0 of 33 carry it) and what two coordinators
-//! and this module concluded, each having checked. adopter's implementing agent surveyed all
+//! and this module concluded, each having checked. The adopter's implementing agent surveyed all
 //! 711 of its beads and inverted it: 647 field, 57 section, 0 both, 7 neither. The shape is a
 //! property of how a repo files beads, and `air land` runs in every repo, so `clauses_of`
 //! reads the UNION. A fixture with one shape proves nothing about the other.
@@ -56,7 +56,7 @@
 //!    A git lookup.
 //!
 //! Everything else is `Undecidable`: Air has nothing to look up, which is a fact about Air and
-//! not a criticism of the bead. 29 of adopter's 99 were of that kind, and the bead requires
+//! not a criticism of the bead. 29 of the adopter's 99 were of that kind, and the bead requires
 //! that case be explicit — never silently closed, never blocked from landing.
 //!
 //! `Discharged` on every clause is what lets a reader trust a close at a glance. A clause Air
@@ -65,7 +65,7 @@
 //!
 //! ## A path Air cannot resolve is unreadable, not refuted (air-dqa)
 //!
-//! `paths_named` reads path-like tokens out of prose, and a token it trims wrongly (adopter
+//! `paths_named` reads path-like tokens out of prose, and a token it trims wrongly (the adopter
 //! wrote `docs/reference/tooling.md`'s, and the possessive survived the trim) matched nothing in
 //! the merge and was reported as CONTRADICTED. Three firings, zero true, in the mechanism whose
 //! job is to be believed. So a named path that is NOT in the merge's file list is checked
@@ -93,9 +93,9 @@ use serde::Serialize;
 /// repos that file with `-d` put a `## Acceptance Criteria` section in the description. Which
 /// one a bead uses depends on how its repo files beads, and `air land` runs in every repo, so
 /// this reads the union rather than either half. Measured: this repo is 33 section / 0 field;
-/// adopter is 647 field / 57 section / 0 both / 7 neither, across all 711 of its beads.
+/// The adopter is 647 field / 57 section / 0 both / 7 neither, across all 711 of its beads.
 ///
-/// Both empty is a real case (adopter's 7): no clauses, which never closes.
+/// Both empty is a real case (the adopter's 7): no clauses, which never closes.
 pub fn clauses_of(field: &str, description: &str) -> Vec<String> {
     let mut out = bullets(field);
     out.extend(section(description));
@@ -283,7 +283,7 @@ pub struct Judged {
 
 impl Judged {
     /// Every clause looked up and held. What lets a reader trust a close at a glance. No
-    /// clauses at all is not a pass: it means Air read nothing (adopter had 7 such beads).
+    /// clauses at all is not a pass: it means Air read nothing (the adopter had 7 such beads).
     pub fn all_discharged(&self) -> bool {
         !self.clauses.is_empty() && self.clauses.iter().all(|(_, v)| v.discharged())
     }
@@ -338,7 +338,7 @@ impl Judged {
 /// **Layer 1.** Every bead the merge carries, printed beside its acceptance and Air's verdict
 /// on each clause, so a wrong close is visible at the moment it lands. True under both closure
 /// models: if this repo adopts close-with-proof, the closing layer goes and this stays
-/// (adopter `docs/plans/0029-bead-closure.md`, where the print is the only external check on
+/// (the adopter `docs/plans/0029-bead-closure.md`, where the print is the only external check on
 /// the honour system). Pure.
 pub fn report(judged: &[Judged]) -> String {
     if judged.is_empty() {
@@ -546,7 +546,7 @@ Something happened. See docs/rules/roles.md for the rule.
 
     /// air-ayp: the two storage shapes are BOTH real and which one a bead uses depends on how
     /// its repo files beads — 33 of 33 section-only here, 647 field / 57 section / 0 both /
-    /// 7 neither in adopter. `air land` runs in both, so a fixture with one shape proves
+    /// 7 neither in the adopter. `air land` runs in both, so a fixture with one shape proves
     /// nothing. Every shape, including neither.
     #[test]
     fn both_storage_shapes_are_read_and_neither_is_reported() {
@@ -563,14 +563,14 @@ Something happened. See docs/rules/roles.md for the rule.
             clauses_of("", "## Acceptance Criteria\n\n- from the section\n"),
             vec!["from the section"]
         );
-        // Both, which adopter has none of today but nothing forbids: the union, not either.
+        // Both, which the adopter has none of today but nothing forbids: the union, not either.
         assert_eq!(
             clauses_of("field one", "## Acceptance Criteria\n\n- section one\n"),
             vec!["field one".to_string(), "section one".to_string()]
         );
         // Neither: the adopter measured 7. No clauses, so it is reported, never assumed met.
         let j = judge_clauses(
-            "fd-7",
+            "zz-7",
             clauses_of("", "## Incident\n\nno criteria anywhere\n"),
             &Evidence {
                 green_at_landed: true,
@@ -586,7 +586,7 @@ Something happened. See docs/rules/roles.md for the rule.
         );
     }
 
-    /// The heading is exactly `Acceptance Criteria`. the adopter has three descriptions with
+    /// The heading is exactly `Acceptance Criteria`. The adopter has three descriptions with
     /// headings merely including the word, and a following heading must not be swallowed.
     #[test]
     fn only_the_exact_heading_opens_the_section() {
@@ -653,7 +653,7 @@ Something happened. See docs/rules/roles.md for the rule.
         assert_eq!(unreadable.why_contradicted(), "");
     }
 
-    /// air-dqa, the two cases the bead names. The possessive: adopter wrote
+    /// air-dqa, the two cases the bead names. The possessive: the adopter wrote
     /// `docs/reference/tooling.md`'s, the trim stopped at the `s`, the token matched nothing
     /// in a merge that HAD changed that file, and Air reported a contradiction. Now: no file by
     /// that name at the landed commit, so unreadable, with the token named. The ai_runner case:
@@ -673,7 +673,7 @@ Something happened. See docs/rules/roles.md for the rule.
             changed: &changed,
             tree: &tree,
         };
-        // The possessive, verbatim from ad-cnjx.
+        // The possessive, verbatim from.
         let v = judge(
             "Air's own `docs/reference/tooling.md`'s section is updated.",
             &ev,

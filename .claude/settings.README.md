@@ -25,7 +25,7 @@ hook config found across the source repos.
 ## Deliberately not ported (yet)
 
 - **`SessionStart` / `PreCompact` → `bd prime`** (also in another-project' settings, and
-  `adopter/.claude/settings.json` uses `bd prime --hook-json`). Air has no beads store in this
+  `the adopter's .claude/settings.json` uses `bd prime --hook-json`). Air has no beads store in this
   repo yet, so `bd prime` would fail or prime the wrong context. Re-add when `.beads/` exists.
 - **Any `permissions.allow` list.** None needed for the current work; add per named pain.
 - **Air's own hooks (`air hook …`).** Those belong to plan 0001 and will be wired here once the

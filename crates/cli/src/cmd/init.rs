@@ -9,7 +9,7 @@
 //! with Air's roles; owner 2026-08-21); `bd config set status.custom awaiting_review` (the
 //! hand-over state is not a bd default);
 //! `.claude/air.json` with deny patterns proposed from a scan of the repo's publish targets
-//! (adopter: a new publish target shipped outside an enumerated list; deny the verb, not the
+//! (the adopter: a new publish target shipped outside an enumerated list; deny the verb, not the
 //! tool); then `air install --write` (hooks, `.mcp.json`, roles, skills); a minimal CLAUDE.md
 //! only when none exists; `air selftest`; and the next steps, which start with
 //! `air record verify -- <cmd>` as the first proof (it is what made bd's corruption visible).

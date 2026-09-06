@@ -128,7 +128,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "A worker's Edit/Write whose resolved path leaves its worktree is denied; the \
                harness's --worktree isolation it replaces is off.",
         added: "2026-09-06 (air-8gj)",
-        source: "crates/hooks/src/fence.rs; docs/notes/2026-09-06-adopter-answers-worktree-and-verify.md",
+        source: "crates/hooks/src/fence.rs; private/notes/2026-09-06-answers-worktree-and-verify.md",
         fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-outside-worktree")]),
         removal: Removal::Judgement(
             "the harness keys its isolation on the cwd rather than the flag; or a round records zero refuse-outside-worktree firings AND the owner prefers the harness block back",
@@ -199,7 +199,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-ayp)",
         source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
         fires: Fires::Condition("landed-not-closed"),
-        // Not ZeroFirings: this one firing is the mechanism working. adopter's closer put
+        // Not ZeroFirings: this one firing is the mechanism working. The adopter's closer put
         // 14 partial and 1 not-done bead into `closed` by never asking
         // (docs/plans/0029-bead-closure.md D.6, cited via air-ayp). It goes when acceptance is
         // machine-checkable by construction, at which point the merge either satisfies it or
@@ -290,13 +290,13 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "lease-held-by-dead-session",
         class: "attention",
         what: "A lease whose holder's process is gone or was reused.",
-        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        added: "2026-08-21 (owner ruling A; ported from the adopter's lease.sh)",
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-held-by-dead-session"),
         // KEPT, and for a different reason from the three above: this one's zero is about
         // USAGE, not about the mechanism. Addressed to the waiter rather than the holder
         // since air-q9c, like `lease-stale` below. The `leases` table has zero rows in this repo because
-        // `air lease` is unused here. adopter uses it every round. Deleting on our zero is
+        // `air lease` is unused here. The adopter uses it every round. Deleting on our zero is
         // precisely the error the owner reversed on `air lease` itself (air-uae, 2026-08-29):
         // a verdict from an absence in one repo is not a verdict about a mechanism.
         removal: Removal::Judgement(
@@ -307,15 +307,15 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "lease-stale",
         class: "attention",
         what: "A lease whose heartbeat has aged past the stale threshold.",
-        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        added: "2026-08-21 (owner ruling A; ported from the adopter's lease.sh)",
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-stale"),
         // Same zero-is-about-usage argument. The KNOWN defect this row was registered to hold
         // — the condition addressed to the lease's HOLDER, offering them `air lease break` on
         // the lease they were using — is FIXED as of air-q9c: both lease conditions now name
         // whoever is waiting in `lease_wants`, and a defect nobody is waiting on produces no
-        // condition at all. the adopter reported six firings in one day on healthy leases (their
-        // ad-m07x); the attribution half reproduced here, captured 01M17J9NSHXZBH56K7MVY7XAM8.
+        // condition at all. The adopter reported six firings in one day on healthy leases (their
+        //); the attribution half reproduced here, captured 01M17J9NSHXZBH56K7MVY7XAM8.
         //
         // So the first half of the recorded condition is discharged and the second is what is
         // left to observe, which needs a repo that actually takes leases.
@@ -413,7 +413,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-09-05 (air-1bm; the warning it replaces was air-4cr, 2026-08-29)",
         source: "crates/cli/src/cmd/land.rs, in_flight_refusal",
         fires: Fires::Decisions(&[("land", "refuse-in-flight")]),
-        // adopter ad-fthq: the warning fired, was read, and the landing went ahead anyway,
+        // The adopter : the warning fired, was read, and the landing went ahead anyway,
         // 1,199 s of destroyed verify in two incidents plus six more runs invalidated. Two
         // ways to retire it, both counts: overrides at zero (below) mean it is only ever
         // waited out and could be a plain wait; refusals at zero while verifies and landings
@@ -444,7 +444,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-09-05 (air-gsj)",
         source: "crates/cli/src/cmd/claim.rs, retry_once",
         fires: Fires::Decisions(&[("claim", "timeout-retry")]),
-        // adopter w1 retried a claim by hand three times on 2026-08-31 and lost the bead to
+        // The adopter's w1 retried a claim by hand three times on 2026-08-31 and lost the bead to
         // a peer between retries; the message read as a denial. A fresh bd process starts at
         // the ~2 s floor again while any usable timeout is crossed by the same stalls
         // (air-bp0), which is why this is a retry and not a longer wait.

@@ -6,8 +6,8 @@
 //! other worker's `--claim` is printed with who is assigned; a closed bead is closed); then
 //! `bd update --claim` (bd's atomic CAS decides races); only after bd succeeds is the ledger
 //! row written. A bd timeout is not a refusal: bd's state is unknown, so Air re-reads
-//! `bd show` and records the claim if it landed, otherwise says so (adopter ad-b68j,
-//! ad-wowp, 2026-08-21).
+//! `bd show` and records the claim if it landed, otherwise says so (the adopter,
+//!, 2026-08-21).
 //!
 //! Closed is closed (owner, 2026-08-21): `air release` sends back to `open` only a bead bd
 //! holds as `in_progress`; it never reopens a closed or handed-over bead. Unfinished work
@@ -28,9 +28,9 @@ use crate::cmd::{emit, log_event, now, open};
 /// apart: `human` is about PRESENCE, a person in the loop who can watch and type into every
 /// session, and `owner` is about AUTHORITY, whose decision is required. An owner-only
 /// decision stays owner-only when the owner hands it to an agent, so `human` was the wrong
-/// word for a gate. It rotted exactly that way in adopter, where a triage note records a
+/// word for a gate. It rotted exactly that way in the adopter, where a triage note records a
 /// whole category of beads that "carries human but needs no owner ruling" (its
-/// `docs/research/adopter-notes/notes/human-queue-triage.md`, category C). Every site that
+/// `private/research/adopter-notes/notes/human-queue-triage.md`, category C). Every site that
 /// decides claimability reads this constant, never a literal (air-5hw).
 pub const OWNER_LABEL: &str = "owner";
 
@@ -412,7 +412,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         Err(BdError::Timeout(_)) => {
             // bd may have completed the write after we stopped waiting: reconcile before
             // saying anything about state, with a short separate probe, twice (under load
-            // one probe can time out too; adopter 2026-08-22, load avg ~90).
+            // one probe can time out too; the adopter 2026-08-22, load avg ~90).
             if !claim_landed(&bd, bead, &actor) {
                 return fail(
                     &ledger,
@@ -555,7 +555,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
         // air-0kk: open AND unassigned, in ONE bd process. Reopening alone left the assignee
         // pencilled in, and in bd 1.2.x that blocks every other worker's `--claim`: the bead
         // sat in `bd ready` claimable by nobody but the worker that had just released it
-        // (adopter ad-tdv8; here air-an9 after gate's session was gone). One process, so
+        // (the adopter; here air-an9 after gate's session was gone). One process, so
         // the status and the assignee cannot be left half-applied.
         match bd.reopen_unassigned(bead) {
             Ok(()) => {}

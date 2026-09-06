@@ -10,7 +10,7 @@
 //! conditions are delivered into the session, plus Metis when the repo declares it (air-g5o).
 //!
 //! A `--task` never rides in argv. It is written to `<main>/.air/tasks/<name>.md` and the
-//! prompt claude receives is a fixed sentence naming that path (air-er0: adopter's seven
+//! prompt claude receives is a fixed sentence naming that path (air-er0: the adopter's seven
 //! worker deaths of 2026-08-30 were `pkill -f "air record verify"` matching the task prompt in
 //! every peer's command line; `ps -o command=` showed the whole prompt). What still sits in
 //! argv is Air's own fixed text: the roles path, the deny patterns, and until air-9dg the
@@ -70,7 +70,7 @@ pub const WORKER_DENY: &[&str] = &[
 /// main and is already the coordinator's, so the deny was never protecting main from the
 /// coordinator; it was stopping it from saving its own prose.
 ///
-/// This is NOT precedent from adopter, and the bead's original framing that it was does not
+/// This is NOT precedent from the adopter, and the bead's original framing that it was does not
 /// survive checking. Their coordinator cannot hand-commit on main either, and their CLAUDE.md
 /// forbids `git add`/`git commit` in the main checkout outright; what was allowed there was a
 /// scripted path (`land.sh`: refuse, digest, `--no-ff` merge, verify, rewind on red), which is
@@ -84,7 +84,7 @@ pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)"];
 
 /// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
 /// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
-/// enumerations, so a new publish target cannot ship outside the list (adopter capture
+/// enumerations, so a new publish target cannot ship outside the list (the adopter's capture
 /// fcd8ff: `make deploy-site` shipped without being added to a list that named `deploy-api`).
 pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
     let Ok(air_dir) = air_ledger::paths::air_dir_for(repo) else {
@@ -166,7 +166,7 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
 /// The env a worker session runs with, set on the SPAWNED PROCESS (`Command::env`, or
 /// `tmux new-session -e` on the detached path) and not only in a `--settings` blob.
 ///
-/// air-9dg: adopter's workers carried two `--settings`; the second (added to turn off Remote
+/// air-9dg: the adopter's workers carried two `--settings`; the second (added to turn off Remote
 /// Control) replaced the first, so `AIR_ENFORCE` never reached a hook and the one refusal Air
 /// promises advised instead of refusing for five hours, with nothing saying so. Nothing on a
 /// command line can clobber a process environment. The blob stays too, merged with any
@@ -283,10 +283,10 @@ pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
 
 /// Pure: the argv for a worker session. No `--worktree` (air-8gj): Air creates the worktree
 /// (air-fdz) and starts claude with its cwd inside it. The harness's own worktree isolation,
-/// which the flag switched on, is off: in adopter's record it stopped no observed write to
+/// which the flag switched on, is off: in the adopter's record it stopped no observed write to
 /// the main checkout and cost 455 refusals in five days, 388 of them (88%) with no git token in
 /// the command, plus a native build refused with no prompt and permission prompts nobody could
-/// answer unattended (`docs/notes/2026-09-06-adopter-answers-worktree-and-verify.md`, owner
+/// answer unattended (`private/notes/2026-09-06-answers-worktree-and-verify.md`, owner
 /// ruling 2026-09-06). What holds the line instead: the cwd, the deny list below, the
 /// peer-on-file and hand-over hooks, and one PreToolUse denial of an Edit/Write whose resolved
 /// path leaves the worktree (`hook.rs`, `air_hooks::fence`).
@@ -410,7 +410,7 @@ pub enum Launch {
     Exec,
     /// No controlling tty (stdin is a socket: the coordinator's Bash tool, `</dev/null`), so
     /// `claude --tmux` cannot run here (`tcgetattr failed: Operation not supported on
-    /// socket`, adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
+    /// socket`, the adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
     Detached,
 }
 
@@ -571,7 +571,7 @@ fn exec_claude(repo: &Path, env: &[(String, String)], argv: &[String], print: bo
 /// The prompt goes *first*. `--disallowed-tools` takes space-separated values (cli-reference,
 /// https://code.claude.com/docs/en/cli-reference, accessed 2026-08-22: example
 /// `"Bash(git log *)" "Bash(git diff *)" "Edit"`), so a positional appended after the deny
-/// list is read as one more deny rule, not as the prompt (air-2ct: adopter 2026-08-22,
+/// list is read as one more deny rule, not as the prompt (air-2ct: the adopter 2026-08-22,
 /// three workers idle at an empty prompt once `--tmux`, the only thing terminating the
 /// list, was stripped). The reference shows the prompt positional before flags
 /// (`claude -p "query" --output-format json`).
@@ -767,8 +767,8 @@ mod tests {
     #[test]
     fn task_precedes_the_deny_list_and_nothing_follows_it() {
         let base = worker_argv("w", "air", Path::new("/r/roles.md"), &[]);
-        let v = worker_argv_prompt(base.clone(), Some("fix fd-1 end to end"));
-        assert_eq!(v[0], "fix fd-1 end to end");
+        let v = worker_argv_prompt(base.clone(), Some("fix zz-1 end to end"));
+        assert_eq!(v[0], "fix zz-1 end to end");
         let deny = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert!(deny > 0, "task must not follow the variadic deny list");
         assert_eq!(&v[1..], &base[..]);

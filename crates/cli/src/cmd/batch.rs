@@ -2,7 +2,7 @@
 //!
 //! The gate wanted a green AT the worker's HEAD (or, since air-7wf, at its tree). A verify
 //! lane's green is at the batch head, whose tree holds everyone's changes, so neither key
-//! matched and the lane's green closed nothing: adopter's 2026-08-29 round parked a quarter
+//! matched and the lane's green closed nothing: the adopter's 2026-08-29 round parked a quarter
 //! of the fleet as a lane whose batch never formed (air-learnings-round-2026-08-29.md, item 2).
 //!
 //! **The check is per bead, not per HEAD** (owner, 2026-09-05). A worker keeps committing after

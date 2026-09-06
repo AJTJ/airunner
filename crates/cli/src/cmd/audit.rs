@@ -767,7 +767,7 @@ pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
 /// The reason is not a guess: `air status` shells out to bd once for `in_progress`, once more
 /// per claim the reconcile has to resolve, and again for `ready` and `awaiting_review`. bd
 /// costs about a second and a half per *process* here whatever the query, so a handful of
-/// processes is the floor and the ledger reads are nowhere in it. adopter's took ~20 s and
+/// processes is the floor and the ledger reads are nowhere in it. The adopter's took ~20 s and
 /// they wrapped it in a 60 s timeout in `reclaim.py`; the number belongs where the mechanisms
 /// are priced, not in each reader's head.
 pub fn latency_lines(l: &Latency) -> String {

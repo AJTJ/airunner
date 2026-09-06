@@ -1,5 +1,5 @@
 //! `air doctor`: where the ledger is, how big, row counts, pragmas — so an absent or wrong
-//! ledger is visible, not silent. Also the bd gate (adopter adoption, 2026-08-21: bd 1.2.1
+//! ledger is visible, not silent. Also the bd gate (the adopter's adoption, 2026-08-21: bd 1.2.1
 //! had corrupted the Dolt schema; 1.2.2 refused it and `bd list` returned 4 of 144 beads):
 //! the installed bd version against the pin, and whether `bd list --json` actually answers.
 
