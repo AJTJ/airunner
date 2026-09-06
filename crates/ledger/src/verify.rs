@@ -626,9 +626,10 @@ mod tests {
         ledger.record_verify(&batch).unwrap();
         let runs = ledger.latest_runs(Kind::Verify, 10).unwrap();
         assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0].sha, "batch");
-        assert_eq!(runs[0].members, batch.members);
-        assert!(runs[1].members.is_empty());
+        let newest = runs.first().unwrap();
+        assert_eq!(newest.sha, "batch");
+        assert_eq!(newest.members, batch.members);
+        assert!(runs.get(1).unwrap().members.is_empty());
         // Greens only, so the red batch is not there.
         assert_eq!(ledger.latest_greens(Kind::Verify, 10).unwrap().len(), 1);
     }
