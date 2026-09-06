@@ -145,6 +145,21 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-et0o. The anchor is the render alone. The query, the change-only fingerprint, the
+    // wording of the warning and the once-per-session suppression all survive it, so what it
+    // isolates is exactly whether the sentence dates the entry — which is the whole bead: a
+    // fortnight-old journal row and a live concurrent edit were spelled identically. The green
+    // half is expected to SURVIVE this, because a peer is still warned about either way.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "hook: the peer warning dates each holder's journal entry, so a fortnight-old one does not read like a live edit",
+        Mutation {
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "peer_ages(&peers, &now())",
+            to: "peers.iter().map(|(w, _)| w.as_str()).collect::<Vec<_>>().join(\", \")",
+            also_red: &[],
+        },
+    ),
     // air-x1ha. The anchor is the arm for "bd never had this id", and nothing else: recording
     // the resolved id at claim time, releasing a bead bd knows and no longer holds, and the
     // reported line all survive it. Under it that arm releases the row again, which is the
@@ -1769,6 +1784,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_gate_runs_what_the_makefile_says(),
         probe_docs_name_real_flags_and_kinds(),
         probe_an_untracked_digest_is_not_proof(),
+        probe_the_peer_warning_dates_the_entry(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -9081,6 +9097,135 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-et0o (an adopter's worker, 2026-09-06): the peer warning says which tense it is in.
+///
+/// `is also being edited by w3` was printed identically for a live concurrent edit and for a
+/// journal entry left by a worker that had not existed for a fortnight. Their worker spent a
+/// stop and four fields of `air holdings` output establishing that nobody was in the file. The
+/// cost is not the false alarm: a reader who learns the warning is usually stale stops reading
+/// it, and the one time it is live it looks the same.
+///
+/// The age is read from a column the query already touched, and `air holdings` has printed the
+/// tense per holder since air-v7o — this is one surface not saying what its neighbour says.
+/// **Not** clean-or-dirty (a `git status` on a hook path whose git budget fails OPEN) and
+/// **not** suppression of peers with no live session (it fails toward silence on the case the
+/// warning exists for); both reasons are on [`crate::cmd::hook::peer_ages`].
+///
+/// Red: the sentence a worker actually gets, from a real hook against a real ledger, dates the
+/// entry — and the renderer spells a fortnight-old entry and a minutes-old one differently, so
+/// the two states a reader has to tell apart are told apart.
+///
+/// Green: the two things this must not have broken. A genuinely concurrent edit still warns —
+/// this bead made no peer silent — and a second edit in the same session stays quiet even
+/// after the peer's timestamp moves, because the change-only fingerprint is built from NAMES
+/// only. Folding the age into it would change it on every peer edit and turn one warning per
+/// session into one per edit.
+fn probe_the_peer_warning_dates_the_entry() -> Probe {
+    use crate::cmd::hook::peer_ages;
+
+    let at = "2026-09-06T12:00:00Z";
+    let stale = [("w3".to_string(), "2026-08-23T12:00:00Z".to_string())];
+    let live = [("w2".to_string(), "2026-09-06T11:57:00Z".to_string())];
+    let both = [live[0].clone(), stale[0].clone()];
+    let renders = peer_ages(&stale, at) == "w3 (14 d ago)"
+        && peer_ages(&live, at) == "w2 (3 min ago)"
+        && peer_ages(&both, at) == "w2 (3 min ago), w3 (14 d ago)";
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+        std::fs::create_dir_all(dir.join("src")).map_err(|e| e.to_string())?;
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let edit = |session: &str, file: &str| -> Result<String, String> {
+            let input = serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": session,
+                "cwd": dir.display().to_string(),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": dir.join("src").join(file).display().to_string()},
+            });
+            let mut child = air_command(&exe, &dir)
+                .arg("hook")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            {
+                use std::io::Write;
+                let mut stdin = child.stdin.take().ok_or("no stdin")?;
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            let out = child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        };
+        let touch = |worker: &str, file: &str, when: &str| -> Result<(), String> {
+            let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+            air_hooks::journal::touch(&l, worker, &format!("src/{file}"), Some("s"), when)
+                .map_err(|e| e.to_string())
+        };
+
+        // A worker that stopped existing years ago is still journaled on the file. Dated far
+        // back on purpose: the assertion is "reads in days", and a fixed recent date would
+        // start passing for a different reason as the real clock moved.
+        touch("w3", "a.rs", "2020-01-01T00:00:00Z")?;
+        let said = edit("s1", "a.rs")?;
+        let dated = said.contains("is also journaled by w3 (")
+            && said.contains(" d ago)")
+            && !said.contains("is also being edited by");
+
+        // A peer in the file right now is still warned about. Deliberately NOT asserting the
+        // age here: that is the red half's claim, and restating it in the green half would
+        // make both halves fail together under the declared mutation — which reports as a
+        // mutation that took out the whole guard rather than one that reached a branch.
+        touch("w2", "b.rs", &crate::cmd::now())?;
+        let live_said = edit("s2", "b.rs")?;
+        let still_warns = live_said.contains("is also journaled by w2");
+
+        // The same session edits the same file again, and in between the peer touches it
+        // again. Same names, so the warning is not repeated: once per session, not per edit.
+        touch("w2", "b.rs", &crate::cmd::now())?;
+        let again = edit("s2", "b.rs")?;
+        let quiet = !again.contains("journaled by");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((dated, still_warns && quiet))
+    })();
+    let (dated, kept) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "hook: the peer warning dates each holder's journal entry, so a fortnight-old one does not read like a live edit",
+        red_fires: dated && renders,
+        green_passes: kept,
     }
 }
 

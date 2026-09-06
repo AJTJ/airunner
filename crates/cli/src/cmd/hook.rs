@@ -628,10 +628,17 @@ fn pre_tool_use(
             let inputs = serde_json::json!({"path": rel, "peers": peers});
             let denominator = format!("{} peer(s) journaled on path", peers.len());
             // Same peers on the same path: warned once per session, not on every edit.
+            // NAMES only, never the ages (air-et0o): the fingerprint is what makes this
+            // change-only, and folding a timestamp into it would change it every time a peer
+            // touched the file, so the once-per-session warning would become once-per-edit.
             let fingerprint = if peers.is_empty() {
                 String::new()
             } else {
-                peers.join(",")
+                peers
+                    .iter()
+                    .map(|(w, _)| w.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
             };
             let speak = ledger
                 .emit_if_changed(
@@ -658,9 +665,9 @@ fn pre_tool_use(
                         // moment it was dealing with a shared file. Both commands below exist;
                         // a probe holds every shipped advice string to that.
                         context: Some(format!(
-                            "air: {} is also being edited by {} — coordinate before overlapping edits (`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
+                            "air: {} is also journaled by {} — coordinate before overlapping edits (`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
                             rel,
-                            peers.join(", ")
+                            peer_ages(&peers, &now())
                         )),
                     },
                     "warn",
@@ -900,6 +907,38 @@ pub fn role_for(worker: &str) -> &'static str {
     } else {
         "worker"
     }
+}
+
+/// Each peer with the age of its journal entry (air-et0o): `w2 (3 min ago)`.
+///
+/// The bare age rather than `edited N ago`, for two reasons that are the same reason. The
+/// ledger knows a journal entry was written, not that a file was edited, and the sentence
+/// already carries the verb (`is also journaled by`). And `air holdings` has said
+/// `journaled 14 d ago` per holder since air-v7o: the complaint this closes is one surface
+/// not saying what its neighbour already says, so it is not closed by saying it differently.
+///
+/// **Why age and not clean-or-dirty.** `air holdings` prints both, and the bead asked for both.
+/// The dirty half needs a `git status` on a PreToolUse path, and that path's git budget is 1.5 s
+/// and fails OPEN (air-d75) — a warning is not worth spending the one budget whose overrun makes
+/// the gate stop refusing. The age alone separates the two states this exists for: an edit
+/// minutes old and a journal entry from a worker that stopped existing a fortnight ago were
+/// spelled identically, and an adopter's worker spent a stop establishing which it was.
+///
+/// **Why not suppress a peer with no live session**, which was the other candidate and is the
+/// stronger-looking one: it fails toward SILENCE on the case the warning exists for. Session
+/// liveness has been wrong before — an adopter's lease read dead beside a fresh heartbeat after
+/// a relaunch — and a wrong read there hides a genuinely concurrent edit rather than adding a
+/// stale line. Age is read from the row the warning already loads and cannot be wrong in that
+/// direction.
+///
+/// Pure over `(worker, last_seen)` pairs and `now`, so a probe renders every tense without a
+/// ledger.
+pub fn peer_ages(peers: &[(String, String)], now: &str) -> String {
+    peers
+        .iter()
+        .map(|(w, seen)| format!("{w} ({})", crate::cmd::holdings::age_text(seen, now)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Current state of a session row, if any.

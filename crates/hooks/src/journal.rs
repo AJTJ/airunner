@@ -25,12 +25,27 @@ pub fn touch(
     Ok(())
 }
 
-/// Other workers currently journaled on `repo_relative` (for the PreToolUse warning).
-pub fn peers_on(ledger: &Ledger, worker: &str, repo_relative: &str) -> Result<Vec<String>> {
+/// Other workers journaled on `repo_relative`, each with the time it was last seen there (for
+/// the PreToolUse warning).
+///
+/// The timestamp comes back because the warning has to tell a live concurrent edit from a
+/// journal entry left by a worker that stopped existing a fortnight ago (air-et0o). Both were
+/// spelled identically, and an adopter's worker spent a stop and four fields of `air holdings`
+/// output establishing that nobody was in the file. `air holdings` has printed the tense per
+/// holder since air-v7o; this is the same fact, one column further along a query the hook was
+/// already running.
+pub fn peers_on(
+    ledger: &Ledger,
+    worker: &str,
+    repo_relative: &str,
+) -> Result<Vec<(String, String)>> {
     let mut stmt = ledger.conn().prepare(
-        "SELECT worker FROM edit_journal WHERE path = ?1 AND worker != ?2 ORDER BY worker",
+        "SELECT worker, last_seen FROM edit_journal WHERE path = ?1 AND worker != ?2 \
+         ORDER BY worker",
     )?;
-    let rows = stmt.query_map(params![repo_relative, worker], |r| r.get::<_, String>(0))?;
+    let rows = stmt.query_map(params![repo_relative, worker], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -67,7 +82,11 @@ mod tests {
             .unwrap();
         assert_eq!(first, "2026-08-18T10:00:00Z");
         assert_eq!(last, "2026-08-18T10:05:00Z");
-        assert_eq!(peers_on(&l, "w1", "src/a.rs").unwrap(), vec!["w2"]);
+        // air-et0o: the time comes back too, so the warning can say which tense it is.
+        assert_eq!(
+            peers_on(&l, "w1", "src/a.rs").unwrap(),
+            vec![("w2".to_string(), "2026-08-18T10:06:00Z".to_string())]
+        );
         assert!(peers_on(&l, "w1", "src/b.rs").unwrap().is_empty());
     }
 
