@@ -79,6 +79,15 @@ pub struct Session {
     /// air-9dg: did this session's hooks see `AIR_ENFORCE=1`? Written by the hook from its
     /// own environment, so it is what the gate ran with. `None` on rows from before v15.
     pub enforce: Option<bool>,
+    /// air-1n3, schema v20: why this session stopped, when it stopped for a reason other than
+    /// finishing a turn. `(at, kind, text)` from a `Notification` or `StopFailure` hook.
+    /// `None` on a session that has never been stopped that way, which is nearly all of them.
+    ///
+    /// The kind is what makes this actionable rather than merely sad: `quota_auto_resume_fired`
+    /// says the harness is bringing the session back by itself and nothing should touch it,
+    /// while `quota_auto_resume_stale`, `quota_auto_resume_disabled` and `stop_failure` say it
+    /// is not.
+    pub stopped: Option<(String, String, String)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1354,7 +1363,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         let mut st = ledger
             .conn()
             .prepare(
-                "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, enforce \
+                "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, \
+                        enforce, stopped_at, stopped_kind, stopped_text \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1373,6 +1383,17 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         project: r.get(7)?,
                         model: r.get(8)?,
                         enforce: r.get::<_, Option<i64>>(9)?.map(|v| v == 1),
+                        stopped: match (
+                            r.get::<_, Option<String>>(10)?,
+                            r.get::<_, Option<String>>(11)?,
+                        ) {
+                            (Some(at), Some(kind)) => Some((
+                                at,
+                                kind,
+                                r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                            )),
+                            _ => None,
+                        },
                     },
                 ))
             })
@@ -1854,6 +1875,25 @@ pub fn render_for_probe(s: &Snapshot) -> String {
     render(s, &[])
 }
 
+/// How a stopped session reads on its `air status` line (air-1n3).
+///
+/// The distinction the phrase has to carry is not "stopped or not" but "coming back or not",
+/// because they call for opposite actions: a session the harness is auto-resuming must be left
+/// alone (typing at it cancels the recovery), and one it is not needs a wake. `kind` is the
+/// harness's own declared notification type, never read out of the message text.
+pub fn stopped_phrase(kind: &str, at: &str) -> String {
+    match kind {
+        "quota_auto_resume_fired" => {
+            format!("STOPPED at {at} (limit; the harness is resuming it, leave it alone)")
+        }
+        "quota_auto_resume_stale" | "quota_auto_resume_disabled" => {
+            format!("STOPPED at {at} ({kind}; the harness is NOT resuming it)")
+        }
+        "stop_failure" => format!("STOPPED at {at} (turn ended on an API error)"),
+        other => format!("STOPPED at {at} ({other})"),
+    }
+}
+
 fn render(s: &Snapshot, att: &[Attention]) -> String {
     let mut out = String::new();
     for w in &s.workers {
@@ -1878,7 +1918,19 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 } else {
                     ""
                 };
-                format!("{} since {} [{model}]{unenforced}", x.state, x.changed_at)
+                // air-1n3: a session the harness stopped, and whether the harness is
+                // bringing it back. Before this the ledger could only say "silent", and on
+                // 2026-09-06 that cost a lane 79 minutes because silent-and-recovering and
+                // silent-and-dead read identically.
+                let stopped = x
+                    .stopped
+                    .as_ref()
+                    .map(|(at, kind, _)| format!(" {}", stopped_phrase(kind, at)))
+                    .unwrap_or_default();
+                format!(
+                    "{} since {} [{model}]{unenforced}{stopped}",
+                    x.state, x.changed_at
+                )
             })
             .unwrap_or_else(|| "no session".to_string());
         let green = match (w.green_at_head, w.green_detail.as_deref()) {
@@ -2159,6 +2211,7 @@ mod tests {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                stopped: None,
             }),
             head: Some("abc".into()),
             green_at_head: green,

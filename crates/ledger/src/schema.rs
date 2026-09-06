@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 19;
+pub const CURRENT_VERSION: i64 = 20;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -290,6 +290,22 @@ const V19: &str = r#"
 ALTER TABLE verify_runs ADD COLUMN main_sha TEXT;
 "#;
 
+/// v20 (2026-09-06, air-1n3): why a session stopped, when the reason was not "it finished".
+/// A `Notification` or `StopFailure` hook writes `stopped_at`, `stopped_kind` (the
+/// notification type, or `stop_failure`) and `stopped_text` (what the harness showed).
+///
+/// The night this comes from: seven sessions on one machine were stopped by one account
+/// limit. Five had the harness's own auto-continue armed and were working again within 70
+/// seconds of the reset; two did not, and the one that also had no scheduled task sat dead
+/// for 79 minutes. Air saw only "silent with a claim" and could not tell those apart, so the
+/// coordinator took it to the owner instead of acting. These three columns are the fact that
+/// distinction needs. NULL on every row until a session is actually stopped this way.
+const V20: &str = r#"
+ALTER TABLE sessions ADD COLUMN stopped_at TEXT;
+ALTER TABLE sessions ADD COLUMN stopped_kind TEXT;
+ALTER TABLE sessions ADD COLUMN stopped_text TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -368,6 +384,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if version < 19 {
         conn.execute_batch(V19)?;
         conn.pragma_update(None, "user_version", 19)?;
+    }
+    if version < 20 {
+        conn.execute_batch(V20)?;
+        conn.pragma_update(None, "user_version", 20)?;
     }
     Ok(())
 }
