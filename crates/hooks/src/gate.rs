@@ -20,6 +20,13 @@ pub struct GateFacts {
     /// (air-7wf). Only for the message: it names the re-verify as the price of a
     /// commit-keyed repo rather than as an absence.
     pub tree_green: Option<String>,
+    /// A green recorded at a verified commit that contains main and every commit of the
+    /// bead(s) being handed over (air-80x.1): the verify lane's batch. Counts as green. The
+    /// sentence is the ok line: "green at C (batch by W) contains every commit of <bead>".
+    pub batch_green: Option<String>,
+    /// A batch green that contains main and some of the bead's commits but not the newest:
+    /// the batch predates the worker's last commit (air-80x.1). For the refusal only.
+    pub batch_predates: Option<String>,
     /// The most recent green sha for this worker, if any (for the message).
     pub last_green_sha: Option<String>,
     /// `git merge-base --is-ancestor main HEAD`.
@@ -95,14 +102,22 @@ pub struct Missing {
 
 pub fn handover_verdict(f: &GateFacts) -> Verdict {
     let mut missing = Vec::new();
-    if !f.green_at_head {
+    // air-80x.1: a verify lane's batch green counts when it contains main and every commit
+    // of the bead. It is a second way to be green, never a way to be less than green.
+    let green = f.green_at_head || f.batch_green.is_some();
+    if !green {
         let last = f
             .last_green_sha
             .as_deref()
             .map(|s| format!(" (last green: {s})"))
             .unwrap_or_default();
         let (g, r) = f.runs_at_head;
-        let (detail, fix) = if g > 0 && r > 0 {
+        let (detail, fix) = if let Some(p) = f.batch_predates.as_deref() {
+            (
+                format!("no green verify recorded at HEAD {}; {p}", short(&f.head)),
+                "wait for the lane's next batch, or: air record verify -- make verify".to_string(),
+            )
+        } else if g > 0 && r > 0 {
             (
                 format!(
                     "verify at HEAD {} is flaky: {g} green / {r} red; latest is red",
@@ -272,8 +287,15 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         // expiring before it could be used. Naming the main it was true of lets a reader see
         // at a glance whether it still applies, and the refusal (which names main too, air-4up)
         // then reads as main having moved rather than as a contradiction.
+        // air-80x.1: when the green is a batch's, say whose and what it contains.
+        let batch = f
+            .batch_green
+            .as_deref()
+            .filter(|_| !f.green_at_head)
+            .map(|b| format!("; {b}"))
+            .unwrap_or_default();
         format!(
-            "handover ok: {} at {}{}",
+            "handover ok: {} at {}{}{batch}",
             f.worker,
             short(&f.head),
             containing_main(&f.main_sha)
@@ -357,6 +379,8 @@ mod tests {
             head: "f854145abcdef".into(),
             green_at_head: true,
             tree_green: None,
+            batch_green: None,
+            batch_predates: None,
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
             main_sha: "0a1b2c3d4e5f".into(),
@@ -370,6 +394,37 @@ mod tests {
             carried_beads: vec![],
             advisory: false,
         }
+    }
+
+    /// air-80x.1: a batch green is a second way to be green; a batch that predates the last
+    /// commit is named in the refusal with the fix that waits for the next batch.
+    #[test]
+    fn a_batch_green_passes_and_a_predating_batch_is_named() {
+        let mut f = facts();
+        f.green_at_head = false;
+        f.batch_green =
+            Some("green at abc12345 (batch by lane) contains every commit of ad-o5fi".into());
+        let v = handover_verdict(&f);
+        assert!(v.pass, "{}", v.message);
+        assert!(v.message.contains("batch by lane"), "{}", v.message);
+
+        let mut f = facts();
+        f.green_at_head = false;
+        f.batch_predates = Some("the batch's green at abc12345 (by lane) predates your commit deadbeef \"more work\" for ad-o5fi: it does not contain it".into());
+        let v = handover_verdict(&f);
+        assert!(v.block);
+        assert!(
+            v.missing[0]
+                .detail
+                .contains("predates your commit deadbeef"),
+            "{}",
+            v.missing[0].detail
+        );
+        assert!(
+            v.missing[0].fix.contains("next batch"),
+            "{}",
+            v.missing[0].fix
+        );
     }
 
     /// air-60x: the claim refusal never offers `air claim <id>`. The bead may be closed and

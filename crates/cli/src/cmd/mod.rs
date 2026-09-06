@@ -3,6 +3,7 @@
 pub mod acceptance;
 pub mod attribution;
 pub mod audit;
+pub mod batch;
 pub mod bd_latency;
 pub mod capture;
 pub mod claim;
