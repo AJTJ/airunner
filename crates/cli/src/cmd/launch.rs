@@ -743,10 +743,7 @@ mod tests {
             p,
             "Your task is in /r/.air/tasks/w1.md. Read that file and carry it out."
         );
-        assert!(task_is_prompt(
-            &worker_argv_tmux(vec![], false, None, Some(&p)),
-            &p
-        ));
+        assert!(task_is_prompt(&worker_argv_prompt(vec![], Some(&p)), &p));
     }
 
     /// `--print` pasted into `sh -c` must reproduce the exec argv for a task with a space,
@@ -754,10 +751,8 @@ mod tests {
     #[test]
     fn print_line_round_trips_through_sh() {
         let task = "fix it's $HOME \"now\"";
-        let argv = worker_argv_tmux(
+        let argv = worker_argv_prompt(
             worker_argv("w", "air", Path::new("/r/roles.md"), &[]),
-            true,
-            None,
             Some(task),
         );
         let line = print_line("claude", &argv);

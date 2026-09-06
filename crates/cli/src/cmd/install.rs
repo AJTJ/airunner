@@ -842,17 +842,31 @@ pub fn surface_diff(known: &[String]) -> Vec<&'static SurfaceChange> {
 /// binaries apart while its own doc claimed it could. A surface version that moves on nobody's
 /// authority is the same defect one level up.
 ///
-/// The three columns are checked against each other and against the crate by
-/// `install::tests::a_release_row_matches_the_crate_and_the_surface`, which runs in
-/// `make verify`. So:
+/// **Releases are cut per round, not per notice** (owner, 2026-09-06, air-mir). A lane
+/// appending a notice appends NO row; the coordinator appends one row at round end covering
+/// every notice since the last. What that ruling moved is WHEN the count has to match, not
+/// whether: the invariant — a surface notice never ships without a row, so `Installed` never
+/// claims a version it cannot identify (air-w9d) — is unchanged.
 ///
-/// * appending a surface notice **forces a release** — the count stops matching until a row
-///   is added;
-/// * bumping the crate version **forces a decision** about the surface version;
-/// * neither can drift from the other, because both read this table rather than each other.
+/// So the check is split across two moments:
+///
+/// * `make verify` (`tests::a_release_row_matches_the_crate_and_the_surface`) asks only that
+///   nothing went BACKWARDS ([`verify_rows_ok`]) and that the crate version matches the last
+///   row. Notices beyond that row are the normal mid-round state.
+/// * `make release` (`air release-check`, [`release_check`]) asks that the count and the crate
+///   version agree with the last row exactly, and names the row to append when they do not.
+///
+/// The cost of asking at every verify was measured, not guessed: nineteen releases between
+/// 17:22Z and 00:50Z on 2026-09-06, five release-row number collisions between lanes
+/// re-numbered by coordinator message, and a tag/verify/install cycle of several minutes on
+/// main for every landing that carried a notice.
 ///
 /// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing — which
-/// is the one direction a guard must not fail in, and is why this is a test and not a comment.
+/// is the one direction a guard must not fail in, and is why the release half is a refusal and
+/// not a comment.
+///
+/// Removal condition for the release-time check: when notices are generated from the release
+/// rows rather than written by hand, at which point they cannot outrun them.
 pub const RELEASES: &[(&str, u32, usize)] = &[
     // The surface as it stood before 2026-08-29: nine notices, no release ever cut.
     ("0.0.1", 1, 9),
@@ -1569,15 +1583,15 @@ mod tests {
         assert!(ROLES_MD.find("### Verification lane") < ROLES_MD.find("## Coordinator"));
     }
 
-    /// The release line in the sand (owner, 2026-08-29). `RELEASES` is the single home for
-    /// what a release IS here, and this is what makes it a line rather than a comment:
+    /// The verify-time half of the release line in the sand (owner, 2026-08-29; narrowed to
+    /// this half by air-mir, 2026-09-06). What it still holds:
     ///
-    /// * append a surface notice and the count stops matching, so a release is forced;
+    /// * a notice REMOVED, or a row edited to say less, stops matching — rows are appended;
     /// * bump the crate version and the last row stops matching, so the surface version has
     ///   to be decided rather than drift.
     ///
-    /// Forgetting fails toward PERMITTING — the downgrade refusal quietly stops noticing —
-    /// which is the one direction a guard must not fail in.
+    /// What moved to `air release-check`: notices beyond the last row's count. Mid-round that
+    /// is the normal state, not a defect, since a lane appends a notice and no row.
     #[test]
     fn a_release_row_matches_the_crate_and_the_surface() {
         let (version, surface, count) = RELEASES.last().copied().unwrap_or(("", 0, 0));
