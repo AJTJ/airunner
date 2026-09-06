@@ -708,7 +708,12 @@ pub fn select(repo: &Path) -> Selection {
                         "{worker} has no recorded green at its head {}",
                         head.get(..8).unwrap_or(&head)
                     ),
-                    fix: "in that worktree: air record verify -- <the repo's verify>".to_string(),
+                    // air-155w: advice about a WORKER, printed on the coordinator's
+                    // surface. Under a verify lane that worker must not record a green, so
+                    // this names the condition and leaves who satisfies it to the repo's flow.
+                    fix: "a green at that head; `air handover` in that worktree names \
+                          what it needs"
+                        .to_string(),
                     worker: worker.clone(),
                 });
                 continue;
