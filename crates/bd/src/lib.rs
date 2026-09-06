@@ -2,16 +2,24 @@
 //!
 //! Rules (plan 0001 §7; tick 0300): read via `bd --json`; write only through `bd`; CAS and
 //! leases are owned by Air's ledger because bd 1.2.2 has neither. The surface Air actually
-//! calls is `ready`, `show`, `list`, `update --claim`, `update -s/-a`, `comment` and `close`.
+//! calls is `ready`, `show`, `list`, `dep list`, `update --claim`, `update -s/-a`, `comment`
+//! and `close`.
 //!
-//! **Air does not interpret the dependency graph** (air-3qg). `dep`, `blocked` and
-//! `recompute-blocked` were listed here as "verified present" until 2026-09-06 and no call
-//! site has ever invoked them; [`Issue`] carries no edge field. Air reads the ready list bd
-//! computes and never asks what an edge means — which matters because an edge means different
-//! things at different moments: an adopter's file-contention edges say who may START in a
-//! shared file, and bd applies them at CLOSE time, which blocked a bead whose work was
-//! finished and green. If Air ever grows edge semantics of its own it has to separate the two,
-//! and the decomposition skill has to say which kind it is filing.
+//! **Air does not interpret the dependency graph** (air-3qg), and reading one edge type does
+//! not change that. Air reads the ready list bd computes and never asks what an edge MEANS —
+//! which matters because an edge means different things at different moments: an adopter's
+//! file-contention edges say who may START in a shared file, and bd applies them at CLOSE
+//! time, which blocked a bead whose work was finished and green. If Air ever grows edge
+//! semantics of its own it has to separate the two, and the decomposition skill has to say
+//! which kind it is filing.
+//!
+//! The one thing Air does read (air-btz, 2026-09-06, which is why the sentence above used to
+//! end "`Issue` carries no edge field" and no longer can): [`Dep`], via [`WorkLedger::dep_list`],
+//! to answer ONE structural question — is this bead blocked by its own ancestor? That is not an
+//! interpretation of what the edge means; it is a shape that can never resolve whatever it
+//! means, because an ancestor cannot finish until its descendants do. bd does not prevent it on
+//! every route and does not report it at all
+//! (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`).
 //!
 //! `bd` is slow (`ready --json` ≈ 1.1 s locally, tick 0315), so nothing here is called from a
 //! hook path — CLI and reconcile paths only.
