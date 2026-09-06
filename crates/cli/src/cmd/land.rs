@@ -339,6 +339,44 @@ pub fn remerge_command() -> String {
     "`git merge main`, then a green at the new head (the worker's own, or their lane's)".to_string()
 }
 
+/// What to say and record after `git merge --ff-only` returned an error (air-htmn).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FfVerdict {
+    /// The fast-forward completed; the error was about the wait, not the ref.
+    Landed,
+    /// Main genuinely did not move.
+    Refused(String),
+    /// The look itself failed, so neither is established.
+    Unknown(String),
+}
+
+/// Pure: given the fast-forward's error text and what a look at main said, what happened.
+///
+/// `landed` is `Some(true)` when the landing commit is an ancestor of main, `Some(false)` when
+/// it is not, and `None` when the check could not be made — the ancestry probe runs through the
+/// same 1500 ms bound that produced the original error, so it can time out too.
+///
+/// **Pure so the probe drives the decision rather than constructing the outcome it asserts.**
+/// The bead anticipated that: a probe that has to build the post-fast-forward state itself is
+/// testing its own constructor, which is the trap air-682 names and which I hit twice earlier
+/// tonight. Here the inputs are the two facts and the output is the verdict, so neither is
+/// derived from the other.
+pub fn after_fast_forward(err: &str, landed: Option<bool>) -> FfVerdict {
+    match landed {
+        Some(true) => FfVerdict::Landed,
+        Some(false) => FfVerdict::Refused(format!(
+            "could not fast-forward main onto the landing commit, so main is untouched. Usually \
+             main moved, or a local change is in the way: {err}"
+        )),
+        None => FfVerdict::Unknown(format!(
+            "the fast-forward returned an error and Air could not then read main, so whether \
+             the landing happened is NOT established: {err}. Check with `git merge-base \
+             --is-ancestor <landing commit> main` before running `air land` again; nothing was \
+             recorded either way, and the in-flight row stands until it is."
+        )),
+    }
+}
+
 /// What one branch's landing did.
 enum Outcome {
     Landed {
@@ -953,11 +991,29 @@ fn land_one(
     // and it moves it onto a commit whose tree is already green.
     record("in-flight", Some(merge.clone()), None, None);
     if let Err(e) = git::run(repo, &["merge", "--ff-only", &merge]) {
-        record("refused", None, None, Some("fast-forward".into()));
-        return Outcome::Refused(format!(
-            "could not fast-forward main onto the landing commit, so main is untouched. Usually \
-             main moved, or a local change is in the way: {e}"
-        ));
+        // air-htmn: LOOK before saying anything about main. `git merge --ff-only` updates the
+        // ref atomically and `git::run` kills the child on timeout, which does not undo a ref
+        // update — so an `Err` here means "I stopped waiting", never "it did not happen". An
+        // adopter's coordinator was told "main is untouched" while main was at the landing
+        // commit, and ran `air land` a second time; the second call's correct refusal is the
+        // only reason they found out the first had worked.
+        //
+        // The worse half was the row: `record("refused", …)` ran on this branch too, so the
+        // ledger said refused for a landing that happened, and `landings()`, `landed_open()`
+        // and `air status` all read that row afterwards. A wrong sentence is read once.
+        match after_fast_forward(&e.to_string(), git::is_ancestor(repo, &merge, "HEAD").ok()) {
+            FfVerdict::Landed => {}
+            FfVerdict::Refused(msg) => {
+                record("refused", None, None, Some("fast-forward".into()));
+                return Outcome::Refused(msg);
+            }
+            FfVerdict::Unknown(msg) => {
+                // Deliberately records NOTHING. The in-flight row above already says a landing
+                // started and has not reported (air-bxe), which is exactly true here, and
+                // writing "refused" would be this bug again one layer over.
+                return Outcome::Refused(msg);
+            }
+        }
     }
     // The landing commit was built FROM the branch's tree, so main's tree is now byte-identical
     // to the one this worker recorded a green at. That equality is the whole reason no verify
