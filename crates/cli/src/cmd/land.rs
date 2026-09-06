@@ -210,7 +210,11 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
             acceptance: Vec::new(),
             oldest_minutes: 0,
         });
-        b.beads.push(l.bead.clone());
+        // air-kexg: a journal-only landing carries no bead, so it adds none here and the
+        // batch lands with an empty list, which is what the row should record.
+        if let Some(id) = l.bead.clone() {
+            b.beads.push(id);
+        }
         b.acceptance.push(l.acceptance.clone());
         b.oldest_minutes = b.oldest_minutes.max(l.minutes);
     }
@@ -355,7 +359,7 @@ fn blocked_line(l: &super::status::Landing) -> String {
     format!(
         "\n  {} [{}]: {}\n    fix: {}",
         l.worker,
-        l.bead,
+        l.bead.as_deref().unwrap_or("no bead (journal only)"),
         l.blocked.as_deref().unwrap_or(""),
         l.command
     )
@@ -427,13 +431,16 @@ pub fn resolve(
         let carriers: BTreeSet<&str> = ready
             .iter()
             .chain(blocked)
-            .filter(|l| &l.bead == bead)
+            .filter(|l| l.bead.as_deref() == Some(bead.as_str()))
             .map(|l| l.worker.as_str())
             .collect();
         if carriers.len() > 1 {
             let mut s = format!("\n  {bead} is carried by {} branches:", carriers.len());
             for w in carriers {
-                match blocked.iter().find(|l| l.worker == w && &l.bead == bead) {
+                match blocked
+                    .iter()
+                    .find(|l| l.worker == w && l.bead.as_deref() == Some(bead.as_str()))
+                {
                     Some(b) => s.push_str(&format!(
                         "\n    {w}: blocked: {}\n      fix: {}",
                         b.blocked.as_deref().unwrap_or(""),
@@ -449,7 +456,10 @@ pub fn resolve(
             missing.push(bead);
             continue;
         }
-        match blocked.iter().find(|l| &l.bead == bead) {
+        match blocked
+            .iter()
+            .find(|l| l.bead.as_deref() == Some(bead.as_str()))
+        {
             Some(b) => named_blocked.push(b),
             None => chosen.extend(carriers),
         }
@@ -473,7 +483,7 @@ pub fn resolve(
             "refused: {} not landable yet.{}",
             named_blocked
                 .iter()
-                .map(|l| l.bead.as_str())
+                .filter_map(|l| l.bead.as_deref())
                 .collect::<Vec<_>>()
                 .join(", "),
             named_blocked
@@ -1117,7 +1127,7 @@ mod tests {
     #[test]
     fn batches_group_by_branch_and_land_the_longest_wait_first() {
         let l = |bead: &str, worker: &str, minutes: i64| super::super::status::Landing {
-            bead: bead.into(),
+            bead: Some(bead.into()),
             worker: worker.into(),
             head: "abc".into(),
             minutes,
