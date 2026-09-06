@@ -262,21 +262,40 @@ pub fn red_batches_of(runs: &[air_ledger::verify::VerifyRun]) -> Vec<RedBatch> {
         .collect()
 }
 
+/// Pure: is `red` superseded by any of `greens`? A green supersedes it when it carries every
+/// one of its members, so the work the batch failed on has since been verified together.
+pub fn superseded_by(
+    repo: &Path,
+    red: &RedBatch,
+    greens: &[air_ledger::verify::VerifyRun],
+) -> bool {
+    greens.iter().filter(|g| g.finished_at > red.at).any(|g| {
+        red.members
+            .iter()
+            .all(|m| git::is_ancestor(repo, &m.sha, &g.sha).unwrap_or(false))
+    })
+}
+
 /// The newest red batch still standing: none of its members has since been carried by a
 /// newer green run (a later batch, or the worker's own verify at that head). One list, one
 /// answer; the lane reads it in `air status` until a newer batch supersedes it.
+///
+/// **No window** (air-cyf). This used to read the last 20 verify runs and pick the red batch
+/// out of them, so a batch that stayed red across 20 further runs stopped being reported with
+/// nothing said — and a report that was dropped looked exactly like one that was fixed, which
+/// is a failure toward permitting in the one place the fleet is told nothing may land. The 20
+/// had no test and no reason recorded beside it.
+///
+/// Both halves are now asked of the rows themselves: the newest red run that carried members,
+/// and the green runs finished after it. Neither is bounded by a count, and both are one
+/// indexed query. A busy day cannot age a standing red out of view.
 pub fn red_batch_standing(ledger: &Ledger, repo: &Path) -> Option<RedBatch> {
-    let runs = ledger.latest_runs(Kind::Verify, 20).ok()?;
-    let red = red_batches_of(&runs).into_iter().next()?;
-    let superseded = runs
-        .iter()
-        .filter(|r| r.is_green() && r.finished_at > red.at)
-        .any(|g| {
-            red.members
-                .iter()
-                .all(|m| git::is_ancestor(repo, &m.sha, &g.sha).unwrap_or(false))
-        });
-    (!superseded).then_some(red)
+    let run = ledger.latest_red_batch(Kind::Verify).ok()??;
+    let red = red_batches_of(std::slice::from_ref(&run))
+        .into_iter()
+        .next()?;
+    let greens = ledger.greens_since(Kind::Verify, &red.at).ok()?;
+    (!superseded_by(repo, &red, &greens)).then_some(red)
 }
 
 /// One line for a red batch, as `air record` prints it and `air status` repeats it.
