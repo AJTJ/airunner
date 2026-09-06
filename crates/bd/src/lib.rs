@@ -112,7 +112,31 @@ pub struct Issue {
     /// the claimable count offered two epics as work and a worker nearly claimed one. An epic
     /// is a container, not a task; `bd ready` lists it beside the tasks all the same.
     pub issue_type: String,
+    /// How many issues this one depends on, bd's own count (air-btz). Read only as a GATE:
+    /// with zero, there is no edge to fetch, so the dependency scan skips its `bd dep list`
+    /// entirely. Never used as the answer — which edges they are is what `dep_list` says.
+    #[serde(default)]
+    pub dependency_count: i64,
 }
+
+/// One dependency edge as `bd dep list --json` reports it: `issue_id` depends on
+/// `depends_on_id`, of `dep_type` (air-btz). The array is flat across every id asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dep {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    /// `blocks` | `parent-child` | `related` | … Only `blocks` stops a bead becoming ready;
+    /// `parent-child` is bd's own hierarchy and is definitional.
+    #[serde(rename = "type")]
+    pub dep_type: String,
+}
+
+/// bd's name for the edge that actually blocks.
+pub const BLOCKS: &str = "blocks";
+
+/// bd's name for its own hierarchy edge, which every child has to its parent.
+pub const PARENT_CHILD: &str = "parent-child";
 
 /// What Air needs from a work tracker. `BdCli` is the only implementation today; tests use
 /// an in-memory fake.
@@ -126,6 +150,14 @@ pub trait WorkLedger {
     /// whose children are all closed would be indistinguishable from one with none. `-n 0`
     /// lifts bd's default limit of 50, which would otherwise cap a large epic silently.
     fn children(&self, id: &str) -> Result<Vec<Issue>>;
+    /// `bd list --status <s1,s2,…> -n 0 --json`: every issue in any of those stored statuses.
+    /// Comma-separated in ONE argument, deliberately: bd 1.2.2's `--help` says repeating
+    /// `-s` silently overwrites the previous value, so the repeated form would ask for the
+    /// last status only and answer confidently.
+    fn by_statuses(&self, statuses: &[&str]) -> Result<Vec<Issue>>;
+    /// `bd dep list <id> <id> … --json`: the edges of every id in ONE process. Flat across
+    /// all of them, so the caller reads `issue_id` to know whose each edge is.
+    fn dep_list(&self, ids: &[String]) -> Result<Vec<Dep>>;
     fn show(&self, id: &str) -> Result<Option<Issue>>;
     /// `bd show <id> <id> … --json`: every id in ONE process (bd 1.2.2 `bd show [id...]`).
     /// bd OMITS an id it does not know and still exits 0 — checked 2026-08-22: stderr says
@@ -159,6 +191,33 @@ pub fn reopen_argv(id: &str) -> Vec<String> {
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+/// argv for [`WorkLedger::by_statuses`], pure so the ONE-ARGUMENT comma-separated form is
+/// checkable without running bd (air-btz). bd 1.2.2's own `bd list --help` says a repeated
+/// `-s`/`--status` **silently overwrites the previous value**, so the repeated form asks for
+/// the last status alone and answers with complete confidence — the failure this shape is
+/// written to avoid, and the reason it is pinned by a probe rather than by a comment.
+/// `-n 0` lifts bd's default limit of 50, which would otherwise cap the answer silently.
+pub fn by_statuses_argv(statuses: &[&str]) -> Vec<String> {
+    vec![
+        "list".to_string(),
+        "--status".to_string(),
+        statuses.join(","),
+        "-n".to_string(),
+        "0".to_string(),
+        "--json".to_string(),
+    ]
+}
+
+/// argv for [`WorkLedger::dep_list`], pure so the batching is checkable without running bd:
+/// every id in ONE process, as `bd dep list [issue-id...]` documents (air-btz). The per-process
+/// cost is the whole cost, exactly as it is for [`close_argv`].
+pub fn dep_list_argv(ids: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = vec!["dep".to_string(), "list".to_string()];
+    v.extend(ids.iter().cloned());
+    v.push("--json".to_string());
+    v
 }
 
 pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
@@ -322,6 +381,18 @@ impl WorkLedger for BdCli {
 
     fn children(&self, id: &str) -> Result<Vec<Issue>> {
         parse_issues(&self.run(&["list", "--parent", id, "--all", "-n", "0", "--json"])?)
+    }
+
+    fn by_statuses(&self, statuses: &[&str]) -> Result<Vec<Issue>> {
+        let argv = by_statuses_argv(statuses);
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        parse_issues(&self.run(&argv)?)
+    }
+
+    fn dep_list(&self, ids: &[String]) -> Result<Vec<Dep>> {
+        let argv = dep_list_argv(ids);
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        Ok(serde_json::from_str(&self.run(&argv)?).unwrap_or_default())
     }
 
     fn show(&self, id: &str) -> Result<Option<Issue>> {
