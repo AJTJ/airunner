@@ -442,11 +442,19 @@ pub fn landing_line(sel: &crate::cmd::status::Selection, worker: &str) -> String
         return format!("landing: cannot tell — {e}");
     }
     if let Some(l) = sel.landings.iter().find(|l| l.worker == worker) {
-        return format!(
-            "landing: landable at {}, carrying {}",
-            l.head.get(..8).unwrap_or(&l.head),
-            l.bead
-        );
+        // air-kexg landed `bead: Option<String>` while this was being written: a journal-only
+        // branch IS landable and carries no bead. Saying "carrying none" rather than printing
+        // an empty slot is the difference between an answer and a gap.
+        return match l.bead.as_deref() {
+            Some(b) => format!(
+                "landing: landable at {}, carrying {b}",
+                l.head.get(..8).unwrap_or(&l.head)
+            ),
+            None => format!(
+                "landing: landable at {}, carrying no bead (journal-only branch)",
+                l.head.get(..8).unwrap_or(&l.head)
+            ),
+        };
     }
     if let Some(s) = sel.skipped.iter().find(|s| s.worker == worker) {
         return format!(

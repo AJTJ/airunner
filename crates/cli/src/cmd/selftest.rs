@@ -11132,7 +11132,7 @@ fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
     let sel = Selection {
         landings: vec![Landing {
             worker: "alpha".into(),
-            bead: "air-1".into(),
+            bead: Some("air-1".into()),
             head: "aaaaaaaa1111".into(),
             minutes: 3,
             command: "air land --worker alpha".into(),
