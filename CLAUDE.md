@@ -43,9 +43,13 @@ Index items are 1–3 lines; detail lives behind the link.
   installed into other repos, so "what this binary is" has to be answerable by the binary. One
   release = one appended row in `install::RELEASES` (crate version, surface version, notice
   count) + the same version in `Cargo.toml` + `make release`, which refuses a dirty tree or a
-  non-main branch, runs `make verify`, and tags what it verified. **Appending a surface-change
-  notice forces a release**: the notice count stops matching and `make verify` fails until a row
-  is added. Never edit a row; append. The reason it is enforced rather than written down is that
+  non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
+  **Releases are cut per round, not per notice** (owner, 2026-09-06, air-mir): a lane appends
+  its surface notice and no row; the coordinator appends one row at round end covering every
+  notice since the last, and `air release-check` refuses the release until the count and the
+  version agree. `make verify` refuses only a count going backwards. Nineteen releases and
+  five row collisions in one day was the cost of checking at every verify. Never edit a row;
+  append. The reason it is enforced rather than written down is that
   forgetting fails toward *permitting* — `air install`'s downgrade refusal quietly stops
   noticing, and a stale binary shows an adopting repo none of the notices telling it to upgrade
   (owner, 2026-08-29; air-w9d). Before that ruling Air had no release concept at all: `0.0.1`

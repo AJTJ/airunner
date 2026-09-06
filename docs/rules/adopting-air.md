@@ -281,7 +281,7 @@ their tree.
 | "Say which checkout you are in" | Hook records `role` (main = coordinator, worktree = worker) on every session and event |
 | "Announce before touching a shared file" | `PreToolUse(Edit\|Write)` warns with the peer's name from the edit journal |
 | "Do not set awaiting_review without green" | Hand-over gate: green at HEAD, main merged, claim held, digest present (advisory; `AIR_ENFORCE=1` refuses) |
-| "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode |
+| "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode. Since air-8gj workers are started IN their worktree without `claude --worktree`, so they no longer see the harness's worktree refusals (adopter: 455 in five days, 88% with no git token, none of them a write to main); the one denial left is Air's PreToolUse hook on an Edit/Write whose resolved path leaves the worktree |
 | "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
 | "Check on the fleet every N minutes" | Channel push: idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
 | "The owner merges every green branch at the end of the round" | Landing is the coordinator's, and a branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
@@ -339,6 +339,12 @@ Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over
   number means. What still had to be relayed by hand is the next thing Air builds.
 
 ## 5a. Upgrading an existing installation (Air's own surface moved)
+
+Releases are cut per round (air-mir, owner 2026-09-06): a change that alters the surface
+appends a notice to `SURFACE` and nothing else; the coordinator appends one `RELEASES` row at
+round end covering every notice since the last, and `make release` runs `air release-check`,
+which refuses until the notice count and `Cargo.toml` agree with that row. So a repo sees
+notices arrive in batches, one release per round, rather than one release per notice.
 
 §5 keeps the integration current against *bd* and *Claude Code* upgrades. This is the other
 direction: **Air changed under a repo that already has it installed.** That happened for the
