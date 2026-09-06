@@ -79,6 +79,16 @@ pub struct Session {
     /// air-9dg: did this session's hooks see `AIR_ENFORCE=1`? Written by the hook from its
     /// own environment, so it is what the gate ran with. `None` on rows from before v15.
     pub enforce: Option<bool>,
+    /// Is there a transcript behind this row (air-3jv5)? Every session Claude Code starts
+    /// carries a `transcript_path` in every hook payload — Air already reads it for the model —
+    /// so a row without one was not written by a session.
+    ///
+    /// **Reported, never refused.** A hook that carries no transcript still gets its row and
+    /// its event line, because the alternative fails the wrong way: refusing the row would
+    /// lose a real worker from `air status` if a harness ever omitted the field, and losing a
+    /// live worker is worse than showing a synthetic one. What changes is that the fleet is
+    /// not TOLD a worker arrived, and a reader can see which rows no session is behind.
+    pub has_transcript: bool,
     /// air-1n3, schema v20: why this session stopped, when it stopped for a reason other than
     /// finishing a turn. `(at, kind, text)` from a `Notification` or `StopFailure` hook.
     /// `None` on a session that has never been stopped that way, which is nearly all of them.
@@ -1443,7 +1453,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .conn()
             .prepare(
                 "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, \
-                        enforce, stopped_at, stopped_kind, stopped_text \
+                        enforce, stopped_at, stopped_kind, stopped_text, transcript_path \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1462,6 +1472,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         project: r.get(7)?,
                         model: r.get(8)?,
                         enforce: r.get::<_, Option<i64>>(9)?.map(|v| v == 1),
+                        has_transcript: r
+                            .get::<_, Option<String>>(13)?
+                            .is_some_and(|t| !t.trim().is_empty()),
                         stopped: match (
                             r.get::<_, Option<String>>(10)?,
                             r.get::<_, Option<String>>(11)?,
@@ -2055,13 +2068,23 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 // bringing it back. Before this the ledger could only say "silent", and on
                 // 2026-09-06 that cost a lane 79 minutes because silent-and-recovering and
                 // silent-and-dead read identically.
+                // air-3jv5: a row no session is behind. A hook demonstrated by piping a
+                // synthetic event at the real ledger wrote a worker a reader could not tell
+                // from a live one, in the table `air status`, the attention conditions and the
+                // stopped-session line all read.
+                let synthetic = if x.has_transcript {
+                    ""
+                } else {
+                    " NO TRANSCRIPT (no session is behind this row: a synthetic hook, or a \
+                     harness that sent none)"
+                };
                 let stopped = x
                     .stopped
                     .as_ref()
                     .map(|(at, kind, _)| format!(" {}", stopped_phrase(kind, at)))
                     .unwrap_or_default();
                 format!(
-                    "{} since {} [{model}]{unenforced}{stopped}",
+                    "{} since {} [{model}]{unenforced}{synthetic}{stopped}",
                     x.state, x.changed_at
                 )
             })
@@ -2173,6 +2196,27 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         for line in rewind_propagation(&r.merge_commit, &r.carried_by) {
             out.push_str(&format!("rewound and still carried: {line}\n"));
         }
+    }
+    // air-3jv5: rows no session is behind, counted across EVERY session row rather than only
+    // the ones rendered. The per-worker view keeps the latest row per worker, so a synthetic
+    // row is invisible there the moment the real session emits a hook — which is how the one
+    // that pushed `session_joined` sat in the table unseen. The count is the "say what it
+    // looked at" half: it names how many rows were examined, so silence means checked-and-none
+    // rather than not-looked.
+    let (no_transcript, examined) = (
+        s.sessions
+            .iter()
+            .filter(|(_, _, x)| !x.has_transcript)
+            .count(),
+        s.sessions.len(),
+    );
+    if no_transcript > 0 {
+        out.push_str(&format!(
+            "sessions: {no_transcript} of {examined} row(s) have no transcript behind them \
+             (synthetic hooks, or a harness that sent none). They are never announced as a \
+             worker joining; `sqlite3 .air/ledger.db \"select session_id, worker from sessions \
+             where transcript_path is null or transcript_path = \'\'\"` names them.\n"
+        ));
     }
     out.push_str(&format!(
         "ready: {}{}{}\n",
@@ -2361,6 +2405,7 @@ mod tests {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                has_transcript: true,
                 stopped: None,
             }),
             head: Some("abc".into()),
