@@ -1025,6 +1025,26 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "docs: every flag and condition kind the README and the rules name still exists",
+        Mutation {
+            // Check the command word and stop, which is what air-w91's check already does
+            // over sources and what this bead exists because of: measured against the README
+            // at c64175b, that catches NONE of the three drifts. The retired-kind half and
+            // the declared-absence half are untouched, so the mutation reaches the flag rule
+            // alone and the probe's `air inbox --owner` fixture is the half that falls.
+            //
+            // Anchored on a line carrying quotes on purpose: a mutation whose target is in
+            // this file is duplicated by its own `from:` literal unless the text needs
+            // escaping. The first attempt anchored on `for f in flags {`, appeared twice, and
+            // was refused by the anchor probe air-g7e added — the third real thing that probe
+            // has caught, and the first that was mine.
+            file: "crates/cli/src/cmd/selftest.rs",
+            from: "                return Err(format!(\"`air {}` has no --{f}\", path.join(\" \")));",
+            to: "                let _ = f;",
+            also_red: &[],
+        },
+    ),
+    (
         "make: the verify target runs adopter-check and selftest, and release runs release-check before verify",
         Mutation {
             // Read the whole file instead of one target's recipe, which is the grep this probe
@@ -1633,6 +1653,7 @@ fn all_probes() -> Vec<Probe> {
         probe_every_declared_mutation_still_anchors(),
         probe_a_batch_records_exactly_the_branches_it_merged(),
         probe_the_gate_runs_what_the_makefile_says(),
+        probe_docs_name_real_flags_and_kinds(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -8277,5 +8298,241 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
         name: "make: the verify target runs adopter-check and selftest, and release runs release-check before verify",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// Condition kinds that once existed and no longer do (air-wfd).
+///
+/// Declared, because it cannot be derived: a deleted kind leaves no trace in `kinds::ALL`, and
+/// the whole risk is prose that goes on naming one. One line when a kind is deleted, beside
+/// the deletion record that already gets written.
+pub const RETIRED_KINDS: &[(&str, &str)] = &[
+    (
+        "stuck",
+        "air-12k, 2026-09-06: set only by a permission prompt auto mode never sends",
+    ),
+    (
+        "owner-decision-waiting",
+        "air-uef, 2026-09-05: the owner's queue is owner-labelled beads",
+    ),
+];
+
+/// Spans in tracked prose that name a command, flag or kind **in order to say it does not
+/// exist**. Declared, with the bead, because the alternative is reading intent out of prose.
+///
+/// This list is the whole reason the check is honest. Without it the first thing it refuses is
+/// `docs/rules/worktree-protocol.md`'s own record that `air peer` was planned and never built —
+/// which is air-w91's provenance line — and `roles.md`'s paragraph explaining that `stuck` was
+/// deleted. A check that fails on the documentation of a deletion teaches people to stop
+/// documenting deletions.
+/// Keyed by FILE as well as span: an absence is documented in a place. Keyed by span alone
+/// this list excused `stuck` in every document including one that used it as an instruction,
+/// which is the drift the check exists to catch — found by the probe's own red half staying
+/// silent (air-wfd).
+pub const DOCUMENTED_ABSENCE: &[(&str, &str, &str)] = &[
+    (
+        "docs/rules/worktree-protocol.md",
+        "air peer",
+        "air-w91: planned in the subsystem table, never built",
+    ),
+    (
+        "docs/rules/worktree-protocol.md",
+        "air merge-advice",
+        "air-w91: same list, same fate",
+    ),
+    (
+        "docs/rules/roles.md",
+        "stuck",
+        "air-12k: roles.md explains the deletion and why the heartbeat replaced it",
+    ),
+];
+
+/// air-wfd: every flag and condition kind the docs name still exists.
+///
+/// air-w91 gave Air a check that every `air <word>` in command position resolves to a real
+/// subcommand, over shipped SOURCES. It covers command words only, and the three drifts
+/// air-9iz found in the README were not command words: `air inbox --owner` (a flag air-uef
+/// deleted) and `stuck` among the channel conditions (a kind air-12k deleted). Measured against
+/// the README as it stood at `c64175b`, the subcommand check would have caught **none** of
+/// them. Prose reads as authoritative while it goes stale, and nothing verified it.
+///
+/// Two things this deliberately does not do. It does not scan for hyphenated tokens and guess
+/// which are condition kinds — that reads a fact out of prose and would refuse half the
+/// backticks in the repo. And it stops at `--`: `air worker <name> -- --settings '{…}'` passes
+/// `--settings` to claude, not to `air worker`, so treating it as this command's flag would
+/// make the check wrong about the one place a pass-through appears.
+///
+/// The third drift — a worker loop ending at `air handover` rather than `bd close` — names only
+/// commands that still exist. **No name check reaches it**, and that limit is stated here
+/// rather than papered over: prose describing a sequence is not checkable by matching names.
+///
+/// Red: both catchable drifts. `air inbox --owner` is refused with its file and line, and a
+/// doc naming `stuck` as a live condition is refused. Green: today's tracked prose passes, a
+/// nested subcommand's flag resolves (`air lease take --reason` belongs to `take`, not to
+/// `lease`), and a span on the declared-absence list is allowed — because the prose that
+/// records a deletion must not be the thing that fails.
+fn probe_docs_name_real_flags_and_kinds() -> Probe {
+    use clap::CommandFactory;
+
+    /// Every backticked span of a markdown text, with its 1-indexed line.
+    fn spans(text: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let mut rest = line;
+            while let Some(a) = rest.find('`') {
+                let after = rest.get(a.saturating_add(1)..).unwrap_or("");
+                let Some(b) = after.find('`') else { break };
+                if let Some(s) = after.get(..b) {
+                    out.push((n.saturating_add(1), s.to_string()));
+                }
+                rest = after.get(b.saturating_add(1)..).unwrap_or("");
+            }
+        }
+        out
+    }
+
+    /// `(command path, flag)` pairs a span asks for, or nothing if it is not an `air` command.
+    /// Stops at `--`: everything after it belongs to another program.
+    fn asks(span: &str) -> Option<(Vec<String>, Vec<String>)> {
+        let mut words = span.split_whitespace();
+        if words.next()? != "air" {
+            return None;
+        }
+        let mut path = Vec::new();
+        let mut flags = Vec::new();
+        for w in words {
+            if w == "--" {
+                break;
+            }
+            if let Some(f) = w.strip_prefix("--") {
+                let f = f.split(['=', '<', '\'', '"']).next().unwrap_or(f);
+                if !f.is_empty() {
+                    flags.push(f.to_string());
+                }
+            } else if flags.is_empty()
+                && w.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && !w.is_empty()
+            {
+                path.push(w.to_string());
+            }
+        }
+        Some((path, flags))
+    }
+
+    /// Does clap know this command path, and does it know every flag on it? Walks nested
+    /// subcommands, so `lease take --reason` is asked of `take` and not of `lease`.
+    fn resolves(path: &[String], flags: &[String]) -> Result<(), String> {
+        let root = crate::Cli::command();
+        let mut cur = root.clone();
+        for (i, seg) in path.iter().enumerate() {
+            match cur.clone().find_subcommand(seg) {
+                Some(next) => cur = next.clone(),
+                // Hidden subcommands are real; clap still knows them.
+                None if i > 0 => break,
+                None => return Err(format!("no subcommand `air {seg}`")),
+            }
+        }
+        let known = |c: &clap::Command, f: &str| c.get_arguments().any(|a| a.get_long() == Some(f));
+        for f in flags {
+            if !known(&cur, f) && !known(&root, f) {
+                return Err(format!("`air {}` has no --{f}", path.join(" ")));
+            }
+        }
+        Ok(())
+    }
+
+    let excused = |file: &str, span: &str| {
+        DOCUMENTED_ABSENCE
+            .iter()
+            .any(|(f, text, _)| *f == file && span == *text)
+    };
+
+    /// Every complaint one document makes.
+    fn scan(name: &str, text: &str, excused: &dyn Fn(&str, &str) -> bool) -> Vec<String> {
+        let mut out = Vec::new();
+        for (line, span) in spans(text) {
+            if excused(name, &span) {
+                continue;
+            }
+            if let Some((path, flags)) = asks(&span)
+                && !path.is_empty()
+                && let Err(e) = resolves(&path, &flags)
+            {
+                out.push(format!("{name}:{line}: {e}"));
+            }
+            if let Some((kind, why)) = RETIRED_KINDS.iter().find(|(k, _)| span == *k) {
+                out.push(format!("{name}:{line}: `{kind}` was retired ({why})"));
+            }
+        }
+        out
+    }
+
+    let docs: &[(&str, &str)] = &[
+        ("README.md", include_str!("../../../../README.md")),
+        ("CLAUDE.md", include_str!("../../../../CLAUDE.md")),
+        (
+            "docs/rules/roles.md",
+            include_str!("../../../../docs/rules/roles.md"),
+        ),
+        (
+            "docs/rules/adopting-air.md",
+            include_str!("../../../../docs/rules/adopting-air.md"),
+        ),
+        (
+            "docs/rules/worktree-protocol.md",
+            include_str!("../../../../docs/rules/worktree-protocol.md"),
+        ),
+        (
+            "docs/rules/writing.md",
+            include_str!("../../../../docs/rules/writing.md"),
+        ),
+    ];
+    let live: Vec<String> = docs
+        .iter()
+        .flat_map(|(n, t)| scan(n, t, &excused))
+        .collect();
+    if !live.is_empty() {
+        eprintln!("selftest: tracked prose names something that does not exist:");
+        for l in &live {
+            eprintln!("  {l}");
+        }
+    }
+
+    // The two drifts that were really in the README at c64175b, as fixtures.
+    let drift_flag = scan(
+        "old-README.md",
+        "- **Owner:** `air status` in any terminal. `air inbox --owner` for what waits on you.\n",
+        &excused,
+    );
+    let drift_kind = scan(
+        "old-README.md",
+        "- **Informs** the coordinator when something needs a person: a `stuck` worker.\n",
+        &excused,
+    );
+    let red = drift_flag.iter().any(|d| d.contains("has no --owner"))
+        && drift_kind.iter().any(|d| d.contains("was retired"));
+
+    // A nested flag resolves against the subcommand that owns it, and a declared absence is
+    // allowed rather than refused.
+    let nested = scan(
+        "t.md",
+        "`air lease take runtime --reason \"why\"`\n",
+        &excused,
+    )
+    .is_empty();
+    let absence_ok = scan(
+        "docs/rules/worktree-protocol.md",
+        "`air peer` and `air merge-advice` were planned and never built.\n",
+        &excused,
+    )
+    .is_empty()
+        // and the same span in a document that has NOT declared it is still refused, or one
+        // line would switch the check off everywhere.
+        && !scan("t.md", "`air peer` is how you check.\n", &excused).is_empty();
+
+    Probe {
+        name: "docs: every flag and condition kind the README and the rules name still exists",
+        red_fires: red,
+        green_passes: live.is_empty() && nested && absence_ok,
     }
 }
