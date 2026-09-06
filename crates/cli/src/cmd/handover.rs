@@ -45,7 +45,7 @@ pub fn facts(
         main_moved_by(ledger, repo, &crate::cmd::now())
     };
     // air-60x: what this branch carries, by the `Bead:` trailers in main..HEAD. The same fact
-    // `air land` attributes a landing by (status.rs `landings_for`), read here so the gate and
+    // `air land` attributes a landing by (status.rs `select`), read here so the gate and
     // the landing agree on what makes a branch handable. Declared ids only: the prose guess
     // needs bd to narrow it and bd is never called on a hook path.
     let carried_beads: Vec<String> = {
