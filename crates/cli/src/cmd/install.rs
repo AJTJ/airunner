@@ -247,7 +247,9 @@ pub struct SurfaceChange {
     pub action: &'static str,
 }
 
-/// Every surface change since Air started recording them. Append; never edit an id.
+/// Every surface change since Air started recording them. Append; never edit an id. A lane
+/// appends the notice only; the release row that covers it is appended by the coordinator at
+/// round end (air-mir), and `make release` refuses until the two agree.
 pub const SURFACE: &[SurfaceChange] = &[
     SurfaceChange {
         id: "land",
@@ -888,6 +890,56 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.19", 23, 42),
 ];
 
+/// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
+/// Yes while nothing went backwards (air-mir): a lane appends notices during a round and the
+/// coordinator appends the row at round end, so `len > last` is the normal state mid-round.
+pub fn verify_rows_ok(last: usize, len: usize) -> bool {
+    len >= last
+}
+
+/// Pure: the release-time check (air-mir; owner ruling 2026-09-06, releases per round). The
+/// invariant is unchanged, a notice never ships without a row; what moved is WHEN it is
+/// asked: here, from `make release`, instead of on every verify. Nineteen releases in one
+/// day and five row collisions between lanes was the cost of asking every time. Returns the
+/// message naming the count and the row to append.
+pub fn release_check(cargo_version: &str, surface_len: usize) -> Result<(), String> {
+    let (version, surface, count) = RELEASES.last().copied().unwrap_or(("", 0, 0));
+    if version != cargo_version {
+        return Err(format!(
+            "Cargo.toml is at {cargo_version} but RELEASES' last row is {version}: append a \
+             row for {cargo_version} (or set Cargo.toml to {version})."
+        ));
+    }
+    if surface_len != count {
+        return Err(format!(
+            "SURFACE has {surface_len} notices but RELEASES' last row ({version}, {surface}, \
+             {count}) covers {count}: append (\"<next version>\", {}, {surface_len}) and set \
+             Cargo.toml to the same version, then re-run.",
+            surface.saturating_add(1)
+        ));
+    }
+    Ok(())
+}
+
+/// `air release-check`: exit 2 with the row to append when the surface has outrun the
+/// releases. Run by `make release`, never by `make verify`.
+pub fn release_check_cmd() -> i32 {
+    match release_check(env!("CARGO_PKG_VERSION"), SURFACE.len()) {
+        Ok(()) => {
+            println!(
+                "release-check ok: {} notices, last row {:?}",
+                SURFACE.len(),
+                RELEASES.last()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("release-check: {e}");
+            2
+        }
+    }
+}
+
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
 /// it**. Bumped by cutting a release, never on its own.
 ///
@@ -1516,12 +1568,13 @@ mod tests {
              appending a row here; see CLAUDE.md \"Releases\".",
             env!("CARGO_PKG_VERSION")
         );
-        assert_eq!(
-            (SURFACE_VERSION, SURFACE.len()),
-            (surface, count),
-            "SURFACE has {} notices at version {SURFACE_VERSION}, but RELEASES' last row says \
-             ({surface}, {count}). Appending a notice means cutting a release: add a row with \
-             the new crate version, the next surface version, and the new count.",
+        // air-mir: notices beyond the last row are allowed here and refused at release time
+        // (`release_check`, run by `make release`). A count going BACKWARDS is still a lie.
+        assert_eq!(SURFACE_VERSION, surface);
+        assert!(
+            verify_rows_ok(count, SURFACE.len()),
+            "SURFACE has {} notices but RELEASES' last row says {count}: a notice was removed \
+             or a row edited; rows are appended, never edited.",
             SURFACE.len()
         );
         // Monotonic in both machine-read columns, so `may_install` compares a total order

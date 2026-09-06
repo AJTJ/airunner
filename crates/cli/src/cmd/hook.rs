@@ -459,6 +459,22 @@ fn pre_tool_use(
 ) -> Result<Dispatched, String> {
     let prev = set_session(ledger, input, worker, "running", input.tool_name.as_deref())?;
     let moved = transition(&prev, "running");
+    // The worktree fence (air-8gj): a worker's Edit/Write whose resolved path leaves its
+    // worktree is denied. Never for the coordinator, whose checkout is main. This is the one
+    // check that replaces the harness's `--worktree` isolation (see `air_hooks::fence`).
+    if let Some(abs) = input.edited_path()
+        && role_for(worker) == "worker"
+        && let Ok(root) = git::toplevel(cwd)
+        && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root)
+    {
+        return Ok(Dispatched::new(
+            HookOutcome::Block { reason },
+            "refuse-outside-worktree",
+            format!("{moved}; edit outside the worktree refused"),
+        )
+        .inputs(serde_json::json!({"path": abs, "worktree": root.display().to_string()}))
+        .denominator("1 path"));
+    }
     // Peer-on-file warning.
     if let Some(abs) = input.edited_path() {
         if let Ok(root) = git::toplevel(cwd)
