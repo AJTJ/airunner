@@ -95,6 +95,24 @@ real red. Air does not retry (a retry hides real reds); it makes the disagreemen
 adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
 first. Whether the gate should require N-of-M agreement is an owner policy, not built.
 
+## 0e. A check that has never had an input is not a passing check
+
+**[air-jsz, 2026-09-06]** `air adopter-check` refuses a tracked line that names an adopter. It
+reads the names from `private/adopters.md`, which is gitignored so the names are never
+published — and for a whole round that file existed nowhere, so the check skipped under every
+green verify, including the one that landed the sweep it exists to guard. A count of zero
+refusals said nothing about the repository, because the check had never been handed anything.
+
+The lesson generalises past this one check, and it is worth reading before you trust any
+mechanism of your own: **ask what the mechanism's input is and whether it has ever arrived.**
+A zero is evidence only when the subject occurred and the mechanism stayed silent.
+
+What Air does about it now: the repo DECLARES the answer in tracked config. `"adopters": true`
+in `.claude/air.json` with no `private/adopters.md` is a refusal naming the file; the default,
+`false`, skips exactly as before, which is what a repo that quotes nobody wants. The names stay
+private; only the yes-or-no is tracked. The list is read from the main checkout, beside the
+declaration, so a worktree copy cannot disagree with it.
+
 ## 0d. What an account limit does to your fleet, and what does not save you from it
 
 **[measured on one machine, 2026-09-06, seven sessions, two projects; air-1n3 and
