@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-hgi9. The anchor is the arm that renders the reason, and nothing else: the counts in
+    // `cover`, both pure renderers, the batch-predates arm and the flaky arm all survive it.
+    // Under it the four not-green states collapse back into the one sentence they shared, with
+    // the generic fix — which is the defect, and it is invisible in any check that asks whether
+    // the gate says SOMETHING. The green half is expected to survive: a covering green still
+    // passes and a partial one still names the commit it lacks.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "gate: each not-green state names the fact that distinguishes it, and the two with opposite responses carry different fixes",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "        } else if let Some(why) = f.batch_absent.as_deref() {",
+            to: "        } else if let Some(why) = None::<&str> {",
+            also_red: &[],
+        },
+    ),
     // air-et0o. The anchor is the render alone. The query, the change-only fingerprint, the
     // wording of the warning and the once-per-session suppression all survive it, so what it
     // isolates is exactly whether the sentence dates the entry — which is the whole bead: a
@@ -1907,6 +1923,7 @@ fn all_probes() -> Vec<Probe> {
         probe_docs_name_real_flags_and_kinds(),
         probe_an_untracked_digest_is_not_proof(),
         probe_the_peer_warning_dates_the_entry(),
+        probe_the_refusal_says_which_not_green_state_it_is(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -5175,6 +5192,8 @@ fn base_facts() -> GateFacts {
         tree_green: None,
         batch_green: None,
         batch_predates: None,
+        batch_absent: None,
+        batch_absent_fix: None,
         last_green_sha: None,
         main_is_ancestor: true,
         main_sha: "fedcba9876543210".into(),
@@ -9269,6 +9288,132 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-hgi9 (an adopter, 2026-09-06, whose w3 met three of these in one night): the refusal
+/// says WHICH not-green state it is.
+///
+/// Four states rendered one sentence, `no green verify recorded at HEAD <sha>`: no green
+/// recorded to check, none containing the main it was recorded over, none touching the bead's
+/// commits, and the bead having no commit here at all. Only the batch-predates case named what
+/// it found. Two of the four have opposite correct responses — wait for the next batch, versus
+/// stop waiting for this one and ride the one after — and a worker could not tell which it was
+/// looking at.
+///
+/// The facts were all present and discarded: [`cover`] already walks the candidates, already
+/// filters on `contains_main`, and already knows how many commits the bead has. `Scanned`
+/// keeps the counts from that same loop, so this adds no git call and no ledger read.
+///
+/// Red: the four states render four distinct sentences, each naming its own distinguishing
+/// number, and the two whose responses differ carry different fixes. Green: the states that
+/// were already distinguished still are (a covering green passes, a partial one still names the
+/// commit it lacks), and `with_main` counts against the main each run was RECORDED over rather
+/// than current main — the air-9ij distinction, which a reader of the field name would not
+/// assume and which the sentence therefore says out loud.
+fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
+    use crate::cmd::batch::{Candidate, Scanned, cover, fix_absent, why_absent};
+
+    let commits = |n: usize| -> Vec<crate::cmd::batch::BeadCommit> {
+        (0..n)
+            .map(|i| crate::cmd::batch::BeadCommit {
+                sha: format!("c{i}0000000"),
+                subject: format!("work {i}"),
+            })
+            .collect()
+    };
+    let cand = |sha: &str, main: bool, contains: &[bool]| Candidate {
+        sha: sha.into(),
+        worker: "lane".into(),
+        contains_main: main,
+        contains: contains.to_vec(),
+    };
+
+    // The four states, as the scan sees them.
+    let none_recorded = cover(&[], &commits(2)).scanned;
+    let no_main = cover(&[cand("a", false, &[false, false])], &commits(2)).scanned;
+    let untouched = cover(&[cand("b", true, &[false, false])], &commits(2)).scanned;
+    let no_commits = cover(&[cand("c", true, &[])], &[]).scanned;
+
+    let says = |s: &Scanned| why_absent("air-hgi9", s);
+    let four = [
+        says(&none_recorded),
+        says(&no_main),
+        says(&untouched),
+        says(&no_commits),
+    ];
+    // Distinct sentences, each naming the number that distinguishes it.
+    let distinct = four.iter().collect::<std::collections::BTreeSet<_>>().len() == 4
+        && four[0].contains("no green verify is recorded to check")
+        && four[0].contains(&format!(
+            "last {} verify runs",
+            crate::cmd::batch::CANDIDATES
+        ))
+        && four[1].contains("1 recorded green(s) checked")
+        && four[1].contains("the main it was recorded over")
+        && four[2].contains("1 green(s) contain main")
+        && four[2].contains("none contains any of the 2 commit(s)")
+        && four[3].contains("`Bead: air-hgi9` trailer");
+    // The half that actually differs: wait-for-the-next-batch versus stop-waiting are opposite
+    // instructions, and they used to share a fix line.
+    let fixes = [
+        fix_absent(&none_recorded),
+        fix_absent(&no_main),
+        fix_absent(&untouched),
+        fix_absent(&no_commits),
+    ];
+    let acts = fixes
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        == 4
+        && fixes[2].contains("the next batch rather than this one")
+        // The no-commits state keeps the green as its SUBJECT: the missing trailer is a fact in
+        // the detail. Making the trailer the fix told a worker to add one when their next step
+        // was a verify, and an existing probe caught it by going red on this very line.
+        && fixes[3].contains("a green at this head")
+        && four[3].contains("trailer");
+    // No fix names a command the worker must not run under a lane (air-155w).
+    let flow_safe = fixes
+        .iter()
+        .all(|f| !f.contains("air record verify") && !f.contains("git merge main"));
+    // And the sentence reaches the worker: the gate renders the reason and the matching fix
+    // on the one refusal, rather than the generic line the four used to share.
+    let mut f = base_facts();
+    f.green_at_head = false;
+    f.runs_at_head = (0, 0);
+    f.batch_absent = Some(four[2].clone());
+    f.batch_absent_fix = Some(fixes[2].to_string());
+    let rendered = handover_verdict(&f).missing.iter().any(|m| {
+        m.check == "verify-green-at-head"
+            && m.detail.contains("no green verify recorded at HEAD")
+            && m.detail.contains("none contains any of the 2 commit(s)")
+            && m.fix.contains("the next batch rather than this one")
+    });
+    let red = distinct && acts && flow_safe && rendered;
+
+    // The states that were ALREADY distinguished must stay so, and the counts must not have
+    // changed what `cover` decides.
+    let covering = cover(&[cand("d", true, &[true, true])], &commits(2));
+    let partial = cover(&[cand("e", true, &[true, false])], &commits(2));
+    // air-9ij: `with_main` is counted from the filter that asks about the run's RECORDED main,
+    // so a candidate disqualified there is not counted as containing main — which is why the
+    // sentence says "the main it was recorded over" rather than "main".
+    let recorded_main = no_main.candidates == 1 && no_main.with_main == 0;
+    let green = covering.covering == Some(("d".to_string(), "lane".to_string()))
+        && covering.predates.is_none()
+        && partial
+            .predates
+            .as_ref()
+            .is_some_and(|(sha, _, missing, _)| sha == "e" && missing == "c10000000")
+        && recorded_main
+        && untouched.with_main == 1
+        && untouched.touching == 0;
+
+    Probe {
+        name: "gate: each not-green state names the fact that distinguishes it, and the two with opposite responses carry different fixes",
         red_fires: red,
         green_passes: green,
     }

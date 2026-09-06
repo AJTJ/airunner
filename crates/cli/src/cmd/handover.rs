@@ -78,8 +78,8 @@ pub fn facts(
     // air-80x.1: with no green at HEAD, a verify lane's batch may still cover the bead. Per
     // bead: the one named, else every bead this worker holds. Only on the slow path, so a
     // worker who verified at HEAD pays no git spawns here.
-    let (batch_green, batch_predates) = if green_at_head {
-        (None, None)
+    let batch = if green_at_head {
+        super::batch::Described::default()
     } else {
         let targets: Vec<String> = match bead {
             Some(b) => vec![b.to_string()],
@@ -127,8 +127,11 @@ pub fn facts(
         head,
         green_at_head,
         tree_green,
-        batch_green,
-        batch_predates,
+        batch_green: batch.green,
+        batch_predates: batch.predates,
+        // air-hgi9: the scan's own counts, so a refusal says which not-green state it is.
+        batch_absent: batch.absent,
+        batch_absent_fix: batch.absent_fix,
         last_green_sha,
         main_is_ancestor,
         main_sha,

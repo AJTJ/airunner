@@ -29,6 +29,15 @@ pub struct GateFacts {
     /// A batch green that contains main and some of the bead's commits but not the newest:
     /// the batch predates the worker's last commit (air-80x.1). For the refusal only.
     pub batch_predates: Option<String>,
+    /// Why the batch scan found nothing, when it found nothing (air-hgi9): no green recorded
+    /// to check, none containing the main it must, or none touching the bead's commits at all.
+    /// Those were one sentence, `no green verify recorded at HEAD`, and an adopter's w3 met
+    /// three of them in a night. Two have opposite correct responses — wait for the next
+    /// batch, or stop waiting — so a reader who cannot tell them apart cannot act on either.
+    /// For the refusal only; it never makes the verdict pass or fail.
+    pub batch_absent: Option<String>,
+    /// The fixing line for [`Self::batch_absent`], which is the half that actually differs.
+    pub batch_absent_fix: Option<String>,
     /// The most recent green sha for this worker, if any (for the message).
     pub last_green_sha: Option<String>,
     /// `git merge-base --is-ancestor main HEAD`.
@@ -167,6 +176,22 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                 "a green at this head; `air handover` names what your flow needs to \
                  produce one"
                     .to_string(),
+            )
+        } else if let Some(why) = f.batch_absent.as_deref() {
+            // air-hgi9: the scan looked, and this says what it looked at and what it found —
+            // which of the not-green states this is. The three it separates were one
+            // sentence, and "wait for the next batch" and "stop waiting for this one" are
+            // opposite instructions that shared it.
+            (
+                format!(
+                    "no green verify recorded at HEAD {}{last}; {why}",
+                    short(&f.head)
+                ),
+                f.batch_absent_fix.clone().unwrap_or_else(|| {
+                    "a green at this head; `air handover` names what your flow needs to \
+                     produce one"
+                        .to_string()
+                }),
             )
         } else {
             (
@@ -524,6 +549,8 @@ mod tests {
             tree_green: None,
             batch_green: None,
             batch_predates: None,
+            batch_absent: None,
+            batch_absent_fix: None,
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
             main_sha: "0a1b2c3d4e5f".into(),
