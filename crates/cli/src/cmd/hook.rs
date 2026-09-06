@@ -379,10 +379,16 @@ fn dispatch(
             let speak = ledger
                 .emit_if_changed(&input.session_id, "stop", &fingerprint, &now())
                 .unwrap_or(true);
+            // air-avj: the Stop hook's own rendering, not the CLI's. Under a verify lane the
+            // CLI's repairs are the two things the lane exists to prevent, and this arrives
+            // with the authority of tooling at the moment a worker picks what to do next.
             let context = if v.pass || !has_work || !speak {
                 None
             } else {
-                Some(format!("air: {}", v.message))
+                Some(format!(
+                    "air: {}",
+                    air_hooks::stop_message(&v, worker, &f.head)
+                ))
             };
             // Nudge (air-09i): no claim and nothing carried, beads ready, first stop: block
             // once with the list.
