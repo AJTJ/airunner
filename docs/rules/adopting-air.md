@@ -95,6 +95,24 @@ real red. Air does not retry (a retry hides real reds); it makes the disagreemen
 adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
 first. Whether the gate should require N-of-M agreement is an owner policy, not built.
 
+## 0e. A check that has never had an input is not a passing check
+
+**[air-jsz, 2026-09-06]** `air adopter-check` refuses a tracked line that names an adopter. It
+reads the names from `private/adopters.md`, which is gitignored so the names are never
+published — and for a whole round that file existed nowhere, so the check skipped under every
+green verify, including the one that landed the sweep it exists to guard. A count of zero
+refusals said nothing about the repository, because the check had never been handed anything.
+
+The lesson generalises past this one check, and it is worth reading before you trust any
+mechanism of your own: **ask what the mechanism's input is and whether it has ever arrived.**
+A zero is evidence only when the subject occurred and the mechanism stayed silent.
+
+What Air does about it now: the repo DECLARES the answer in tracked config. `"adopters": true`
+in `.claude/air.json` with no `private/adopters.md` is a refusal naming the file; the default,
+`false`, skips exactly as before, which is what a repo that quotes nobody wants. The names stay
+private; only the yes-or-no is tracked. The list is read from the main checkout, beside the
+declaration, so a worktree copy cannot disagree with it.
+
 ## 0d. What an account limit does to your fleet, and what does not save you from it
 
 **[measured on one machine, 2026-09-06, seven sessions, two projects; air-1n3 and
@@ -212,6 +230,22 @@ to **what Air records and what Air refuses**:
 | `air handover` names what is missing | When in the loop to run it |
 | Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
 | Decomposing an epic with no open child is the coordinator's standing duty, and `air status` names each such epic with its closed count (air-84u) | How to split one, and when the queue is deep enough not to bother |
+| A bead blocked by one of its own ancestors can never become ready; `air status` names it with the edge and the `bd dep remove` that clears it (air-btz) | Nothing — but read the note below before filing a wave with `bd create --graph` |
+
+**[an adopter, 2026-09-06, air-btz] `bd create --graph` can build a deadlock bd will not warn
+about.** A bead blocked by one of its own ancestors waits forever: the ancestor cannot finish
+until its descendants do, which is bd's hierarchy rather than an edge, so `bd dep cycles`
+reports nothing and the tracker shows it as "not ready yet". An adopter lost a night to it —
+every P1 unreachable, 42 beads offered and not one of them a P1.
+
+bd 1.2.2 refuses this on nine routes but not on all of them, measured 2026-09-06
+([the note](../notes/2026-09-06-bd-refuses-the-ancestor-edge.md)). Its guard is an existing
+`parent-child` row on the same pair, which always covers the direct parent, plus a dotted-id
+prefix test, which covers deeper ancestors only when the id encodes the chain. `bd create
+--graph` assigns flat ids and links by `parent_key`, so a wave filed from a plan file slips
+both silently. After any `--graph` file, read `bd dep tree <epic> --json` for an edge from a
+child to ANY ancestor; `bd dep cycles` will not tell you. `air status` names the shape as a
+failsafe, which is not a substitute for looking.
 
 **[an adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
 `bd update <id> -s awaiting_review` as the closing step. The adopter's owner had ruled that step
@@ -251,7 +285,7 @@ disagree deny work while reporting success.**
 The adopter ran both. `make lease-take` called `air lease take`, which writes the ledger, and
 reported success; their PreToolUse guard read `$(git --git-common-dir)/<prefix>-leases/runtime/`. So
 `make api` was refused with *"take it first: `make lease-take`"* — naming the command that had
-just succeeded. Every worker hit it, twice recorded (, capture
+just succeeded. Every worker hit it, twice recorded; capture
 `01M0NM3YSE05GTNPNGVDQB24FW`).
 
 This is worse than an ordinary overlap because of its failure direction. A lease store that fails
@@ -569,7 +603,7 @@ For a repo already running an older Air. **This section is the order**; §5a exp
 `air install` does and §5b explains the label migration, but neither has to be read first.
 Everything below is run by the owner, in the target repo, except where it says otherwise.
 
-Written for the adopter as the first customer (air-5tu). Every the adopter-specific fact here is
+Written for the adopter as the first customer (air-5tu). Every adopter-specific fact here is
 cited from this repo's `private/research/adopter-as-built.md`; nothing in this repo reads or
 writes that fleet.
 

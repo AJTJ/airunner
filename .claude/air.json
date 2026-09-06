@@ -4,5 +4,6 @@
     "Bash(cargo publish *)"
   ],
   "verify_key": "tree",
-  "metis": true
+  "metis": true,
+  "adopters": true
 }

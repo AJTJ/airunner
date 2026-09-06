@@ -481,10 +481,16 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             // in a repo with no metis installed — the coordinator prints one line and
             // launches — and a default of false would mean the rule the owner asked to be
             // programmatic arrives off.
+            // `"adopters": false` is written so the key EXISTS with the honest answer for a
+            // fresh repo (air-jsz). It decides what `air adopter-check` does when
+            // `private/adopters.md` is absent: false skips, which is right for a repo that
+            // quotes nobody, and true refuses. Leaving the key out entirely is how a repo that
+            // DID quote somebody ran a whole round with the check silently checking nothing.
             let v = json!({
                 "worker_deny": proposed_deny,
                 "coordinator_deny": [],
                 "metis": true,
+                "adopters": false,
             });
             std::fs::write(
                 dir.join(".claude/air.json"),

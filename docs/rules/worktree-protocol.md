@@ -74,7 +74,7 @@ Derive from `sysctl -n hw.logicalcpu`, never pin: a replaced machine must not in
 laptop's cap. A long-lived watcher (`cargo watch`) inside one worktree needs its own target dir,
 or every `cargo check` beside it blocks on `Blocking waiting for file lock on build directory`.
 
-**There is no pool.** the adopter's owner decided on 2026-08-14 to isolate rather than coordinate —
+**There is no pool.** The adopter's owner decided on 2026-08-14 to isolate rather than coordinate —
 no supervisor, no jobserver, nothing to leak or wedge. If a pool is ever built, the acquisition
 order is part of building it: take any lease *before* a build slot, never hold two slots. Air does
 not build a pool (plan 0001 §9, non-goals).
