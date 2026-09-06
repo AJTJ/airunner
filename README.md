@@ -85,17 +85,25 @@ by a session that died.
 
 ## What your repo provides
 
-Air records and refuses; four things have to come from the repo, and `air init` prints what is
-missing rather than guessing.
+Air records and refuses; four things have to come from the repo. `air init --write` scaffolds
+all four **empty but ready** in a fresh repo, and never touches one that is already there:
+`air init` on its own lists what it would create.
 
 - **A verify command.** Anything that exits non-zero on red. Air's one refusal reads a green
-  recorded at a commit, so a repo with no such command has nothing to record.
+  recorded at a commit, so a repo with no such command has nothing to record. The scaffolded
+  `Makefile` has a `verify` target that **fails until you edit it**: a placeholder that passed
+  would let the first `air record verify` record a green for a check nobody wrote.
 - **One paragraph on how a finished task is handed on.** `.air/roles.md` deliberately does not
-  say: some repos hand over for review, some close with proof. That choice is the repo's.
+  say: some repos hand over for review, some close with proof. That choice is the repo's, and
+  the scaffolded `CLAUDE.md` starts you on close-with-proof.
 - **A `Bead: <id>` trailer on the commits that do a task's work.** Attribution reads the
-  trailer and nothing else; a commit without one is attributed to nothing.
+  trailer and nothing else; a commit without one is attributed to nothing. The rule is a line
+  in the same stub.
 - **A `.worktreeinclude`**, if a build needs files git ignores (keys, `.env`). Air fills each
-  worker's worktree from it.
+  worker's worktree from it. Scaffolded as a comment header with nothing listed.
+
+A repo that already has a `Makefile`, a `CLAUDE.md` or a `.worktreeinclude` keeps it untouched.
+A `Makefile` with no `verify` target is reported and still not edited.
 
 Everything else Air leaves to you on purpose: how the verify is scoped, how code is reviewed,
 which commands are too dangerous for an agent, whether landing is `air land` or your own script.

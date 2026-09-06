@@ -14,6 +14,15 @@
 //! only when none exists; `air selftest`; and the next steps, which start with
 //! `air record verify -- <cmd>` as the first proof (it is what made bd's corruption visible).
 //! Dry run by default, like `install`.
+//!
+//! air-ej4 adds the empty-but-ready scaffold: the four things Air ASSUMES a repo has and used
+//! to leave the adopter to discover at their first hand-over. A `Makefile` whose `verify`
+//! target fails until it is edited, a `.worktreeinclude` comment header, and, inside the
+//! `CLAUDE.md` stub, the hand-over sequence and the `Bead: <id>` trailer rule. Each follows the
+//! same rule as `.claude/air.json`: created only when absent, never edited. The failing verify
+//! target is the load-bearing part. A placeholder that PASSED would let the first
+//! `air record verify -- make verify` record a green for a check nobody has written, and the
+//! close gate reads that green.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -171,10 +180,128 @@ struct Plan {
     metis: String,
     proposed_deny: Vec<String>,
     claude_md: &'static str,
+    scaffold: Vec<ScaffoldItem>,
     written: bool,
 }
 
-const CLAUDE_MD_STUB: &str = "# CLAUDE.md\n\nThis repo runs a small fleet with Air. Roles, the loop, and what Air enforces: `.air/roles.md`\n(appended to every session by `air worker` / `air coordinator`). Work is tracked in beads\n(`bd ready`, `air claim`, `air capture`). Domain rules for this codebase go below.\n";
+const CLAUDE_MD_STUB: &str = r#"# CLAUDE.md
+
+This repo runs a small fleet with Air. Roles, the loop, and what Air enforces: `.air/roles.md`
+(appended to every session by `air worker` / `air coordinator`). Work is tracked in beads
+(`bd ready`, `air claim`, `air capture`). Domain rules for this codebase go below.
+
+## This repo's work flow
+
+`.air/roles.md` says what Air records and what it refuses, and deliberately does not say how a
+finished bead is handed on: that is this repo's choice, so it lives here. Until you change it,
+a worker closes its own bead with proof.
+
+    air claim <id> [--files a,b]
+    ... implement; every commit that does the bead's work carries a `Bead: <id>` trailer
+    git merge main
+    air record verify -- make verify    # last, so the green is at a commit containing main
+    bd close <id> --reason "<proof>"
+    ... next bead
+
+Proof is a command and its output, a `file:line`, or a passing test. Not a description of the
+approach: "refactored the parser" is not proof.
+
+**The `Bead: <id>` trailer is not optional.** `air land` attributes a landing by reading that
+trailer and nothing else. No prose is read, and a commit without one is attributed to nothing.
+"#;
+
+/// The header of the `Makefile` `air init` writes into a repo that has none (air-ej4).
+const MAKEFILE_HEADER: &str = r#"# Written by `air init` because this repo had no Makefile. Air creates this file only when it
+# is absent, and never edits it afterwards.
+#
+# `air record verify -- make verify` records the green that Air's one refusal reads, so this
+# target is what decides whether a bead can be closed. It FAILS until you replace the
+# placeholder below with this repo's own check: a verify that passes without checking anything
+# records a green for an empty check, which is worse than having no verify command at all.
+.PHONY: verify
+verify:
+"#;
+
+/// The recipe of that target, kept separate so a probe can swap it for a real command and show
+/// the failure is the placeholder rather than a broken Makefile. The `exit 1` is the point: it
+/// is what stops a scaffolded repo recording a green for a check nobody has written yet.
+const MAKEFILE_PLACEHOLDER: &str = "\t@echo 'placeholder: put this repo verify command in Makefile:verify, then delete this line'; exit 1\n";
+
+/// What `air init --write` puts in a `Makefile` when the repo has none.
+pub fn makefile_stub() -> String {
+    format!("{MAKEFILE_HEADER}{MAKEFILE_PLACEHOLDER}")
+}
+
+/// The `.worktreeinclude` `air init` writes: a comment header and nothing else. Empty but
+/// ready, because the failure it prevents is a worktree that does not build with an error that
+/// does not say why.
+const WORKTREEINCLUDE_STUB: &str = r#"# Files git does not track that a fresh worktree still needs in order to build: .env files,
+# keys, local config. `air worker` copies everything named here out of the main checkout and
+# into the new worktree. gitignore syntax, one pattern per line; `!` negations are not
+# supported. Leaving this empty is fine and means a worktree gets only what git tracks.
+"#;
+
+/// One empty-but-ready file `air init --write` scaffolds (air-ej4). Created only when absent
+/// and never edited, the rule `.claude/air.json` and the `CLAUDE.md` stub already follow.
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct ScaffoldItem {
+    pub path: &'static str,
+    /// True when `--write` creates it. False means present, and Air leaves it alone.
+    pub create: bool,
+    /// What `air init` prints for this row, in dry run and after writing alike.
+    pub note: &'static str,
+}
+
+/// Whether a Makefile text declares a `verify` target. Read from text somebody wrote freely,
+/// so it decides only which SENTENCE prints: Air never edits an existing Makefile either way,
+/// and a wrong read costs one misleading report line rather than a wrong write.
+fn declares_verify(makefile: &str) -> bool {
+    makefile.lines().any(|l| {
+        let Some(rest) = l.strip_prefix("verify") else {
+            return false;
+        };
+        matches!(rest.trim_start().as_bytes().first(), Some(b':'))
+    })
+}
+
+/// Pure: what the scaffold would do, given what the directory already holds. `makefile` is the
+/// Makefile's text when there is one.
+pub fn scaffold(makefile: Option<&str>, worktreeinclude_exists: bool) -> Vec<ScaffoldItem> {
+    vec![
+        match makefile {
+            None => ScaffoldItem {
+                path: "Makefile",
+                create: true,
+                note: "will write a `verify` target that FAILS until you edit it",
+            },
+            Some(mk) if declares_verify(mk) => ScaffoldItem {
+                path: "Makefile",
+                create: false,
+                note: "present, declares `verify` (not touched)",
+            },
+            Some(_) => ScaffoldItem {
+                path: "Makefile",
+                create: false,
+                note: "present, NO `verify` target (not touched): add one, or \
+                       `air record verify` has nothing to record and no bead can close",
+            },
+        },
+        if worktreeinclude_exists {
+            ScaffoldItem {
+                path: ".worktreeinclude",
+                create: false,
+                note: "present (not touched)",
+            }
+        } else {
+            ScaffoldItem {
+                path: ".worktreeinclude",
+                create: true,
+                note: "will write a comment header; list the gitignored files a fresh \
+                       worktree needs to build",
+            }
+        },
+    ]
+}
 
 /// What `air init` will do about Metis, said before it does it (air-g5o). Three states, and
 /// only one of them runs anything: an existing `.metis/` is the coordinator's plan and is never
@@ -238,6 +365,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         .unwrap_or(false);
     let air_json_exists = dir.join(".claude/air.json").exists();
     let claude_md_exists = dir.join("CLAUDE.md").exists();
+    let scaffold = scaffold(makefile.as_deref(), dir.join(".worktreeinclude").exists());
 
     let mut plan = Plan {
         dir: dir.clone(),
@@ -266,8 +394,9 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         claude_md: if claude_md_exists {
             "present (not touched)"
         } else {
-            "will write a minimal stub"
+            "will write a minimal stub: the work-flow sequence and the `Bead:` trailer rule"
         },
+        scaffold,
         written: false,
     };
 
@@ -373,6 +502,18 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             std::fs::write(dir.join("CLAUDE.md"), CLAUDE_MD_STUB)
                 .map_err(|e| format!("CLAUDE.md: {e}"))?;
         }
+        // The empty-but-ready four (air-ej4). Two of them are the CLAUDE.md stub's own
+        // paragraphs above; these two are files, and each is written ONLY when absent.
+        for item in &plan.scaffold {
+            if !item.create {
+                continue;
+            }
+            let body = match item.path {
+                "Makefile" => makefile_stub(),
+                _ => WORKTREEINCLUDE_STUB.to_string(),
+            };
+            std::fs::write(dir.join(item.path), body).map_err(|e| format!("{}: {e}", item.path))?;
+        }
         Ok(())
     })();
     if let Err(e) = steps {
@@ -418,6 +559,9 @@ fn render(p: &Plan) -> String {
         s.push_str(&format!("  deny {d}\n"));
     }
     s.push_str(&format!("CLAUDE.md: {}\n", p.claude_md));
+    for item in &p.scaffold {
+        s.push_str(&format!("{:<9} {}\n", format!("{}:", item.path), item.note));
+    }
     s.push_str(if p.written {
         "written.\n"
     } else if p.gate_ok {
@@ -431,7 +575,7 @@ fn render(p: &Plan) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::propose_deny;
+    use super::{CLAUDE_MD_STUB, makefile_stub, propose_deny, scaffold};
 
     #[test]
     fn deny_patterns_name_the_verb_not_the_tool() {
@@ -457,5 +601,46 @@ mod tests {
         assert!(d.contains(&"Bash(fastlane *)".to_string()));
         assert!(d.contains(&"Bash(cargo publish *)".to_string()));
         assert!(propose_deny(&[], None, None).is_empty());
+    }
+
+    #[test]
+    fn the_scaffold_creates_only_what_is_absent() {
+        // Fresh repo: both files are created, and the verify target Air writes fails.
+        let fresh = scaffold(None, false);
+        assert!(fresh.iter().all(|i| i.create), "{fresh:?}");
+        assert!(makefile_stub().contains("exit 1"), "{}", makefile_stub());
+
+        // Present is present, whatever it holds: nothing is created either way, and the
+        // Makefile with no verify target is named rather than edited.
+        let with = scaffold(Some("verify: ## the repo's own\n\t@true\n"), true);
+        assert!(with.iter().all(|i| !i.create), "{with:?}");
+        assert!(
+            with.iter()
+                .any(|i| i.path == "Makefile" && i.note.contains("declares `verify`"))
+        );
+        let without = scaffold(Some("build:\n\t@true\nverify-scope:\n\t@true\n"), true);
+        assert!(without.iter().all(|i| !i.create), "{without:?}");
+        assert!(
+            without
+                .iter()
+                .any(|i| i.path == "Makefile" && i.note.contains("NO `verify`")),
+            "a verify-scope target is not a verify target: {without:?}"
+        );
+    }
+
+    #[test]
+    fn the_stub_carries_the_flow_and_the_trailer() {
+        // The two of the four that are paragraphs rather than files (air-ej4). `air land`
+        // reads the trailer and nothing else, so a stub that omits it scaffolds a repo whose
+        // landings attribute nothing.
+        assert!(CLAUDE_MD_STUB.contains("Bead: <id>"), "{CLAUDE_MD_STUB}");
+        for step in [
+            "air claim <id>",
+            "git merge main",
+            "air record verify --",
+            "bd close <id>",
+        ] {
+            assert!(CLAUDE_MD_STUB.contains(step), "missing {step}");
+        }
     }
 }
