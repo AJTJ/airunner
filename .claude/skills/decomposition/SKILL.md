@@ -156,7 +156,7 @@ siblings**. So ask these of the template, once, before it becomes ten beads:
    worthless. `+html.tsx exists` is trivially checkable and the file is inert, so satisfying it
    ships nothing.
 
-And one level down, which caught four clauses in a single the adopter's session: **could the
+And one level down, which caught four clauses in a single session of the adopter's: **could the
 INSTRUMENT satisfy this instead of the code?** A clause the test harness, the fixture, or the
 probe can make true on its own is not a clause about the work.
 
@@ -164,7 +164,7 @@ This is where `air land`'s unreadable-clause verdicts come from, and **the fix i
 at landing**. Air discharges a clause only by lookup and reports the rest as unreadable; it
 cannot judge prose, and nothing downstream will.
 
-**No mechanical check, deliberately.** the adopter attempted a prose regex for this and measured
+**No mechanical check, deliberately.** The adopter attempted a prose regex for this and measured
 it at **80% false positives** on their own queue before dropping it; the distinction here is
 finer than the one that failed. If anyone proposes one again, the discriminator is the absence
 of a named observer or artefact, and **the rate must be measured and reported before it is

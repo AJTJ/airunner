@@ -149,7 +149,7 @@ Total ledgered: **94** rows (several rows bundle two or three sentences from the
 | 32 | `validation.on-create: warn` | `bd config get validation.on-create` in the adopter (read-only) or copy `.beads/config.yaml:71-96`. |
 | 50 | Claim Plane (2608.00947) / grite (2606.19616) | Fetch both abstracts; confirm Claim Plane's static-vs-dynamic table and grite's "simulation" disclaimer (10 min). |
 | 79 | Gas Town ~$100/h, "verification chain remains open" | Not needed for the decision (wholesale adoption rejected on structural grounds); the URLs are in `beads-and-gastown.md:157-159`. |
-| 89 | `cmd-guard.py`, `scripts/land.sh`, `land-prove` paths | Confirm at M0 install time against the live the adopter's checkout. |
+| 89 | `cmd-guard.py`, `scripts/land.sh`, `land-prove` paths | Confirm at M0 install time against the adopter's live checkout. |
 
 ## 4. Edits made to `docs/research/SYNTHESIS.md` this tick
 
