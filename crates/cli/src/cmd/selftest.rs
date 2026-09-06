@@ -193,6 +193,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
+        Mutation {
+            // "every commit" becomes "any commit": a batch cut before the worker's last commit
+            // would close the bead. The per-bead rule the owner's note is about.
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "        let covers_all = c.contains.len() == commits.len() && c.contains.iter().all(|x| *x);",
+            to: "        let covers_all = c.contains.len() == commits.len() && c.contains.iter().any(|x| *x);",
+            also_red: &[],
+        },
+    ),
+    (
         "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
         Mutation {
             // Drop the entry: the deny is gone and the matcher alone remains, which is the
@@ -1230,6 +1241,7 @@ fn all_probes() -> Vec<Probe> {
         probe_release_unassigns(),
         probe_every_air_spawn_pins_identity(),
         probe_worker_cannot_ask_the_owner_directly(),
+        probe_batch_green_closes_the_bead_it_covers(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -4390,6 +4402,8 @@ fn base_facts() -> GateFacts {
         head: "0123456789abcdef".into(),
         green_at_head: true,
         tree_green: None,
+        batch_green: None,
+        batch_predates: None,
         last_green_sha: None,
         main_is_ancestor: true,
         main_sha: "fedcba9876543210".into(),
@@ -5486,6 +5500,75 @@ fn probe_status_reconcile_is_one_show() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-80x.1: a verify lane's green at a batch commit closes the bead it covers. Per bead: every
+/// commit in `main..HEAD` carrying the bead's trailer is an ancestor of the verified commit C,
+/// and C contains main. adopter's lane's green closed nothing because the gate wanted a
+/// green AT the worker's HEAD.
+///
+/// Red: a batch cut before the worker's last commit is refused, and the refusal names that
+/// commit. Green: a batch containing main and every commit of the bead passes the gate with no
+/// green at HEAD, the ok line names it, and a green that lacks main never counts.
+fn probe_batch_green_closes_the_bead_it_covers() -> Probe {
+    use crate::cmd::batch::{BeadCommit, Candidate, cover};
+
+    let commit = |sha: &str| BeadCommit {
+        sha: sha.into(),
+        subject: format!("work {sha}"),
+    };
+    let cand = |sha: &str, main: bool, contains: &[bool]| Candidate {
+        sha: sha.into(),
+        worker: "lane".into(),
+        contains_main: main,
+        contains: contains.to_vec(),
+    };
+    let commits = vec![commit("c2after"), commit("c1")];
+
+    // RED: the batch was cut after c1 and before c2after; it must not close the bead, and
+    // the refusal must name c2after.
+    let early = cover(&[cand("batch1", true, &[false, true])], &commits);
+    let mut f = base_facts();
+    f.green_at_head = false;
+    f.batch_predates = early.predates.as_ref().map(|(sha, w, missing, subject)| {
+        format!("the batch's green at {sha} (by {w}) predates your commit {missing} \"{subject}\"")
+    });
+    let refused = handover_verdict(&f);
+    let red = early.covering.is_none()
+        && refused.block
+        && refused
+            .missing
+            .iter()
+            .any(|m| m.check == "verify-green-at-head" && m.detail.contains("c2after"));
+
+    // GREEN: a later batch contains both commits and main; the gate passes on it alone.
+    let late = cover(
+        &[
+            cand("batch2", true, &[true, true]),
+            cand("batch1", true, &[false, true]),
+        ],
+        &commits,
+    );
+    let mut g = base_facts();
+    g.green_at_head = false;
+    g.batch_green = late
+        .covering
+        .as_ref()
+        .map(|(sha, w)| format!("green at {sha} (batch by {w}) contains every commit of fd-1"));
+    let passed = handover_verdict(&g);
+    // A green that lacks main never covers, whatever it contains.
+    let no_main = cover(&[cand("stray", false, &[true, true])], &commits);
+    let green = late.covering == Some(("batch2".into(), "lane".into()))
+        && passed.pass
+        && passed.message.contains("batch by lane")
+        && no_main.covering.is_none()
+        && no_main.predates.is_none();
+
+    Probe {
+        name: "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
         red_fires: red,
         green_passes: green,
     }
