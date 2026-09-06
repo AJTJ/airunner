@@ -127,6 +127,26 @@ pub fn head(cwd: &Path) -> Result<String> {
     run(cwd, &["rev-parse", "HEAD"])
 }
 
+/// Main's tip, from the REF, so the answer does not depend on which worktree asked (air-i6fd).
+///
+/// `head(repo)` was used for this in three places, and `repo` is whatever directory the command
+/// ran in. From a worktree it is that worktree's own head, so the running worker's branch was
+/// compared against ITSELF — `is_ancestor(head, head)` is always true — and every other
+/// branch was compared against a commit that was never main. alerts read `landable: []` from
+/// its own worktree and concluded it had nothing to land.
+///
+/// The three sites all named their variable `main_tip` or `main_head`, so the intent was
+/// written down at each of them and the value was wrong at all three. That is the argument for
+/// a named function over a correct expression repeated: the name was already there and did not
+/// help.
+///
+/// A branch ref reads identically from every worktree, so this asserts nothing about where a
+/// future `air land` will run — which is why `Site` is still deliberately not built in
+/// `status::select`.
+pub fn main_tip(cwd: &Path) -> Result<String> {
+    run(cwd, &["rev-parse", "main"])
+}
+
 pub fn toplevel(cwd: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(run(
         cwd,
