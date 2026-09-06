@@ -416,6 +416,47 @@ pub fn digest_newer_than(dir: &Path, worker: &str, since: Option<&str>) -> bool 
     })
 }
 
+/// What `air land` would say about ONE worker's branch, rendered from `select`'s own answer
+/// (air-33rn).
+///
+/// **This is a READ, not a second copy of the landing decision.** Two workers concluded
+/// independently that a journal-only branch could land, both were wrong, and neither surface a
+/// worker can reach said so — each learned it from the coordinator running `air land`, which
+/// workers are denied. The fix is not to re-derive landability here: `select` already computes
+/// the whole answer as `Skipped { check, detail, fix }`, so this looks the worker up in that
+/// answer and renders it. Restating the decision is air-avj's shape, and this round has hit it
+/// three times; the rule there was to name the thing that knows rather than repeat it.
+///
+/// Pure over a `Selection` so a probe drives every branch with no repo and no fixture — which
+/// also sidesteps the trap alerts hit on air-kexg, where a shared fixture's worker already
+/// carried work, so the range was genuinely mixed and the test proved the constraint while
+/// claiming to prove the permission.
+pub fn landing_line(sel: &crate::cmd::status::Selection, worker: &str) -> String {
+    // An error about this worker outranks everything: it means selection could not tell, and
+    // "not landable" would read as a verdict it never reached (air-6u5, air-72t7).
+    if let Some(e) = sel
+        .errors
+        .iter()
+        .find(|e| e.starts_with(&format!("{worker}:")))
+    {
+        return format!("landing: cannot tell — {e}");
+    }
+    if let Some(l) = sel.landings.iter().find(|l| l.worker == worker) {
+        return format!(
+            "landing: landable at {}, carrying {}",
+            l.head.get(..8).unwrap_or(&l.head),
+            l.bead
+        );
+    }
+    if let Some(s) = sel.skipped.iter().find(|s| s.worker == worker) {
+        return format!(
+            "landing: NOT landable — {}: {}; needs {}",
+            s.check, s.detail, s.fix
+        );
+    }
+    "landing: not a landing candidate (no worktree branch of yours is in selection)".to_string()
+}
+
 pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
@@ -462,7 +503,19 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
         &v.message,
         "4 checks",
     );
-    emit(json, &v, || v.message.clone());
+    // air-33rn: the landing answer, from the ONE selection `air land` runs. A worker cannot
+    // run `air land`, so without this the only way to learn its branch is unlandable was to ask
+    // the coordinator — which is how two workers spent tonight believing a journal-only branch
+    // would land.
+    let landing = landing_line(&crate::cmd::status::select(repo), &worker);
+    // ADDED to the verdict, never wrapping it. Nesting it under a key moved `missing` to
+    // `handover.missing` and broke four integration tests that parse this — a surface change
+    // nobody asked for, to add a field. A new key costs every existing caller nothing.
+    let mut out = serde_json::to_value(&v).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(o) = out.as_object_mut() {
+        o.insert("landing".to_string(), serde_json::json!(landing));
+    }
+    emit(json, &out, || format!("{}\n{landing}", v.message));
     if v.block { 2 } else { 0 }
 }
 
