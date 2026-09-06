@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" width="640" height="200" role="img" aria-label="AIRunner. Lighter than air.">
+  <title>AIRunner</title>
+  <defs>
+    <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#22d3ee" stop-opacity="0.9"/>
+      <stop offset="0.65" stop-color="#a78bfa" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="text" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e0f2fe"/>
+      <stop offset="1" stop-color="#c4b5fd"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .stream { fill: none; stroke: url(#flow); stroke-linecap: round; stroke-dasharray: 140 260; animation: drift 6s linear infinite; }
+      .s1 { stroke-width: 2.2; animation-duration: 5.2s; }
+      .s2 { stroke-width: 1.6; animation-duration: 7.4s; animation-delay: -2s; }
+      .s3 { stroke-width: 2.8; animation-duration: 6.1s; animation-delay: -4s; }
+      .s4 { stroke-width: 1.2; animation-duration: 8.3s; animation-delay: -1s; }
+      .s5 { stroke-width: 1.8; animation-duration: 5.7s; animation-delay: -3s; }
+      .grid { stroke: #22d3ee; stroke-opacity: 0.08; stroke-width: 1; }
+      .dot { fill: #22d3ee; animation: pulse 3s ease-in-out infinite; }
+      .word { font-family: Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: url(#text); }
+      @keyframes drift { from { stroke-dashoffset: 400; } to { stroke-dashoffset: 0; } }
+      @keyframes pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 0.9; } }
+    </style>
+  </defs>
+  <rect width="640" height="200" rx="16" fill="#0b1020"/>
+  <g class="grid">
+    <path d="M0 50 H640 M0 100 H640 M0 150 H640"/>
+  </g>
+  <g filter="url(#glow)">
+    <path class="stream s1" d="M-20 60 C 120 20, 220 100, 360 60 S 600 20, 660 70"/>
+    <path class="stream s2" d="M-20 90 C 140 60, 240 130, 380 95 S 580 60, 660 100"/>
+    <path class="stream s3" d="M-20 120 C 110 150, 230 80, 350 120 S 560 160, 660 115"/>
+    <path class="stream s4" d="M-20 150 C 150 110, 260 170, 400 140 S 600 120, 660 150"/>
+    <path class="stream s5" d="M-20 35 C 130 70, 250 10, 390 40 S 590 70, 660 30"/>
+  </g>
+  <g>
+    <circle class="dot" cx="118" cy="63" r="2.2" style="animation-delay:-1s"/>
+    <circle class="dot" cx="352" cy="118" r="2.6" style="animation-delay:-2.2s"/>
+    <circle class="dot" cx="522" cy="86" r="2" style="animation-delay:-0.4s"/>
+  </g>
+  <text class="word" x="320" y="118" text-anchor="middle" filter="url(#glow)"><tspan font-size="84" font-weight="300" letter-spacing="6">AIR</tspan><tspan font-size="30" font-weight="200" letter-spacing="3" dx="4">unner</tspan></text>
+  <text x="320" y="156" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" letter-spacing="3" fill="#94a3b8">LIGHTER THAN AIR</text>
+</svg>
