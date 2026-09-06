@@ -49,7 +49,8 @@ pub fn facts(
     // the landing agree on what makes a branch handable. Declared ids only: the prose guess
     // needs bd to narrow it and bd is never called on a hook path.
     let carried_beads: Vec<String> = {
-        let mut v = super::attribution::attributed_in_range(repo, "main..HEAD").declared;
+        let mut v =
+            super::attribution::attributed_in_range(repo, super::batch::BRANCH_RANGE).declared;
         v.dedup();
         v
     };
