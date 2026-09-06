@@ -19,6 +19,10 @@ pub enum HookEvent {
     Stop,
     SubagentStop,
     Notification,
+    /// The turn ended because of an API error rather than because Claude finished (air-1n3).
+    /// The nearest thing the harness has to "this session stopped and did not mean to";
+    /// there is no hook for a usage limit or its reset.
+    StopFailure,
     UserPromptSubmit,
     #[serde(other)]
     Other,
@@ -38,6 +42,7 @@ impl HookEvent {
             HookEvent::Stop => "Stop",
             HookEvent::SubagentStop => "SubagentStop",
             HookEvent::Notification => "Notification",
+            HookEvent::StopFailure => "StopFailure",
             HookEvent::UserPromptSubmit => "UserPromptSubmit",
             HookEvent::Other => "Other",
         }
@@ -66,6 +71,14 @@ pub struct HookInput {
     /// SessionEnd reason.
     pub reason: Option<String>,
     pub permission_mode: Option<String>,
+    /// Notification: what the harness showed the person. Recorded verbatim and never parsed
+    /// for a decision (air-1n3): the wording is the harness's and moves between versions,
+    /// while `notification_type` is a declared field.
+    pub message: Option<String>,
+    /// Notification: the matcher value, such as `quota_auto_resume_fired`, `idle_prompt` or
+    /// `permission_prompt`. Absent on a harness that does not send one.
+    #[serde(alias = "notificationType")]
+    pub notification_type: Option<String>,
 }
 
 impl HookInput {
