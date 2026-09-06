@@ -7,9 +7,21 @@
 //!
 //! **The check is per bead, not per HEAD** (owner, 2026-09-05). A worker keeps committing after
 //! the batch is cut, so "the batch contains HEAD" would refuse a bead the batch fully covered.
-//! The fact that closes a bead: every commit in `main..HEAD` whose `Bead:` trailer names it is
-//! an ancestor of a verified commit C, and C contains main. Recorded by any worker: the lane
-//! is not the author.
+//! The fact that closes a bead: every commit in [`BRANCH_RANGE`] whose `Bead:` trailer names it
+//! is an ancestor of a verified commit C, and C contains **the main it was recorded over**.
+//! Recorded by any worker: the lane is not the author.
+//!
+//! **Both halves of that sentence moved once** (air-9ij, 2026-09-06), because both were
+//! evaluated against a target that keeps moving:
+//!
+//! - "C contains main" was asked of CURRENT main at query time, so a green that contained main
+//!   when it ran was silently disqualified the instant anyone wrote to main. An adopter's
+//!   coordinator invalidated a whole batch with one prose commit. It is now asked of the run's
+//!   own `main_sha`, recorded before the verify started. The LANDING gate still asks about
+//!   current main and did not move: a close says the bead's work was verified, a landing says
+//!   main will still be green, and only the second expires.
+//! - An empty range was read as "this bead has no commits" when it also means "every commit of
+//!   this bead is already in main". [`landed_by`] tells the two apart.
 //!
 //! Removal condition: never, while the gate exists; this is the gate's definition of green.
 
@@ -21,7 +33,7 @@ use serde::Serialize;
 
 use crate::git;
 
-/// One commit in `main..HEAD` that carries the bead's trailer.
+/// One commit in [`BRANCH_RANGE`] that carries the bead's trailer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeadCommit {
     pub sha: String,
@@ -34,6 +46,8 @@ pub struct BeadCommit {
 pub struct Candidate {
     pub sha: String,
     pub worker: String,
+    /// The green contained MAIN AS IT STOOD WHEN THE RUN WAS RECORDED (air-9ij), from the
+    /// run's own `main_sha`; current main only for rows written before that was stored.
     pub contains_main: bool,
     pub contains: Vec<bool>,
 }
@@ -47,6 +61,10 @@ pub struct Batch {
     /// (batch sha, batch worker, the newest commit it lacks, that commit's subject). The
     /// refusal names it: the batch predates the worker's last commit.
     pub predates: Option<(String, String, String, String)>,
+    /// The bead has no commit left for main to be missing: Air landed it, and main still
+    /// contains that merge (air-9ij). `(merge commit, the worker whose branch was merged)`.
+    /// No green is looked for, because the landing already required one.
+    pub landed: Option<(String, String)>,
 }
 
 /// Pure: which candidate, if any, covers the bead. Candidates are newest first, so the first
@@ -78,10 +96,22 @@ pub fn cover(candidates: &[Candidate], commits: &[BeadCommit]) -> Batch {
     out
 }
 
-/// The commits of `bead` in `main..HEAD`, newest first, by their `Bead:` trailer only.
+/// The ONE range for "what has this branch done that main does not have yet" (air-9ij).
+///
+/// Every reader that asks which commits a branch is answerable for reads this range, and none
+/// spells it out: `bead_commits` here, and the gate's carried-bead scan in `handover::facts`.
+/// The range is deliberately still `main..HEAD` — the commits main already has need no
+/// evidence, because nothing reaches main without the landing gate's green. What was wrong
+/// was reading an EMPTY result as "this bead has no commits" when it also means "every commit
+/// of this bead is already in main"; [`for_bead`] now tells the two apart.
+pub const BRANCH_RANGE: &str = "main..HEAD";
+
+/// The commits of `bead` in [`BRANCH_RANGE`], newest first, by their `Bead:` trailer only.
+/// Empty when the bead has no commit here, which includes the case where it has landed —
+/// [`for_bead`] is what distinguishes them, never this.
 pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
     let text =
-        git::run(repo, &["log", "--format=%H%x1f%s%x1f%B%x1e", "main..HEAD"]).unwrap_or_default();
+        git::run(repo, &["log", "--format=%H%x1f%s%x1f%B%x1e", BRANCH_RANGE]).unwrap_or_default();
     text.split('\u{1e}')
         .filter_map(|rec| {
             let mut it = rec.trim_start_matches('\n').splitn(3, '\u{1f}');
@@ -101,11 +131,42 @@ pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
 /// HEAD itself has no green.
 pub const CANDIDATES: usize = 12;
 
+/// Air landed this bead, and main still contains the merge (air-9ij).
+///
+/// The judgement this encodes, recorded because it was a judgement: **when a bead's work is
+/// already in main, the close passes.** `air land` refuses a branch without a recorded green
+/// at a head containing main, and the commit it fast-forwards main onto has that green's
+/// exact tree (air-odv), so the work reached main carrying precisely the proof this gate
+/// asks for. Demanding a fresh green naming the merge would make Air refuse the close of a
+/// bead Air itself landed and is already nagging about as `landed-not-closed`.
+///
+/// It is a landing ROW, not "HEAD is an ancestor of main", because the row names the bead by
+/// the same `Bead:` trailer the rest of the gate reads. A worker that claimed a bead and
+/// committed nothing has no row, so it still has nothing to close on — the looser branch-level
+/// test would have handed it a pass. A repo that lands by hand writes no row and its workers
+/// re-verify as before; that is the status quo, not a regression.
+pub fn landed_by(ledger: &Ledger, repo: &Path, bead: &str) -> Option<(String, String)> {
+    ledger.landings().ok()?.into_iter().find_map(|l| {
+        let merge = l.merge_commit.clone()?;
+        (l.landed()
+            && l.beads.iter().any(|b| b == bead)
+            && git::is_ancestor(repo, &merge, "main").unwrap_or(false))
+        .then_some((merge, l.worker))
+    })
+}
+
 /// The batch verdict for one bead on this branch, from the ledger's newest greens.
 pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, String> {
     let commits = bead_commits(repo, bead);
     if commits.is_empty() {
-        return Ok(Batch::default());
+        // air-9ij: an empty range is not "no such bead". It is also every bead whose commits
+        // have landed, which is what a worker's own `git merge main` produces the moment its
+        // batch is on main. Returning `Batch::default()` here refused those closes and said
+        // there was no green at HEAD, naming nothing.
+        return Ok(Batch {
+            landed: landed_by(ledger, repo, bead),
+            ..Batch::default()
+        });
     }
     let greens = ledger
         .latest_greens(Kind::Verify, CANDIDATES)
@@ -113,7 +174,12 @@ pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, Strin
     let candidates: Vec<Candidate> = greens
         .into_iter()
         .map(|g| {
-            let contains_main = git::is_ancestor(repo, "main", &g.sha).unwrap_or(false);
+            // air-9ij: the main the run was recorded over, not the main of this instant. A
+            // green that contained main when it ran goes on containing it; main moving is a
+            // fact about main. Rows written before v19 have no `main_sha` and fall back to
+            // the old question, which is the only answer available for them.
+            let against = g.main_sha.clone().unwrap_or_else(|| "main".to_string());
+            let contains_main = git::is_ancestor(repo, &against, &g.sha).unwrap_or(false);
             let contains = if contains_main {
                 commits
                     .iter()
@@ -240,6 +306,15 @@ pub fn describe(
     let mut predates: Option<String> = None;
     for bead in beads {
         let b = for_bead(ledger, repo, bead).unwrap_or_default();
+        if let Some((merge, worker)) = b.landed {
+            // air-9ij: nothing of this bead is outstanding, so there is no green to look for.
+            covered.push(format!(
+                "every commit of {bead} is already in main, landed at {} (branch by {worker}), \
+                 which required a green containing main",
+                short(&merge)
+            ));
+            continue;
+        }
         match (b.covering, b.predates) {
             (Some((sha, worker)), _) => covered.push(format!(
                 "green at {} (batch by {worker}) contains every commit of {bead}",
