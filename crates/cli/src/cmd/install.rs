@@ -1297,6 +1297,11 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // digest must be tracked, a red run keeps its output, a build says which build it is, and
     // the overlap warning dates its holders.
     ("0.3.0", 24, 58),
+    // 2026-09-06, second half of the round: an adopter's five reports after the log was first
+    // written. handover-not-green stopped firing on successful closes, the refusal names which
+    // of four not-green states it found, and a batch records the member a batch took rather
+    // than where the branch is now.
+    ("0.3.1", 25, 59),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
