@@ -41,8 +41,14 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     let tree = super::green::tree_of(repo, &head).ok();
     // air-80x.4: the worker branch heads this commit contains that main does not, recorded
     // with the run so a red at a batch head names its members without a landing row.
-    let members = git::run(repo, &["rev-parse", "main"])
-        .map(|tip| super::batch::members_of(repo, &worker, &head, &tip))
+    // air-9ij: main's own sha goes on the row too, read BEFORE the command runs, because the
+    // tree about to be checked was built over this main and not over whatever main is when
+    // somebody asks later. That is what makes "the green contains main" a recorded fact
+    // instead of one that expires the next time anyone writes to main.
+    let main_sha = git::run(repo, &["rev-parse", "main"]).ok();
+    let members = main_sha
+        .as_deref()
+        .map(|tip| super::batch::members_of(repo, &worker, &head, tip))
         .unwrap_or_default();
     let Some((prog, args)) = command.split_first() else {
         eprintln!("air record: missing command after --");
@@ -111,6 +117,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         dirty,
         tree,
         members,
+        main_sha,
     };
     if let Err(e) = ledger.record_verify(&run) {
         eprintln!("air record: could not write ledger: {e}");
