@@ -63,6 +63,11 @@ pub struct GateFacts {
     /// air-xbl: a batching lane that merges other workers' green work holds nothing and hands
     /// over); `Some(false)` when no digest declares a bead this worker is handing over.
     pub digest_present: Option<bool>,
+    /// A digest declaring the bead EXISTS in the directory but git does not track it
+    /// (air-ahl). Only reachable alongside `digest_present: Some(false)`, and only for the
+    /// message: "write one" and "add the one you wrote" are different fixes, and a worker told
+    /// the first while looking at the second learns to distrust the gate.
+    pub digest_untracked: bool,
     /// Where digests live (for the fixing message).
     pub digest_dir: Option<String>,
     /// Advisory mode: report what would be refused but allow (first round; decisions.md).
@@ -240,67 +245,93 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     }
     if f.digest_present == Some(false) {
         let dir = f.digest_dir.as_deref().unwrap_or("docs/log.d");
-        // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
-        // Saying "write a digest" was true of the old filename guess and would leave a
-        // worker with a written digest and a gate that still refuses.
-        let (detail, fix) = match beads.as_slice() {
-            [bead] => (
-                format!("no digest in {dir} declaring `bead: {bead}`"),
-                format!(
-                    "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
-                    f.worker
+        // air-ahl: written but never tracked. An adopter's worker used this deliberately and
+        // reported it anyway: the file satisfied the gate while existing for nobody but that
+        // worktree, so a green said nothing about whether a digest would exist for the next
+        // reader. Named apart from "no digest", because the fixes are different sentences.
+        if f.digest_untracked {
+            let one = beads.first().cloned().unwrap_or_default();
+            missing.push(Missing {
+                check: "digest-untracked",
+                detail: format!(
+                    "a digest in {dir} declares `bead: {one}` but git does not track it, so it \
+                     exists for nobody but this worktree"
                 ),
-            ),
-            // Unreachable from `handover::facts`, which skips the check when there is no
-            // bead to declare; a caller that sets the fact by hand still gets no placeholder.
-            [] => (
-                format!(
-                    "no digest in {dir}, and no bead to declare: {} holds no claim and none was named",
-                    f.worker
+                fix: format!(
+                    "git add {dir} && git commit -m \"docs: digest for {one}\" — and if your \
+                     lane has already cut a batch at this head, that commit must carry NO \
+                     `Bead:` trailer: the batch green has to contain every commit that NAMES \
+                     the bead, and an untrailered digest commit never joins that set, so your \
+                     head moves and the close still passes at the batch you were cut at"
                 ),
-                "air claim the bead first, then write its digest with `bead:` front matter"
-                    .to_string(),
-            ),
-            many => (
-                format!(
-                    "no digest in {dir} declaring any of {}",
-                    many.iter()
-                        .map(|b| format!("`bead: {b}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                // Committing a digest is the same act under either flow; only the trailer
+                // advice is about the batching one, and it is guarded by its own sentence.
+                flow_dependent: false,
+            });
+        } else {
+            // air-agq: the gate reads a declared `bead:` field, so the fix has to name it.
+            // Saying "write a digest" was true of the old filename guess and would leave a
+            // worker with a written digest and a gate that still refuses.
+            let (detail, fix) = match beads.as_slice() {
+                [bead] => (
+                    format!("no digest in {dir} declaring `bead: {bead}`"),
+                    format!(
+                        "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
+                        f.worker
+                    ),
                 ),
-                format!(
-                    "write {dir}/<date>-{}-<one of {}>.md opening with front matter naming that bead:\n---\nbead: {}\n---",
-                    f.worker,
-                    many.join("|"),
-                    many.join("|")
+                // Unreachable from `handover::facts`, which skips the check when there is no
+                // bead to declare; a caller that sets the fact by hand still gets no placeholder.
+                [] => (
+                    format!(
+                        "no digest in {dir}, and no bead to declare: {} holds no claim and none was named",
+                        f.worker
+                    ),
+                    "air claim the bead first, then write its digest with `bead:` front matter"
+                        .to_string(),
                 ),
-            ),
-        };
-        // air-yol: the fix above is right and following it created the next refusal.
-        // Committing the digest moves HEAD off the sha the green was recorded at, so the very
-        // next check refuses on verify-green-at-head (the adopter, two workers hit it
-        // independently on 2026-08-31). Say so HERE, where a worker is reading, and only when
-        // there is a green to invalidate: with no green at HEAD the order is already the
-        // standard one and the note would be the unconditional noise air-5wq was left open
-        // over.
-        let order_note = if f.green_at_head {
-            format!(
-                "\nthen commit it, `git merge main`, and run `air record verify -- make verify` \
+                many => (
+                    format!(
+                        "no digest in {dir} declaring any of {}",
+                        many.iter()
+                            .map(|b| format!("`bead: {b}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    format!(
+                        "write {dir}/<date>-{}-<one of {}>.md opening with front matter naming that bead:\n---\nbead: {}\n---",
+                        f.worker,
+                        many.join("|"),
+                        many.join("|")
+                    ),
+                ),
+            };
+            // air-yol: the fix above is right and following it created the next refusal.
+            // Committing the digest moves HEAD off the sha the green was recorded at, so the very
+            // next check refuses on verify-green-at-head (the adopter, two workers hit it
+            // independently on 2026-08-31). Say so HERE, where a worker is reading, and only when
+            // there is a green to invalidate: with no green at HEAD the order is already the
+            // standard one and the note would be the unconditional noise air-5wq was left open
+            // over.
+            let order_note = if f.green_at_head {
+                format!(
+                    "\nthen commit it, `git merge main`, and run `air record verify -- make verify` \
                  LAST: committing the digest moves HEAD off {}, where the green is recorded, \
                  and the next check would refuse for a green that is no longer at HEAD",
-                short(&f.head)
-            )
-        } else {
-            String::new()
-        };
-        missing.push(Missing {
-            check: "digest-present",
-            detail,
-            fix: format!("{fix}{order_note}"),
-            // Where a repo configures digests, writing one is the same act under either flow.
-            flow_dependent: false,
-        });
+                    short(&f.head)
+                )
+            } else {
+                String::new()
+            };
+            missing.push(Missing {
+                check: "digest-present",
+                detail,
+                fix: format!("{fix}{order_note}"),
+                // Where a repo configures digests, writing one is the same act under either
+                // flow.
+                flow_dependent: false,
+            });
+        }
     }
     let pass = missing.is_empty();
     let block = !pass && !f.advisory;
@@ -463,6 +494,7 @@ mod tests {
             bead_claimed_or_carried: true,
             runs_at_head: (1, 0),
             digest_present: None,
+            digest_untracked: false,
             digest_dir: None,
             bead: Some("zz-o5fi".into()),
             held_beads: vec!["zz-o5fi".into()],

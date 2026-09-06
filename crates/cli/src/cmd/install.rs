@@ -1080,6 +1080,24 @@ pub const SURFACE: &[SurfaceChange] = &[
                  NOT read `verify_lane` for this: that key stays yours, and a hook branching \
                  on it would be a second copy of a decision `air handover` already makes.",
     },
+    SurfaceChange {
+        id: "claim-records-the-resolved-id",
+        since: "2026-09-06 (air-x1ha)",
+        headline: "`air claim` records the id BD RESOLVED, not the string that was typed, so a \
+                   prefix claim and a full-id claim produce identical rows. And the status \
+                   reconcile now tells an id bd never had from one bd no longer holds: only \
+                   the second releases the row, and a kept one is reported by id. Before this, \
+                   a worker typed a prefix, bd claimed the full id, Air's row went under the \
+                   prefix, and the next reconcile released the claim while the work continued.",
+        silent_break: false,
+        action: "Nothing to run, and nothing is released that was not released before — this \
+                 only stops releases. If you have rows recorded under a prefix from before, \
+                 `air status` now names them under \"kept N claim(s) bd could not resolve\" \
+                 instead of silently dropping them: re-claim under the id bd knows, or \
+                 `air release <id> --reason unknown`. A `bd show` that TIMES OUT no longer \
+                 releases anything either, which it used to for every claim not in the \
+                 in-progress list.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1767,6 +1785,13 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
 mod tests {
     use super::*;
 
+    /// Collapse every run of whitespace to one space, so a pin can quote a sentence the way
+    /// it reads rather than the way it happens to wrap (air-ahl). Two pins this round were
+    /// written against a phrase that crossed a line break and failed on the break.
+    fn flat(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     /// The embedded roles prose is `include_str!` of docs/rules/roles.md, so the two cannot
     /// drift; this pins that, plus the lines the round added: run-to-completion and the
     /// coordinator reach/landing facts (air-arq), bd's per-type sections (air-8zz).
@@ -1820,6 +1845,16 @@ mod tests {
         // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
         // `claude --worktree` and is false without it.
         assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        // air-ahl: the tracked requirement and its route, both pinned. The route is the half
+        // that must not go missing: a worker who meets the refusal has already committed, so
+        // advice living only in the refusal arrives after the thing it prevents.
+        //
+        // Through `flat`, because roles.md is hard-wrapped and a pin that spans a wrap fails
+        // on the wrap rather than on the rule. That happened twice this round (air-zth, then
+        // this), so it is a helper now rather than a third carefully shortened substring.
+        let roles = flat(ROLES_MD);
+        assert!(roles.contains("It also has to be tracked by git"));
+        assert!(roles.contains("commit the digest WITHOUT a `Bead:` trailer"));
         // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
         // states that the count attached to it refuses nothing. Both halves are pinned: a
         // rules file that names a count without saying it is not a gate is how a measurement

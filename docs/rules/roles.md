@@ -65,7 +65,13 @@ Two constraints, because Air checks them and they are about ordering rather than
 - **A digest, where the repo configures `digest_dir`, has to name its bead** in front matter
   (`---` / `bead: <id>` / `---`) and be written with the work rather than after the fact. Air
   reads the declared field, not the filename: a digest for another bead used to satisfy the
-  gate (air-agq).
+  gate (air-agq). **It also has to be tracked by git** (air-ahl): a file only your worktree has
+  is a note to self, and the gate exists for the reader who was not there. An adopter's worker
+  used an untracked digest to satisfy the gate and reported it against its own interest.
+  **If your lane has already cut a batch at your head, commit the digest WITHOUT a `Bead:`
+  trailer.** The batch green has to contain every commit that NAMES the bead, and an
+  untrailered commit never joins that set, so your head moves and the close still passes at the
+  batch you were cut at. This is the one place a commit is deliberately not trailered.
 
 `air handover` names whatever is missing and the command that fixes it, so run it before you
 finish rather than guessing which of the two bit you. **[fact]**
