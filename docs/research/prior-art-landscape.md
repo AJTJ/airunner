@@ -527,7 +527,7 @@ None of these orchestrate *external agent processes*; they call LLM APIs in-proc
 | **tmux_interface** 0.4.0 (2026-03-10) | — | Drive tmux for human-attachable sessions (Claude Squad approach). Alternative: herdr panes (above). |
 | **pueue-lib** 0.31.1 | — | See pueue entry. |
 | **interprocess** 2.4.3 | — | Local sockets (Unix domain / named pipes) for daemon↔CLI. |
-| **fs4** 1.1.0 / **ad-lock** 4.0.4 | — | File locks for worktree/lease files. |
+| **fs4** 1.1.0 / **** 4.0.4 | — | File locks for worktree/lease files. |
 | **notify** 8.2.0 | — | Watch beads JSONL / worktree changes. |
 
 ---
@@ -569,7 +569,7 @@ None of these orchestrate *external agent processes*; they call LLM APIs in-proc
 | Tracing / OTel | `tracing` 0.1.44, `tracing-subscriber` 0.3.23, `opentelemetry` 0.32.0, `opentelemetry-otlp` 0.32.0, `tracing-opentelemetry` 0.33.0 (2026-05) | — | span per bead/run/step; OTLP export optional. |
 | IDs / time | `ulid` 3.0.0 / `uuid` 1.24.1; `jiff` 0.2.35 (or `chrono` 0.4.45) | — | ULIDs sort by time — good for event logs. |
 | Errors | `thiserror` 2.0.20, `anyhow` 1.0.104 (or `miette` 7.6.0 for pretty CLI diagnostics) | — | |
-| Locks / IPC | `ad-lock` 4.0.4 / `fs4` 1.1.0; `interprocess` 2.4.3 | — | worktree/lease lock files; daemon ↔ CLI over local socket. |
+| Locks / IPC | `` 4.0.4 / `fs4` 1.1.0; `interprocess` 2.4.3 | — | worktree/lease lock files; daemon ↔ CLI over local socket. |
 | HTTP API (optional) | `axum` 0.8.9 | — | Symphony-style `/api/v1/state`. |
 | Actors (optional) | `kameo` 0.22.2 or `ractor` 0.16.5 | — | supervision trees per worker; plain tokio tasks + `CancellationToken` likely sufficient. |
 | Scheduling | `tokio-cron-scheduler` 0.15.1 or `tokio::time::interval` | — | reconcile tick. |

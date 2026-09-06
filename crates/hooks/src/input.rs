@@ -163,9 +163,9 @@ mod tests {
     #[test]
     fn bash_command_extracts() {
         let h = HookInput::parse(
-            r#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"bd close fd-1"}}"#,
+            r#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"bd close zz-1"}}"#,
         )
         .unwrap();
-        assert_eq!(h.bash_command(), Some("bd close fd-1"));
+        assert_eq!(h.bash_command(), Some("bd close zz-1"));
     }
 }

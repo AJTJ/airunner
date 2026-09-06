@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-18. **Question:** what is the *smallest* declaration of a named topology such
 that the machinery already specified for M0–M1 (ledger, hooks, hand-over gate, `air next`,
-`air land`) runs adopter's shape today and could run two or three other shapes later — without
+`air land`) runs the adopter's shape today and could run two or three other shapes later — without
 Air growing a workflow engine.
 
 **Sources read.** Local: `docs/decisions.md` (topology "flexible and *named*"; keep the coordinator;
@@ -27,7 +27,7 @@ about 25 lines of TOML. It names *who may cause which transition of the fixed st
 many of each*, and *which of the existing checks are advisory or blocking for that role*. It
 declares **no** routing, phases, prompts, scheduling policy or coordinator logic: those are either
 Air's fixed machinery (step machine, `next` ranking, `land` steps) or a person's/skill's judgement.
-The adopter preset falls out of plan 0001 verbatim; `solo-ralph` and `pair-review` need no new
+The adopter's preset falls out of plan 0001 verbatim; `solo-ralph` and `pair-review` need no new
 schema key; `refinery` needs one new *role kind* (a mechanical role with no model) and is gated by
 the batching trigger from tick 0445. Do **not** write the file before the second shape exists;
 until then the three knobs M0/M1 actually read live as flat keys in `.air/config.toml` (§6).
@@ -46,8 +46,8 @@ that is *more* than roles + limits + gates would be more than any of the three s
 ```toml
 # .air/topology.toml — committed, human-diffable; unknown keys are refused (anti-cruft)
 schema = 1
-name = "adopter"        # a preset name (built into the binary) or a free name
-extends = "adopter"     # optional: start from a preset, override below
+name = "the adopter"        # a preset name (built into the binary) or a free name
+extends = "the adopter"     # optional: start from a preset, override below
 
 # ---- roles: who plays, where they run, what they may cause ----------------------
 [roles.<role>]
@@ -106,11 +106,11 @@ What "role" resolution costs: one `git rev-parse --git-common-dir` (≈10 ms, ti
 read; no `bd` call. What a role does *not* carry: a prompt. Prompts/skills belong to `CLAUDE.md`,
 `.claude/agents/*.md`, `.claude/skills/` — the registers Claude Code already loads.
 
-## 2. `adopter` preset (from what adopter actually does)
+## 2. `the adopter` preset (from what the adopter actually does)
 
 ```toml
 schema = 1
-name = "adopter"
+name = "the adopter"
 
 [roles.coordinator]                 # the main-tree session (as-built §1.1; coord interview §5)
 where   = "main"
@@ -166,7 +166,7 @@ name = "solo-ralph"
 **`pair-review`** — worker + separate rubric-grader before `awaiting_review` (billing §7: review on
 a metered API role; SYNTHESIS §4.4).
 ```toml
-name = "pair-review";  extends = "adopter"
+name = "pair-review";  extends = "the adopter"
 [roles.reviewer] where = "any"; backend = "api"; model = "sonnet"; effort = "high"; count = 1
                  may = ["review"]                        # writes verify_runs(kind=review, exit)
 [gates]          review = { worker = "blocking" }        # handover needs review exit 0 at HEAD
@@ -175,7 +175,7 @@ name = "pair-review";  extends = "adopter"
 The grader's verdict is recorded as a `verify_runs` row (`kind = review`, exit code, log path) —
 an evidence row, the same shape the gate already reads; the rubric itself is a skill file.
 
-**`refinery`** (Gas Town shape, beads-and-gastown §2.4) — `extends = "adopter"`, plus
+**`refinery`** (Gas Town shape, beads-and-gastown §2.4) — `extends = "the adopter"`, plus
 `[roles.refinery] where = "main"; backend = "none"; count = 1; may = ["land", "close"];
 run = "air land --queue"` and `coordinator.may` minus `land`. Needs the one new thing in the
 schema (`backend = "none"`, a role that is a process, not a model) and is not to be built before
@@ -188,7 +188,7 @@ landings/day with median depth ≥ 3).
 |---|---|---|
 | Message routing, mailboxes, "who tells whom" | `SendMessage` (people/agents); Air only measures it | coord interview §1: the channel worked, the *facts* were wrong; corpus §0.4: keep exactly one inter-agent message; plan 0001 §6 "the binary never sends messages" |
 | Coordinator logic (what to steer, priorities, rulings, re-cutting) | the coordinator's judgement + skills | decisions: keep the coordinator; SYNTHESIS §1b: "no LLM middle-manager"; plan 0002 §5 right-hand column |
-| A phase machine per epic/feature | none; edges (`blocks`) + `bd ready` frontier | adopter 0022: a phase machine "will be exactly that kind of wrong the first time real work does not fit its model"; plan 0002 §6 |
+| A phase machine per epic/feature | none; edges (`blocks`) + `bd ready` frontier | the adopter 0022: a phase machine "will be exactly that kind of wrong the first time real work does not fit its model"; plan 0002 §6 |
 | Prompts, personas, skills, tool allow-lists | `CLAUDE.md`, `.claude/agents/*.md`, `.claude/skills/`, `settings.json` | Claude Code already owns these registers (sub-agents doc, fetched 2026-08-18); duplicating them is a second policy language (corpus §5) |
 | Scheduling policy beyond counters (ordering, ranking, backoff, retries) | fixed in Air: `next` ranks by same-file overlap; Symphony order priority→oldest→id | plan 0001 §3 ranking is ours to *measure*, not configure; Symphony puts ordering in the SPEC, not the front matter |
 | Step machine / transition table | fixed in Air (SYNTHESIS §4.2, forward-only) | metis pattern; a topology picks *who* may take an edge, never adds edges |
@@ -225,7 +225,7 @@ and prints the *effective* table (preset + overrides) and the resolution for the
 6. `escalation.labels` empty (then `next` would offer `owner` beads).
 
 **Runtime posture** (Symphony SPEC §6.2/6.3, adapted): an invalid file at hook time never blocks —
-hooks fail open with a one-line warning and behave as the `adopter` preset; mutating CLI
+hooks fail open with a one-line warning and behave as the `the adopter` preset; mutating CLI
 commands (`claim`, `handover`, `land`) print the same warning and refuse only what the *built-in
 default* would refuse. "Keep operating with the last known good effective configuration and emit an
 operator-visible error" is exactly the behaviour; the last known good is the compiled preset.
@@ -237,10 +237,10 @@ Trigger (plan 0001 §9): **the second real shape is about to run** — someone i
 reviewer is the constraint (SYNTHESIS §1b, corpus §0.5). Not a trigger: wanting the file for
 tidiness, or Gas Town envy. Until then:
 
-- M0/M1 hardcode the `adopter` preset; the three knobs they actually read —
+- M0/M1 hardcode the `the adopter` preset; the three knobs they actually read —
   `handover_gate = "advisory" | "blocking"`, `wip_per_worker = 2`, `max_workers = 4` — sit as flat
   keys in `.air/config.toml` next to `verify`, `shared_files`, `bd` path (plan 0001 §2), and migrate
-  into `topology.toml` on the day the second preset lands (`air topology init adopter` reads
+  into `topology.toml` on the day the second preset lands (`air topology init the adopter` reads
   them);
 - `air whoami` (role resolution by cwd) can ship in M0 for free because `air status` needs the
   same main-vs-worktree fact; nothing else of §1 exists as code before the trigger;
@@ -280,5 +280,5 @@ temptation to put routing/phases in it (the Gas Town failure mode, decisions "an
 - Local: `docs/decisions.md`; `docs/research/SYNTHESIS.md` §1b, §4.1–4.4; `docs/plans/0001-first-slice.md`
   §2–§6, §9; `docs/plans/0002-what-to-work-on.md` §3–§6; `docs/research/prior-art-landscape.md`
   §A.2, §A.4, §A.5, §B1.12; `docs/research/beads-and-gastown.md` §2.2–2.4;
-  `docs/research/claude-code-billing.md` §7; `docs/research/adopter-as-built.md` §1.1–1.3, §4;
+  `docs/research/claude-code-billing.md` §7; `private/research/adopter-as-built.md` §1.1–1.3, §4;
   `docs/research/coordinator-interview-2026-08-17.md` §1, §5; ticks 0315, 0430, 0445.

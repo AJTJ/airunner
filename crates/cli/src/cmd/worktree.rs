@@ -8,7 +8,7 @@
 //!   directory and branch names the harness uses, so `air status`, `worker_name_for`, the
 //!   ledger and every existing worktree keep reading as before.
 //! - **`.worktreeinclude`.** `--worktree` copies gitignored files matching the repo's
-//!   `.worktreeinclude` (gitignore syntax) into the new worktree. adopter's workers do not
+//!   `.worktreeinclude` (gitignore syntax) into the new worktree. The adopter's workers do not
 //!   function without it: `backend/.env`, `app/.env`, and `backend/keys/*.pem`, which
 //!   `authn.rs:233` reads with `include_str!` at COMPILE TIME, so a naive `git worktree add`
 //!   gives a fleet whose backend test crate does not build, with an error that does not say
@@ -26,7 +26,7 @@
 //!   (`La()?.worktreePath` in 2.1.261) and exists only with the flag. Dropping the flag would
 //!   remove a working enforcement that roles.md promises, for a coupling argument with no
 //!   incident behind it (do-less). What changes is who creates and who removes.
-//! - **WorktreeCreate hook.** adopter's file says configuring one "replaces git's worktree
+//! - **WorktreeCreate hook.** the adopter's file says configuring one "replaces git's worktree
 //!   logic entirely and this file stops being processed". Checked against 2.1.261's messages
 //!   rather than exercised: the harness uses the hook's returned path in place of its own git
 //!   logic ("Cannot create agent worktree: not in a git repository and no WorktreeCreate hooks

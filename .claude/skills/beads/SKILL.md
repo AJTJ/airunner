@@ -190,7 +190,7 @@ also forbids Claude memory; `CLAUDE.md` Rules).
 
 ## Known traps (bd 1.2.1)
 
-Ported from adopter's field notes (its `CLAUDE.md:785-949` at `f2ca891`, "Beads Issue
+Ported from the adopter's field notes (its `CLAUDE.md:785-949` at `f2ca891`, "Beads Issue
 Tracker" rules; each item cites the line range it came from). That file is **not** copied into
 this repo, so those line numbers do not resolve here. Every one was
 measured on a live fleet.
@@ -275,7 +275,7 @@ measured on a live fleet.
   another-project) with the env-clearing recipe from
   `another-project/justfile:14` and
   `another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
-  adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (adopter `f2ca891`, not copied
+  The adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (the adopter `f2ca891`, not copied
   into this repo) for the Known traps section; version-trap facts from
   `docs/research/beads-and-gastown.md §0, §1.7, §1.8`. Read for context, not copied:
   `beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
@@ -285,5 +285,5 @@ measured on a live fleet.
   wrapper); env clearing shown as a raw `env -u` recipe; Dolt/molecule/formula/swarm/gate
   content dropped; `bd remember` family forbidden per this project's no-memory rule; Air
   boundary (`air claim`, hand-over gate) added with plan citations; version trap section added;
-  adopter's project-specific label list reduced to the `owner`/`runtime`/`human` semantics
-  Air depends on; adopter bead IDs and dates kept only where they are the measurement.
+  The adopter's project-specific label list reduced to the `owner`/`runtime`/`human` semantics
+  Air depends on; the adopter's bead IDs and dates kept only where they are the measurement.

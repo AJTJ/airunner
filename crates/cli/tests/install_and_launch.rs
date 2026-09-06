@@ -164,7 +164,7 @@ fn install_reports_the_surface_diff_to_an_already_installed_repo() {
     assert_eq!(code, 0, "{out}");
     assert!(!out.contains("SURFACE DIFF"), "{out}");
 
-    // Now the adopter case: Air is installed, but from before any of this was recorded.
+    // Now the adopter's case: Air is installed, but from before any of this was recorded.
     std::fs::remove_file(repo.join(".air/installed.json")).unwrap();
     let (code, out, _) = air(&repo, Some(&path), &["install"]);
     assert_eq!(code, 0, "{out}");
@@ -645,7 +645,7 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     let lines: Vec<&str> = argv.lines().collect();
     // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule),
     // and it names the task file rather than carrying the task (air-er0: the text in argv is
-    // what `pkill -f` matched on adopter, seven workers in a day).
+    // what `pkill -f` matched on the adopter, seven workers in a day).
     let task_path = repo.join(".air").join("tasks").join("w.md");
     assert_eq!(
         lines.first().copied(),

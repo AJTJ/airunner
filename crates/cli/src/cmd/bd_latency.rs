@@ -73,7 +73,7 @@ pub struct Percentiles {
 
 /// How long `air status` took, from its own event lines (air-p61).
 ///
-/// `status` stamps `duration_ms` on every run. adopter's took ~20 s under load and they
+/// `status` stamps `duration_ms` on every run. The adopter's took ~20 s under load and they
 /// wrapped it in a 60 s timeout in `reclaim.py`; this repo's is seconds too. A command the
 /// coordinator runs on a loop being slow is a fact the audit should carry, not something each
 /// reader re-derives.
@@ -132,7 +132,7 @@ pub fn percentiles(ms: &mut [u64]) -> Option<Percentiles> {
 ///
 /// The old value was a flat 2 s. Measured over 495,892 bd processes in this ledger, bd's p50
 /// is 1430 ms and its p99 is 1644 ms — 356 ms of headroom, and 59 calls already exceeded it.
-/// adopter's median is 1760 ms, which is **above** our whole budget: at their latency the
+/// The adopter's median is 1760 ms, which is **above** our whole budget: at their latency the
 /// status reconcile times out on ordinary calls, which is what air-19u was.
 ///
 /// Four times the median, because bd's cost is a process start plus a store open and scales

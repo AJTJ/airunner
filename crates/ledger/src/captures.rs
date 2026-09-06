@@ -148,14 +148,14 @@ mod tests {
             ["a", "b"]
         );
         let was = l
-            .resolve_captures(&[item("a", "promoted", Some("fd-9"), None)], "t3")
+            .resolve_captures(&[item("a", "promoted", Some("zz-9"), None)], "t3")
             .unwrap();
         assert_eq!(was[0], Some(("open".to_string(), None)));
         assert_eq!(l.inbox().unwrap().len(), 1);
         let a = l.capture_by_id("a").unwrap().unwrap();
         assert_eq!(
             (a.status.as_str(), a.bead.as_deref()),
-            ("promoted", Some("fd-9"))
+            ("promoted", Some("zz-9"))
         );
     }
 
@@ -169,9 +169,9 @@ mod tests {
             l.capture(id, "w1", None, text, "t0").unwrap();
         }
         let items = vec![
-            item("a", "promoted", Some("fd-1"), None),
+            item("a", "promoted", Some("zz-1"), None),
             item("b", "dropped", None, Some("dup")),
-            item("nope", "promoted", Some("fd-3"), None),
+            item("nope", "promoted", Some("zz-3"), None),
         ];
         let was = l.resolve_captures(&items, "t1").unwrap();
         assert_eq!(was[0], Some(("open".to_string(), None)));
@@ -185,18 +185,18 @@ mod tests {
         // Re-point `a` from a bead that was never created to the real one, and promote the
         // dropped `b`. Both say what they used to point at.
         let fix = vec![
-            item("a", "promoted", Some("ad-real"), None),
-            item("b", "promoted", Some("fd-2"), None),
+            item("a", "promoted", Some("zz-real"), None),
+            item("b", "promoted", Some("zz-2"), None),
         ];
         let was = l.resolve_captures(&fix, "t2").unwrap();
         assert_eq!(
             was[0],
-            Some(("promoted".to_string(), Some("fd-1".to_string())))
+            Some(("promoted".to_string(), Some("zz-1".to_string())))
         );
         assert_eq!(was[1], Some(("dropped".to_string(), None)));
         assert_eq!(
             l.capture_by_id("a").unwrap().unwrap().bead.as_deref(),
-            Some("ad-real")
+            Some("zz-real")
         );
         assert_eq!(
             l.capture_by_id("b").unwrap().unwrap().status.as_str(),

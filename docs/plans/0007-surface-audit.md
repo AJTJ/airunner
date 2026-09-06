@@ -119,7 +119,7 @@ Work intake and fleet:
 audience) · `leases` · `lease_wants` · `hook_emissions` (session_id, key, fingerprint: the
 once-per-session suppression) · `conditions` (worker, kind, first_seen, last_seen, cleared_at: an
 open row means the condition holds now) · `bd_cache` (last good bd answers so a slow bd degrades to
-stale counts rather than an empty screen, after adopter saw 20 s bd calls, air-19u).
+stale counts rather than an empty screen, after the adopter saw 20 s bd calls, air-19u).
 
 Forward-only migrations keyed by `PRAGMA user_version`. **`air doctor` reports 7 of the 11 tables**;
 `hook_emissions`, `conditions`, `lease_wants` and `bd_cache` are invisible to it, which is how the
@@ -248,7 +248,7 @@ by two selftest probes). See §11 before quoting any number about this.
 ### 6.1 beads / `bd` — much deeper than "Air wraps claims"
 
 Air pins **bd 1.2.2** and refuses to run against another version (`doctor::BD_PINNED`); 1.2.1
-corrupted the Dolt schema during the adopter adoption on 2026-08-21.
+corrupted the Dolt schema during the adopter's adoption on 2026-08-21.
 
 - **Trait boundary**: `WorkLedger` in `crates/bd` with `ready`, `in_progress`, `by_status`, `show`,
   `show_all`, `claim`, `set_status`, `comment`, `close_all`. Every call shells out to `bd` with a
@@ -310,7 +310,7 @@ Two modules read structured facts out of git, and both exist because reading pro
   branch went 8 → 6 → 3. `AIR_BEAD_TRAILER_SINCE` / `FALLBACK_BEFORE` (2026-08-23) is the dated
   cutover so older branches still resolve by the old path.
 - **`acceptance.rs`** (566 lines) — what a landing may close versus only land. From a measurement
-  on adopter's own closer: **99 of 532 beads (18.6%) closed on branch containment alone**,
+  on the adopter's own closer: **99 of 532 beads (18.6%) closed on branch containment alone**,
   never reading acceptance criteria, and accelerating to 84 of the last 172 closes (48.8%) over
   two days. Verdicts on those 99: 82 done, 14 partial, 1 not done, 1 unverifiable, 1 moot. The
   misses were not random; they were beads with a clause the merging agent could not discharge
@@ -430,7 +430,7 @@ changed since its last adoption.
 ### 10.3 Prove or delete
 
 **`air lease`** (368 lines, plus two ledger tables and three MCP tools) — **0 rows in this repo's
-entire ledger**. Check the adopter ledger before deleting; if it is also zero, delete. If
+entire ledger**. Check the adopter's ledger before deleting; if it is also zero, delete. If
 resource contention ever becomes real, read Zaivern Code (line-range leases in a per-repo ledger,
 git hooks refusing colliding writes, with published numbers) and wit (Tree-sitter symbol locks)
 first.
@@ -662,7 +662,7 @@ out-of-worktree refusal is what roles.md promises).
 | `cli/status.rs` | 2251 | C | The coordinator's one screen and the conditions that mean a person is needed. |
 | `cli/mcp.rs` | 794 | C | The channel into the watched coordinator session; tools mirror the CLI. The poll thread is kept on air-djl's measurement: it reads the ledger only (air-cmn), writes on change only (air-5uz), and its cost is not where the cost was. Goes when the harness can push on a ledger change without a timer AND a round shows the pushes arriving that way. |
 | `cli/holdings.rs` | 282 | none of A, B, C | The collision fact behind `peer-warning`, which fired 133 times over 112 files in this window and whose tags now say when (air-v7o). Goes when a round passes with zero peer warnings (the mechanism's own condition). |
-| `cli/lease.rs`, `ledger/leases.rs` | 386, 247 | none | 0 rows here for the whole ledger; adopter takes one every round (air-uae reversed the deletion, §10.3). Goes on the two lease mechanisms' conditions, in a repo that takes leases. |
+| `cli/lease.rs`, `ledger/leases.rs` | 386, 247 | none | 0 rows here for the whole ledger; the adopter takes one every round (air-uae reversed the deletion, §10.3). Goes on the two lease mechanisms' conditions, in a repo that takes leases. |
 | `ledger/messages.rs` | 110 | none | Owner ruling 2026-09-05 (air-srv): the coordination that never reached the ledger. 72 rows in its first day. Goes when the harness persists agent-to-agent messages where the ledger can read them, or when the fleet goes. |
 | `cli/worktree.rs` | 446 | none (isolate) | Owner ruling 2026-08-30 (air-fdz): Air creates and removes its worktrees because `claude --worktree` copies `.worktreeinclude` only on its own path and removes nothing. Goes when the harness creates a worktree Air names with the includes copied, and removal is not Air's, on the module's own recorded condition. |
 | `cli/audit.rs`, `cli/mechanisms.rs` | 1149, 499 | none | The removal-condition registry and its reading: how a mechanism is deleted on evidence rather than argument. This sweep is its reader. Goes when every mechanism's condition is machine-checkable and evaluated where it lives, so the registry is a query. |

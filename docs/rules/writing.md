@@ -27,7 +27,7 @@ the `writing-style` skill. This file is only the map of which bucket is which.
 
 ## Why the cap stops at the procedural buckets
 
-adopter caps sentences at 30 words in `guides/` and `reference/` only (`make docs-check`), and
+The adopter caps sentences at 30 words in `guides/` and `reference/` only (`make docs-check`), and
 deliberately not in `plans/`, `rules/`, `notes/` or its log. Air has no such check yet; when one
 is added (a candidate for an `air doctor` or hook check, since it is a prose rule that a
 mechanical check can replace), it must keep the same boundary.
@@ -43,7 +43,7 @@ unreadable without fighting ordinary technical prose.
 
 ## Provenance
 
-- Source: `~/projects/adopter/docs/rules/writing.md` (adopter `f2ca891`).
+- Source: `the adopter's docs/rules/writing.md` (the adopter `f2ca891`).
 - Ported 2026-08-18.
 - Adaptations: bucket table retargeted to Air's `docs/` layout; `make docs-check` noted as not yet
   present here; domain example replaced with worktree/claim terms; em dashes removed.

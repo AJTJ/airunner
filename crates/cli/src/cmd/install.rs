@@ -70,7 +70,7 @@ pub const SKILLS: &[(&str, &str)] = &[
     // `beads` was considered and deliberately left out. A target repo does need the bd
     // vocabulary, but that skill's own frontmatter says it covers "the bd 1.2.1 CLI surface",
     // and Air pins 1.2.2 because 1.2.1 corrupted the Dolt schema (`doctor::BD_PINNED`;
-    // adopter adoption 2026-08-21). Installing it would ship a document describing the
+    // The adopter's adoption 2026-08-21). Installing it would ship a document describing the
     // version Air refuses — the same "surface describes something untrue" failure this bead
     // exists to fix. Add it when it is rewritten against the pinned version.
     (
@@ -271,7 +271,7 @@ fn read_json(path: &Path) -> Result<Value, String> {
 /// One change to Air's OWN surface that a repo already running Air has to be told about
 /// (air-6g1).
 ///
-/// The incident: this round moved five things under adopter, which has Air installed, and
+/// The incident: this round moved five things under the adopter, which has Air installed, and
 /// nothing told it. `air install` already dry-runs; this is that dry run made honest about
 /// version-to-version change.
 ///
@@ -361,7 +361,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    landing prints each bead beside its acceptance and Air's verdict.",
         silent_break: true,
         action: "A repo whose landing pass assumed \"merged means closed\" will now find beads \
-                 merged and still open, because closing moved to the worker. adopter closed \
+                 merged and still open, because closing moved to the worker. The adopter closed \
                  99 beads on branch containment alone, 14 partial and 1 not done. The close \
                  reason is PROOF - a command and its output, a file:line, a passing test - and \
                  the hand-over gate already covers `bd close`.",
@@ -556,7 +556,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                  workers that fast-forward onto it. Who ran it is still on the row. (2) The \
                  tree key is NOT on by default and must not be turned on by reflex: a green \
                  transfers to an identical tree only if your verify is a function of the tree \
-                 alone. adopter's is not - `make verify` runs `git log main..HEAD` to pick \
+                 alone. The adopter's is not - `make verify` runs `git log main..HEAD` to pick \
                  the beads it checks (scripts/lib/bead_citations.py:140), so two commits over \
                  one tree verify differently there and a tree-keyed gate would pass beads it \
                  never checked. Ten-minute check before declaring it: grep your verify for \
@@ -579,7 +579,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                  signalled, make exits 2 and Air records a red, because 2 is a real failure's \
                  code too and Air does not parse make's \"Terminated\" line to tell them \
                  apart. A wrapper that knows a stage was signalled should exit 143 to say so \
-                 (adopter's run-logged.sh does).",
+                 (the adopter's run-logged.sh does).",
     },
     SurfaceChange {
         id: "task-by-file",
@@ -591,7 +591,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "Nothing to change in how workers are launched. What changes is what `ps` \
                  shows: a worker's argv no longer contains its prompt, so a `pkill -f` over \
                  ordinary command text (`air record verify`, `git status`) stops matching \
-                 every peer. adopter lost seven workers to that on 2026-08-30. Anything \
+                 every peer. The adopter lost seven workers to that on 2026-08-30. Anything \
                  that reads a worker's task out of `ps` or the tmux command line reads the \
                  file instead; anything that cleans `.air/` leaves `tasks/` alone.",
     },
@@ -634,7 +634,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "A landing that used to print a warning and proceed now exits 2 with the runs \
                  named. Wait (`air status` shows when they exit), stop one by pid (`kill \
                  <pid>`, never `pkill -f`), or pass `--despite-inflight` knowing it destroys \
-                 those runs. adopter lost 1,199 s of finished verify to the warning on \
+                 those runs. The adopter lost 1,199 s of finished verify to the warning on \
                  2026-08-30 and an operational rule did not hold; the override count is what \
                  decides whether the refusal stays.",
     },
@@ -661,7 +661,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: true,
         action: "Check every launch of yours for a second `--settings`: `air worker … -- \
                  --settings '{…}'` used to REPLACE Air's env block and switch the one refusal \
-                 off with no message (adopter ran five hours unenforced after adding one to \
+                 off with no message (the adopter ran five hours unenforced after adding one to \
                  disable Remote Control, and found out from a close that should have been \
                  refused). Inline JSON now merges; a `--settings <file>` in pass-through is \
                  refused with the four names. Relaunch every worker through `air worker` and \
@@ -704,7 +704,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    the Stop nudge (no bd call, no idle mark).",
         silent_break: true,
         action: "Any number derived by summing `bd_calls` over the event log is wrong for \
-                 every day before this: adopter's 2026-08-30 summed to 570,989 while the \
+                 every day before this: the adopter's 2026-08-30 summed to 570,989 while the \
                  largest total any process reached was 1,661, and one-shot commands cost \
                  1 to 4. Re-derive from lines written by this version; for older days, take \
                  the max `bd_calls` per command as that process's lifetime total. The bead's \
@@ -819,7 +819,7 @@ pub const SURFACE: &[SurfaceChange] = &[
         since: "2026-09-06 (air-d61)",
         headline: "`air doctor` and `air status` print one line when `.air/installed.json` \
                    records an older crate or surface version than the running binary: both \
-                   versions, the count of unread notices, and the fix. adopter's hooks ran \
+                   versions, the count of unread notices, and the fix. The adopter's hooks ran \
                    0.2.18 for days on a record that said 0.1.0 / surface 2, with the ledger \
                    already migrated and the installed skills stale, and nothing said so. \
                    Printed, never refused; a repo with no record at all stays silent.",
@@ -865,7 +865,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    creates the worktree and starts claude IN it, so the harness's own worktree \
                    isolation is off; one PreToolUse check replaces it, denying an \
                    Edit/Write/MultiEdit whose RESOLVED path leaves the worker's worktree. In \
-                   adopter's record the harness block stopped no observed write to the main \
+                   The adopter's record the harness block stopped no observed write to the main \
                    checkout and cost 455 refusals in five days, 388 of them (88%) with no git \
                    token in the command.",
         silent_break: false,
@@ -894,6 +894,22 @@ pub const SURFACE: &[SurfaceChange] = &[
                  the tools, set `metis_plugin_dir` to the `plugins/metis` directory of a metis \
                  checkout; Air will not guess that path, and a `--plugin-dir` pointing at \
                  nothing loads nothing silently.",
+    },
+    SurfaceChange {
+        id: "adopter-check",
+        since: "2026-09-06 (air-bpj)",
+        headline: "`air adopter-check` refuses a tracked line naming an adopter. Names are \
+                   read from `private/adopters.md` (one `name: <x>` line each), never from \
+                   the binary, and the check SKIPS when that file is absent. Air's own tracked \
+                   text now says \"an adopter\": an incident keeps its date, its count and its \
+                   `air-` bead, and anything that quotes an adopter's files lives in an \
+                   ignored `private/`.",
+        silent_break: false,
+        action: "Nothing to run, and nothing changes for a repo that does not use it. If YOUR \
+                 repo is quoted in someone else's, the same shape works: `private/` in \
+                 `.gitignore`, the names in `private/adopters.md`, and `air adopter-check` in \
+                 your verify. Air will not tell you a name is missing — a check whose list is \
+                 public would publish what it exists to hide.",
     },
 ];
 
@@ -1089,7 +1105,7 @@ pub const SURFACE_VERSION: u32 = match RELEASES.last() {
 ///
 /// `None` recorded means a repo installed before this existed: allowed, and deliberately so.
 /// The file already treats a missing record as "told about nothing", and refusing here would
-/// lock out every repo running Air today, adopter included.
+/// lock out every repo running Air today, the adopter included.
 pub fn may_install(mine: u32, theirs: Option<u32>) -> bool {
     theirs.is_none_or(|t| mine >= t)
 }
@@ -1106,7 +1122,7 @@ pub fn read_installed(air_dir: &Path) -> Installed {
 /// The install record is older than the running binary (air-d61).
 ///
 /// The downgrade refusal (air-w9d) guards one direction: an old binary may not write over a
-/// newer record. Nothing stated the other: adopter's `.air/installed.json` said 0.1.0 /
+/// newer record. Nothing stated the other: the adopter's `.air/installed.json` said 0.1.0 /
 /// surface 2 while its hooks had run 0.2.18 for days (the ledger already at schema v16, the
 /// installed `air-*` skills still telling workers to run a refused command), and `air doctor`
 /// said nothing. A repo whose hooks run a binary newer than the one it installed is exactly
@@ -1621,7 +1637,7 @@ mod tests {
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
         // air-8zu: roles.md states what Air records and refuses, never one repo's closing
-        // procedure. adopter closes with proof and was being told to set awaiting_review by
+        // procedure. The adopter closes with proof and was being told to set awaiting_review by
         // a file it cannot edit. `awaiting_review` may appear only where the refusal lists
         // what the gate matches, never as an instruction.
         assert!(
@@ -1668,7 +1684,7 @@ mod tests {
             "the owner audience is gone (air-uef)"
         );
         assert!(!ROLES_MD.contains("owner decision waiting"));
-        // Two facts from adopter's round, riding on the same file (owner, 2026-09-05).
+        // Two facts from the adopter's round, riding on the same file (owner, 2026-09-05).
         assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
         assert!(ROLES_MD.contains("reads the tree alone and not git history"));
         // air-80x.6: the verification lane, under Worker, as facts Air records and refusals

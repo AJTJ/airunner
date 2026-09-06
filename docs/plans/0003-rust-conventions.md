@@ -7,11 +7,11 @@ reasoning stays readable; each carries a **Decision** line citing `docs/decision
 while porting the Group 2 skills
 (a private skills inventory), which prescribe conventions the ported skills now
 reference conditionally.
-Sources: `adopter/.claude/skills/rust-safety/SKILL.md` (adopter `f2ca891`),
+Sources: `the adopter's .claude/skills/rust-safety/SKILL.md` (the adopter `f2ca891`),
 `another-project/.claude/skills/rust-safety/SKILL.md` + `rust-toolchain.toml` +
 `Cargo.toml` (another-project), `another-project/.claude/skills/rust-safety/SKILL.md` (no git),
 `another-project/CLAUDE.md:69-76` + `Cargo.toml [workspace.lints]` + `rustfmt.toml` +
-`rust-toolchain.toml` (another-project), `adopter/backend/Cargo.toml` +
+`rust-toolchain.toml` (another-project), `the adopter's backend/Cargo.toml` +
 `rust-toolchain.toml`, `another-project/.claude/skills/writing-rust-tests/SKILL.md` +
 `backend/Cargo.toml` (another-project), `another-project/Cargo.toml` +
 `.claude/settings.json` (another-project), `docs/plans/0001-first-slice.md §10`.
@@ -50,7 +50,7 @@ recommendation — for the owner to accept, reject, or defer. The ported skills 
 
 ## 1. Error handling crate(s) — DECIDED
 
-**What the sources do.** Every `rust-safety` copy (adopter, another-project, another-project, another-project)
+**What the sources do.** Every `rust-safety` copy (the adopter, another-project, another-project, another-project)
 uses plain `thiserror` enums, one per crate. All but another-project layer `error-stack` 0.6 `Report`
 on top (location capture, `change_context`, `ensure!`), and say "no `anyhow` in new code; only
 at boundaries like `main()`" (`another-project/CLAUDE.md:69`). another-project uses `thiserror` alone.
@@ -68,7 +68,7 @@ here; API surface consistency across `ledger`/`bd`/`hooks`/`cli` matters more.
 | Context chains / caller location | manual (`#[source]`, message) | automatic (`Report`) | `anyhow::Context` at the edge only |
 | Testing errors | `matches!(err, E::V{..})` | `report.current_context()` (Report has no `Display`) | same as libs |
 | Extra dep / learning curve | none | one crate, one idiom | one crate, well known |
-| Matches source skills | another-project | adopter, another-project, another-project | none exactly (all forbid anyhow in *new* code) |
+| Matches source skills | another-project | the adopter, another-project, another-project | none exactly (all forbid anyhow in *new* code) |
 
 **Decision (`docs/decisions.md` 2026-08-18):** `thiserror` enums per crate; `error-stack` a
 possible later addition; `anyhow` out of library crates. `rust-safety` v1.1.0 encodes this.
@@ -84,7 +84,7 @@ crates either way.
 
 **Sources.** another-project pins a large `[workspace.lints.clippy]` table (191 active `deny` entries and ~576 more commented out, `Cargo.toml:225+`, e.g.
 `cast_*`, `arc_with_non_send_sync`; `arithmetic_side_effects` is among the commented-out ones;
-run via `just clippy-strict` = `-D warnings`, `another-project/CLAUDE.md:14`); adopter, another-project, another-project, another-project have no lint tables and
+run via `just clippy-strict` = `-D warnings`, `another-project/CLAUDE.md:14`); the adopter, another-project, another-project, another-project have no lint tables and
 rely on default `cargo clippy`. The `rust-safety` skill's rules (no `unwrap`/`expect`/`panic`
 in runtime code, no `as` casts, no unchecked arithmetic) are prose, not lints, in every source.
 
@@ -116,7 +116,7 @@ two nightly-only import options are not added.
 
 ## 4. Clippy invocation and CI — DECIDED
 
-**Sources.** No source runs clippy in a hook; adopter's `Makefile` verify targets run
+**Sources.** No source runs clippy in a hook; the adopter's `Makefile` verify targets run
 `cargo test` (with named binaries, `Makefile:619-640`) but not clippy. another-project's `just clippy-strict` runs
 clippy with `-D warnings` (`another-project/CLAUDE.md:14,131`).
 
@@ -127,11 +127,11 @@ whatever `air record`'s verify command becomes; not a hook (too slow for <300 ms
 
 ## 5. Test layout and stack — DECIDED (speed rule); `rstest` = standing recommendation
 
-**Sources.** Two lineages (a private skills inventory): adopter/another-project use
+**Sources.** Two lineages (a private skills inventory): the adopter's another-project use
 `rstest` + `rstest_reuse`, inline `#[cfg(test)]` modules, a `prelude_test.rs` re-export;
 another-project uses a single integration binary (`backend/tests/main.rs` + `tests/common/`)
 with `#[sqlx::test]` per-test databases and *no* inline test modules. `cargo-nextest` is
-"preferred, not required" in adopter.
+"preferred, not required" in the adopter.
 
 **Recommendation.** Inline `#[cfg(test)]` modules for pure logic (the ledger's derivations,
 the hand-over verdict), one `tests/` integration binary per crate only for things that need
@@ -150,11 +150,11 @@ and sources: `writing-rust-tests` "Speed is a requirement" and
 
 **Sources.** another-project: `edition = "2024"`, `rust-version = "1.89.0"`, toolchain pinned
 `1.89.0`. another-project: `edition = "2024"`, toolchain `1.93.0` with `rustfmt`+`clippy` components.
-another-project: `edition = "2024"`. adopter: `edition = "2021"`, toolchain `channel = "stable"`
+another-project: `edition = "2024"`. The adopter: `edition = "2021"`, toolchain `channel = "stable"`
 ("never silently require nightly"). another-project: `edition = "2021"`.
 
 **Recommendation.** `edition = "2024"`; `rust-toolchain.toml` with `channel = "stable"` and
-`components = ["rustfmt", "clippy"]` (adopter's reasoning); set `rust-version` to whatever
+`components = ["rustfmt", "clippy"]` (the adopter's reasoning); set `rust-version` to whatever
 stable is at first commit and only bump it deliberately. Note: `rusqlite` bundled and `gix`
 both have their own MSRVs — check at workspace creation.
 

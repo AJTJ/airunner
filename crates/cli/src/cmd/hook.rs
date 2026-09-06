@@ -140,7 +140,7 @@ fn inner_env(
     // air-1r6: the tool's cwd is wherever the shell last cd'd, and every path the hook joins
     // (digest_dir, the ready cache, `.claude/air.json`) is relative to the worktree root. So
     // the root is resolved ONCE here and everything below reads it; a persisted `cd crates`
-    // refused three closes on adopter's w1 whose digests were there. Same class as air-dws
+    // refused three closes on the adopter's w1 whose digests were there. Same class as air-dws
     // and air-75u: a check that reads where it runs. A cwd outside any repository stays as
     // it is, and `open` fails on it as before.
     let cwd = git::toplevel(&cwd).unwrap_or(cwd);
@@ -302,7 +302,7 @@ fn dispatch(
             d
         }
         HookEvent::Stop | HookEvent::SubagentStop if role_for(worker) == "coordinator" => {
-            // The coordinator holds no lane and never hands over: no advisory (adopter
+            // The coordinator holds no lane and never hands over: no advisory (the adopter
             // adoption log §9: the coordinator received a worker's hand-over advisory).
             let prev = set_session(ledger, input, worker, "idle", None)?;
             Dispatched::new(
@@ -317,7 +317,7 @@ fn dispatch(
         // A subagent stopping is not the worker stopping: the main agent is mid-turn and
         // about to read the subagent's result. Treating it as a Stop marked a working
         // session idle and, with no claim held, ran the nudge's `bd ready` confirm — one bd
-        // process (~2 s) per subagent stop, 241 of them on adopter's 2026-08-30, none of
+        // process (~2 s) per subagent stop, 241 of them on the adopter's 2026-08-30, none of
         // which could ever be acted on (air-bp0). Observed, and nothing else.
         HookEvent::SubagentStop => Dispatched::new(
             HookOutcome::Allow { context: None },
@@ -333,13 +333,13 @@ fn dispatch(
             // bead by trailer: say nothing (guardrails audit 2026-08-21; a non-green stop
             // after a WIP commit is not a gap). The trailer half is air-60x: a superseding
             // branch holds no claim and now has a hand-over path, so silence toward it
-            // stopped being correct the moment that path existed (adopter's w1: "a defect
+            // stopped being correct the moment that path existed (the adopter's w1: "a defect
             // created by a fix elsewhere"). Both halves are the facts the gate itself read.
             let has_work = !f.held_beads.is_empty() || !f.carried_beads.is_empty();
             // Silence is the signal that all is well, and silence when nothing has changed:
             // the advisory is spoken once per (session, HEAD, missing checks, latest verify)
             // and again only when one of those moves. A blocked worker is not nagged every
-            // turn about a blocker it cannot clear (adopter, 2026-08-21).
+            // turn about a blocker it cannot clear (the adopter, 2026-08-21).
             let latest = ledger
                 .latest_run_at_commit(&f.head, air_ledger::verify::Kind::Verify)
                 .ok()
@@ -543,7 +543,7 @@ fn pre_tool_use(
                 return Ok(Dispatched::new(
                     HookOutcome::Allow {
                         // air-w91: this named `air peer`, a command that was planned and never
-                        // built, and adopter's worker hit "unrecognized subcommand" at the
+                        // built, and the adopter's worker hit "unrecognized subcommand" at the
                         // moment it was dealing with a shared file. Both commands below exist;
                         // a probe holds every shipped advice string to that.
                         context: Some(format!(
@@ -698,7 +698,7 @@ pub fn handover_gate(
 ///
 /// The failure this closes: a claim row survived `bd close`, so `handover-not-green` and the
 /// idle conditions kept firing on a bead that was closed and landed — three repeats of one
-/// alert on ad-gwyv.1, and a coordinator spending a setup window establishing that a row was
+/// alert on.1, and a coordinator spending a setup window establishing that a row was
 /// stale rather than a worker stuck. `air status` reconciled it against bd eventually, but only
 /// when bd answered inside its 2 s budget, which under load it does not.
 ///
@@ -766,7 +766,7 @@ pub fn is_handover_command(cmd: &str) -> bool {
 ///
 /// The hook derived it from the input's `cwd` alone, and that is the SHELL's directory: a
 /// coordinator whose shell had stepped into a worker's worktree was taken for that worker at
-/// its next Stop. adopter ad-fv4z, 2026-08-30, twice: the main checkout's Stop hook reported
+/// its next Stop. The adopter, 2026-08-30, twice: the main checkout's Stop hook reported
 /// a hand-over refusal naming HEAD e7005fe, w1's head, while main was at f4f7008, with nothing
 /// saying whose tree that was. A coordinator acting on it would run `git merge main` in the
 /// wrong checkout; and the session row was written under w1.
@@ -850,7 +850,7 @@ pub fn project_for(cwd: &Path) -> String {
 /// Upsert the session row; returns the state it had before (None for a new session) so the
 /// caller can put the transition on the event line. `worker`/`role` are updated on every
 /// hook: `claude --worktree` can fire SessionStart with `cwd` still at the main checkout, and
-/// a row stuck on `main` made a live worker look gone (adopter ad-lpqp).
+/// a row stuck on `main` made a live worker look gone (the adopter).
 /// air-air: the model a session is running, read out of its own transcript.
 ///
 /// Recorded rather than inferred, and that is the whole point of the bead: a session launched
@@ -901,7 +901,7 @@ fn set_session(
     // Read once per hook, cheaply; None until the transcript has its first assistant message.
     let model = model_of(input.transcript_path.as_deref());
     // What THIS hook process sees, which is what the gate at hook.rs runs with (air-9dg:
-    // adopter's workers ran unenforced for five hours after a second `--settings` replaced
+    // The adopter's workers ran unenforced for five hours after a second `--settings` replaced
     // the env block; the ledger is where that becomes visible).
     let enforce: i64 = i64::from(std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1"));
     ledger
@@ -1158,7 +1158,7 @@ mod tests {
         // The nudge's own text and its filtering are covered by `stop_nudge`'s unit tests in
         // `crates/hooks/src/gate.rs` and by two `air selftest` probes, neither of which needs
         // a bd.
-        crate::cmd::ready_cache::write(&wt, &["fd-1".into(), "fd-2".into()], &crate::cmd::now());
+        crate::cmd::ready_cache::write(&wt, &["zz-1".into(), "zz-2".into()], &crate::cmd::now());
         let d = stop(&ledger);
         assert_eq!(d.decision, "no-claim", "a cache alone must not nudge");
         assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
@@ -1172,7 +1172,7 @@ mod tests {
         assert_eq!(d.inputs["ready_confirmed"], false);
         // A claim ends the nudging, and the measurement records that one followed.
         ledger
-            .record_claim("fd-1", "wt", &[], &crate::cmd::now())
+            .record_claim("zz-1", "wt", &[], &crate::cmd::now())
             .unwrap();
         // Claim held, no green recorded: speaks once, then the identical gap is silent.
         let d = stop(&ledger);
@@ -1248,16 +1248,16 @@ mod tests {
     fn extracts_the_bead_from_handover_commands() {
         use super::handover_bead;
         assert_eq!(
-            handover_bead("bd close fd-1 --reason done").as_deref(),
-            Some("fd-1")
+            handover_bead("bd close zz-1 --reason done").as_deref(),
+            Some("zz-1")
         );
         assert_eq!(
-            handover_bead("bd update fd-2 -s awaiting_review").as_deref(),
-            Some("fd-2")
+            handover_bead("bd update zz-2 -s awaiting_review").as_deref(),
+            Some("zz-2")
         );
         assert_eq!(
-            handover_bead("bd update --status closed fd-3").as_deref(),
-            Some("fd-3")
+            handover_bead("bd update --status closed zz-3").as_deref(),
+            Some("zz-3")
         );
         assert_eq!(handover_bead("make verify"), None);
     }
@@ -1280,21 +1280,21 @@ mod tests {
         fire(repo, serde_json::json!({"hook_event_name": "SessionStart"}));
         {
             let (l, worker) = crate::cmd::open(repo).unwrap();
-            l.record_claim("fd-1", &worker, &[], "t0").unwrap();
-            l.record_claim("fd-2", &worker, &[], "t0").unwrap();
+            l.record_claim("zz-1", &worker, &[], "t0").unwrap();
+            l.record_claim("zz-2", &worker, &[], "t0").unwrap();
         }
 
         // A hand-over is not an ending: the row stays (air-3eu).
-        post("bd update fd-2 -s awaiting_review");
+        post("bd update zz-2 -s awaiting_review");
         assert_eq!(open().len(), 2, "awaiting_review must not release");
 
-        post("bd close fd-1 --reason done");
+        post("bd close zz-1 --reason done");
         let held: Vec<String> = open().into_iter().map(|c| c.bead).collect();
-        assert_eq!(held, vec!["fd-2".to_string()], "close must release fd-1");
+        assert_eq!(held, vec!["zz-2".to_string()], "close must release zz-1");
 
         let released = events(repo)
             .iter()
-            .any(|e| e["decision"] == "released" && e["inputs"]["bead"] == "fd-1");
+            .any(|e| e["decision"] == "released" && e["inputs"]["bead"] == "zz-1");
         assert!(released, "the release must be on the event line");
     }
 
@@ -1337,14 +1337,14 @@ mod tests {
 
     #[test]
     fn matches_only_handover_writes() {
-        assert!(is_handover_command("bd close fd-1 --reason done"));
-        assert!(is_handover_command("bd update fd-1 -s awaiting_review"));
-        assert!(is_handover_command("bd update fd-1 --status closed"));
+        assert!(is_handover_command("bd close zz-1 --reason done"));
+        assert!(is_handover_command("bd update zz-1 -s awaiting_review"));
+        assert!(is_handover_command("bd update zz-1 --status closed"));
         assert!(is_handover_command(
-            "bd update fd-1 --status=awaiting_review"
+            "bd update zz-1 --status=awaiting_review"
         ));
-        assert!(!is_handover_command("bd update fd-1 -s in_progress"));
-        assert!(!is_handover_command("bd update fd-1 --claim"));
+        assert!(!is_handover_command("bd update zz-1 -s in_progress"));
+        assert!(!is_handover_command("bd update zz-1 --claim"));
         assert!(!is_handover_command("git commit -am wip"));
         assert!(!is_handover_command("git merge worktree-x"));
         assert!(!is_handover_command("echo bd close"));

@@ -37,7 +37,7 @@ without a trigger.
 
 **Once you have work, finishing a bead is not a stop.** At WIP 0 take the next ready bead and say
 so afterwards; stop only when `bd ready` is empty or on a blocker you captured. (Two workers read
-"next bead" as "wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of
+"next bead" as "wait for review" and idled 20 min, 2026-08-22; the adopter's 51-minute idle of
 2026-08-15 was fixed by this sentence and never recurred. Removed never.) The run-on begins at
 your first piece of work, not at session start; the two sentences above are the whole of the
 difference.
@@ -90,7 +90,7 @@ worktree, and `AskUserQuestion`. The owner is reached through `air capture "<que
 coordinator files it as a bead labelled `owner`, the queue shows in `air status`, and the
 question and its answer leave a row (owner, 2026-08-30; air-bm3). An Edit or Write whose
 resolved path leaves your worktree is denied by Air's PreToolUse hook (air-8gj); the harness's
-own worktree isolation is off, since in adopter's record it stopped no observed write to
+own worktree isolation is off, since in the adopter's record it stopped no observed write to
 main and cost 455 refusals in five days, 88% with no git token. **[Air enforces]** The one
 refusal: the `bd` write that
 ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
@@ -136,7 +136,7 @@ are yours), set priority, add `blocks` edges for shared files. Never set `assign
 bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
 flight. **Idle:** feed no one. Naming a bead at a worker reserves nothing: `air claim` is the
 reservation, and a bead named in a message and not claimed is still every worker's to take
-(adopter lost two that way, ad-xbr5; owner, 2026-09-05). **[fact]**
+(the adopter lost two that way,; owner, 2026-09-05). **[fact]**
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
 acceptance, a resource conflict), by filing a bead labelled `owner` with your recommendation in
 its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
@@ -202,11 +202,11 @@ and nothing to roll back, no armed window, and no `git reset --hard` on main. Th
 refusal went with the reset that was its only reason. **[fact]** An identical tree is an
 identical verdict only when the repo's verify reads the tree alone and not git history; a
 verify that reads the log, the branch name or the reflog can pass on the branch and fail on
-main over the same bytes (adopter ad-ogoa; owner, 2026-09-05). **[fact]**
+main over the same bytes (the adopter; owner, 2026-09-05). **[fact]**
 
 The `.git` shape still differs between a worktree (a FILE) and the main checkout (a DIRECTORY),
 and anything reading it, `core.hooksPath`, or the cwd can differ between the two. That was a
-reason to verify twice while a landing verified in the main checkout (air-eaw, from adopter
+reason to verify twice while a landing verified in the main checkout (air-eaw, from the adopter
 2026-08-23: *"Every other instrument failure that night was catchable by running the suite. This
 one was only catchable by running it somewhere else."*). Air's landing no longer runs anything
 there, so the difference is now a reason to fix a test that reads where it runs, not a reason to
@@ -216,7 +216,7 @@ proof (owner, 2026-08-22). A landing Air performs prints every bead beside its a
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause
 only by lookup (a recorded green at the landed sha, a path the merge changed) and reports the
 rest as unreadable rather than judging prose. A clause the merge CONTRADICTS is a wrong close,
-named by `air status` (air-ayp; adopter closed 99 beads on containment alone, 14 partial and
+named by `air status` (air-ayp; the adopter closed 99 beads on containment alone, 14 partial and
 1 not done). **[Air enforces]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
@@ -248,8 +248,8 @@ A refusal names its rule and the fixing command. Silence from Air is not a denia
 
 Cut to facts and refusals after `../research/guardrails-as-throttles.md` (2026-08-21): advice
 to a capable model was removed; what remains is what Air records, answers, or refuses. Duties
-adapted from adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
+adapted from the adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
 `../decisions.md` (2026-08-20/21). Standstill lines (worker run-to-completion, from
-adopter/CLAUDE.md:683; coordinator reach, poll, and landings) added for the 2026-08-22
+The adopter's CLAUDE.md:683; coordinator reach, poll, and landings) added for the 2026-08-22
 05:26-05:45 incident, bead air-arq. This file is embedded in the `air` binary (`ROLES_MD`,
 `include_str!`) and written to `.air/roles.md` by `air init`; the two cannot differ.

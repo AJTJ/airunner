@@ -32,7 +32,7 @@ winning on the same model; vendors removing harness pieces on model upgrades; pr
 guidance measured as cost without benefit.
 
 **Inclusion.** Vendor engineering posts and model cards, arXiv papers, benchmark reports,
-this repo's own record and adopter's notes (read-only). Blogs only as labelled opinion.
+this repo's own record and the adopter's notes (read-only). Blogs only as labelled opinion.
 Primary sources exist for every sub-question and were read first.
 
 **Order followed.** External survey, deepen, then the local record (`docs/research/`,
@@ -120,7 +120,7 @@ Confirmatory. Established.
   choice once the weakness went away.
 
 Counter-evidence: none; the corpus already warns that Agentless v1 and v2 numbers must not be
-compared across versions (`docs/research/adopter-research-corpus.md:43`).
+compared across versions (`private/research/adopter-research-corpus.md:43`).
 
 ### F4. Vendors now say in public that harness components are bets against the model, and remove them on model upgrades
 
@@ -204,8 +204,8 @@ Confirmatory. Established for the taxonomy; contested for the interpretation.
   prompt fixes gave +9.4% (AG2) and +15.6% (ChatDev); "many MAS failures arise from the
   challenges in organizational design and agent coordination rather than the limitations of
   individual agents" (https://arxiv.org/html/2503.13657). The corpus's standing caution:
-  "take MAST's VOCABULARY, not its STATISTICS"; three of adopter's six failures are gaps in
-  MAST (`docs/research/adopter-research-corpus.md:56`).
+  "take MAST's VOCABULARY, not its STATISTICS"; three of the adopter's six failures are gaps in
+  MAST (`private/research/adopter-research-corpus.md:56`).
 - Anthropic research system: multi-agent beat single Opus 4 by 90.2% *on research*, at "about
   15x more tokens than chats"; "most coding tasks involve fewer truly parallelizable tasks
   than research"; subagent "prompting strategy focuses on instilling good heuristics rather
@@ -255,8 +255,8 @@ Exploratory. Established (model cards, verified by pdftotext in this repo).
   hacking persists, with smaller models exhibiting larger gaps on holdout suites"; the gap
   "grows by 28 percentage points for every tenfold increase in code size"
   (https://arxiv.org/abs/2605.21384).
-- adopter, 2026-08-21: `make verify` silently skipped jest; a backgrounded verify reported
-  exit 0 (`docs/decisions.md`, "incidents mined from adopter's round").
+- The adopter, 2026-08-21: `make verify` silently skipped jest; a backgrounded verify reported
+  exit 0 (`docs/decisions.md`, "incidents mined from the adopter's round").
 
 This is the strongest evidence *for* keeping one class of constraint: the model's own report
 of success is not evidence at any capability level measured so far, and the prompt-level
@@ -270,12 +270,12 @@ Emerging.
 - CAID (arXiv 2603.21489): single 57.2 / soft (prompt-declared) isolation 55.5 / worktree
   63.3 on PaperBench; the corpus verdict "Either enforce the partition observationally ... or
   stop writing the rule" (`adopter-research-corpus.md:298`,
-  `docs/research/adopter-notes/notes/research-actions.md:184-206`). The abstract confirms the
+  `private/research/adopter-notes/notes/research-actions.md:184-206`). The abstract confirms the
   +25.6 headline only (https://arxiv.org/abs/2603.21489).
-- adopter's own dead-end list: "Adding a rule to CLAUDE.md to fix a behaviour ... making the
+- The adopter's own dead-end list: "Adding a rule to CLAUDE.md to fix a behaviour ... making the
   instruction more explicit did not fix it" (`research-actions.md:585-607`); its enforcement
   audit: 66 process rules, 27% enforced, and "not one E fires on a sequence"
-  (`docs/research/adopter-enforcement-and-skills.md:144-172`).
+  (`private/research/adopter-enforcement-and-skills.md:144-172`).
 
 ## 2. Taxonomy: which constraints age well
 
@@ -285,7 +285,7 @@ The evidence sorts constraints by what they *are*, not by how strict they are.
 |---|---|---|---|
 | **Fact supply** (tell the model something true it cannot derive) | green at sha, who holds a file, pid liveness, bd version | Well. A fact stays true as models improve; cost is one line. | F5 (CLAUDE.md "commands Claude can't guess"), F6 (non-standard practices are the useful content), Weng "interface with external context ... should remain" (F4) |
 | **Verification of an artifact** (check the thing, not the claim) | `air record` exit at HEAD, merged-tree verify in `land`, flaky-at-head | Well. The false-success rate is flat across capability (F9); the surviving harness piece at Anthropic is the external evaluator (F4). | F9, F4, best-practices "give Claude a check it can run" (F5) |
-| **Isolation** (make the wrong action impossible rather than forbidden) | `--worktree`, deny `git push`, deny `bd create`, leases on `:8080` | Well, when it removes a recorded collision. Zero-cost on the happy path. Ages badly only when the deny encodes a *policy* the model could now judge (see `bd create`). | F10 (enforced beats declared), adopter resource collisions 2026-08-21 |
+| **Isolation** (make the wrong action impossible rather than forbidden) | `--worktree`, deny `git push`, deny `bd create`, leases on `:8080` | Well, when it removes a recorded collision. Zero-cost on the happy path. Ages badly only when the deny encodes a *policy* the model could now judge (see `bd create`). | F10 (enforced beats declared), the adopter resource collisions 2026-08-21 |
 | **Measurement** (count, show, never gate) | `awaiting_review` count, review wait, inbox depth, `--estimate` vs actual | Well. Measurement is how the removal condition of everything else gets decided. | do-less §3; decisions 2026-08-18 item 5, 2026-08-21 "No WIP cap" |
 | **Goal + contract statements** | "hand-over needs green at HEAD that contains main" | Well. OpenAI: "a clear goal, strong constraints, and an explicit output contract" (F1). | F1, F4 |
 | **Procedures** (ordered steps the model must follow) | "merge main, then verify, then digest, then close"; sprint contracts | Badly. Four-month half-life at Anthropic (F4); Agentless (F3); CoT (F1). | F1, F3, F4 |
@@ -303,7 +303,7 @@ Rule of thumb that falls out: **a constraint ages well when removing it would ma
 From do-less §1-6, sharpened by the evidence above:
 
 1. Name the incident (capture id, retro line, decisions entry). F10: a rule written without
-   one did not fix the behaviour in adopter's own measurement.
+   one did not fix the behaviour in the adopter's own measurement.
 2. Classify by the taxonomy. If it is a procedure, role script, ritual, or cap, the default is
    "do not build; measure instead". If it is a fact, verification, or isolation, build the
    smallest version.
@@ -346,7 +346,7 @@ the machinery, and two of them get *worse* with capability:
    capability, not less.
 4. **Two behavioural incidents this week were fixed by prose, and the fix worked at once.** A
    worker claimed and sat idle; the coordinator asked the owner whether to assign work instead
-   of assigning it (adopter's `docs/notes/air-adoption.md` §9, read 2026-08-21; not copied into this repo, so this citation does not resolve here). Both were cured by
+   of assigning it (the adopter's `docs/notes/air-adoption.md` §9, read 2026-08-21; not copied into this repo, so this citation does not resolve here). Both were cured by
    a sentence in roles.md ("run to completion"; "active mode: every online worker has work").
    This is F6's "instructions are well followed" operating in Air's favour.
 
@@ -393,28 +393,28 @@ behaviour, stop speaking), **remove**, **defer** (keep for round one, decide on 
 | Mechanism | Failure cited | Fact / judgement | Measurement / gate | Removal condition | Verdict |
 |---|---|---|---|---|---|
 | Every invocation appends one event line; fail-open on any error (`hook.rs:1-18`) | "all events should be new events" (decisions 2026-08-20); hook must never block a tool (plan 0001) | fact | measurement | None needed: this is the instrument every other removal condition reads | keep |
-| SessionStart / SessionEnd session rows (`hook.rs:159-183`) | gone-with-claim needs a liveness fact; ad-lpqp launch race | fact | measurement | When Claude Code exposes session liveness to an outside process | keep |
-| PermissionRequest -> `stuck` (`hook.rs:184-190`) | adopter rank-1 pain: stalls on a prompt nobody watches (`enforcement-and-skills.md:182`); 51 min lost to idling (`corpus:114`) | fact | measurement (feeds `stuck`) | When permission prompts no longer occur in worker sessions (auto mode classifier) | keep |
-| PostToolUse(Edit\|Write) journals the path (`hook.rs:205-210`) | holdings must be derived, not declared (CAID, F10; ad-uwdg) | fact | measurement | When `git status` across worktrees alone answers `holdings` with the same precision (it nearly does: `holdings.rs:1-6`) | keep; re-test need after round one |
+| SessionStart / SessionEnd session rows (`hook.rs:159-183`) | gone-with-claim needs a liveness fact; launch race | fact | measurement | When Claude Code exposes session liveness to an outside process | keep |
+| PermissionRequest -> `stuck` (`hook.rs:184-190`) | the adopter rank-1 pain: stalls on a prompt nobody watches (`enforcement-and-skills.md:182`); 51 min lost to idling (`corpus:114`) | fact | measurement (feeds `stuck`) | When permission prompts no longer occur in worker sessions (auto mode classifier) | keep |
+| PostToolUse(Edit\|Write) journals the path (`hook.rs:205-210`) | holdings must be derived, not declared (CAID, F10;) | fact | measurement | When `git status` across worktrees alone answers `holdings` with the same precision (it nearly does: `holdings.rs:1-6`) | keep; re-test need after round one |
 | PreToolUse(Edit\|Write) peer-on-file warning, once per (session, path, peer set) (`hook.rs:315-355`) | "announce before touching a shared file" was prose; corpus: keep exactly one inter-agent message (`corpus:217`) | fact | gate (warn) | *proposed*: remove the warning, keep the journal, when one round shows the warning fired and the worker changed course in under 10% of cases (count `warn` vs subsequent edits on the same path) | defer; candidate for make-measurement |
 | PreToolUse(Bash `bd close` / `-s awaiting_review`) hand-over gate, advisory unless `AIR_ENFORCE=1` (`hook.rs:379-405`, `gate.rs`) | exit gated on a promise not evidence (rank 2, `enforcement-and-skills.md:183`); "green alone / red together" twice; false green 2026-08-21 | fact (4 checks on git + ledger) | gate | Never fully: the false-success base rate is flat (F9). Enforce only after one advisory round shows a `would-refuse` that led to a bad land | keep (advisory) |
-| Stop / SubagentStop worker advisory, fingerprint-deduped (`hook.rs:226-260`) | ad-ydzt "Stop hook blocks exit *while holding a claim*"; "handover ok every turn" noise (fixed) | fact, but spoken at the wrong moment | gate (advise) | *proposed*: remove when the PreToolUse gate above is observed to catch every hand-over (it runs on the actual command) | **make-silent**: today it fires for any worker stop with HEAD not green, claim or not, and re-fires after every WIP commit (new HEAD = new fingerprint). Gate it on an open claim plus `handover_attempts > 0`, or drop it and let `gone-with-claim` cover the abandoned case |
+| Stop / SubagentStop worker advisory, fingerprint-deduped (`hook.rs:226-260`) | "Stop hook blocks exit *while holding a claim*"; "handover ok every turn" noise (fixed) | fact, but spoken at the wrong moment | gate (advise) | *proposed*: remove when the PreToolUse gate above is observed to catch every hand-over (it runs on the actual command) | **make-silent**: today it fires for any worker stop with HEAD not green, claim or not, and re-fires after every WIP commit (new HEAD = new fingerprint). Gate it on an open claim plus `handover_attempts > 0`, or drop it and let `gone-with-claim` cover the abandoned case |
 | Stop for coordinator: silent (`hook.rs:213-224`) | adoption log §9: coordinator nagged with a worker's advisory | fact | none | n/a | keep |
 | Lease heartbeat refreshed on every tool call (`lease.rs:1-5`) | lease.sh stale-heartbeat semantics; dead-holder detection | fact | measurement | When pid liveness alone is trusted for staleness (it already is for `gone-with-claim`); then the heartbeat is redundant | defer |
-| PreCompact re-inject (ad-wp98, plan 0001 §5) | not built | fact | n/a | Build only if a round shows a post-compaction hand-over failure; Claude Code's compaction now preserves "key decisions" (best-practices) | defer (do not build without an incident) |
+| PreCompact re-inject (plan 0001 §5) | not built | fact | n/a | Build only if a round shows a post-compaction hand-over failure; Claude Code's compaction now preserves "key decisions" (best-practices) | defer (do not build without an incident) |
 
 ### 6.2 Deny rules (`crates/cli/src/cmd/launch.rs:21-34`, `repo_deny`)
 
 | Rule | Failure cited | Fact / judgement | Gate | Removal condition | Verdict |
 |---|---|---|---|---|---|
-| worker `Bash(git push *)`, coordinator `Bash(git push *)` | publishing safety; adopter's most-enforced class (`enforcement-and-skills.md:166-170`) | isolation | gate | None while landing is the owner's act | keep |
+| worker `Bash(git push *)`, coordinator `Bash(git push *)` | publishing safety; the adopter's most-enforced class (`enforcement-and-skills.md:166-170`) | isolation | gate | None while landing is the owner's act | keep |
 | worker `Bash(air land *)` | workers do not land (role boundary; sole reviewer) | judgement encoded as isolation | gate | *proposed*: when `air land` itself refuses from a non-main checkout and verifies the merged tree, the deny is redundant | keep for now; revisit when `air land` is built |
-| worker `Bash(bd create *)` | "workers capture, they do not file" (decisions 2026-08-18 item 3) | **judgement** (who may file) | gate | *proposed*: when one round shows >70% of captures promoted to beads with no change by triage, workers filing with `--validate` is cheaper than the relay. The evidence for the split is thin: adopter dedup was ~3% (`SYNTHESIS.md:23`) | defer; candidate for remove after round one |
+| worker `Bash(bd create *)` | "workers capture, they do not file" (decisions 2026-08-18 item 3) | **judgement** (who may file) | gate | *proposed*: when one round shows >70% of captures promoted to beads with no change by triage, workers filing with `--validate` is cheaper than the relay. The evidence for the split is thin: the adopter dedup was ~3% (`SYNTHESIS.md:23`) | defer; candidate for remove after round one |
 | worker `Bash(bd sync *)` | outward write (pushes `.beads`) | isolation | gate | Same as `git push` | keep |
 | worker `Bash(bd update *--claim*)` | "claims are wrapped, not watched; a missed event must not be possible" (decisions 2026-08-20) | fact integrity (ledger completeness) | gate | When bd records claim history with actor and files (then `air claim` is a wrapper with nothing to add) | keep |
 | worker `Bash(claude *)` | nested sessions escape the worktree and the subscription pool | isolation | gate | No incident on record. Smallest version already. | keep (cheap); log if it ever fires |
 | worker `EnterWorktree`, `ExitWorktree` | leaving the worktree defeats native isolation | isolation | gate | When Claude Code pins a `--worktree` session natively | keep |
-| coordinator `Bash(git commit *)` | adopter pre-commit refuses agent commits on main; `intake.jsonl` dirtied main and blocked `make land` | isolation | gate | When `land` is the only writer to main by construction | keep |
+| coordinator `Bash(git commit *)` | the adopter pre-commit refuses agent commits on main; `intake.jsonl` dirtied main and blocked `make land` | isolation | gate | When `land` is the only writer to main by construction | keep |
 | repo deny patterns from `.claude/air.json` | capture fcd8ff: `make deploy-site` shipped outside an enumerated list | isolation (pattern over enumeration) | gate | None; adoption log §9 asks `air init` to *propose* the list by scanning the repo | keep |
 
 ### 6.3 Attention conditions (`crates/cli/src/cmd/status.rs:66-145`, pushed by `mcp.rs`)
@@ -424,7 +424,7 @@ behaviour, stop speaking), **remove**, **defer** (keep for round one, decide on 
 | `stuck` (PermissionRequest age >= 5 min) | stalls unwatched; 13-min cron replaced | fact; threshold is a guess | push | Tune from round data; remove if auto mode makes prompts rare | keep |
 | `idle-with-claim` (>= 20 min) | worker claimed then sat idle (2026-08-21) | fact | push | *proposed*: when a round shows zero occurrences with the run-to-completion prose present, raise the threshold or drop the push and keep the count | keep |
 | `silent-with-claim` (>= 20 min, state working) | claim open with no hook event (decisions 2026-08-20) | fact; threshold is a guess and long tool calls will false-positive as horizons grow (F8) | push | *proposed*: remove when pid liveness plus `idle-with-claim` cover every real case in a round | defer; likely merge into `gone`/`idle` |
-| `gone-with-claim` (pid dead, or no session row after 3 min grace) | ad-lpqp false positive fixed by grace + pid | fact | push | When Claude Code exposes liveness | keep |
+| `gone-with-claim` (pid dead, or no session row after 3 min grace) | false positive fixed by grace + pid | fact | push | When Claude Code exposes liveness | keep |
 | `handover-not-green` (attempted, red) | hand-over gate result needs to reach the coordinator | fact | push | None | keep |
 | `inbox-waiting` (oldest capture >= 30 min) | time-to-triage metric (§2.8) | **judgement** about the coordinator's pace, pushed at the coordinator about its own queue | push | *proposed*: measurement only; the count is on `air status` already | **make-measurement** |
 | `owner-decision-waiting` | ruling E; `bd human` did not exist | fact | push | When the owner walks the queue on a cadence of their own | keep |
@@ -439,7 +439,7 @@ behaviour, stop speaking), **remove**, **defer** (keep for round one, decide on 
 | green `verify` at HEAD | false green; exit on promise | fact | never (F9) | keep |
 | `main` is ancestor of HEAD | "green alone / red together" caught twice by `make land` | fact | never while branches merge into main | keep |
 | bead claimed by this worker | claim state not evidence (`enforcement-and-skills.md:57`) | fact | when bd enforces claim ownership on status change | keep |
-| flaky-at-head N/M reported, no retry | ad-jklh | fact (measurement inside a gate) | none | keep |
+| flaky-at-head N/M reported, no retry | | fact (measurement inside a gate) | none | keep |
 | digest newer than claim (ruling D) | plan 0001 §4 item 5; no incident of a missing digest causing a bad land is on record | **procedure** (a digest is a judgement artifact; its presence is a proxy) | *proposed*: remove from the gate when digests are derivable from commits + event log, or when one round shows no reviewer ever read one before landing | **make-measurement**: count hand-overs without a digest in `status`; do not list it as a missing check |
 | advisory mode for a full round | decisions 2026-08-17 | policy | enforce only on evidence (above) | keep |
 
@@ -450,7 +450,7 @@ behaviour, stop speaking), **remove**, **defer** (keep for round one, decide on 
 | `air record`: refuses backgrounded commands (`record.rs:1-9`) | backgrounded verify reported 0 | fact | gate | none | keep |
 | `air record`: `suspicious` (< 2 s or no output), `command-changed`, `dirty-tree` flags | jest silently skipped; deleted `router.d.ts` silenced tsc | fact | measurement (flags, not refusals) | none | keep; never promote to a refusal without an incident where the flag was right and ignored |
 | `air claim` / `air release --reason` (`claim.rs`) | claims wrapped not watched | fact | gate (ledger refuses a held bead, then bd CAS) | when bd holds the history | keep |
-| `air claim --files` (intent, measured not required) | CooperBench first-turn plan (`corpus:217`), ad-jl0c | judgement made optional | measurement | none | keep as optional |
+| `air claim --files` (intent, measured not required) | CooperBench first-turn plan (`corpus:217`), | judgement made optional | measurement | none | keep as optional |
 | `air capture` (one line, never a tracked file) | `intake.jsonl` dirtied main | fact | measurement | none | keep |
 | `air triage --bead/--drop` | capture -> triage split (0022) | procedure for the coordinator | measurement | see `bd create` deny above | defer |
 | `air lease take/release/status/break/beat` (`lease.rs`) | resource collision night; `lease.sh` 1:1 | fact + isolation | gate on a named resource | when resources stop being shared (one fleet per machine) | keep |
@@ -500,7 +500,7 @@ the two incident-backed drives, and the denial-reading paragraph.
 | "Touches another worktree's tree. Read with `git show`" (123-124) | zero incidents; sibling fencing not pursued (decisions 2026-08-20) | judgement | no | n/a | keep the `git show` fact only |
 | Never closes without green at HEAD containing main (125-126) | the one refusal | fact | gate | n/a | keep |
 | "Never asks a peer to run what it was denied, or accepts a peer's green" (127) | none | judgement | no | n/a | **remove** (no incident; the gate checks *this worker's* green anyway) |
-| "Never prints a `bd` command for the owner to run" (128) | `bd human` x4 in adopter CLAUDE.md | judgement | `capture --for owner` exists | n/a | **remove**; the owner queue is the fact that replaces it |
+| "Never prints a `bd` command for the owner to run" (128) | `bd human` x4 in the adopter CLAUDE.md | judgement | `capture --for owner` exists | n/a | **remove**; the owner queue is the fact that replaces it |
 | Hand-over "in order" (134-137) | none | procedure | gate holds the facts | n/a | rewrite as the four facts the gate checks, unordered |
 | "When you are denied" (139-142) | teaching denial (corpus §5) | fact about the refusal format | n/a | n/a | keep |
 
@@ -590,8 +590,8 @@ Local (this repo):
 - `CLAUDE.md` (Rules); `.claude/skills/do-less/SKILL.md`; `.claude/skills/explore/SKILL.md`
 - `docs/decisions.md` (2026-08-17 through 2026-08-21, all entries)
 - `docs/research/SYNTHESIS.md:11-54`
-- `docs/research/adopter-research-corpus.md:18-21,43-44,54-60,114,217,293,298,1260,1288,1365`
-- `docs/research/adopter-enforcement-and-skills.md:12-30,57,144-192`
+- `private/research/adopter-research-corpus.md:18-21,43-44,54-60,114,217,293,298,1260,1288,1365`
+- `private/research/adopter-enforcement-and-skills.md:12-30,57,144-192`
 - `docs/research/verification/specs-guards-tooling.md:20-70` (rows 6-13)
 - `docs/research/verification/mas-literature-part2.md:102-103,116-117`
 - `docs/research/beads-and-gastown.md:154-175`
@@ -601,7 +601,7 @@ Local (this repo):
   `capture.rs:1-5`; `lease.rs:1-5`; `install.rs:1-34`; `mcp.rs:1-30,240-299`; `doctor.rs:1-5`;
   `holdings.rs:1-5`; `selftest.rs:1-4`
 
-Local (adopter, read-only):
+Local (the adopter, read-only):
 
-- `docs/research/adopter-notes/notes/research-actions.md:184-206,384-428,585-607`
-- adopter's `docs/notes/air-adoption.md:244-330` (§9, what was tricky) — read 2026-08-21; **not** copied into this repo, unlike the notes under `docs/research/adopter-notes/`, so it will not resolve here
+- `private/research/adopter-notes/notes/research-actions.md:184-206,384-428,585-607`
+- The adopter's `docs/notes/air-adoption.md:244-330` (§9, what was tricky) — read 2026-08-21; **not** copied into this repo, unlike the notes under `private/research/adopter-notes/`, so it will not resolve here
