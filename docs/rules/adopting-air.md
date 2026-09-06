@@ -5,7 +5,48 @@
 > scripts, what Air now does that the repo's prose or scripts used to do, and how the repo keeps
 > itself current afterwards. The README says what Air *is*; this says what *you* do.
 > The adopter-specific items are marked **[an adopter]** and come from its coordinator's report of
-> 2026-08-21 (`../decisions.md`, same date).
+> 2026-08-21 (`../decisions.md`, same date). Those are the **worked example**: a real fleet on a
+> real product, kept because the incidents behind Air's mechanisms are more useful than a
+> summary of them. Nothing in them is a requirement, and a fresh repo needs none of it.
+
+## Start here: a fresh repo
+
+Everything after this section assumes a repo that already runs a fleet and has its own scripts
+and habits. If yours does not, this is the whole procedure.
+
+    brew install beads && brew pin beads          # bd, pinned at 1.2.2
+    cargo install --path crates/cli               # in the Air checkout; `which air` must be it
+    cd <your repo>
+    air init                                      # reads the repo, prints what it would do
+    air init --write                              # applies it
+    $EDITOR Makefile                              # put your real check in the `verify` target
+    air record verify -- make verify              # the first proof
+    air coordinator                               # main checkout, the channel attached
+    air worker w1 --tmux --task "<a complete task>"
+
+`air init --write` gates on bd and Claude Code being present, then does the rest: `git init` if
+needed, `bd init`, `.air/` in `.gitignore`, `.claude/air.json` with deny patterns proposed from
+a scan of the repo, hooks, `.mcp.json`, `.air/roles.md`, the `air-*` skills, and four
+empty-but-ready items Air assumes a repo has (air-ej4): a `Makefile` `verify` target, a
+`.worktreeinclude`, and in the `CLAUDE.md` stub the hand-over sequence and the `Bead: <id>`
+trailer rule. Each is created only when absent and never edited, so re-running it is safe and a
+repo that already has any of them keeps what it has.
+
+**The editor step is not optional.** The scaffolded `verify` target exits 1 on purpose. Air's
+one refusal reads a recorded green, so a placeholder that passed would let the first
+`air record verify` record a green for a check nobody had written, and the close gate would
+pass it.
+
+Need by need, what Air ships against what a repo supplies is the table in
+[`../notes/2026-09-05-open-source-analysis.md`](../notes/2026-09-05-open-source-analysis.md) §7.
+Its "fresh repo" column is this section. The one item there that `air init` does NOT write is
+the digest directory: the front-matter gate is off until `.claude/air.json` names a
+`digest_dir`, and a repo can hand over without digests, so turning it on is a choice rather
+than a default (§1, step 4). Everything else in that table is one adopter's own tooling around
+its product, which Air deliberately does not replace.
+
+Then read §5 (keeping the integration current). The rest is for a repo that already has a
+fleet, and §1 below is the install for one.
 
 ## 0. The bd gate comes first
 
@@ -46,7 +87,7 @@ and removed the same day; do not reintroduce it.
 
 ## 0a. Flakiness becomes load-bearing
 
-**[an adopter, 2026-08-21, ]** Once a machine gates on "green at HEAD", a flaky test is no
+**[an adopter, 2026-08-21]** Once a machine gates on "green at HEAD", a flaky test is no
 longer a nuisance: a real green can record red and hold a hand-over, and a flake can mask a
 real red. Air does not retry (a retry hides real reds); it makes the disagreement visible:
 `air record` flags `flaky-at-head: N green / M red` when runs at one sha disagree, and
@@ -139,6 +180,7 @@ to **what Air records and what Air refuses**:
 | The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
 | `air handover` names what is missing | When in the loop to run it |
 | Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
+| Decomposing an epic with no open child is the coordinator's standing duty, and `air status` names each such epic with its closed count (air-84u) | How to split one, and when the queue is deep enough not to bother |
 
 **[an adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
 `bd update <id> -s awaiting_review` as the closing step. The adopter's owner had ruled that step

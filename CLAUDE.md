@@ -119,6 +119,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) · [`docs/rules/writing.md`](docs/rules/writing.md) |
 | Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
 | Working with `bd` (versions, leases trap) | [`docs/research/beads-and-gastown.md`](docs/research/beads-and-gastown.md) §0 |
+| Wondering whether `bd` should be replaced, or what Air would have to rewrite if it were | [`docs/research/bd-alternatives.md`](docs/research/bd-alternatives.md) |
 
 ## Index — systems and subsystems (first slice 2026-08-18, plan 0001; first-round surface 2026-08-20, plan 0004)
 
