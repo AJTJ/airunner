@@ -121,6 +121,11 @@ pub trait WorkLedger {
     fn in_progress(&self) -> Result<Vec<Issue>>;
     /// `bd list --status <status> --json` (custom statuses such as `awaiting_review` included).
     fn by_status(&self, status: &str) -> Result<Vec<Issue>>;
+    /// `bd list --parent <id> --all --json`: every child of `id`, closed ones included
+    /// (air-84u). `--all` is the point — without it bd hides closed children, and an epic
+    /// whose children are all closed would be indistinguishable from one with none. `-n 0`
+    /// lifts bd's default limit of 50, which would otherwise cap a large epic silently.
+    fn children(&self, id: &str) -> Result<Vec<Issue>>;
     fn show(&self, id: &str) -> Result<Option<Issue>>;
     /// `bd show <id> <id> … --json`: every id in ONE process (bd 1.2.2 `bd show [id...]`).
     /// bd OMITS an id it does not know and still exits 0 — checked 2026-08-22: stderr says
@@ -313,6 +318,10 @@ impl WorkLedger for BdCli {
 
     fn by_status(&self, status: &str) -> Result<Vec<Issue>> {
         parse_issues(&self.run(&["list", "--status", status, "--json"])?)
+    }
+
+    fn children(&self, id: &str) -> Result<Vec<Issue>> {
+        parse_issues(&self.run(&["list", "--parent", id, "--all", "-n", "0", "--json"])?)
     }
 
     fn show(&self, id: &str) -> Result<Option<Issue>> {
