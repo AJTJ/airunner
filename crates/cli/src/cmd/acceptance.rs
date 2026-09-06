@@ -368,12 +368,35 @@ pub fn report(judged: &[Judged]) -> String {
             );
         }
         for (text, v) in &j.clauses {
-            let (mark, how) = match v {
-                Verdict::Discharged { how } => ("ok  ", how.as_str()),
-                Verdict::Unevidenced { how } => ("MISS", how.as_str()),
-                Verdict::Undecidable { how } => ("?   ", how.as_str()),
-            };
-            s.push_str(&format!("    {mark} {text}\n         {how}\n"));
+            match v {
+                // air-rud0: the tick carries the lookup that produced it, on its own line.
+                //
+                // A clause Air could not read said WHY, and a clause Air discharged said
+                // `ok`, with its reason on a line underneath. Read quickly — and a nine-bead
+                // landing is read quickly, by scanning this column — the bare tick is the
+                // stronger claim of the two, and it is the weaker one: `ok` means a lookup
+                // matched, not that anything about the clause's substance was checked. An
+                // adopter's batch 22 printed `ok` beside a clause about sections no longer
+                // carrying a sequential number, discharged because the merge touched that
+                // file; it would have printed the same had the change renamed a variable in
+                // it. Their lane's phrase: a lookup wearing the clothes of a judgement.
+                //
+                // It is right in this case and will be right most of the time, which is what
+                // made it invisible. Nothing about the JUDGEMENT changes — still discharged
+                // by lookup, still no reading of prose (`judge` is untouched, and so is
+                // `--json`, which carried `how` all along). Only the rendering moves, and the
+                // second line goes with it rather than repeating itself.
+                Verdict::Discharged { how } => {
+                    s.push_str(&format!("    ok ({how}) — {text}\n"));
+                }
+                // Unchanged: these were already honest, and their reasons are the long ones.
+                Verdict::Unevidenced { how } => {
+                    s.push_str(&format!("    MISS {text}\n         {how}\n"));
+                }
+                Verdict::Undecidable { how } => {
+                    s.push_str(&format!("    ?    {text}\n         {how}\n"));
+                }
+            }
         }
     }
     s
@@ -535,11 +558,16 @@ Something happened. See docs/rules/roles.md for the rule.
             r.contains("no acceptance criteria in the field or the"),
             "{r}"
         );
-        // Every clause is shown, discharged or not, so a wrong close is visible.
+        // Every clause is shown, discharged or not, so a wrong close is visible. air-rud0:
+        // and a discharged one carries the lookup that discharged it ON THE VERDICT LINE, so
+        // the tick cannot be read as a stronger claim than it is.
         assert!(
-            r.contains("ok   docs/rules/roles.md names the rule."),
+            r.contains(
+                "ok (the merge changed docs/rules/roles.md) — docs/rules/roles.md names the rule."
+            ),
             "{r}"
         );
+        assert!(!r.contains("ok   docs/rules/roles.md"), "bare tick: {r}");
         assert!(r.contains("?    Red/green probe"), "{r}");
         assert_eq!(report(&[]), "");
     }
