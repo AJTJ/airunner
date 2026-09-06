@@ -180,9 +180,21 @@ bd create "Spike: <question>" --type=spike --parent <epic> -p 1 \
 # order and shared files: edges between CHILDREN, never on the epic
 # (an edge on an epic propagates to every child; the adopter)
 bd dep add <later> <earlier>
-bd dep cycles
+bd dep cycles                      # must print none BEFORE the wave is opened
 bd dep tree <epic> --json
 ```
+
+**Never point a child at its own epic.** An epic finishes when its children finish, so a child
+that waits on its epic waits on itself: the pair can never move and `bd dep cycles` does NOT
+report it, because the epic's dependence on its children is definitional rather than an edge.
+An adopter did this to four children on 2026-09-05 and every P1 in their queue was unreachable
+for a night; 42 beads were offered to workers and none was a P1. The tracker rendered it as
+"not ready yet", indistinguishable from ordinary queueing.
+
+So, after filing a wave and before opening it: run `bd dep cycles` (it must print none), and
+read `bd dep tree <epic> --json` for an edge from a child to any ancestor. Both are one call
+each and both are cheap next to a night of unreachable work. Air names this shape in
+`air status` (air-btz), which is the failsafe, not the check.
 
 `bd create --validate` stays on. Note: in bd 1.2.1 it checks required description sections
 from the beads config, not `--acceptance`; Air's triage check is what refuses an empty
