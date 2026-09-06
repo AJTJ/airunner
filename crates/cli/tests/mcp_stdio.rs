@@ -1,5 +1,5 @@
 //! `air mcp` end to end over piped stdio: handshake, a tool call, a resource read, survival
-//! of a garbage line, a channel push for a seeded stuck session, and a clean exit on EOF.
+//! of a garbage line, a channel push for a seeded idle-with-claim session, and a clean exit on EOF.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -32,12 +32,13 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
-/// Seed a session row that has been `stuck` for an hour.
+/// Seed a session row that has been `idle` for an hour while holding a claim (`stuck` was the
+/// seeded state until air-12k deleted it).
 /// bd is not under test here; a missing binary fails in microseconds where a real `bd` in a
 /// non-beads directory cost 0.25 to 0.5 s per call, three calls per `status` (air-4vu).
 const NO_BD: &str = "/nonexistent/bd";
 
-fn seed_stuck(repo: &Path) {
+fn seed_idle_with_claim(repo: &Path) {
     let out = Command::new(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
@@ -50,7 +51,12 @@ fn seed_stuck(repo: &Path) {
     let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
     conn.execute(
         "INSERT INTO sessions (session_id, worker, state, detail, changed_at, started_at, role) \
-         VALUES ('s1','main','stuck','Bash','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','coordinator')",
+         VALUES ('s1','main','idle',NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','coordinator')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO claims (bead, worker, claimed_at) VALUES ('x-1','main','2026-01-01T00:00:00Z')",
         [],
     )
     .unwrap();
@@ -60,14 +66,14 @@ fn seed_stuck(repo: &Path) {
 fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
-    seed_stuck(&repo);
+    seed_idle_with_claim(&repo);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .arg("mcp")
         .current_dir(&repo)
-        // The first tick runs before the first sleep, so the seeded stuck session is pushed
+        // The first tick runs before the first sleep, so the seeded idle session is pushed
         // at startup whatever the interval. A short interval only makes the poll thread
         // (3 bd + ~5 git spawns per tick) fight the 1800 requests below for the stdout lock:
         // 50 ms cost 3.4 s per run (air-4vu, 2026-08-22). 5 s: no second tick in a run.
@@ -82,7 +88,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let mut reader = BufReader::new(child.stdout.take().unwrap());
 
     // Collect lines until a predicate matches, bounded in time; notifications may interleave.
-    // Unmatched lines are kept: the poll thread's first tick (the seeded stuck session)
+    // Unmatched lines are kept: the poll thread's first tick (the seeded idle session)
     // usually lands before the `initialize` reply, and dropping it meant waiting a whole
     // poll interval for the second tick (air-4vu, 2026-08-22).
     let mut pending: Vec<serde_json::Value> = Vec::new();
@@ -139,9 +145,9 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     // Captures and landings in one shape since air-6p5.
     assert_eq!(inbox["captures"][0]["text"], "from mcp");
 
-    // The poll thread must have pushed the seeded stuck session as a channel event.
+    // The poll thread must have pushed the seeded idle session as a channel event.
     let ev = next_matching(&|v| v["method"] == "notifications/claude/channel");
-    assert_eq!(ev["params"]["meta"]["kind"], "stuck");
+    assert_eq!(ev["params"]["meta"]["kind"], "idle_with_claim");
     assert_eq!(ev["params"]["meta"]["worker"], "main");
 
     // A tool argument error is a JSON-RPC error, not a crash.

@@ -28,7 +28,8 @@ use crate::git;
 /// invisible to `air audit` entirely, because the audit could only count what the registry
 /// already named. An unregistered condition is not "uncounted", it is unseeable.
 pub mod kinds {
-    pub const STUCK: &str = "stuck";
+    // `STUCK` was first here. Deleted 2026-09-06 (air-12k): its state was set only by a
+    // permission prompt auto mode never shows. The deletion record is in `mechanisms.rs`.
     pub const IDLE_WITH_CLAIM: &str = "idle-with-claim";
     pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
     pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
@@ -46,7 +47,6 @@ pub mod kinds {
 
     /// The whole set, compared against the registry by `air selftest`.
     pub const ALL: &[&str] = &[
-        STUCK,
         IDLE_WITH_CLAIM,
         IDLE_WITHOUT_CLAIM,
         SILENT_WITH_CLAIM,
@@ -185,7 +185,6 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thresholds {
-    pub stuck_min: i64,
     pub idle_with_claim_min: i64,
     pub silent_with_claim_min: i64,
     /// A claim younger than this with no session row is a worker still launching, not gone.
@@ -198,7 +197,6 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            stuck_min: 5,
             idle_with_claim_min: 20,
             silent_with_claim_min: 20,
             launch_grace_min: 3,
@@ -217,7 +215,6 @@ impl Thresholds {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
-        t.stuck_min = get("AIR_ATTENTION_STUCK_MIN", t.stuck_min);
         t.idle_with_claim_min = get("AIR_ATTENTION_IDLE_MIN", t.idle_with_claim_min);
         t.silent_with_claim_min = get("AIR_ATTENTION_SILENT_MIN", t.silent_with_claim_min);
         t.launch_grace_min = get("AIR_ATTENTION_LAUNCH_GRACE_MIN", t.launch_grace_min);
@@ -231,7 +228,7 @@ pub struct Attention {
     /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
-    /// stuck | idle-with-claim | silent-with-claim | handover-not-green |
+    /// idle-with-claim | silent-with-claim | handover-not-green |
     /// lease-held-by-dead-session | lease-stale | idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
     /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
@@ -910,35 +907,11 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         match &w.session {
             Some(sess) => {
                 let age = minutes_between(&sess.changed_at, now).unwrap_or(0);
-                // `stuck` has never fired in any recorded day, and that is a fact about the
-                // FLEET'S CONFIGURATION rather than about this arm (air-dqw, corrected by
-                // diligence during air-byw before the deletion it nearly justified shipped).
-                //
-                // The state is set only by `HookEvent::PermissionRequest` (hook.rs:188), and
-                // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days.
-                // The hook is real and correctly registered. It never fires because the fleet
-                // runs in auto mode: `~/.claude/settings.json` has `permissions.defaultMode:
-                // auto` with `skipAutoPermissionPrompt: true` and an `autoMode` classifier, so
-                // no permission prompt is ever shown and nothing ever waits on one. Every
-                // `hook.PermissionDenied` event says "Blocked by classifier" — that classifier
-                // deciding instead of asking.
-                //
-                // So the silence is DORMANCY, not death: turn auto mode off and this works
-                // immediately, with no code change. A zero is evidence only when the subject
-                // occurred and the mechanism stayed silent; here the subject never occurred.
-                // Deleting on that silence and keeping on that silence rest on the same
-                // nothing, which is why air-dqw closed on the finding instead of the deletion.
+                // A `"stuck"` arm stood first here until 2026-09-06 (air-12k). Its state was
+                // written only by `HookEvent::PermissionRequest`, which auto mode never sends,
+                // so the arm matched nothing in any recorded day; the deletion record and the
+                // zero's cause (case 3b, air-byw) are in `mechanisms.rs`.
                 match sess.state.as_str() {
-                    "stuck" if age >= t.stuck_min => out.push(Attention {
-                        worker: w.worker.clone(),
-                        kind: kinds::STUCK,
-                        detail: format!(
-                            "waiting on a permission prompt{} for {age} min; answer it in their terminal",
-                            sess.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
-                        ),
-                        for_minutes: age,
-                        fingerprint: String::new(),
-                    }),
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
                         kind: kinds::IDLE_WITH_CLAIM,
@@ -1036,7 +1009,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         //
         // Removal: when no worker ever holds two claims at once, this collapses nothing and
         // the loop above can go back to pushing per claim.
-        let stuck: Vec<&Claim> = if w.green_at_head == Some(false) {
+        let red: Vec<&Claim> = if w.green_at_head == Some(false) {
             w.claims
                 .iter()
                 .filter(|c| c.handover_attempts > 0)
@@ -1046,12 +1019,12 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         };
         // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
         // one, and the beads read in the order they have been waiting.
-        let oldest = stuck
+        let oldest = red
             .iter()
             .filter_map(|c| c.last_handover_at.as_deref())
             .min()
             .unwrap_or(now);
-        let detail = match stuck.as_slice() {
+        let detail = match red.as_slice() {
             [] => None,
             [c] => Some(format!(
                 "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
@@ -2044,10 +2017,9 @@ mod tests {
         t.checked_sub(span).unwrap().to_string()
     }
 
-    fn every_line() -> [i64; 5] {
+    fn every_line() -> [i64; 4] {
         let t = Thresholds::default();
         [
-            t.stuck_min,
             t.idle_with_claim_min,
             t.silent_with_claim_min,
             t.launch_grace_min,
@@ -2105,7 +2077,6 @@ mod tests {
     fn each_condition_fires_with_its_threshold() {
         let s = Snapshot {
             workers: vec![
-                worker("stuck", Some("stuck"), &past(), vec![], None),
                 worker(
                     "idle",
                     Some("idle"),
@@ -2144,7 +2115,6 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                ("stuck", "stuck"),
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
@@ -2157,7 +2127,6 @@ mod tests {
         // fires.
         let beyond = past_every_line_min().saturating_add(1);
         let loose = Thresholds {
-            stuck_min: beyond,
             idle_with_claim_min: beyond,
             silent_with_claim_min: beyond,
             launch_grace_min: Thresholds::default().launch_grace_min,
@@ -2434,7 +2403,13 @@ mod tests {
     #[test]
     fn unparseable_timestamps_never_panic_or_fire() {
         let s = Snapshot {
-            workers: vec![worker("x", Some("stuck"), "garbage", vec![], None)],
+            workers: vec![worker(
+                "x",
+                Some("idle"),
+                "garbage",
+                vec![claim("fd-9", "x", "garbage", 0)],
+                None,
+            )],
             ..Default::default()
         };
         assert!(attention(&s, NOW, Thresholds::default()).is_empty());

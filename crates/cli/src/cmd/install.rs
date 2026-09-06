@@ -1418,6 +1418,9 @@ mod tests {
         assert!(ROLES_MD.contains("Once you have work, finishing a bead is not a stop."));
         assert!(ROLES_MD.contains("Starting a session is not being given work."));
         assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
+        // air-12k: the heartbeat is the failsafe, and roles.md promises no `stuck` condition.
+        assert!(ROLES_MD.contains("the heartbeat is the failsafe"));
+        assert!(!ROLES_MD.contains("the channel (stuck,"));
         // air-97z: roles.md states landing as a role boundary and as facts Air records, and
         // names no landing command. A repo with its own lander keeps it, so the prose that used
         // to prescribe `air land --all` here is asserted ABSENT, the same shape as the

@@ -203,14 +203,12 @@ fn dispatch(
             )
             .inputs(serde_json::json!({"reason": input.reason}))
         }
-        HookEvent::PermissionRequest => {
-            let prev = set_session(ledger, input, worker, "stuck", input.tool_name.as_deref())?;
-            Dispatched::new(
-                HookOutcome::Allow { context: None },
-                "stuck",
-                transition(&prev, "stuck"),
-            )
-        }
+        // `PermissionRequest` used to set the session `stuck`, the state behind the `stuck`
+        // condition. Deleted 2026-09-06 (air-12k): the event arrived 0 times in 39,071 lines
+        // because the fleet runs in auto mode, so the state was a promise nothing wrote. The
+        // event now falls through to the ignored arm like `Notification`; its line is still
+        // logged, so a fleet that turns auto mode off will show the count that would justify
+        // bringing a condition back.
         // Friction Air did not cause: a denial by any rule, hook, or the human, or a tool
         // that ran and failed. Observation only; the command and the reason are the record.
         HookEvent::PermissionDenied | HookEvent::PostToolUseFailure => {
@@ -982,9 +980,10 @@ mod tests {
             ("hook.PostToolUse", "journaled")
         );
         assert_eq!(ev[2]["inputs"]["path"], "src.rs");
+        // air-12k: a permission request changes no state; the line is logged and that is all.
         assert_eq!(
-            (got[3].1.as_str(), got[3].2.as_str()),
-            ("stuck", "working -> stuck")
+            (got[3].0.as_str(), got[3].1.as_str()),
+            ("hook.PermissionRequest", "ignored")
         );
         assert_eq!(
             (got[4].0.as_str(), got[4].1.as_str()),

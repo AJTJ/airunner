@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id       TEXT PRIMARY KEY,
     worker           TEXT NOT NULL,
     transcript_path  TEXT,
-    state            TEXT NOT NULL,           -- working | running | stuck | idle
+    state            TEXT NOT NULL,           -- working | running | idle (stuck: deleted, air-12k)
     detail           TEXT,                    -- tool name for running
     changed_at       TEXT NOT NULL,
     started_at       TEXT NOT NULL
