@@ -175,6 +175,20 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-x1ha. The anchor is the arm for "bd never had this id", and nothing else: recording
+    // the resolved id at claim time, releasing a bead bd knows and no longer holds, and the
+    // reported line all survive it. Under it that arm releases the row again, which is the
+    // defect — a claim under an id bd cannot resolve is dropped while the work continues.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "claim: a prefix claim is recorded under the id bd resolved and survives the reconcile; a bead bd no longer holds is still released",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "Some(None) => unresolved.push(format!(\"{} ({})\", c.bead, c.worker)),",
+            to: "Some(None) => {\n                        let _ = ledger.release_claim(&c.bead, &c.worker, \"reconciled\", &at);\n                        continue;\n                    }",
+            also_red: &[],
+        },
+    ),
     // air-e21v. The anchor puts a probe's output back on this process's stdout, which is
     // exactly what broke `--prove`: the tail still carries both streams, every other probe
     // still passes, and only the machine-readable output stops parsing. A probe that stayed
@@ -1153,6 +1167,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        Mutation {
+            // Count an untracked file as tracked, which is the gate exactly as it stood: the
+            // directory is read and git is never asked. The Missing case and the refusal text
+            // are untouched, so the mutation reaches the tracked rule alone.
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "        if tracked.contains(&e.file_name().to_string_lossy().to_string()) {",
+            to: "        if true {",
+            also_red: &[],
+        },
+    ),
+    (
         "docs: every flag and condition kind the README and the rules name still exists",
         Mutation {
             // Check the command word and stop, which is what air-w91's check already does
@@ -1775,6 +1801,7 @@ fn all_probes() -> Vec<Probe> {
         probe_ancestor_deadlock_is_named(),
         probe_a_red_runs_output_is_kept(),
         probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
+        probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -1805,6 +1832,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_batch_records_exactly_the_branches_it_merged(),
         probe_the_gate_runs_what_the_makefile_says(),
         probe_docs_name_real_flags_and_kinds(),
+        probe_an_untracked_digest_is_not_proof(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -2241,7 +2269,7 @@ fn probe_land_selection_is_never_silent() -> Probe {
 /// has the worker's name in it. Green: the digest that declares this bead is accepted, and a
 /// pre-cutoff digest with no front matter still passes so today's work is not invalidated.
 fn probe_digest_names_its_bead() -> Probe {
-    use crate::cmd::handover::{declared_bead, digest_for_bead};
+    use crate::cmd::handover::{Digest, declared_bead, digest_for_bead};
 
     let res = (|| -> Option<(bool, bool)> {
         let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -2251,6 +2279,11 @@ fn probe_digest_names_its_bead() -> Probe {
         // is accepted. The lenient cutoff below is the history case.
         let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().ok()?;
         let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).ok();
+        // air-ahl: this probe is about DECLARING a bead, not about tracking, so everything it
+        // writes is declared tracked and the tracked rule is probed separately.
+        let all_tracked = |names: &[&str]| -> std::collections::BTreeSet<String> {
+            names.iter().map(|n| (*n).to_string()).collect()
+        };
         // A digest for ANOTHER bead, by this worker, written now.
         write(
             "2026-08-23-beta-air-other.md",
@@ -2260,11 +2293,15 @@ fn probe_digest_names_its_bead() -> Probe {
 
         // Red: it declares a different bead, so it is not this bead's digest, whatever its
         // name or mtime say.
-        let wrong_bead = !digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&["2026-08-23-beta-air-other.md"]);
+        let wrong_bead =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
         // Red: a file carrying the worker's name and no declaration, written after the
         // cutoff, is not a substitute — this is the `touch` case and the substring case.
         write("2026-08-23-beta-notes.md", "# just some notes\n")?;
-        let undeclared_after_cutoff = !digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&["2026-08-23-beta-air-other.md", "2026-08-23-beta-notes.md"]);
+        let undeclared_after_cutoff =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
         let red =
             wrong_bead && undeclared_after_cutoff && declared_bead("# no front matter").is_none();
 
@@ -2273,7 +2310,13 @@ fn probe_digest_names_its_bead() -> Probe {
             "2026-08-23-beta-air-agq.md",
             "---\nbead: air-agq\n---\n# ours\n",
         )?;
-        let declared_ok = digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&[
+            "2026-08-23-beta-air-other.md",
+            "2026-08-23-beta-notes.md",
+            "2026-08-23-beta-air-agq.md",
+        ]);
+        let declared_ok =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Tracked;
 
         // Green: history still passes. A digest written before the cutoff with no front
         // matter is matched the old way, so the change does not invalidate what exists.
@@ -2281,7 +2324,14 @@ fn probe_digest_names_its_bead() -> Probe {
         std::fs::create_dir_all(&old).ok()?;
         std::fs::write(old.join("2026-08-22-beta-air-old.md"), "# old\n").ok()?;
         let far_future: jiff::Timestamp = "2999-01-01T00:00:00Z".parse().ok()?;
-        let fallback_ok = digest_for_bead(&old, "beta", &ours, None, far_future);
+        let fallback_ok = digest_for_bead(
+            &old,
+            "beta",
+            &ours,
+            None,
+            far_future,
+            &all_tracked(&["2026-08-22-beta-air-old.md"]),
+        ) == Digest::Tracked;
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&old);
         Some((red, declared_ok && fallback_ok))
@@ -5044,6 +5094,7 @@ fn base_facts() -> GateFacts {
         bead_claimed_or_carried: true,
         runs_at_head: (1, 0),
         digest_present: None,
+        digest_untracked: false,
         digest_dir: None,
         bead: None,
         held_beads: vec![],
@@ -8989,6 +9040,132 @@ fn probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list() -> Prob
 
 const ADOPTER_CHECK_PROBE: &str = "privacy: adopter-check refuses a leak when run from a worktree, and refuses a repo that declares an adopter with no names instead of skipping";
 
+/// air-ahl: a digest that git does not track is not proof, and the refusal says which fix.
+///
+/// Reported by an adopter against their own worker's interest: their w2 used the gap
+/// deliberately and told them anyway. `digest_for_bead` read the directory and never asked git,
+/// so a file that existed for nobody but one worktree satisfied the gate — and a green then
+/// said nothing about whether a digest would exist for the next reader, which is the whole
+/// purpose of the check.
+///
+/// The requirement did not ship alone, because the need it served is real: a worker must be
+/// able to close without invalidating the batch its lane cut. **That route already existed and
+/// needed no new mechanism**, which is the finding rather than the fix. `batch::bead_commits`
+/// filters `main..HEAD` by the `Bead:` trailer ONLY, so a digest commit carrying no trailer
+/// never joins the set the batch green has to cover: the worker commits the digest, the head
+/// moves, and the close still passes at the batch it was cut at. Demonstrated end to end on a
+/// real branch, and the refusal below says so where a worker meets it.
+///
+/// Rejected: accepting a STAGED digest. `git add` alone does make a file tracked and does leave
+/// HEAD where it was, so it would have satisfied both halves — but a staged file is still one
+/// worktree's, and the gate exists for the reader who was not there.
+///
+/// Red: a digest declaring the bead, present in the directory and untracked, is `Untracked`,
+/// and the gate refuses it under its own check name with a fix naming the untrailered commit.
+/// Green: the same file once git tracks it is `Tracked` and passes; a directory with no
+/// declaring file at all is `Missing` and gets the other sentence, so the two refusals cannot
+/// collapse into one; and a tracked digest beside an untracked stray still passes, or a scratch
+/// copy would mask the real one.
+fn probe_an_untracked_digest_is_not_proof() -> Probe {
+    use crate::cmd::handover::{Digest, digest_for_bead, tracked_in};
+    use air_hooks::{GateFacts, handover_verdict};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+
+        let digests = dir.join("docs").join("digests");
+        std::fs::create_dir_all(&digests).map_err(|e| e.to_string())?;
+        let beads = vec!["air-ahl".to_string()];
+        let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().map_err(|_| "cutoff")?;
+        let state = || {
+            digest_for_bead(
+                &digests,
+                "w1",
+                &beads,
+                None,
+                cut,
+                &tracked_in(&dir, &digests),
+            )
+        };
+
+        // Nothing written yet.
+        let missing = state() == Digest::Missing;
+
+        // Written, and git has never heard of it: exactly the adopter's case.
+        let path = digests.join("2026-09-06-w1-air-ahl.md");
+        std::fs::write(&path, "---\nbead: air-ahl\n---\nproof\n").map_err(|e| e.to_string())?;
+        let untracked = state() == Digest::Untracked;
+
+        // The refusal a worker actually meets, from the real gate.
+        let facts = GateFacts {
+            worker: "w1".into(),
+            head: "0123456789abcdef".into(),
+            green_at_head: true,
+            main_is_ancestor: true,
+            bead_claimed_or_carried: true,
+            runs_at_head: (1, 0),
+            digest_present: Some(false),
+            digest_untracked: true,
+            digest_dir: Some("docs/digests".into()),
+            held_beads: beads.clone(),
+            ..GateFacts::default()
+        };
+        let v = handover_verdict(&facts);
+        let named = v.missing.iter().any(|m| {
+            m.check == "digest-untracked"
+                && m.detail.contains("does not track it")
+                && m.fix.contains("carry NO `Bead:` trailer")
+                && m.fix.starts_with("git add ")
+        });
+
+        // Tracked: the same bytes, once git knows about them.
+        g(&["add", "docs/digests/2026-09-06-w1-air-ahl.md"])?;
+        let tracked_ok = state() == Digest::Tracked;
+
+        // A stray untracked copy beside a tracked digest must not mask it.
+        std::fs::write(
+            digests.join("scratch.md"),
+            "---\nbead: air-ahl\n---\nnote to self\n",
+        )
+        .map_err(|e| e.to_string())?;
+        let stray_ok = state() == Digest::Tracked;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((untracked && named, missing && tracked_ok && stray_ok))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-avj (an adopter's coordinator, 2026-09-06, after it cost three workers in one round).
 /// The Stop hook fires when a worker is choosing what to do next, and it arrives with the
 /// authority of tooling. Under a verify lane its text told them to do the two things a lane
@@ -9231,6 +9408,129 @@ fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
         name: "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
         red_fires: still_there,
         green_passes: neither_is_a_batch && carries_nothing && earlier_never,
+    }
+}
+
+/// air-x1ha (verify's capture, 2026-09-06, reproduced by hand): a worker typed `air-ahl`, bd
+/// resolved and claimed `air-ahlf`, Air wrote its row under the typed PREFIX, and the next
+/// status reconcile asked bd about the prefix, got nothing, and released the claim while the
+/// work continued. The coordinator saw a worker that had abandoned a bead it was still
+/// building; the worker saw nothing at all. Two stores holding different ids for one bead is
+/// what air-uir prevents a layer up.
+///
+/// The fake bd here is bd 1.2.2's real shape in the two ways that matter: `show` resolves an
+/// unambiguous prefix and answers with the CANONICAL id (checked against the real bd,
+/// 2026-09-06: `bd show zz-bd --json` → `"id": "zz-bdz"`), and it OMITS an id it does not know
+/// while still exiting 0.
+///
+/// Red (declared mutation: the reconcile releases whenever bd did not positively hold the
+/// bead): a claim under an id bd cannot resolve is released again, which is the defect. Green:
+/// `air claim` on a prefix writes the row under the id bd resolved, so a prefix claim and a
+/// full-id claim are the same row; a claim bd KNOWS and no longer holds is still released,
+/// because that is what the reconcile is for; and the kept row is reported with the id it
+/// looked up, not just a count.
+fn probe_a_prefix_claim_is_recorded_and_survives_the_reconcile() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !g.status.success() {
+            return Err(String::from_utf8_lossy(&g.stderr).to_string());
+        }
+        let script = dir.join("bd");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nd='{d}'\necho \"$@\" >> \"$d/bd.log\"\ncase \"$1\" in\n  \
+                 --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+                 show) shift; out=''\n    for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n      \
+                 case \"$id\" in\n        \
+                 zz-pre|zz-full) row='{{\"id\":\"zz-full\",\"title\":\"t\",\"status\":\"open\",\"labels\":[],\"issue_type\":\"task\"}}';;\n        \
+                 zz-gone) row='{{\"id\":\"zz-gone\",\"title\":\"t\",\"status\":\"open\",\"labels\":[],\"issue_type\":\"task\"}}';;\n        \
+                 *) row='';;\n      \
+                 esac\n      \
+                 [ -n \"$row\" ] && out=\"$out${{out:+,}}$row\"\n    done\n    \
+                 printf '%s\\n' \"[$out]\"; exit 0;;\n  \
+                 list) echo '[]'; exit 0;;\n  \
+                 ready) echo '[]'; exit 0;;\n  \
+                 *) exit 0;;\nesac\n",
+                d = dir.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let air = |args: &[&str]| -> Result<String, String> {
+            let out = air_command(&exe, &dir)
+                .env("AIR_BD_BIN", &script)
+                .args(args)
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        };
+        let rows = || -> Vec<(String, Option<String>)> {
+            rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+                .and_then(|c| {
+                    let mut st =
+                        c.prepare("SELECT bead, release_reason FROM claims ORDER BY bead")?;
+                    let v = st
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(v)
+                })
+                .unwrap_or_default()
+        };
+
+        // A worker types the PREFIX. bd resolves it to zz-full.
+        air(&["claim", "zz-pre"])?;
+        let claimed_canonical = rows().iter().any(|(b, _)| b == "zz-full")
+            && !rows().iter().any(|(b, _)| b == "zz-pre");
+
+        // A row bd KNOWS and no longer holds in progress, and a row under an id bd cannot
+        // resolve at all — the shape a pre-air-x1ha prefix claim leaves behind.
+        {
+            let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+            l.record_claim("zz-gone", "probe", &[], "t0")
+                .map_err(|e| e.to_string())?;
+            l.record_claim("zz-nope", "probe", &[], "t0")
+                .map_err(|e| e.to_string())?;
+        }
+        let status = air(&["status"])?;
+        let after = rows();
+        let held = |b: &str| after.iter().any(|(x, r)| x == b && r.is_none());
+        let released = |b: &str| after.iter().any(|(x, r)| x == b && r.is_some());
+
+        // RED: the unresolvable row survives. That is the whole bug.
+        let red = held("zz-nope");
+        let green = claimed_canonical
+            // The reconcile still does its job for a bead bd knows and no longer holds.
+            && released("zz-gone")
+            // The kept row is NAMED, with what was looked up, not just counted.
+            && status.contains("zz-nope")
+            && status.contains("could not resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "claim: a prefix claim is recorded under the id bd resolved and survives the reconcile; a bead bd no longer holds is still released",
+        red_fires: red,
+        green_passes: green,
     }
 }
 

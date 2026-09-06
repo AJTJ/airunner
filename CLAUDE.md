@@ -171,6 +171,8 @@ descendant, air-80x.1).
     air claim <id> [--files a,b]
     … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
     …   it opens with front matter naming the bead:  ---\n bead: <id>\n ---
+    …   COMMIT it: an untracked digest is refused since air-ahl, because a file only your
+    …   worktree has is a note to self rather than proof
     git merge main
     air record verify -- make verify        # last, so the green is at the commit containing main
     bd close <id> --reason "<proof>"
