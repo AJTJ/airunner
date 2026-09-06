@@ -197,6 +197,16 @@ pub struct Snapshot {
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
     pub landable: Vec<Landing>,
+    /// Branches that do NOT qualify, each naming the precondition it failed and the fix
+    /// (air-72t7). air-6u5 added this to `Selection` precisely so nothing is silent, and the
+    /// snapshot kept only `landings` — so `air status --json` said which branches can land and
+    /// never why the others cannot, which is the shape air-6u5 called the worst answer
+    /// available, one layer up.
+    pub land_skipped: Vec<Skipped>,
+    /// Real failures inside selection — git or the ledger — as distinct from "does not
+    /// qualify" (air-72t7). `select` deliberately raises these rather than defaulting, and
+    /// until now they reached no caller at all: an error read as an empty queue.
+    pub land_errors: Vec<String>,
     /// Branches the verify lane may merge into its next batch (air-80x.3): head contains
     /// main, no green at that head, and the commits name a bead the worker holds. A fact the
     /// lane reads when it cuts a batch; no condition pushes it. Before this the list lived in
@@ -308,7 +318,24 @@ pub fn land_command(worker: &str) -> String {
 /// it, this drops to a count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Landing {
-    pub bead: String,
+    /// The bead this landing carries, or `None` for a JOURNAL-ONLY branch (air-kexg).
+    ///
+    /// A session journal (air-3xww) is per session, ungated, and explicitly not work on a
+    /// bead, so a journal commit is the only commit a worker legitimately writes that names
+    /// none — and a branch of them was refused with "no commit declares a bead", which is
+    /// correct for work and wrong as the only outcome here. Two workers concluded independently
+    /// that such a branch could land, by different reasoning, and no surface a worker can reach
+    /// said otherwise.
+    ///
+    /// It is an `Option` rather than a sentinel string or a flag beside an empty one, because
+    /// those encode one fact twice and put a value in a typed field every reader has to know
+    /// not to believe. That is the shape of the workaround this replaces: amending a journal
+    /// commit with `Bead: air-3xww`, honest while that bead was hours old and a lie the moment
+    /// it was not.
+    ///
+    /// A journal branch correctly never matches a named bead — `air land <id>` cannot select
+    /// one, because there is no id to name it by. `--worker` and `--all` are its routes.
+    pub bead: Option<String>,
     pub worker: String,
     /// The worker's HEAD, the commit the recorded green is at.
     pub head: String,
@@ -350,6 +377,33 @@ pub fn to_decompose(epic: &str, children: &[air_bd::Issue]) -> Option<EpicToDeco
             epic: epic.to_string(),
             closed_children: children.len(),
         })
+}
+
+/// Pure: does this range carry ONLY session-journal commits (air-kexg)?
+///
+/// `changed` is every path the range touched; `journal_dir` is the repo's declared
+/// `journal_dir` from `.claude/air.json`. True when the repo declares one, the range touched
+/// something, and every path it touched is under that directory.
+///
+/// **The constraint is the point, not the permission.** A range MIXING journal commits with
+/// anything else is unchanged and still needs a bead: this is a name for the one commit a
+/// worker legitimately writes that names none, never a bypass for work that forgot its
+/// trailer. Both halves are probed, because the permitting half is the one that would still
+/// look right if the constraint rotted.
+///
+/// It reads a DECLARED field rather than guessing which paths look like a journal, so the
+/// answer is a fact somebody wrote down. A repo that declares no `journal_dir` has no journal
+/// case and nothing changes for it.
+pub fn journal_only(changed: &[String], journal_dir: Option<&str>) -> bool {
+    let Some(dir) = journal_dir.map(|d| d.trim_end_matches('/')) else {
+        return false;
+    };
+    if dir.is_empty() || changed.is_empty() {
+        return false;
+    }
+    changed
+        .iter()
+        .all(|p| p.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))
 }
 
 /// A bead that can never become ready: it is blocked by one of its own ancestors (air-btz).
@@ -780,11 +834,31 @@ pub fn select(repo: &Path) -> Selection {
                 continue;
             }
         }
-        if ids.is_empty() {
+        // air-kexg: a branch whose ONLY commits are session-journal entries carries no bead by
+        // design, and is landable anyway. The journal (air-3xww) is explicitly not work on a
+        // bead, so a journal commit is the one commit a worker legitimately writes that names
+        // none. Everything else with no bead is refused exactly as before, and the refusal now
+        // names this case rather than sending a worker to amend a commit that is not about a
+        // bead — which is what two workers were told tonight, and what the coordinator worked
+        // around by having them name a bead that was already closed and that they had not
+        // touched.
+        let changed = git::changed_since(&path, "main").unwrap_or_default();
+        let journal = super::handover::journal_dir(repo);
+        let journal_branch = ids.is_empty() && journal_only(&changed, journal.as_deref());
+        if ids.is_empty() && !journal_branch {
+            let hint = journal
+                .as_deref()
+                .map(|d| {
+                    format!(
+                        "; a branch of journal entries alone (everything under {d}/) needs no \
+                         bead and lands as it is, but this range touches more than that"
+                    )
+                })
+                .unwrap_or_default();
             out.skipped.push(Skipped {
                 check: "no-bead-named",
                 detail: format!(
-                    "{worker} is green at {} but no commit in main..{} declares a bead",
+                    "{worker} is green at {} but no commit in main..{} declares a bead{hint}",
                     head.get(..8).unwrap_or(&head),
                     head.get(..8).unwrap_or(&head)
                 ),
@@ -803,7 +877,14 @@ pub fn select(repo: &Path) -> Selection {
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
             .unwrap_or_else(|| at.clone());
-        for bead in ids {
+        // air-kexg: a journal-only branch produces ONE landing carrying no bead, rather than
+        // none at all — which is why it used to vanish from the list entirely.
+        let carried: Vec<Option<String>> = if journal_branch {
+            vec![None]
+        } else {
+            ids.into_iter().map(Some).collect()
+        };
+        for bead in carried {
             out.landings.push(Landing {
                 // air-y3v: the command a reader can actually run. A branch behind main is
                 // still SHOWN — the coordinator needs to know work is waiting — but what it
@@ -830,10 +911,6 @@ pub fn select(repo: &Path) -> Selection {
 
 /// Just the landable list, for the read-only callers (`air status`).
 /// `air land` uses [`select`], because it is the caller that must not read an error as empty.
-pub fn landings_for(repo: &Path) -> Vec<Landing> {
-    select(repo).landings
-}
-
 /// Acceptance clauses for the beads of ONE branch, fetched at land time.
 ///
 /// This is the expensive call (`bd show` is ~1.4 s per id, see [`known_beads`]), and it is
@@ -1332,7 +1409,10 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             let e = by_worker
                 .entry(&l.worker)
                 .or_insert((&l.head, Vec::new(), 0));
-            e.1.push(&l.bead);
+            // air-kexg: a journal landing has no bead to list; the branch still shows.
+            if let Some(id) = l.bead.as_deref() {
+                e.1.push(id);
+            }
             e.2 = e.2.max(l.minutes);
         }
         for (worker, (head, beads, minutes)) in by_worker {
@@ -1883,6 +1963,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-80x.3: the verify lane's one fact, from git and the ledger only.
     let batch = batch_ready_for(&ledger, repo);
     errors.extend(batch.2.iter().cloned());
+    // air-72t7: ONE selection, and all three of its fields reach the snapshot. Dropping
+    // `skipped` and `errors` here is what made `air status --json` say which branches can land
+    // and never why the others cannot, and made an error `select` deliberately raises reach no
+    // caller at all.
+    let selection = select(repo);
     Ok(Snapshot {
         at,
         workers: views.into_values().collect(),
@@ -1916,8 +2001,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // branch contained the merge saw nothing about work main had lost.
         rewound_carried: rewound_carried(repo, &ledger, git::main_tip(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
-        // branch is landable that the command would then skip.
-        landable: landings_for(repo),
+        // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
+        // so a reader can see why the others cannot.
+        landable: selection.landings,
+        land_skipped: selection.skipped,
+        land_errors: selection.errors,
         epics_to_decompose,
         ancestor_deadlocks,
         batch_ready: batch.0,
@@ -2246,7 +2334,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         out.push_str(&format!(
             "waiting, not landable: {} ({}) at {} — {}; `{}`\n",
             l.worker,
-            l.bead,
+            l.bead.as_deref().unwrap_or("journal only, no bead"),
             l.head.get(..8).unwrap_or(&l.head),
             l.blocked
                 .as_deref()
