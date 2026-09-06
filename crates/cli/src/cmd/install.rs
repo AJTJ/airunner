@@ -1641,6 +1641,16 @@ mod tests {
         // becomes a rule nobody decided on.
         assert!(ROLES_MD.contains("initiative: <CODE>"));
         assert!(ROLES_MD.contains("It is a count and there is no refusal attached to it"));
+        // air-zth: the coordinator's context is the channel, so the reading is delegated by
+        // default. Pinned with its removal condition, because a roles line with no way out is
+        // the throttle the do-less rule exists to prevent (air-s7c).
+        assert!(ROLES_MD.contains("Your context is the channel the owner and every worker reach"));
+        // One line's worth: roles.md is hard-wrapped, so an assertion spanning a wrap fails on
+        // the wrap rather than on the rule.
+        assert!(ROLES_MD.contains(
+            "round shows zero owner or worker messages waiting more than five minutes on the \
+             coordinator."
+        ));
         assert!(
             !ROLES_MD.contains("Editing\nthe main checkout is blocked natively")
                 && !ROLES_MD.contains("the main checkout is blocked natively"),
