@@ -175,6 +175,19 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-zqmi. The anchor restores the unconditional stamp, which is the defect exactly:
+    // every hand-over command the gate saw counted, passes included. The refusal still
+    // counts and the gate still decides, so what it isolates is whether a SUCCESS is
+    // recorded as a failure — the thing the channel then reported to the whole fleet.
+    (
+        "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
+        Mutation {
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "    let stamped = match (&bead, v.pass) {",
+            to: "    let stamped = match (&bead, false) {",
+            also_red: &[],
+        },
+    ),
     // air-et0o. The anchor is the render alone. The query, the change-only fingerprint, the
     // wording of the warning and the once-per-session suppression all survive it, so what it
     // isolates is exactly whether the sentence dates the entry — which is the whole bead: a
@@ -1915,6 +1928,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_row_with_no_transcript_is_named_and_never_announced(),
         probe_selftest_json_is_only_the_array(),
         probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
+        probe_only_a_failed_handover_counts_as_an_attempt(),
     ]
 }
 
@@ -10134,5 +10148,103 @@ fn probe_no_flow_dependent_fix_asserts_a_forbidden_repair() -> Probe {
         name: "gate: no flow-dependent fix tells a worker to record a verify, and the main-moved diagnosis is unchanged",
         red_fires: saw_flow_dependent && none_forbidden && note_clean,
         green_passes: diagnosis_intact && names_a_command,
+    }
+}
+
+/// air-zqmi: the channel told an adopter's coordinator that w3 had handed over `ad-gjw8x`
+/// without a green at HEAD. w3's first and only attempt on that bead SUCCEEDED, as did its
+/// other two; there was no refusal and so no refusal text. The coordinator acted on a reported
+/// refusal that never happened and a worker spent a message establishing it.
+///
+/// The event log says it exactly: at 13:51:59 the `PreToolUse` line for that close reads
+/// `decision: pass`. `handover_gate` stamped the claim anyway — the stamp ran on every
+/// hand-over command the gate saw — while `handover-not-green` reads that counter and says
+/// "handed over N time(s) without green verify at HEAD". So a worker whose closes all passed
+/// was reported to the whole fleet as having failed.
+///
+/// **Same class as air-eiv, one layer over.** That was a QUERY counting as an attempt:
+/// `air handover`, the documented diagnostic, raised the alarm on the worker who ran it. This
+/// is a SUCCESS counting as one. The rule both settle on: only a hand-over that did not go
+/// through is an attempt.
+///
+/// The cost is not the wrong line. Their coordinator told its workers to disregard the
+/// condition and stopped acting on it for the round, because under a lane its alerts were
+/// evidence that closes were working — and a coordinator who ignores a condition is worse off
+/// than one who never had it, if a real refusal ever arrives on the same text.
+///
+/// Red: a close the gate REFUSES stamps one attempt.
+///
+/// Green: a close the gate PASSES stamps none and clears what was there. The clearing is the
+/// half that is easy to miss: without it the counter is a high-water mark, so one early
+/// refusal keeps the condition firing after a clean close, which is the same false positive
+/// arriving a few minutes later.
+fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
+    use crate::cmd::hook::handover_gate;
+    use air_hooks::HookOutcome;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            crate::git::run(&dir, args).map_err(|e| e.to_string())
+        };
+        g(&["init", "-q", "-b", "main", "."])?;
+        g(&["config", "user.email", "a@b"])?;
+        g(&["config", "user.name", "a"])?;
+        std::fs::write(dir.join("f"), "x").map_err(|e| e.to_string())?;
+        g(&["add", "-A"])?;
+        g(&["commit", "-qm", "seed"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("zz-1", "w3", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        let cmd = "bd close zz-1 --reason 'done'";
+        let attempts = || -> i64 {
+            l.open_claims()
+                .unwrap_or_default()
+                .iter()
+                .find(|c| c.bead == "zz-1")
+                .map_or(-1, |c| c.handover_attempts)
+        };
+
+        // No green: the gate refuses, and THAT is an attempt.
+        handover_gate(&l, "w3", &dir, cmd, true)?;
+        let after_refusal = attempts();
+
+        // Now green at that head, so the same close passes.
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "w3".into(),
+            sha: head,
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t1".into(),
+            finished_at: "t1".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: Vec::new(),
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        let d = handover_gate(&l, "w3", &dir, cmd, true)?;
+        let passed = matches!(d.outcome, HookOutcome::Allow { context: None });
+        let after_pass = attempts();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        // Red: the refusal counted. Green: the pass counted nothing AND cleared the one before.
+        Ok((after_refusal == 1, passed && after_pass == 0))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
+        red_fires: red,
+        green_passes: green,
     }
 }
