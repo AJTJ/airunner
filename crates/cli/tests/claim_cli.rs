@@ -1793,6 +1793,91 @@ fn awaiting_review_keeps_the_claim_and_close_releases_it() {
 /// A main checkout plus one linked worktree `alpha` on `worktree-alpha`, with a bead handed
 /// over on it: the shape `air land` lands (air-3pz). `verify` is what the repo's verify
 /// command should be (`true` or `false`), committed so main starts clean.
+/// air-80x.1: a verify lane's green at a batch commit closes the bead it covers, and a batch
+/// cut before the worker's last commit does not. End to end: alpha commits with a `Bead:`
+/// trailer; a lane worktree merges main and alpha's branch and records the only green, at the
+/// batch head, as worker `lane`; alpha's `air handover --bead fd-1` passes on it with no green
+/// at alpha's HEAD. Then alpha commits more for fd-1, and the same batch is refused by name.
+#[test]
+fn a_lane_batch_green_closes_the_bead_it_covers_and_a_stale_batch_is_named() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    // alpha's commit carries the bead by trailer (land_repo's first commit does not).
+    std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
+    git(&alpha, &["add", "-A"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    // The lane: a worktree off main that merges alpha and verifies once.
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    // `--no-ff`: a batch is a merge commit of its own, never alpha's head renamed. A
+    // fast-forward here would put the green AT alpha's HEAD and exercise nothing new.
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    // No green at alpha's HEAD; the batch's green covers fd-1's one commit.
+    let (code, out, err) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["pass"], true, "{out}");
+    assert!(
+        v["message"].as_str().unwrap().contains("batch by lane"),
+        "{out}"
+    );
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap()
+            .contains("every commit of fd-1"),
+        "{out}"
+    );
+
+    // alpha commits again for fd-1 after the batch was cut: the batch no longer covers it.
+    std::fs::write(alpha.join("late.txt"), "late\n").unwrap();
+    git(&alpha, &["add", "-A"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: after the cut\n\nBead: fd-1\n"],
+    );
+    let late = git(&alpha, &["rev-parse", "--short=8", "HEAD"]);
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["pass"], false, "{out}");
+    let msg = v["message"].as_str().unwrap();
+    assert!(msg.contains("predates your commit"), "{msg}");
+    assert!(
+        msg.contains(&late),
+        "must name the commit after the cut: {msg}"
+    );
+    assert!(msg.contains("after the cut"), "{msg}");
+    assert!(msg.contains("next batch"), "{msg}");
+}
+
 fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");

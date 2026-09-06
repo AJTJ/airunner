@@ -74,6 +74,18 @@ pub fn facts(
         .filter(|c| c.worker == worker)
         .collect();
     let held_beads: Vec<String> = held.iter().map(|c| c.bead.clone()).collect();
+    // air-80x.1: with no green at HEAD, a verify lane's batch may still cover the bead. Per
+    // bead: the one named, else every bead this worker holds. Only on the slow path, so a
+    // worker who verified at HEAD pays no git spawns here.
+    let (batch_green, batch_predates) = if green_at_head {
+        (None, None)
+    } else {
+        let targets: Vec<String> = match bead {
+            Some(b) => vec![b.to_string()],
+            None => held_beads.clone(),
+        };
+        super::batch::describe(ledger, repo, &targets)
+    };
     let digest_dir = digest_dir(repo);
     let digest_present = digest_dir.as_deref().and_then(|d| {
         // Newer than this worker's oldest open claim, or than the branch point from main,
@@ -109,6 +121,8 @@ pub fn facts(
         head,
         green_at_head,
         tree_green,
+        batch_green,
+        batch_predates,
         last_green_sha,
         main_is_ancestor,
         main_sha,

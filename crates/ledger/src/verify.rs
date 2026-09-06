@@ -255,6 +255,23 @@ impl Ledger {
         Ok(row)
     }
 
+    /// The newest `limit` green runs of `kind` by any worker, newest first (air-80x.1): the
+    /// candidates a batch green is looked for among. Killed rows are not green and never
+    /// appear; the caller decides which of these contain what.
+    pub fn latest_greens(&self, kind: Kind, limit: usize) -> Result<Vec<VerifyRun>> {
+        let mut st = self.conn().prepare(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+             FROM verify_runs WHERE kind=?1 AND exit_code=0 \
+             ORDER BY finished_at DESC LIMIT ?2",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let v = st
+            .query_map(params![kind.as_str(), limit], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// The most recent *green* run of `kind` for `worker` at any sha (for "peer is green at Y").
     pub fn latest_green(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         let row = self
