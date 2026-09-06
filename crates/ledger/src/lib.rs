@@ -9,6 +9,7 @@
 //! statements, and exits. Anything slow (`bd`, cross-worktree `git status`) lives in the CLI,
 //! never on a hook path (tick 0315).
 
+pub mod budgets;
 pub mod captures;
 pub mod claims;
 pub mod events;
@@ -201,13 +202,96 @@ impl Ledger {
     }
 }
 
+/// How long a writer waits for the WAL write lock before giving up with `SQLITE_BUSY`.
+///
+/// **Fail direction: OPEN, and that is why it is measured.** A hook that cannot get the lock
+/// errors; `air hook` turns any internal error into exit 0 with a `fail-open` line, so the one
+/// refusal Air makes silently does not refuse. The old value was 200 ms and nothing recorded a
+/// single lock wait, so "zero busy errors" was case 3 of `do-less` — the input never arrived —
+/// rather than evidence that 200 ms was enough.
+///
+/// Measured (`crates/ledger/tests/lock_waits.rs`, 6 writers — a coordinator, four workers and
+/// a hook — × 60 immediate transactions against one WAL file, five runs on this Mac): 5–8
+/// waits per 360 writes, p50 1 ms, and a max of 45, 95, 97, 100 and 131 ms.
+///
+/// **That tail is the reason this moved.** Contention is rare, but when it happens the wait
+/// lands within a factor of two of the old 200 ms — one slow run and 200 ms is exceeded, and
+/// what happens then is not a slow hook but a hook that fails open. The old value was sized
+/// against nothing; the new one is sized against a measured max of 131 ms plus the cases the
+/// measurement cannot reach (a WAL checkpoint, a cold `.air`, four concurrent verifies
+/// competing for the disk). One second costs a slow hook at worst; the alternative costs a
+/// refusal that does not happen. A budget that guards a refusal fails closed or is measured;
+/// this one is now both.
+///
+/// The recorded number is an upper bound on the wait, not the wait: [`busy`] only observes at
+/// its sleep boundaries, so a lock freed 60 ms in is recorded at the next boundary. It bounds
+/// in the safe direction for sizing.
+///
+/// Moved by: `air audit`'s `sqlite-lock` row. If p99 approaches this, the fleet is contending
+/// and the fix is fewer writers, not a longer wait; if a `hits` count is ever non-zero, a
+/// refusal was skipped and this is too short.
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// SQLite's own backoff schedule, in milliseconds (`sqliteDefaultBusyCallback` in `main.c`),
+/// kept so replacing `busy_timeout` with a measured handler does not also change the retry
+/// behaviour underneath it.
+const BACKOFF_MS: &[u64] = &[1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100];
+
+thread_local! {
+    /// When the wait this thread is currently inside began. Set on the handler's first call
+    /// for a locking event, which is the only signal SQLite gives that a new wait started.
+    static WAIT_START: std::cell::Cell<Option<std::time::Instant>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// `busy_timeout`'s behaviour, written out so the wait is recorded (air-d75).
+///
+/// `count` is how many times this handler has already run for the same locking event, so
+/// `count == 0` is a new wait. Returning `true` retries; `false` gives up with `SQLITE_BUSY`.
+///
+/// The wait is recorded after each sleep rather than at the end, because SQLite never says a
+/// wait succeeded — it simply stops calling. So the last recorded value for a successful wait
+/// is the total time slept, which is the wait, and [`budgets::record_progress`] keeps it as
+/// one sample rather than one per retry.
+fn busy(count: i32) -> bool {
+    let restart = count == 0;
+    if restart {
+        WAIT_START.with(|s| s.set(Some(std::time::Instant::now())));
+    }
+    let start = WAIT_START
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(std::time::Instant::now);
+    let so_far = start.elapsed();
+    let left = BUSY_TIMEOUT.saturating_sub(so_far);
+    if left.is_zero() {
+        budgets::record_progress(budgets::SQLITE_LOCK, so_far, BUSY_TIMEOUT, restart, true);
+        return false;
+    }
+    let step = usize::try_from(count).unwrap_or(usize::MAX);
+    let delay = BACKOFF_MS
+        .get(step.min(BACKOFF_MS.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or(100);
+    std::thread::sleep(std::time::Duration::from_millis(delay).min(left));
+    budgets::record_progress(
+        budgets::SQLITE_LOCK,
+        start.elapsed(),
+        BUSY_TIMEOUT,
+        restart,
+        false,
+    );
+    true
+}
+
 fn configure(conn: &Connection) -> Result<()> {
     // WAL: concurrent readers with one writer across worktrees; NORMAL is durable enough for
     // a ledger that can be rebuilt (only verify history and receipts have lasting value).
     // Sources: https://sqlite.org/wal.html, https://sqlite.org/pragma.html (tick 0315).
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    conn.busy_timeout(std::time::Duration::from_millis(200))?;
+    // Not `busy_timeout`: same behaviour, but the wait lands in the record (air-d75).
+    conn.busy_handler(Some(busy))?;
     Ok(())
 }
 

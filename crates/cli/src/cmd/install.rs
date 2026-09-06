@@ -81,7 +81,24 @@ pub fn skill_with_name(text: &str, name: &str) -> String {
     out
 }
 
-const HOOK_TIMEOUT_SECS: u64 = 5;
+/// The wall-clock cap written into `settings.json` for `air hook`.
+///
+/// **Fail direction: OPEN, and silently.** Claude Code KILLS the hook at this cap; a killed
+/// process writes no event line, so a gate that never ran is indistinguishable in the record
+/// from a gate that allowed. Every other budget here fails toward a message; this one fails
+/// toward nothing at all.
+///
+/// **Not derived, and it cannot be from its own distribution.** A budget whose overrun deletes
+/// its own sample is censored at exactly the value you would want to size against, so
+/// `air audit` pairs the `hook` percentiles with an unpaired-hook count: the PreToolUse
+/// invocations with no PostToolUse to match them. That count, not the p99, is what moves this
+/// number — a non-zero one means hooks are being killed and the cap is short. The design
+/// budget is p99 ≤ 150 ms (tick 0315), so 5 s is ~33x it; raising the cap raises the price of
+/// every wedged hook the fleet waits on, which is why it is not simply generous.
+///
+/// `hook::HOOK_BUDGET` mirrors this so the process measures itself against the number
+/// actually installed.
+pub const HOOK_TIMEOUT_SECS: u64 = 5;
 
 /// The hook table (plan 0001 §5): one command for every event, short timeout.
 pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {

@@ -267,6 +267,12 @@ enum Cmd {
     /// command exists to surface (air-ha8). Every backticked name in this help is a field the
     /// command prints, and air selftest checks the containment, so the drift cannot come back
     /// quietly.
+    ///
+    /// It also prints `budgets`: every timing budget Air waits on, with which way each fails
+    /// when it is hit, and `hits` — a budget reached, meaning a decision taken on less than
+    /// was asked for. Three of them fail toward permitting, and the hook's own cap cannot
+    /// record its overruns at all, so `hook pairing` counts what a killed hook leaves instead
+    /// (air-d75).
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
