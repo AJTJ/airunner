@@ -1275,6 +1275,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.18", 22, 41),
     // 2026-09-06: doctor and status name an install record that lags the binary (air-d61).
     ("0.2.19", 23, 42),
+    // 2026-09-06: the second round of the day, cut per round rather than per notice (air-mir).
+    // Sixteen surface changes across three lanes: the close gate asks the main a green was
+    // recorded over, the Stop hook names `air handover` instead of restating a repair, the
+    // digest must be tracked, a red run keeps its output, a build says which build it is, and
+    // the overlap warning dates its holders.
+    ("0.3.0", 24, 58),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
