@@ -26,8 +26,65 @@ pub const FOR_OWNER_REFUSAL: &str = "air capture: `--for owner` is gone (air-uef
 2026-09-05). Capture the question plainly: air capture \"<text>\". The coordinator files it as \
 a bead labelled `owner`, with a recommendation, and those beads are the owner's queue.";
 
-pub fn capture(repo: &Path, text: &str, audience: &str, json: bool) -> i32 {
-    let text = text.trim();
+/// Neither route was given. Names both, because the positional is right for the one-liners
+/// that are most captures and the file route is right for the case that sent you here.
+pub const NOTHING_TO_CAPTURE: &str = "air capture: nothing to capture. Pass the text \
+(air capture \"<text>\"), or --file <path> for a finding too long to survive a command line.";
+
+/// Both routes were given. Air will not guess which one is the finding.
+pub const BOTH_ROUTES: &str = "air capture: pass the text OR --file <path>, not both. Air will \
+not guess which is the capture.";
+
+/// air-45pw: `air capture` took one positional and nothing else, so a finding long enough to be
+/// worth writing went through the harness's command classifier as a command line and was
+/// refused for its shape. An adopter's worker shortened a finding in order to file it, and a
+/// shortened capture looks exactly like a capture — the loss is invisible, which is why this is
+/// a file route rather than a longer allowance.
+///
+/// This fleet never hit it: workers here capture through the MCP tool, whose argument is JSON
+/// and never becomes a command line, so every capture triaged on 2026-09-06 ran to several
+/// hundred words and none was refused. The CLI path is the one that bites and our own usage
+/// pattern hides it completely.
+///
+/// The file's bytes are stored as they are, save for leading and trailing whitespace, which is
+/// trimmed exactly as the positional route trims it — a trailing newline is how a file ends,
+/// not something the person wrote. Nothing inside the text is touched: no line limit, no byte
+/// limit, no truncation anywhere on this path.
+///
+/// Removal: when the harness accepts a several-hundred-word argument, or when no adopter files
+/// through the CLI.
+pub fn resolve_text(text: Option<&str>, file: Option<&Path>) -> Result<String, String> {
+    match (text, file) {
+        (Some(_), Some(_)) => Err(BOTH_ROUTES.to_string()),
+        (None, None) => Err(NOTHING_TO_CAPTURE.to_string()),
+        (Some(t), None) => Ok(t.trim().to_string()),
+        (None, Some(p)) => match std::fs::read_to_string(p) {
+            Ok(s) => Ok(s.trim().to_string()),
+            Err(e) => Err(format!(
+                "air capture: cannot read --file {}: {e}",
+                p.display()
+            )),
+        },
+    }
+}
+
+pub fn capture(
+    repo: &Path,
+    text: Option<&str>,
+    file: Option<&Path>,
+    audience: &str,
+    json: bool,
+) -> i32 {
+    let text = match resolve_text(text, file) {
+        Ok(t) => t,
+        Err(e) => {
+            emit(json, &serde_json::json!({"ok": false, "reason": e}), || {
+                e.clone()
+            });
+            return 2;
+        }
+    };
+    let text = text.as_str();
     if text.is_empty() {
         eprintln!("air capture: empty text");
         return 1;
@@ -350,5 +407,38 @@ mod tests {
         // Promoted or dropped, never both, and never neither.
         assert!(plan("c1", Some("zz-1"), Some("dup")).is_err());
         assert!(plan("c1", None, None).is_err());
+    }
+
+    /// air-45pw: the same either/or as triage, one command earlier. Both refusals name both
+    /// routes, because the person reading one has just had a capture refused and needs the
+    /// other way in — `--help` is the second place they look, not the first.
+    #[test]
+    fn capture_takes_one_route_and_each_refusal_names_both() {
+        let dir = std::env::temp_dir().join(format!("air-cap-{}", air_ledger::verify::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("finding.md");
+        // A trailing newline is how a file ends, not something the person wrote; interior
+        // blank lines and whitespace are content and survive untouched.
+        std::fs::write(&f, "  first\n\n   indented second\n").unwrap();
+
+        assert_eq!(
+            resolve_text(None, Some(&f)).unwrap(),
+            "first\n\n   indented second"
+        );
+        assert_eq!(resolve_text(Some("  a line  "), None).unwrap(), "a line");
+
+        for e in [
+            resolve_text(None, None).unwrap_err(),
+            resolve_text(Some("a line"), Some(&f)).unwrap_err(),
+        ] {
+            assert!(e.contains("--file"), "{e}");
+            assert!(e.contains("text"), "{e}");
+        }
+
+        // A path that is not there is named, not silently filed as an empty capture.
+        let missing = resolve_text(None, Some(&dir.join("nope.md"))).unwrap_err();
+        assert!(missing.contains("nope.md"), "{missing}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
