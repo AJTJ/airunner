@@ -656,6 +656,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "handover: a member of a standing red batch is told so, and a non-member is never told it was not",
+        Mutation {
+            // Drops the membership test, so every worker gets the batch line whether or not
+            // it was in it — including when the members list is empty, which is the exact
+            // wrong answer this exists to avoid.
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "    if !b.members.iter().any(|m| m.worker == worker) {\n        return None;\n    }\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2153,6 +2165,7 @@ fn all_probes() -> Vec<Probe> {
         probe_air_runs_no_conflicting_merge(),
         probe_idle_without_claim_counts_claimable_only(),
         probe_idle_without_claim_silent_while_verifying(),
+        probe_handover_names_a_red_batch_you_are_in(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4060,6 +4073,78 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
         && fires(&at(Some("other")));
     Probe {
         name: "attention: idle-without-claim is silent for a worker whose own verify is in flight",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-hpp8: a member of a standing red batch can look it up, and nothing ever claims
+/// non-membership.
+///
+/// A lane's red batch reached its members by the lane remembering to message each of them.
+/// Twice in one night in the adopter's fleet somebody was left off — the second time after the
+/// lane had amended its practice to "every member and the coordinator" — and the omitted
+/// worker spent 132 s running a suite against a hypothesis the batch log had already refuted.
+/// `red_batch_standing` knew the answer the whole time and `air handover` did not say it.
+///
+/// Red: a member is told, with the batch sha, the lane, and where the lane's output is. Green:
+/// a worker not among recorded members is told nothing, a batch with an EMPTY members list is
+/// told nothing either, and in neither case does the output contain a claim that the worker
+/// was not in a batch — the two silences have different reasons and the same output, which is
+/// the ruling (reading A) and is air-sdjo's to change.
+fn probe_handover_names_a_red_batch_you_are_in() -> Probe {
+    use crate::cmd::batch::RedBatch;
+    use crate::cmd::handover::red_batch_line;
+    use air_ledger::landings::Member;
+
+    let batch = |members: Vec<(&str, &str)>, log: Option<&str>| RedBatch {
+        sha: "deadbeefcafe".into(),
+        worker: "lane".into(),
+        at: "2026-09-06T22:10:00Z".into(),
+        members: members
+            .into_iter()
+            .map(|(w, sha)| Member {
+                worker: w.into(),
+                sha: sha.into(),
+            })
+            .collect(),
+        log_path: log.map(str::to_string),
+    };
+
+    let full = batch(
+        vec![("alpha", "aaaaaaaabbbb"), ("beta", "bbbbbbbbcccc")],
+        Some(".air/runs/01J.log"),
+    );
+    let line = red_batch_line(Some(&full), "beta");
+    let red = line.as_deref().is_some_and(|l| {
+        l.contains("RED batch deadbeef")
+            && l.contains("cut by lane")
+            && l.contains("2026-09-06T22:10:00Z")
+            // The member's OWN sha, so they know which of their commits was in it.
+            && l.contains("bbbbbbbb")
+            // The evidence, not just the verdict: this is what the omitted worker had to go
+            // and find in another worktree.
+            && l.contains(".air/runs/01J.log")
+    });
+
+    // A batch that kept no output still answers the question it is asked.
+    let no_log = red_batch_line(Some(&batch(vec![("beta", "bbbbbbbbcccc")], None)), "beta");
+    let green =
+        // Recorded members that do not include this worker: nothing extra.
+        red_batch_line(Some(&full), "gamma").is_none()
+        // An empty members list: the state where Air does not KNOW who was in it. Silent,
+        // and the silence is the same one a genuine non-member gets, on purpose.
+        && red_batch_line(Some(&batch(vec![], None)), "beta").is_none()
+        // No standing batch at all.
+        && red_batch_line(None, "beta").is_none()
+        // Nothing anywhere asserts the negative, which is the answer that would be WRONG
+        // whenever the members list was dropped.
+        && !line.as_deref().unwrap_or_default().contains("not in")
+        && no_log
+            .as_deref()
+            .is_some_and(|l| l.contains("kept no output"));
+    Probe {
+        name: "handover: a member of a standing red batch is told so, and a non-member is never told it was not",
         red_fires: red,
         green_passes: green,
     }
@@ -10699,6 +10784,7 @@ fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
                 sha: "b2".into(),
             },
         ],
+        log_path: None,
     };
     let green = |sha: &str, at: &str| VerifyRun {
         id: new_id(),

@@ -465,6 +465,79 @@ pub fn landing_line(sel: &crate::cmd::status::Selection, worker: &str) -> String
     "landing: not a landing candidate (no worktree branch of yours is in selection)".to_string()
 }
 
+/// Whether the standing red batch has this worker in it (air-hpp8), read from the value
+/// `air status` already computes.
+///
+/// A lane cuts a batch, it goes red, and every member has to be told by the lane remembering
+/// to message each of them. Twice in one night in the adopter's fleet a member was left off —
+/// the second time after the lane had already amended its practice to "every member and the
+/// coordinator" — and that worker spent 132 seconds running a suite to test a hypothesis the
+/// batch log had already refuted, then found the answer by opening the lane's log from another
+/// worktree. Their form of it: **a fact that must reach N parties by one party remembering N
+/// sends will eventually reach N-1.**
+///
+/// What makes it a bead is not that it failed twice. It is that the member **cannot look**:
+/// `red_batch_standing` has the sha, the lane, the time and the members, `air status` renders
+/// it, and a worker running `air handover` in its own worktree was told nothing. Same shape as
+/// air-33rn, and fixed the same way — a lookup over the value that already exists, never a
+/// second copy of the decision, and never a push channel. **The lane messaging people stays
+/// fine; the defect was that it was the only route.**
+///
+/// # The silence is not a claim of non-membership
+///
+/// `None` covers two different states and says nothing in both, deliberately:
+///
+/// - the worker is genuinely not among members that WERE recorded, and
+/// - the members list is empty, so Air does not know who was in it.
+///
+/// 345 of 347 verify runs in this ledger carry no members at all, because the pre-air-vsvt
+/// `members_of` dropped any member whose head had moved. So an empty list is exactly what "not
+/// in a batch" and "in a batch, members dropped" both look like, and an `else` arm here would
+/// turn a dropped list into "you were not in it" — a wrong answer wearing the same grammar as
+/// a right one.
+///
+/// Distinguishing the two in the OUTPUT is air-sdjo's, because it needs the lane to declare
+/// what it merged. Three routes without that were checked and all three are guesses (owner's
+/// coordinator ruled reading A, 2026-09-06):
+///
+/// 1. Ask git whether this head is an ancestor of the red sha. Exact, needs no members — and
+///    recomputes membership, which is the one thing this bead forbids by name.
+/// 2. Report any standing red with no members as "Air cannot tell whether you were in it".
+///    That fires on 345 of 347 runs, framing every ordinary red as a possible batch: a
+///    mechanism speaking on the ok path, which is how a line teaches its reader to skip it.
+/// 3. Read `verify_lane` from `.claude/air.json` and treat an unmembered red by that worker as
+///    a batch. Declared rather than guessed, and it would work in the adopter's repo — but
+///    **this** repo batched through `verify` on 2026-09-06 with no such key, so the most
+///    principled-looking option would have been silent for exactly the case it exists for.
+///
+/// Pure over the batch so a probe drives every arm from a constructed `RedBatch` with no repo
+/// and no fixture.
+pub fn red_batch_line(batch: Option<&crate::cmd::batch::RedBatch>, worker: &str) -> Option<String> {
+    let b = batch?;
+    if !b.members.iter().any(|m| m.worker == worker) {
+        return None;
+    }
+    let mine = b
+        .members
+        .iter()
+        .find(|m| m.worker == worker)
+        .map(|m| m.sha.get(..8).unwrap_or(&m.sha).to_string())
+        .unwrap_or_default();
+    // The log is the point as much as the verdict: the adopter's worker had to read it from
+    // another worktree to learn what the batch had already established.
+    let log = match b.log_path.as_deref() {
+        Some(p) => format!("the lane's output is at {p}"),
+        None => "the lane's run kept no output".to_string(),
+    };
+    Some(format!(
+        "batch: your branch at {mine} was in the RED batch {} cut by {} at {}; nothing lands \
+         on it and the lane splits by hand — {log}",
+        b.sha.get(..8).unwrap_or(&b.sha),
+        b.worker,
+        b.at,
+    ))
+}
+
 pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     let (ledger, worker) = match open(repo) {
         Ok(x) => x,
@@ -516,14 +589,28 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     // the coordinator — which is how two workers spent tonight believing a journal-only branch
     // would land.
     let landing = landing_line(&crate::cmd::status::select(repo), &worker);
+    // air-hpp8: and whether a standing red batch has this branch in it. Same lookup `air
+    // status` does, so the two surfaces cannot disagree.
+    let batch = red_batch_line(
+        crate::cmd::batch::red_batch_standing(&ledger, repo).as_ref(),
+        &worker,
+    );
     // ADDED to the verdict, never wrapping it. Nesting it under a key moved `missing` to
     // `handover.missing` and broke four integration tests that parse this — a surface change
     // nobody asked for, to add a field. A new key costs every existing caller nothing.
     let mut out = serde_json::to_value(&v).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(o) = out.as_object_mut() {
         o.insert("landing".to_string(), serde_json::json!(landing));
+        // Only when there is something to say. An always-present `null` would read as "you
+        // are not in a batch", which is the claim this must never make.
+        if let Some(b) = &batch {
+            o.insert("batch".to_string(), serde_json::json!(b));
+        }
     }
-    emit(json, &out, || format!("{}\n{landing}", v.message));
+    emit(json, &out, || match &batch {
+        Some(b) => format!("{}\n{landing}\n{b}", v.message),
+        None => format!("{}\n{landing}", v.message),
+    });
     if v.block { 2 } else { 0 }
 }
 
