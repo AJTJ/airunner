@@ -1,4 +1,4 @@
-# 0001 — First slice: the referee adopter can run next round
+# 0001 — First slice: the referee the adopter can run next round
 
 Status: proposed, 2026-08-17. Argument for what to build first and the contract it must meet.
 Sources: `docs/research/SYNTHESIS.md`, `coordinator-interview-2026-08-17.md`,
@@ -8,7 +8,7 @@ Binary name: **Air** (`air`), owner's choice 2026-08-17.
 
 ## 1. The bet
 
-One Rust binary, installed on the adopter machine, that (a) holds facts the fleet currently
+One Rust binary, installed on the adopter's machine, that (a) holds facts the fleet currently
 carries in chat and in heads, (b) answers questions from those facts at hook time and on the CLI,
 and (c) refuses exactly one thing — a hand-over whose evidence is missing. Nothing else is
 refused; everything else warns and prints the fixing command. If it does not measurably reduce
@@ -26,7 +26,7 @@ marked so below.
 
 Interview caveats (method): questions 7 proposed (a)(b)(c) and asked for agreement — assent to
 those is weak evidence; questions 1–6 asked for facts (counts, shas, incidents) — those are
-stronger and several are checkable in adopter's git/bd. All five sessions were primed by the
+stronger and several are checkable in the adopter's git/bd. All five sessions were primed by the
 same `CLAUDE.md` rules (so "wish enforced" often echoes an existing rule) and by one round's
 salient failures (matrix citations, one imported-red merge). Weighting:
 
@@ -44,8 +44,8 @@ salient failures (matrix citations, one imported-red merge). Weighting:
 | Post-merge citation/fitness auto-check | fitness-function prior art (line-pinned citations brittle → symbol anchors) | fourth/third factual (most repeated cost) | **medium** — research suggests fixing the *citation scheme* (symbol anchors) beats auto-shifting; do the cheap print-the-fix now, fix the scheme later |
 | Print denominator; `--json`; level-triggered | corpus (guards that fail confidently; level-triggered reconciliation) | third preference | **strong** |
 | Coordinator keeps steering/rulings/arbitration | corpus §0.6 read carefully; owner's account | coord self-description | **medium** — self-report; the ledger should measure how many coordinator turns remain triage after M0 |
-| Guard false-positive tax → rewriting linter | guards-prior-art (soft_deny; teaching denial) | 3/4 factual (~15 refusals each) | **out of scope** for this slice; note for adopter |
-| "Both themes" rule unenforceable in worktree | none | 2/4 factual admission | not ours; report to adopter |
+| Guard false-positive tax → rewriting linter | guards-prior-art (soft_deny; teaching denial) | 3/4 factual (~15 refusals each) | **out of scope** for this slice; note for the adopter |
+| "Both themes" rule unenforceable in worktree | none | 2/4 factual admission | not ours; report to the adopter |
 
 Rule for the rest of this plan: an item appears in §3–§5 only if it is **strong** or
 **medium-strong** above, or is cheap and reversible (advisory-only).
@@ -157,10 +157,10 @@ were the problem — coord §1).
 Read via `bd --json` only; write only through `bd` (claim/status/comment). CAS and leases are
 owned by the ledger — `bd` 1.2.2 (the only supported release, 2026-08-18) has no CAS flags,
 leases, heartbeat, reclaim, events, or `--force`; 1.2.1 is an accidental release. Recommendation:
-adopter moves to 1.2.2 + `brew pin` after the documented cursor rollback
+The adopter moves to 1.2.2 + `brew pin` after the documented cursor rollback
 ([bd facts tick](../research/verification/ticks/2026-08-18-0300-bd-1-2-x-facts.md)). Minimal
 `WorkLedger` surface verified present in 1.2.2: `ready`, `show`, `list`, `update --claim`,
-`update -s/-a`, `comment`, `close`, `dep`, `blocked`, `recompute-blocked`. Never make adopter's
+`update -s/-a`, `comment`, `close`, `dep`, `blocked`, `recompute-blocked`. Never make the adopter's
 tooling depend on this repo's *build* — install a binary (`corpus §5.4`).
 
 ## 8. Probes and measurement
@@ -180,7 +180,7 @@ tooling depend on this repo's *build* — install a binary (`corpus §5.4`).
   `next` (frontend: ~40%; top-1/3/5), and merge/overlap relays (~5/30 today; measurable only via
   the `PostToolUse(SendMessage)` hook or opt-in `air note relay`, else printed `unmeasured`).
   Drift incidents ("green" ≠ landed) remain a landing-time check, not a round metric.
-- Success for M0: adopter runs one round with the binary installed; `make fitness` "enforced"
+- Success for M0: the adopter runs one round with the binary installed; `make fitness` "enforced"
   count rises (5/14 → ≥ 8/14); coordinator reports fewer merge/overlap relays; zero imported-red.
 
 ## 9. Non-goals for this slice
@@ -200,4 +200,4 @@ gix (read-only) + shell `git`, tokio only where needed, tracing. No async in hoo
 
 1. Binary name.
 2. M0 in advisory-only mode for one round before the Stop hook can block? (Recommended: yes.)
-3. Pin `bd` at 1.2.1 or move adopter's leases into the ledger now?
+3. Pin `bd` at 1.2.1 or move the adopter's leases into the ledger now?

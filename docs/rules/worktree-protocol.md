@@ -2,8 +2,8 @@
 
 > **Read when:** you are an agent and have not yet established which checkout you are in. That is
 > the first question of any session, because every other permission depends on the answer. This
-> is the protocol shape adopter runs today (adapted from
-> `~/projects/adopter/docs/rules/worktree-protocol.md` @ `f2ca891`); the parts Air is meant to
+> is the protocol shape the adopter runs today (adapted from
+> `the adopter's docs/rules/worktree-protocol.md` @ `f2ca891`); the parts Air is meant to
 > turn from prose into machinery are marked **[Air enforces]** or **[Air advises]** with the
 > section of [`../plans/0001-first-slice.md`](../plans/0001-first-slice.md) that says so.
 > Everything unmarked stays a rule people follow.
@@ -21,7 +21,7 @@ Corroborating signal, also cheap: `git rev-parse --git-dir` differs from `--git-
 worktree. Air keys its ledger off the same fact — `.air/ledger.db` lives at
 `git rev-parse --git-common-dir`, shared by every worktree (plan 0001 §2).
 
-**Say which you are in your first message.** Two adopter agents were confused with each other on
+**Say which you are in your first message.** Two the adopter agents were confused with each other on
 2026-08-13, and one was credited with the other's finding.
 
 **Check your actor identity rather than assuming it, because your bead claims are only
@@ -59,7 +59,7 @@ denies (plan 0001 §5). `PostToolUse(Edit|Write)` journals the intent to touch a
 ## 3. Compiling is a shared resource
 
 **Cargo takes the whole machine.** `build.jobs` defaults to every logical core *per invocation*,
-so two agents running `cargo check` are each asking for all of it. the adopter measured a 12–16 s
+so two agents running `cargo check` are each asking for all of it. The adopter measured a 12–16 s
 `cargo check` at **219.7 s** under contention, with load average peaking at **207** on 16 cores.
 
 **Worktrees do not isolate the build.** They isolate the branch, not the CPU. Two settings, per
@@ -74,7 +74,7 @@ Derive from `sysctl -n hw.logicalcpu`, never pin: a replaced machine must not in
 laptop's cap. A long-lived watcher (`cargo watch`) inside one worktree needs its own target dir,
 or every `cargo check` beside it blocks on `Blocking waiting for file lock on build directory`.
 
-**There is no pool.** adopter's owner decided on 2026-08-14 to isolate rather than coordinate —
+**There is no pool.** the adopter's owner decided on 2026-08-14 to isolate rather than coordinate —
 no supervisor, no jobserver, nothing to leak or wedge. If a pool is ever built, the acquisition
 order is part of building it: take any lease *before* a build slot, never hold two slots. Air does
 not build a pool (plan 0001 §9, non-goals).
@@ -87,14 +87,14 @@ the doc, anything in `bd`, another bead entirely.
 usually simply broken. **A recorded green is the only green** — see §6.
 
 **Read the load average.** `uptime` is free. Above 2× logical cores: stop compiling and say so
-(metastable-failure territory; adopter hit 207). Under 2, absolute, or a timing you take means
+(metastable-failure territory; the adopter hit 207). Under 2, absolute, or a timing you take means
 nothing — label it an upper bound. Before you diagnose a flaky port, a timeout or a failing test,
 check the load first; contention mistaken for a defect is the feedback loop.
 
 ## 4. Never infer that you are blocked — provoke the guard and read what it says
 
 A guard denies you out loud, with a message naming its rule. Silence means you were never
-blocked. A adopter agent reasoned that its tests must need a lease, never ran them, and asked a
+blocked. An adopter's agent reasoned that its tests must need a lease, never ran them, and asked a
 peer to run them instead; nothing had denied it, and it cost every verification on that branch.
 **[Air enforces]** every Air refusal or warning prints exactly which check failed and the command
 that fixes it (plan 0001 §1, §4). An Air answer you did not receive is not a denial.
@@ -152,7 +152,7 @@ Say what you tried, what happened, and what you think is needed — then take un
 **To whom.** In order: the **coordinating session** if one is running — it holds no lane and its
 job is to be reachable. Otherwise **`bd human <id>`**, which is durable and survives your session
 ending. **Never an interactive prompt to the owner:** it leaves your tool loop and nothing rescues
-you until a human arrives (that cost adopter 4.5 hours on 2026-08-15). Escalate by filing, never
+you until a human arrives (that cost the adopter 4.5 hours on 2026-08-15). Escalate by filing, never
 by prompting. **[Air enforces]** no hook ever blocks on a question (plan 0001 §4).
 
 **Record each failed attempt as `bd comment <id>`**, not as a mental tally — append-only and
@@ -164,13 +164,13 @@ signal, the release is still the right move.
 
 ## Provenance
 
-- Source: `~/projects/adopter/docs/rules/worktree-protocol.md` (adopter `f2ca891`),
+- Source: `the adopter's docs/rules/worktree-protocol.md` (the adopter `f2ca891`),
   adapted 2026-08-18.
 - Kept: the mechanical `.git` file-vs-dir test, the main-vs-worktree permission table, the
-  compile-contention section (measurements attributed to adopter), the guard-provocation rule,
+  compile-contention section (measurements attributed to the adopter), the guard-provocation rule,
   the peer rules, the hand-over order, the stop-and-escalate rules with the OTP-style counters.
-- Stripped: `DB_SUFFIX`/`adopter_<worktree>` per-worktree Postgres DBs, `make worktree-setup` /
+- Stripped: `DB_SUFFIX`/`app_<worktree>` per-worktree Postgres DBs, `make worktree-setup` /
   `worktree-env` / `fleet` / `queue` / `land` / `verify` / `docs-check` targets, `lease-guard.sh`
-  `NEEDS` list, the `runtime` lease, native/Expo builds, links to adopter plans 0010/0015 and
+  `NEEDS` list, the `runtime` lease, native/Expo builds, links to the adopter's plans 0010/0015 and
   notes, bead ids (`fd-*`).
 - Added: `[Air enforces]` / `[Air advises]` markers citing `docs/plans/0001-first-slice.md`.

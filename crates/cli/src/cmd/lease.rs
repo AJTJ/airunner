@@ -1,8 +1,8 @@
 //! `air lease take|release|status|break|beat [<resource>]`: mutual exclusion for what two
-//! agents cannot share. Ported from `adopter/scripts/lease.sh` (2026-08-21): identity is
+//! agents cannot share. Ported from `the adopter's scripts/lease.sh` (2026-08-21): identity is
 //! the worktree; liveness is the holder's `claude` pid plus its start time; stale is
 //! heartbeat age (`AIR_LEASE_STALE_SECS`, default 600; hooks refresh it on every tool call).
-//! Default resource is `runtime`, adopter's name for "ports, device, Docker".
+//! Default resource is `runtime`, the adopter's name for "ports, device, Docker".
 
 use std::path::Path;
 
@@ -12,7 +12,7 @@ use crate::cmd::status::minutes_between;
 use crate::cmd::{emit, log_event, now, open};
 
 /// The `claude` process this command runs under: `CLAUDE_PID` when exported (verified by
-/// adopter), else the nearest ancestor named `claude`, else our parent.
+/// The adopter), else the nearest ancestor named `claude`, else our parent.
 pub fn owner_pid() -> Option<i64> {
     // Verbatim override for tests and diagnostics; never set by launchers.
     if let Some(p) = std::env::var("AIR_LEASE_PID")
@@ -318,7 +318,7 @@ pub fn beat(repo: &Path) -> i32 {
 
 /// air-uae: where Air keeps leases, printed on every `air lease status` whether or not any are
 /// held. A second store in the target repo is then visible in one command instead of inferred
-/// from a contradiction, which is how adopter's took two incidents to find.
+/// from a contradiction, which is how the adopter's took two incidents to find.
 pub fn store_line(air_dir: &Path) -> String {
     format!(
         "lease store: {}/ledger.db (leases table)",
@@ -349,10 +349,10 @@ pub fn status(repo: &Path, json: bool) -> i32 {
             })
         })
         .collect();
-    // air-uae: name the store, always. the adopter ran two that disagreed — `air lease take`
+    // air-uae: name the store, always. The adopter ran two that disagreed — `air lease take`
     // wrote the ledger while their PreToolUse guard read
-    // `$(git --git-common-dir)/ad-leases/<resource>/` — so `make api` was denied naming the
-    // command that had just succeeded (ad-3wnp, ad-gpj0). Neither side ever said where it was
+    // `$(git --git-common-dir)/<prefix>-leases/<resource>/` — so `make api` was denied naming the
+    // command that had just succeeded. Neither side ever said where it was
     // looking, so the disagreement had to be inferred from the contradiction. A second store is
     // now visible in one command instead.
     let store = store_line(ledger.dir());

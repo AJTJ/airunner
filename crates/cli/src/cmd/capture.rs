@@ -10,7 +10,7 @@
 //! `air inbox --owner` are gone: the owner's queue is beads labelled `owner`, which the
 //! coordinator files with its recommendation in the description, and `air claim` refuses to
 //! workers. Two queues reached the owner before, and the prose one carried no id, no
-//! acceptance and no recommendation: ten items sat six days in adopter's 2026-08-29 round,
+//! acceptance and no recommendation: ten items sat six days in the adopter's 2026-08-29 round,
 //! and here a capture sat a week for a bead that already existed and was already labelled.
 
 use std::path::Path;
@@ -194,7 +194,7 @@ pub fn missing_ids(want: &[String], known: &[air_bd::Issue]) -> Vec<String> {
 
 /// Resolve one capture (air-zlq: one at a time, see [`plan`] for the measurement).
 ///
-/// A promotion is verified against bd first (air-76z): `air triage C --bead fd-placeholder`
+/// A promotion is verified against bd first (air-76z): `air triage C --bead zz-placeholder`
 /// used to succeed before the bead existed, and refusing to touch a resolved capture left
 /// the record pointing at nothing with no way to fix it. Now an unknown bead is refused, and
 /// an already-triaged capture can be re-pointed, its old target named in the event line.
@@ -343,12 +343,12 @@ mod tests {
     /// refused rather than guessed at.
     #[test]
     fn plan_resolves_one_capture_and_refuses_an_ambiguous_pass() {
-        let p = plan("c1", Some("fd-1"), None).unwrap();
-        assert_eq!((p.status, p.bead.as_deref()), ("promoted", Some("fd-1")));
+        let p = plan("c1", Some("zz-1"), None).unwrap();
+        assert_eq!((p.status, p.bead.as_deref()), ("promoted", Some("zz-1")));
         let d = plan("c1", None, Some("dup")).unwrap();
         assert_eq!((d.status, d.note.as_deref()), ("dropped", Some("dup")));
         // Promoted or dropped, never both, and never neither.
-        assert!(plan("c1", Some("fd-1"), Some("dup")).is_err());
+        assert!(plan("c1", Some("zz-1"), Some("dup")).is_err());
         assert!(plan("c1", None, None).is_err());
     }
 }

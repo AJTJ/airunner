@@ -2,14 +2,15 @@
 //! this terminal with the role applied (decisions 2026-08-20: a human is always in the loop;
 //! launchers never start headless sessions).
 //!
-//! Worker: `claude --worktree <name>` (native isolation from main), the roles prose appended
-//! to the system prompt, a deny list that holds in every permission mode, and env that used
-//! to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
+//! Worker: `claude` started IN the worktree Air made (air-fdz, air-8gj; no `--worktree`, and
+//! the isolation is the cwd plus the PreToolUse fence in `air_hooks::fence`), the roles prose
+//! appended to the system prompt, a deny list that holds in every permission mode, and env
+//! that used to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
 //! Coordinator: `claude` in the main checkout with the Air channel attached so attention
-//! conditions are delivered into the session.
+//! conditions are delivered into the session, plus Metis when the repo declares it (air-g5o).
 //!
 //! A `--task` never rides in argv. It is written to `<main>/.air/tasks/<name>.md` and the
-//! prompt claude receives is a fixed sentence naming that path (air-er0: adopter's seven
+//! prompt claude receives is a fixed sentence naming that path (air-er0: the adopter's seven
 //! worker deaths of 2026-08-30 were `pkill -f "air record verify"` matching the task prompt in
 //! every peer's command line; `ps -o command=` showed the whole prompt). What still sits in
 //! argv is Air's own fixed text: the roles path, the deny patterns, and until air-9dg the
@@ -69,7 +70,7 @@ pub const WORKER_DENY: &[&str] = &[
 /// main and is already the coordinator's, so the deny was never protecting main from the
 /// coordinator; it was stopping it from saving its own prose.
 ///
-/// This is NOT precedent from adopter, and the bead's original framing that it was does not
+/// This is NOT precedent from the adopter, and the bead's original framing that it was does not
 /// survive checking. Their coordinator cannot hand-commit on main either, and their CLAUDE.md
 /// forbids `git add`/`git commit` in the main checkout outright; what was allowed there was a
 /// scripted path (`land.sh`: refuse, digest, `--no-ff` merge, verify, rewind on red), which is
@@ -83,7 +84,7 @@ pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)"];
 
 /// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
 /// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
-/// enumerations, so a new publish target cannot ship outside the list (adopter capture
+/// enumerations, so a new publish target cannot ship outside the list (the adopter's capture
 /// fcd8ff: `make deploy-site` shipped without being added to a list that named `deploy-api`).
 pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
     let Ok(air_dir) = air_ledger::paths::air_dir_for(repo) else {
@@ -128,6 +129,31 @@ pub fn task_prompt(path: &Path) -> String {
     )
 }
 
+/// The coordinator's own appended file: the role prose, plus the Metis split when Metis is
+/// attached (air-g5o).
+///
+/// A SECOND file rather than a line in `.air/roles.md`, for two reasons. `roles.md` is
+/// rewritten by whichever role launches last, so a paragraph put there for the coordinator
+/// would be stripped by the next worker launch. And it says only what Air records and refuses
+/// — a paragraph about one planning tool does not belong in a file every adopting repo gets,
+/// including the ones with no Metis.
+///
+/// The split itself exists because Metis's own instruction text declares Metis the only system
+/// of record and forbids plans outside it, which contradicts this repo (analysis 2026-09-05,
+/// air-ate). Injecting a plugin's prose unchanged is how a tool's opinion becomes a rule
+/// nobody chose.
+fn coordinator_roles_file(repo: &Path, metis: bool) -> Result<std::path::PathBuf, String> {
+    if !metis {
+        return roles_file(repo);
+    }
+    let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("coordinator.md");
+    let text = format!("{ROLES_MD}\n{}", super::install::METIS_SPLIT);
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
 fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
     let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -140,7 +166,7 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
 /// The env a worker session runs with, set on the SPAWNED PROCESS (`Command::env`, or
 /// `tmux new-session -e` on the detached path) and not only in a `--settings` blob.
 ///
-/// air-9dg: adopter's workers carried two `--settings`; the second (added to turn off Remote
+/// air-9dg: the adopter's workers carried two `--settings`; the second (added to turn off Remote
 /// Control) replaced the first, so `AIR_ENFORCE` never reached a hook and the one refusal Air
 /// promises advised instead of refusing for five hours, with nothing saying so. Nothing on a
 /// command line can clobber a process environment. The blob stays too, merged with any
@@ -255,12 +281,18 @@ pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
     *slot = serde_json::Value::Object(merged).to_string();
 }
 
-/// Pure: the argv for a worker session.
+/// Pure: the argv for a worker session. No `--worktree` (air-8gj): Air creates the worktree
+/// (air-fdz) and starts claude with its cwd inside it. The harness's own worktree isolation,
+/// which the flag switched on, is off: in the adopter's record it stopped no observed write to
+/// the main checkout and cost 455 refusals in five days, 388 of them (88%) with no git token in
+/// the command, plus a native build refused with no prompt and permission prompts nobody could
+/// answer unattended (`private/notes/2026-09-06-answers-worktree-and-verify.md`, owner
+/// ruling 2026-09-06). What holds the line instead: the cwd, the deny list below, the
+/// peer-on-file and hand-over hooks, and one PreToolUse denial of an Edit/Write whose resolved
+/// path leaves the worktree (`hook.rs`, `air_hooks::fence`).
 pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
     let settings = settings_blob(&worker_env(name, project));
     let mut v: Vec<String> = vec![
-        "--worktree".into(),
-        name.into(),
         "--append-system-prompt-file".into(),
         roles.display().to_string(),
         "--settings".into(),
@@ -289,10 +321,16 @@ fn worker_argv_for(
 }
 
 /// Pure: the argv for the coordinator session.
+///
+/// `metis` is whatever [`super::metis::argv`] returned: the MCP server, and the plugin
+/// directory when the repo declared one that exists (air-g5o). It is placed BEFORE `extra`, so
+/// a caller passing its own `--mcp-config` is last and wins, the same ordering every other
+/// pass-through here already has. Workers get none of it: the coordinator plans, workers work.
 pub fn coordinator_argv(
     project: &str,
     roles: &Path,
     channels_flag: &str,
+    metis: &[String],
     extra: &[String],
 ) -> Vec<String> {
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
@@ -308,6 +346,7 @@ pub fn coordinator_argv(
         "--disallowed-tools".into(),
     ];
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
+    v.extend(metis.iter().cloned());
     v.extend(extra.iter().cloned());
     v
 }
@@ -316,10 +355,11 @@ fn coordinator_argv_for(
     repo: &Path,
     roles: &Path,
     flag: &str,
+    metis: &[String],
     extra: &[String],
 ) -> Result<Vec<String>, String> {
     let (extra, theirs) = split_settings(extra)?;
-    let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, &[]);
+    let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
     base.extend(repo_deny(repo, "coordinator_deny"));
     base.extend(extra);
@@ -370,7 +410,7 @@ pub enum Launch {
     Exec,
     /// No controlling tty (stdin is a socket: the coordinator's Bash tool, `</dev/null`), so
     /// `claude --tmux` cannot run here (`tcgetattr failed: Operation not supported on
-    /// socket`, adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
+    /// socket`, the adopter 2026-08-22, backlog #19). Start a detached tmux session instead.
     Detached,
 }
 
@@ -382,17 +422,21 @@ pub fn launch_mode(stdin_is_tty: bool, tmux_requested: bool) -> Launch {
     }
 }
 
-/// Pure: `tmux new-session -d -s <name> -e K=V… -c <repo> -- <bin> <argv...>`. `socket`
+/// Pure: `tmux new-session [-d] -s <name> -e K=V… -c <cwd> -- <bin> <argv...>`. `socket`
 /// (from `AIR_TMUX_SOCKET`) becomes `-L <socket>` so tests never touch the user's tmux server.
+/// `detached` is the coordinator's path (no tty); without it the session opens in the
+/// caller's terminal, which is what `claude --tmux` used to do and can no longer, since
+/// `--tmux` requires `--worktree` and the flag is gone (air-8gj).
 ///
 /// `-e` (tmux ≥ 3.2, 2021) is how env reaches a pane when the server already exists: a
 /// running server hands new sessions ITS environment plus `update-environment`, not the
 /// client's, so `Command::env` on the `tmux` client alone would set nothing (air-9dg).
-pub fn tmux_detached_argv(
+pub fn tmux_session_argv(
     name: &str,
-    repo: &Path,
+    cwd: &Path,
     socket: Option<&str>,
     env: &[(String, String)],
+    detached: bool,
     bin: &str,
     argv: &[String],
 ) -> Vec<String> {
@@ -401,7 +445,12 @@ pub fn tmux_detached_argv(
         v.push("-L".into());
         v.push(s.into());
     }
-    v.extend(["new-session", "-d", "-s", name].map(String::from));
+    v.push("new-session".into());
+    if detached {
+        v.push("-d".into());
+    }
+    v.extend(["-s", name].map(String::from));
+    let repo = cwd;
     for (k, val) in env {
         v.push("-e".into());
         v.push(format!("{k}={val}"));
@@ -422,22 +471,46 @@ fn tmux_socket() -> Option<String> {
 ///
 /// The session is `<project>-<worker>`, not `<worker>`: `tmux ls` is machine-wide, so with two
 /// fleets running the list said nothing about which project a pane belonged to (air-5lg).
-fn spawn_detached(
+fn spawn_tmux(
     repo: &Path,
+    cwd: &Path,
     name: &str,
     env: &[(String, String)],
     argv: &[String],
+    detached: bool,
     print: bool,
 ) -> i32 {
     let bin = claude_bin();
     let socket = tmux_socket();
     let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
-    let targv = tmux_detached_argv(&session, repo, socket.as_deref(), env, &bin, argv);
+    let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return 0;
     }
-    match Command::new("tmux").args(&targv).current_dir(repo).status() {
+    if !detached {
+        // A tty: the session opens here. Replace this process so the terminal talks to tmux.
+        let mut cmd = Command::new("tmux");
+        cmd.args(&targv).current_dir(cwd);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = cmd.exec();
+            eprintln!("air worker: could not exec tmux: {err}");
+            return 1;
+        }
+        #[cfg(not(unix))]
+        {
+            return match cmd.status() {
+                Ok(s) => s.code().unwrap_or(1),
+                Err(e) => {
+                    eprintln!("air worker: could not run tmux: {e}");
+                    1
+                }
+            };
+        }
+    }
+    match Command::new("tmux").args(&targv).current_dir(cwd).status() {
         Ok(s) if s.success() => {
             let l = socket
                 .as_deref()
@@ -489,50 +562,26 @@ fn exec_claude(repo: &Path, env: &[(String, String)], argv: &[String], print: bo
     }
 }
 
-/// Worker argv with an initial prompt and, if `tmux`, `--tmux` (an attachable pane the
-/// owner can open; the coordinator may launch workers this way, owner ruling 2026-08-21).
-/// `--tmux` requires `--worktree` (cli-reference, accessed 2026-08-21), which workers always
-/// have. `AIR_TMUX_MODE=classic` forces plain tmux outside iTerm2.
+/// Worker argv with an initial prompt in front. tmux is Air's on both paths since air-8gj
+/// (`claude --tmux` required `--worktree`, which is gone), so nothing is appended after the
+/// base; `AIR_TMUX_MODE` and the iTerm2 native pane went with the flag.
 ///
 /// `prompt` is [`task_prompt`] (the sentence naming the task file), never the task itself.
 ///
 /// The prompt goes *first*. `--disallowed-tools` takes space-separated values (cli-reference,
 /// https://code.claude.com/docs/en/cli-reference, accessed 2026-08-22: example
 /// `"Bash(git log *)" "Bash(git diff *)" "Edit"`), so a positional appended after the deny
-/// list is read as one more deny rule, not as the prompt (air-2ct: adopter 2026-08-22,
+/// list is read as one more deny rule, not as the prompt (air-2ct: the adopter 2026-08-22,
 /// three workers idle at an empty prompt once `--tmux`, the only thing terminating the
 /// list, was stripped). The reference shows the prompt positional before flags
 /// (`claude -p "query" --output-format json`).
-pub fn worker_argv_tmux(
-    base: Vec<String>,
-    tmux: bool,
-    mode: Option<&str>,
-    prompt: Option<&str>,
-) -> Vec<String> {
+pub fn worker_argv_prompt(base: Vec<String>, prompt: Option<&str>) -> Vec<String> {
     let mut v = Vec::new();
     if let Some(t) = prompt.filter(|t| !t.trim().is_empty()) {
         v.push(t.to_string());
     }
     v.extend(base);
-    if tmux {
-        v.push(tmux_flag(mode));
-    }
     v
-}
-
-/// `AIR_TMUX_MODE`, read once at the edge so everything below it is decided from arguments.
-fn tmux_mode() -> Option<String> {
-    std::env::var("AIR_TMUX_MODE").ok()
-}
-
-/// Pure: the `--tmux` flag, with the mode passed in rather than read (air-7ah). Its test
-/// asserted the flag was exactly `--tmux`, which is true only while the ambient
-/// `AIR_TMUX_MODE` happens to be unset.
-pub fn tmux_flag(mode: Option<&str>) -> String {
-    match mode.map(str::trim).filter(|m| !m.is_empty()) {
-        Some(m) => format!("--tmux={m}"),
-        None => "--tmux".to_string(),
-    }
 }
 
 /// Pure: does claude read `task` in `argv` as the prompt? False when it sits in the value
@@ -617,15 +666,17 @@ pub fn worker(
         }
     }
     let env = worker_env(name, &super::tmux::project_prefix(repo));
-    let mut argv = match worker_argv_for(repo, name, &roles, extra) {
+    let argv = match worker_argv_for(repo, name, &roles, extra) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air worker: {e}");
             return 1;
         }
     };
+    // claude runs IN the worktree (air-8gj): the cwd is the isolation now, with the hook.
+    let wt = super::worktree::dir_for(&super::worktree::main_checkout(repo), name);
     if !(tmux || task.is_some()) {
-        return exec_claude(repo, &env, &argv, print);
+        return exec_claude(&wt, &env, &argv, print);
     }
     // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Written under
     // `--print` too, so the printed command is one that runs.
@@ -639,22 +690,24 @@ pub fn worker(
         },
         None => None,
     };
-    match launch_mode(std::io::stdin().is_terminal(), true) {
-        Launch::Exec => {
-            argv = worker_argv_tmux(argv, true, tmux_mode().as_deref(), prompt.as_deref());
-            exec_claude(repo, &env, &argv, print)
-        }
-        Launch::Detached => {
-            // tmux is ours here, so claude gets no `--tmux`; the prompt still goes first
-            // (air-2ct: after the deny list it reads as one more deny rule).
-            argv = worker_argv_tmux(argv, false, None, prompt.as_deref());
-            spawn_detached(repo, name, &env, &argv, print)
-        }
-    }
+    // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule).
+    let argv = worker_argv_prompt(argv, prompt.as_deref());
+    let detached = launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
+    spawn_tmux(repo, &wt, name, &env, &argv, detached, print)
 }
 
 pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
-    let roles = match roles_file(repo) {
+    // Metis first, because its split paragraph goes into the file the next line writes
+    // (air-g5o). Every note is printed and nothing refuses: a missing planning tool must not
+    // cost the owner their coordinator session.
+    let cfg = super::metis::config(repo);
+    let (metis_argv, notes) = super::metis::attach(&cfg, super::metis::on_path());
+    for note in notes {
+        eprintln!("{note}");
+    }
+    // Keyed on what was ATTACHED, not on what the config asked for: the split opens "Metis is
+    // attached to this session", and a session that got nothing must not be told it did.
+    let roles = match coordinator_roles_file(repo, !metis_argv.is_empty()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("air coordinator: {e}");
@@ -666,7 +719,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
     // channels allowlist (use --dangerously-load-development-channels for local dev)").
     let flag = std::env::var("AIR_CHANNELS_FLAG")
         .unwrap_or_else(|_| "--dangerously-load-development-channels".into());
-    let argv = match coordinator_argv_for(repo, &roles, &flag, extra) {
+    let argv = match coordinator_argv_for(repo, &roles, &flag, &metis_argv, extra) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("air coordinator: {e}");
@@ -690,7 +743,9 @@ mod tests {
             Path::new("/r/.air/roles.md"),
             &["--model".into(), "x".into()],
         );
-        assert_eq!(&v[..2], ["--worktree", "frontend"]);
+        // air-8gj: no `--worktree`; the cwd is the worktree and the fence hook holds the line.
+        assert!(!v.contains(&"--worktree".to_string()));
+        assert_eq!(v[0], "--append-system-prompt-file");
         assert!(
             v.windows(2)
                 .any(|w| w[0] == "--append-system-prompt-file" && w[1] == "/r/.air/roles.md")
@@ -710,26 +765,18 @@ mod tests {
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
     /// (cli-reference, accessed 2026-08-22); after it, claude reads the task as a deny rule.
     #[test]
-    fn task_precedes_the_deny_list_and_tmux_is_last() {
+    fn task_precedes_the_deny_list_and_nothing_follows_it() {
         let base = worker_argv("w", "air", Path::new("/r/roles.md"), &[]);
-        let v = worker_argv_tmux(base.clone(), true, None, Some("fix fd-1 end to end"));
-        assert_eq!(v[0], "fix fd-1 end to end");
-        assert_eq!(v.last().map(String::as_str), Some("--tmux"));
+        let v = worker_argv_prompt(base.clone(), Some("fix zz-1 end to end"));
+        assert_eq!(v[0], "fix zz-1 end to end");
         let deny = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert!(deny > 0, "task must not follow the variadic deny list");
-        // Without --tmux (a detached launch) the task is still the prompt, not a deny value.
-        let v = worker_argv_tmux(base.clone(), false, None, Some("say hello"));
-        assert_eq!(v[0], "say hello");
-        assert!(!v.contains(&"--tmux".to_string()));
         assert_eq!(&v[1..], &base[..]);
-        let v = worker_argv_tmux(base, true, None, None);
-        assert_eq!(v.last().map(String::as_str), Some("--tmux"));
-        assert_eq!(v[0], "--worktree");
-        // air-7ah: the mode is decided from what it is given, not from ambient AIR_TMUX_MODE,
-        // which is what made the assertions above true only by accident of the environment.
-        assert_eq!(tmux_flag(None), "--tmux");
-        assert_eq!(tmux_flag(Some("")), "--tmux");
-        assert_eq!(tmux_flag(Some("classic")), "--tmux=classic");
+        // air-8gj: `--tmux` is never passed; tmux is Air's on both paths.
+        assert!(!v.iter().any(|a| a.starts_with("--tmux")));
+        let v = worker_argv_prompt(base.clone(), None);
+        assert_eq!(v, base);
+        assert_eq!(v[0], "--append-system-prompt-file");
     }
 
     /// air-er0: the prompt names the file and carries none of the task.
@@ -740,10 +787,7 @@ mod tests {
             p,
             "Your task is in /r/.air/tasks/w1.md. Read that file and carry it out."
         );
-        assert!(task_is_prompt(
-            &worker_argv_tmux(vec![], false, None, Some(&p)),
-            &p
-        ));
+        assert!(task_is_prompt(&worker_argv_prompt(vec![], Some(&p)), &p));
     }
 
     /// `--print` pasted into `sh -c` must reproduce the exec argv for a task with a space,
@@ -751,10 +795,8 @@ mod tests {
     #[test]
     fn print_line_round_trips_through_sh() {
         let task = "fix it's $HOME \"now\"";
-        let argv = worker_argv_tmux(
+        let argv = worker_argv_prompt(
             worker_argv("w", "air", Path::new("/r/roles.md"), &[]),
-            true,
-            None,
             Some(task),
         );
         let line = print_line("claude", &argv);
@@ -784,17 +826,11 @@ mod tests {
     }
 
     #[test]
-    fn detached_argv_never_passes_tmux_to_claude_and_carries_env_by_dash_e() {
-        let argv = vec!["--worktree".to_string(), "w".into(), "do x".into()];
+    fn tmux_argv_opens_in_the_worktree_carries_env_by_dash_e_and_detaches_only_when_asked() {
+        let argv = vec!["do x".to_string()];
         let env = vec![("AIR_ENFORCE".to_string(), "1".to_string())];
-        let v = tmux_detached_argv(
-            "w",
-            Path::new("/r"),
-            Some("air-test"),
-            &env,
-            "claude",
-            &argv,
-        );
+        let wt = Path::new("/r/.claude/worktrees/w");
+        let v = tmux_session_argv("w", wt, Some("air-test"), &env, true, "claude", &argv);
         assert_eq!(
             v,
             [
@@ -807,18 +843,20 @@ mod tests {
                 "-e",
                 "AIR_ENFORCE=1",
                 "-c",
-                "/r",
+                "/r/.claude/worktrees/w",
                 "--",
                 "claude",
-                "--worktree",
-                "w",
                 "do x"
             ]
         );
-        assert!(!v.iter().any(|a| a.starts_with("--tmux")));
-        let v = tmux_detached_argv("w", Path::new("/r"), None, &[], "claude", &argv);
+        assert!(
+            !v.iter()
+                .any(|a| a.starts_with("--tmux") || a == "--worktree")
+        );
+        // A tty: the same session, attached (no -d), which is what `claude --tmux` used to be.
+        let v = tmux_session_argv("w", wt, None, &[], false, "claude", &argv);
         assert_eq!(v[0], "new-session");
-        assert!(!v.iter().any(|a| a == "-e"));
+        assert!(!v.iter().any(|a| a == "-d" || a == "-e"));
     }
 
     /// air-9dg: a pass-through `--settings` is merged into Air's, never a second flag; a file
@@ -864,16 +902,16 @@ mod tests {
     #[test]
     fn print_env_line_prefixes_assignments() {
         let env = worker_env("w1", "air");
-        let line = print_env_line(&env, "claude", &["--worktree".into(), "w1".into()]);
+        let line = print_env_line(&env, "claude", &["--model".into(), "x".into()]);
         assert_eq!(
             line,
-            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air claude --worktree w1"
+            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air claude --model x"
         );
     }
 
     #[test]
     fn coordinator_argv_attaches_the_channel() {
-        let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[]);
+        let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[], &[]);
         assert_eq!(&v[..2], ["--channels", "server:air"]);
         // The remote is the boundary, not main (air-iy1): push denied, commit allowed.
         assert!(v.contains(&"Bash(git push *)".to_string()));

@@ -8,7 +8,7 @@
 //!   directory and branch names the harness uses, so `air status`, `worker_name_for`, the
 //!   ledger and every existing worktree keep reading as before.
 //! - **`.worktreeinclude`.** `--worktree` copies gitignored files matching the repo's
-//!   `.worktreeinclude` (gitignore syntax) into the new worktree. adopter's workers do not
+//!   `.worktreeinclude` (gitignore syntax) into the new worktree. The adopter's workers do not
 //!   function without it: `backend/.env`, `app/.env`, and `backend/keys/*.pem`, which
 //!   `authn.rs:233` reads with `include_str!` at COMPILE TIME, so a naive `git worktree add`
 //!   gives a fleet whose backend test crate does not build, with an error that does not say
@@ -26,7 +26,7 @@
 //!   (`La()?.worktreePath` in 2.1.261) and exists only with the flag. Dropping the flag would
 //!   remove a working enforcement that roles.md promises, for a coupling argument with no
 //!   incident behind it (do-less). What changes is who creates and who removes.
-//! - **WorktreeCreate hook.** adopter's file says configuring one "replaces git's worktree
+//! - **WorktreeCreate hook.** the adopter's file says configuring one "replaces git's worktree
 //!   logic entirely and this file stops being processed". Checked against 2.1.261's messages
 //!   rather than exercised: the harness uses the hook's returned path in place of its own git
 //!   logic ("Cannot create agent worktree: not in a git repository and no WorktreeCreate hooks
@@ -68,6 +68,7 @@ pub fn branch_for(name: &str) -> String {
 /// the include listing walks ignored directories (`node_modules`), both of which can take
 /// seconds in a real repo.
 fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
     let child = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -77,16 +78,22 @@ fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git: {e}"))?;
-    let (status, stdout, stderr) =
-        match crate::git::wait_drained(child, timeout).map_err(|e| format!("git: {e}"))? {
-            Some(x) => x,
-            None => {
-                return Err(format!(
-                    "git {} timed out after {timeout:?}",
-                    args.join(" ")
-                ));
-            }
-        };
+    let drained = crate::git::wait_drained(child, timeout).map_err(|e| format!("git: {e}"));
+    air_ledger::budgets::record(
+        air_ledger::budgets::GIT_WORKTREE,
+        t0.elapsed(),
+        timeout,
+        matches!(&drained, Ok(None)),
+    );
+    let (status, stdout, stderr) = match drained? {
+        Some(x) => x,
+        None => {
+            return Err(format!(
+                "git {} timed out after {timeout:?}",
+                args.join(" ")
+            ));
+        }
+    };
     if !status.success() {
         return Err(format!(
             "git {} exited {}: {}",
@@ -98,6 +105,15 @@ fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&stdout).to_string())
 }
 
+/// **Fail direction: CLOSED.** `air worker --create` and worktree removal are CLI commands the
+/// coordinator watches; a hit errors and names the git command. Nothing decides on it and no
+/// hook path reaches it, so this is a convenience budget and may fail open in the sense that
+/// matters (it never permits anything).
+///
+/// Not derived: a `worktree add` on a large repo is minutes-scale work whose distribution has
+/// nothing to do with the one-shot `git` calls elsewhere. Moved by `air audit`'s
+/// `git-worktree` row — a p99 anywhere near 120 s means a repo where creating a worktree needs
+/// its own budget rather than a bigger constant.
 const GIT_BUDGET: Duration = Duration::from_secs(120);
 
 /// Pure: one `.worktreeinclude` line (gitignore syntax) as a git pathspec with `:(glob)`

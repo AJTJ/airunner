@@ -91,9 +91,18 @@ pub struct Mechanism {
 ///   window and never in any recorded day. A dead session holding a claim falls through to the
 ///   ordinary session states, which do fire.
 /// - `cross-project-fence` (2026-08-22, removed 2026-08-29, air-9u6): zero firings ever.
-///
-/// `stuck` was proposed for deletion by air-dqw on zero firings and is NOT deleted. Its silence
-/// measures the fleet's permission mode, not the mechanism: see its row below.
+/// - `stuck` (2026-08-20, plan 0004; removed 2026-09-06, air-12k, owner ruling "sure, both"):
+///   a session waiting on a permission prompt past a threshold. Zero firings in every recorded
+///   day, and the zero was case 3b, not case 1: the state was set only by
+///   `HookEvent::PermissionRequest`, and `hook.PermissionRequest` arrived 0 times in 39,071
+///   event lines over 8 days because the fleet runs in auto mode (`permissions.defaultMode:
+///   auto`, `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing waits on
+///   one (air-byw). Proposed for deletion on the count by air-dqw and reverted on that finding;
+///   deleted now on a different ground: a condition whose input the configuration suppresses
+///   is a promise, not a mechanism, and the coordinator's 5-minute heartbeat did every catch
+///   in the 2026-09-05 round. The heartbeat is the failsafe (`docs/rules/roles.md`). A wedge
+///   that auto mode would show as a prompt is now caught by `idle-with-claim` or the
+///   heartbeat, not by a state nothing ever wrote.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -112,6 +121,18 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.handover", "refuse"),
         ]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
+    },
+    Mechanism {
+        id: "edit-outside-worktree",
+        class: "refusal",
+        what: "A worker's Edit/Write whose resolved path leaves its worktree is denied; the \
+               harness's --worktree isolation it replaces is off.",
+        added: "2026-09-06 (air-8gj)",
+        source: "crates/hooks/src/fence.rs; private/notes/2026-09-06-answers-worktree-and-verify.md",
+        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-outside-worktree")]),
+        removal: Removal::Judgement(
+            "the harness keys its isolation on the cwd rather than the flag; or a round records zero refuse-outside-worktree firings AND the owner prefers the harness block back",
+        ),
     },
     Mechanism {
         id: "handover-would-refuse",
@@ -178,7 +199,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-22 (air-ayp)",
         source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
         fires: Fires::Condition("landed-not-closed"),
-        // Not ZeroFirings: this one firing is the mechanism working. adopter's closer put
+        // Not ZeroFirings: this one firing is the mechanism working. The adopter's closer put
         // 14 partial and 1 not-done bead into `closed` by never asking
         // (docs/plans/0029-bead-closure.md D.6, cited via air-ayp). It goes when acceptance is
         // machine-checkable by construction, at which point the merge either satisfies it or
@@ -212,33 +233,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     // `owner-decision-waiting` was here (plan 0006): captures sitting in the owner queue,
     // with the age of the oldest. DELETED by air-uef (owner, 2026-09-05) with the queue it
     // watched; the owner's queue is beads labelled `owner`, counted on the `ready:` line.
-    Mechanism {
-        id: "stuck",
-        class: "attention",
-        what: "A session waiting on a permission prompt past the stuck threshold.",
-        added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs; the state is set only by hook.rs PermissionRequest",
-        fires: Fires::Condition("stuck"),
-        // Zero firings in every recorded day, and that number settles NOTHING in either
-        // direction (air-dqw, corrected by air-byw before the deletion shipped; ledger reverted
-        // it on the finding).
-        //
-        // The state is set in exactly ONE place, `HookEvent::PermissionRequest`, and
-        // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days. The hook
-        // is not broken and not misnamed: the harness inventory lists `PermissionRequest` as
-        // "permission prompt needed", and `install.rs` registers it correctly. It never arrives
-        // because the fleet runs in AUTO MODE (`permissions.defaultMode: auto`,
-        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits on
-        // one. Every `PermissionDenied` event says "Blocked by classifier": that classifier
-        // deciding instead of asking.
-        //
-        // Dormant, not dead. Turn auto mode off and this fires immediately with no code change.
-        // A zero is evidence only when the subject occurred and the mechanism stayed silent
-        // (air-txa); this is the case where the input is suppressed by configuration.
-        removal: Removal::Judgement(
-            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the permission configuration and cannot settle this in either direction",
-        ),
-    },
+    // `stuck` was here (plan 0004). DELETED by air-12k (owner, 2026-09-06); the record is in
+    // this file's header list so nobody re-adds it on the zero that never justified it.
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered
     // DECISION was merely uncounted (air-8br); an unregistered CONDITION was invisible, because
     // the audit can only count kinds the registry already names. All five read zero over
@@ -271,13 +267,12 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-20 (plan 0004)",
         source: "crates/cli/src/cmd/status.rs, Thresholds::idle_with_claim_min",
         fires: Fires::Condition("idle-with-claim"),
-        // KEPT on the wedge argument, not on its count. `stuck` has never fired either and
-        // records no removal condition, so with both of these gone nothing at all notices a
-        // worker that has stalled holding work — which is the gap the coordinator's 5-minute
-        // heartbeat was added to cover (air-arq). Delete the detector and the heartbeat is the
-        // only thing left looking.
+        // KEPT on the wedge argument, not on its count. With `stuck` deleted (air-12k) this is
+        // the one condition that notices a worker stalled holding work; the coordinator's
+        // 5-minute heartbeat (air-arq) is the failsafe behind it. Delete the detector and the
+        // heartbeat is the only thing left looking.
         removal: Removal::Judgement(
-            "the heartbeat or `stuck` catches a stalled worker holding a bead first, twice, so this is the second thing to notice rather than the only one",
+            "the heartbeat catches a stalled worker holding a bead first, twice, so this is the second thing to notice rather than the only one",
         ),
     },
     Mechanism {
@@ -295,13 +290,13 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "lease-held-by-dead-session",
         class: "attention",
         what: "A lease whose holder's process is gone or was reused.",
-        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        added: "2026-08-21 (owner ruling A; ported from the adopter's lease.sh)",
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-held-by-dead-session"),
         // KEPT, and for a different reason from the three above: this one's zero is about
         // USAGE, not about the mechanism. Addressed to the waiter rather than the holder
         // since air-q9c, like `lease-stale` below. The `leases` table has zero rows in this repo because
-        // `air lease` is unused here. adopter uses it every round. Deleting on our zero is
+        // `air lease` is unused here. The adopter uses it every round. Deleting on our zero is
         // precisely the error the owner reversed on `air lease` itself (air-uae, 2026-08-29):
         // a verdict from an absence in one repo is not a verdict about a mechanism.
         removal: Removal::Judgement(
@@ -312,15 +307,15 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "lease-stale",
         class: "attention",
         what: "A lease whose heartbeat has aged past the stale threshold.",
-        added: "2026-08-21 (owner ruling A; ported from adopter's lease.sh)",
+        added: "2026-08-21 (owner ruling A; ported from the adopter's lease.sh)",
         source: "crates/cli/src/cmd/status.rs, defect() in cmd/lease.rs",
         fires: Fires::Condition("lease-stale"),
         // Same zero-is-about-usage argument. The KNOWN defect this row was registered to hold
         // — the condition addressed to the lease's HOLDER, offering them `air lease break` on
         // the lease they were using — is FIXED as of air-q9c: both lease conditions now name
         // whoever is waiting in `lease_wants`, and a defect nobody is waiting on produces no
-        // condition at all. the adopter reported six firings in one day on healthy leases (their
-        // ad-m07x); the attribution half reproduced here, captured 01M17J9NSHXZBH56K7MVY7XAM8.
+        // condition at all. The adopter reported six firings in one day on healthy leases (their
+        //); the attribution half reproduced here, captured 01M17J9NSHXZBH56K7MVY7XAM8.
         //
         // So the first half of the recorded condition is discharged and the second is what is
         // left to observe, which needs a repo that actually takes leases.
@@ -418,7 +413,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-09-05 (air-1bm; the warning it replaces was air-4cr, 2026-08-29)",
         source: "crates/cli/src/cmd/land.rs, in_flight_refusal",
         fires: Fires::Decisions(&[("land", "refuse-in-flight")]),
-        // adopter ad-fthq: the warning fired, was read, and the landing went ahead anyway,
+        // The adopter : the warning fired, was read, and the landing went ahead anyway,
         // 1,199 s of destroyed verify in two incidents plus six more runs invalidated. Two
         // ways to retire it, both counts: overrides at zero (below) mean it is only ever
         // waited out and could be a plain wait; refusals at zero while verifies and landings
@@ -449,7 +444,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-09-05 (air-gsj)",
         source: "crates/cli/src/cmd/claim.rs, retry_once",
         fires: Fires::Decisions(&[("claim", "timeout-retry")]),
-        // adopter w1 retried a claim by hand three times on 2026-08-31 and lost the bead to
+        // The adopter's w1 retried a claim by hand three times on 2026-08-31 and lost the bead to
         // a peer between retries; the message read as a denial. A fresh bd process starts at
         // the ~2 s floor again while any usable timeout is crossed by the same stalls
         // (air-bp0), which is why this is a retry and not a longer wait.

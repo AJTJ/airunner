@@ -33,6 +33,7 @@ dependencies = [
 name = "air-bd"
 version = "0.2.19"
 dependencies = [
+ "air-ledger",
  "rstest",
  "serde",
  "serde_json",
@@ -50,6 +51,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

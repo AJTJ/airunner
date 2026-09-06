@@ -1,12 +1,12 @@
 # Verification: task specification, guards, fitness functions, merge automation, tooling language
 
-**Scope.** Independent re-check of the load-bearing external claims and sources in the adopter notes
+**Scope.** Independent re-check of the load-bearing external claims and sources in the adopter's notes
 `task-specification-research.md`, `guards-prior-art.md`, `fitness-function-prior-art.md`,
 `merge-automation-research.md`, `repo-tooling-language.md`, `metis-comparison.md`,
 `human-queue-triage.md` (external claims only) and `reinvention-audit.md`
-(all under `docs/research/adopter-notes/notes/`), plus the digest
-`docs/research/adopter-research-corpus.md` §1.5/1.7/1.8/1.9/1.12/1.14/1.17, §3, §4.1, §5.
-Locally-measured numbers (timings on the adopter machine, `command -v` results, `bd` output)
+(all under `private/research/adopter-notes/notes/`), plus the digest
+`private/research/adopter-research-corpus.md` §1.5/1.7/1.8/1.9/1.12/1.14/1.17, §3, §4.1, §5.
+Locally-measured numbers (timings on the adopter's machine, `command -v` results, `bd` output)
 are **not** re-verifiable from here and are marked LOCAL — only their external framing is checked.
 
 **Method.** For each claim: quote with `file:line`, locate the primary source, fetch it (WebFetch /
@@ -66,7 +66,7 @@ pointer is added. Written incrementally; rows appear in the order verified.
 | 43 | Claude Code hooks: `SessionStart` matchers `startup/resume/clear/compact` with `additionalContext`; `Stop` exit 2 blocks stopping; advisory path = JSON `additionalContext` (+ `continue`) | merge-automation-research.md:320-334 | https://code.claude.com/docs/en/hooks.md | yes | CONFIRMED (Stop exit 2 "Prevents Claude from stopping"; `additionalContext` supported on Stop and SessionStart; SessionStart now also has a `fork` matcher) | Newer: `fork` matcher (2026) — a worktree/fork-aware SessionStart is now expressible. |
 | 44 | Corpus §5: "expose a CLI, not an MCP dependency" (Metis's MCP dependency as a cost) | metis-comparison.md:225; corpus:1422 | Anthropic, *Code execution with MCP* (Nov 2025, https://www.anthropic.com/engineering/code-execution-with-mcp); 2026 comparisons e.g. https://www.firecrawl.dev/blog/mcp-vs-cli , https://blog.mcpservers.org/posts/cli-vs-mcp | search only | CONFIRMED as a direction (industry 2026 consensus: MCP tool schemas are loaded up-front and cost 4–32× tokens per call vs CLI in the cited comparisons; MCP wins on auth/governance, CLI on cost/composability). Figures are vendor/blog measurements — treat as directional. | Newer evidence for Air's "CLI first, MCP optional". |
 
-**Legend.** LOCAL = measured on the adopter machine (timings, `command -v`, `bd --help`); cannot be re-verified remotely and is not disputed here.
+**Legend.** LOCAL = measured on the adopter's machine (timings, `command -v`, `bd --help`); cannot be re-verified remotely and is not disputed here.
 
 ## Claims that should not be repeated
 
@@ -85,7 +85,7 @@ pointer is added. Written incrementally; rows appear in the order verified.
 - **The hook binary is the documented mechanism.** Claude Code docs confirm shell-operator-aware Bash rules, refusal of bypassable rules, the "PreToolUse hook + allow Bash" recipe, exit-2 precedence over allow rules, and managed-settings precedence over CLI flags. Newer keys (`allowManagedDomainsOnly`, `sandbox.credentials`, `disableSideloadFlags`, `forceRemoteSettingsRefresh`, server-managed settings) extend the "layer beneath the hook" story.
 - **Resolver-backed policy in a diffable config** has precedent in `clippy.toml` `disallowed-*` (DefId matching, confirmed from source) — the model for Air's gate configuration.
 - **Local land verb is unserved by hosted queues.** GitHub merge queue still needs a remote + `merge_group` CI, and is not on the Team plan; Gas Town's refinery and funador's queue confirm the shape (batch, verify, bisect, PID lock) is being independently reinvented for local agent fleets.
-- **Language choice reasoning (corpus §5).** The Metis evidence holds and sharpens: Metis is Rust because it ships to strangers (curl install, Tauri, tree-sitter), and its own repo tasks are Python-defined (via angreal, itself a Rust binary). The adopter measurements are LOCAL but their *scope* — repo-local gates behind `make` in the target workspace — is correctly distinguished from Air's shipped-binary case. `cargo <file>.rs` remains nightly, so a standalone Rust CLI is still the only stable-toolchain shape for a distributed hook binary.
+- **Language choice reasoning (corpus §5).** The Metis evidence holds and sharpens: Metis is Rust because it ships to strangers (curl install, Tauri, tree-sitter), and its own repo tasks are Python-defined (via angreal, itself a Rust binary). The adopter's measurements are LOCAL but their *scope* — repo-local gates behind `make` in the target workspace — is correctly distinguished from Air's shipped-binary case. `cargo <file>.rs` remains nightly, so a standalone Rust CLI is still the only stable-toolchain shape for a distributed hook binary.
 - **Contradictions are silent** (ConInstruct confirmed): only an executable probe surfaces a description/acceptance mismatch.
 
 ## Gaps worth new research

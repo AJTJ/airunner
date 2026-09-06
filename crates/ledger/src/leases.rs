@@ -1,5 +1,5 @@
 //! Named-resource leases: mutual exclusion for what two agents cannot share (ports, the
-//! simulator, Docker lifecycle, the browser). Ported from `adopter/scripts/lease.sh`
+//! simulator, Docker lifecycle, the browser). Ported from `the adopter's scripts/lease.sh`
 //! (read 2026-08-21): identity is the worktree, liveness is the pid plus its start time
 //! (pid reuse), stale is heartbeat age. Races are settled by SQLite (`BEGIN IMMEDIATE`), not
 //! by `mkdir`. Owner ruling A, 2026-08-21.

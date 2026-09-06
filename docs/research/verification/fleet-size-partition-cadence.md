@@ -1,7 +1,7 @@
 # Verification: fleet size, partitioning, integration cadence
 
 **Date:** 2026-08-18. **Author:** ajtj (with Claude Fable 5).
-**Scope.** The externally-cited claims that carry the fleet-size, partitioning and integration-cadence arguments in `docs/research/adopter-notes/notes/` — `does-the-prior-art-transfer.md`, `research-actions.md`, `fleet-run-structure.md`, and the externally-cited parts of `overnight-fleet-retrospective.md` / `round-2026-08-15-evening-retrospective.md` — plus the "claims that did not survive" list in `adopter-research-corpus.md` §4.1.
+**Scope.** The externally-cited claims that carry the fleet-size, partitioning and integration-cadence arguments in `private/research/adopter-notes/notes/` — `does-the-prior-art-transfer.md`, `research-actions.md`, `fleet-run-structure.md`, and the externally-cited parts of `overnight-fleet-retrospective.md` / `round-2026-08-15-evening-retrospective.md` — plus the "claims that did not survive" list in `adopter-research-corpus.md` §4.1.
 **Method.** For each load-bearing claim: quote briefly with `file:line`; locate the primary source (arXiv abstract / DOI landing / PDF / vendor page); fetch it and check numbers, population and conditions; verdict CONFIRMED / MISQUOTED / OVERSTATED / UNVERIFIABLE / SUPERSEDED; where the claim bears on a live decision (how many agents, worktree isolation, partition unit, integration cadence) add 1–2 newer 2026 sources. Fetches were done from a clean session on 2026-08-18; nothing below is copied from the notes' own verification.
 **Not in scope.** Internal (own-run) measurements — merge counts, idle minutes, CV 1.38 — are the repo's own data and were not re-derived.
 

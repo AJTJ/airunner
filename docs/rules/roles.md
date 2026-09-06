@@ -37,7 +37,7 @@ without a trigger.
 
 **Once you have work, finishing a bead is not a stop.** At WIP 0 take the next ready bead and say
 so afterwards; stop only when `bd ready` is empty or on a blocker you captured. (Two workers read
-"next bead" as "wait for review" and idled 20 min, 2026-08-22; adopter's 51-minute idle of
+"next bead" as "wait for review" and idled 20 min, 2026-08-22; the adopter's 51-minute idle of
 2026-08-15 was fixed by this sentence and never recurred. Removed never.) The run-on begins at
 your first piece of work, not at session start; the two sentences above are the whole of the
 difference.
@@ -88,8 +88,11 @@ Not available to a worker, by deny rule in every permission mode: `air land`, `a
 `git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the
 worktree, and `AskUserQuestion`. The owner is reached through `air capture "<question>"`: the
 coordinator files it as a bead labelled `owner`, the queue shows in `air status`, and the
-question and its answer leave a row (owner, 2026-08-30; air-bm3). Editing
-the main checkout is blocked natively. **[Air enforces]** The one refusal: the `bd` write that
+question and its answer leave a row (owner, 2026-08-30; air-bm3). An Edit or Write whose
+resolved path leaves your worktree is denied by Air's PreToolUse hook (air-8gj); the harness's
+own worktree isolation is off, since in the adopter's record it stopped no observed write to
+main and cost 455 refusals in five days, 88% with no git token. **[Air enforces]** The one
+refusal: the `bd` write that
 ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
 whichever your repo uses — is denied without a recorded green at HEAD that contains `main`.
 Worker launches set `AIR_ENFORCE=1` and the hook names the fixing command. Enforced after the
@@ -133,15 +136,33 @@ are yours), set priority, add `blocks` edges for shared files. Never set `assign
 bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
 flight. **Idle:** feed no one. Naming a bead at a worker reserves nothing: `air claim` is the
 reservation, and a bead named in a message and not claimed is still every worker's to take
-(adopter lost two that way, ad-xbr5; owner, 2026-09-05). **[fact]**
+(the adopter lost two that way,; owner, 2026-09-05). **[fact]**
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
 acceptance, a resource conflict), by filing a bead labelled `owner` with your recommendation in
 its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
 workers, and `air status` counts them on its `ready:` line.
 
+**Your context is the channel the owner and every worker reach, so keep it free.** Long reads,
+dry runs and analyses go to a background agent with a file deliverable; the filing and the
+deciding stay yours. A coordinator inside a twenty-minute read is a fleet with no one to talk
+to: on 2026-09-06 it was the only path to the owner and to four workers while it sat in a 21 GB
+copy and a five-minute verify, and messages queued behind both. This is a fact about where the
+coordinator's attention has to be, not a procedure (owner, 2026-09-06, air-zth). Removed when a
+round shows zero owner or worker messages waiting more than five minutes on the coordinator.
+
+**Where a bead came from is a declared field, not a memory.** Where the repo attaches a
+planning tool to this session (`"metis": true` in `.claude/air.json` attaches Metis, and no
+worker ever gets it), plan there and file beads from it: each bead's description carries a line
+reading `initiative: <CODE>`. Air reads that line and nothing else — a mention of an initiative
+in prose declares nothing. **[fact]** `air status` prints how many beads declare none, over the
+set it already asked bd about. It is a count and there is no refusal attached to it; a gate
+comes only if the count shows the rule is ignored (owner, 2026-09-06, air-g5o). Removed when
+`bd create --validate` can require the field.
+
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
-landable branches, ready depth with the owner-labelled count, leases, inbox depth),
-`air holdings`, the channel (stuck, idle or silent with a claim, idle without a claim, hand-over
+landable branches, ready depth with the owner-labelled count, beads without an initiative,
+leases, inbox depth),
+`air holdings`, the channel (idle or silent with a claim, idle without a claim, hand-over
 not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
 in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
@@ -151,13 +172,14 @@ Workers are reached with `SendMessage` to the session name `air status` shows; t
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
 denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
 zero denied send-keys attempts). **[fact]**
-**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions on change, and
-`stuck` — the one that should catch a wedged worker — has never fired in any recorded day and
-carries no removal condition (air-dqw). So a wedged worker can reach nobody. The heartbeat is the
-failsafe, not the reporting path: it runs `air status` and says nothing when nothing changed.
-Incident: the 2026-08-22 05:26-05:45 standstill (air-arq), where the quiet channel rested on the
-coordinator remembering to look. Removed when `stuck` fires on a real wedge before the heartbeat
-catches it, twice. **[fact]**
+**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions when the set
+changes; the heartbeat is the failsafe. It runs `air status` and says nothing when nothing
+changed. A wedged worker reaches nobody by itself: `stuck`, the condition that promised to
+catch one, was set only by a permission prompt the fleet's auto mode never shows, fired zero
+times in any recorded day, and was deleted on 2026-09-06 (air-12k) after the heartbeat did
+every catch in the 2026-09-05 round. Incident: the 2026-08-22 05:26-05:45 standstill (air-arq),
+where the quiet channel rested on the coordinator remembering to look. Removed when a condition
+catches a real wedge before the heartbeat does, twice. **[fact]**
 
 **Landing is the coordinator's, not a worker's.** *How* a branch reaches main is the repo's own
 flow and lives in its CLAUDE.md, exactly as hand-over does: some repos have their own lander,
@@ -180,7 +202,7 @@ and nothing to roll back, no armed window, and no `git reset --hard` on main. Th
 refusal went with the reset that was its only reason. **[fact]** An identical tree is an
 identical verdict only when the repo's verify reads the tree alone and not git history; a
 verify that reads the log, the branch name or the reflog can pass on the branch and fail on
-main over the same bytes (adopter ad-ogoa; owner, 2026-09-05). **[fact]**
+main over the same bytes (the adopter; owner, 2026-09-05). **[fact]**
 
 **What main moving costs, and what it no longer costs** (air-9ij, 2026-09-06). Landability is
 the thing that expires: a branch is landable only while it contains CURRENT main, so every
@@ -200,7 +222,7 @@ landing about current main]**
 
 The `.git` shape still differs between a worktree (a FILE) and the main checkout (a DIRECTORY),
 and anything reading it, `core.hooksPath`, or the cwd can differ between the two. That was a
-reason to verify twice while a landing verified in the main checkout (air-eaw, from adopter
+reason to verify twice while a landing verified in the main checkout (air-eaw, from the adopter
 2026-08-23: *"Every other instrument failure that night was catchable by running the suite. This
 one was only catchable by running it somewhere else."*). Air's landing no longer runs anything
 there, so the difference is now a reason to fix a test that reads where it runs, not a reason to
@@ -210,7 +232,7 @@ proof (owner, 2026-08-22). A landing Air performs prints every bead beside its a
 Air's verdict on each clause, which is the only external check on that. Air discharges a clause
 only by lookup (a recorded green at the landed sha, a path the merge changed) and reports the
 rest as unreadable rather than judging prose. A clause the merge CONTRADICTS is a wrong close,
-named by `air status` (air-ayp; adopter closed 99 beads on containment alone, 14 partial and
+named by `air status` (air-ayp; the adopter closed 99 beads on containment alone, 14 partial and
 1 not done). **[Air enforces]**
 
 Intake: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` or
@@ -242,8 +264,8 @@ A refusal names its rule and the fixing command. Silence from Air is not a denia
 
 Cut to facts and refusals after `../research/guardrails-as-throttles.md` (2026-08-21): advice
 to a capable model was removed; what remains is what Air records, answers, or refuses. Duties
-adapted from adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
+adapted from the adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
 `../decisions.md` (2026-08-20/21). Standstill lines (worker run-to-completion, from
-adopter/CLAUDE.md:683; coordinator reach, poll, and landings) added for the 2026-08-22
+The adopter's CLAUDE.md:683; coordinator reach, poll, and landings) added for the 2026-08-22
 05:26-05:45 incident, bead air-arq. This file is embedded in the `air` binary (`ROLES_MD`,
 `include_str!`) and written to `.air/roles.md` by `air init`; the two cannot differ.

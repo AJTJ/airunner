@@ -34,6 +34,14 @@ use serde_json::{Value, json};
 use crate::cmd::status::{self, Attention, Thresholds};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// **Fail direction: CLOSED.** A tool call that runs past this returns an error to the
+/// coordinator's session naming the command, so the coordinator is told rather than answered
+/// wrongly. It is the ceiling `status_bd_budget` is capped under: a status budget that could
+/// approach this would trade a slow answer for no answer at all (air-19u).
+///
+/// Not derived: it is a ceiling chosen against the MCP client's patience, not a distribution.
+/// Moved by `air audit`'s `mcp-tool` row — the number to watch is its p99 against
+/// `bd-status`'s, since `air status` is what the channel spends this on.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
 /// A line longer than this is an error, not a buffer we keep growing.
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -190,7 +198,7 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 // rather than against memory. `review-waiting` left with air-okc,
                 // `owner-decision-waiting` with air-uef. A surface describing something
                 // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (stuck, idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -447,6 +455,7 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
 
 /// Run this binary with `--repo <repo>`; time-bounded, always reaped.
 fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String> {
+    let t0 = std::time::Instant::now();
     let child = Command::new(&ctx.exe)
         .arg("--repo")
         .arg(&ctx.repo)
@@ -457,16 +466,22 @@ fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String>
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", ctx.exe.display()))?;
-    let (status, stdout, stderr) =
-        match crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string())? {
-            Some(x) => x,
-            None => {
-                return Err(format!(
-                    "air {} timed out after {TOOL_TIMEOUT:?}",
-                    argv.join(" ")
-                ));
-            }
-        };
+    let drained = crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string());
+    air_ledger::budgets::record(
+        air_ledger::budgets::MCP_TOOL,
+        t0.elapsed(),
+        TOOL_TIMEOUT,
+        matches!(&drained, Ok(None)),
+    );
+    let (status, stdout, stderr) = match drained? {
+        Some(x) => x,
+        None => {
+            return Err(format!(
+                "air {} timed out after {TOOL_TIMEOUT:?}",
+                argv.join(" ")
+            ));
+        }
+    };
     Ok((
         status.code().unwrap_or(-1),
         String::from_utf8_lossy(&stdout).to_string(),
@@ -674,17 +689,23 @@ mod tests {
     #[test]
     fn pushes_new_then_escalates_then_clears() {
         let mut p = Pushed::new();
-        let first = select_new(&mut p, &[att("a", "stuck", 5)]);
+        let first = select_new(&mut p, &[att("a", "silent-with-claim", 5)]);
         assert_eq!(first.len(), 1);
         // Same condition a little later: silent.
-        assert!(select_new(&mut p, &[att("a", "stuck", 9)]).is_empty());
+        assert!(select_new(&mut p, &[att("a", "silent-with-claim", 9)]).is_empty());
         // Doubled (and +10): pushed again.
-        assert_eq!(select_new(&mut p, &[att("a", "stuck", 15)]).len(), 1);
+        assert_eq!(
+            select_new(&mut p, &[att("a", "silent-with-claim", 15)]).len(),
+            1
+        );
         // Condition gone: map empties; nothing pushed.
         assert!(select_new(&mut p, &[]).is_empty());
         assert!(p.is_empty());
         // Reappears: new again.
-        assert_eq!(select_new(&mut p, &[att("a", "stuck", 5)]).len(), 1);
+        assert_eq!(
+            select_new(&mut p, &[att("a", "silent-with-claim", 5)]).len(),
+            1
+        );
     }
 
     #[test]
@@ -723,7 +744,7 @@ mod tests {
         let mut p = Pushed::new();
         for tick in 0..10_000i64 {
             let cur = vec![
-                att("a", "stuck", tick),
+                att("a", "silent-with-claim", tick),
                 att("b", "idle-with-claim", tick / 2),
                 att(
                     if tick % 2 == 0 { "c" } else { "d" },
