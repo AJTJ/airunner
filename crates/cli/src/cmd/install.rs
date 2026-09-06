@@ -1319,6 +1319,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // of four not-green states it found, and a batch records the member a batch took rather
     // than where the branch is now.
     ("0.3.1", 25, 59),
+    // 2026-09-06, the round's last landing: a discharged acceptance clause names the lookup
+    // that discharged it, so the report is symmetric with the unreadable branch (air-rud0).
+    ("0.3.2", 26, 60),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
