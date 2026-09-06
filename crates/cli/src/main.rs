@@ -13,20 +13,28 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
+// air-dwq5: clap's own `--version` is disabled and replaced by one flag Air owns, so there is
+// exactly one implementation. clap's short-circuits before any of Air's code runs, which is
+// why `--version --json` printed a plain string, and why the version could not carry the
+// build. Two implementations of one answer is the drift air-avj is about, one layer down.
 #[command(
     name = "air",
-    version,
+    disable_version_flag = true,
     about = "Hub and referee for a few concurrent coding agents"
 )]
 pub(crate) struct Cli {
+    /// Print the version, the commit this binary was built from, and its surface version.
+    #[arg(long, short = 'V')]
+    version: bool,
     /// Emit JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
     /// Repository path (defaults to the current directory).
     #[arg(long, global = true)]
     repo: Option<PathBuf>,
+    // Optional so `air --version` parses on its own; a bare `air` prints where to look.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -366,6 +374,20 @@ fn foreign_repo(repo: &std::path::Path) -> Option<String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // air-dwq5: before anything that needs a repo, because "what binary is this" is a question
+    // about the binary and must answer outside a checkout too.
+    if cli.version {
+        if cli.json {
+            println!("{}", cmd::install::version_json());
+        } else {
+            println!("{}", cmd::install::version_line());
+        }
+        return ExitCode::SUCCESS;
+    }
+    let Some(cmd) = cli.cmd else {
+        eprintln!("air: no command given; `air --help` lists them");
+        return ExitCode::from(2);
+    };
     let repo = cli
         .repo
         .clone()
@@ -377,7 +399,7 @@ fn main() -> ExitCode {
         eprintln!("{why}");
         return ExitCode::from(2);
     }
-    let code = match cli.cmd {
+    let code = match cmd {
         Cmd::Record { kind, command } => cmd::record::run(&repo, &kind, &command, cli.json),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
