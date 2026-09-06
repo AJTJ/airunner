@@ -1133,6 +1133,41 @@ pub const SURFACE: &[SurfaceChange] = &[
                  sha against a worktree's current head will now see them differ, which is the \
                  point. Rows written before this keep whatever they recorded.",
     },
+    SurfaceChange {
+        id: "discharged-clause-names-its-lookup",
+        since: "2026-09-06 (air-rud0)",
+        headline: "A landing's acceptance report prints `ok (the merge changed <path>) — \
+                   <clause>` where it printed a bare `ok`. The verdict was already honest and \
+                   its reason was already on the line beneath; what was wrong is that a \
+                   reader scanning the verdict column saw a REASON on the branches Air could \
+                   not read and a bare tick on the branch it could, so the weaker claim wore \
+                   the stronger form. `ok` means a lookup matched, never that a clause's \
+                   substance was checked.",
+        silent_break: true,
+        action: "If anything of yours greps a landing's output for `ok ` followed by the \
+                 clause text, the lookup now sits between them, and the discharged clause is \
+                 one line rather than two. `MISS` and `?` are unchanged, reason on the line \
+                 beneath. `--json` is unchanged entirely: `Verdict::Discharged` has carried \
+                 `how` since it was written, which is why this cost no new fact.",
+    },
+    SurfaceChange {
+        id: "session-journal",
+        since: "2026-09-06 (air-3xww)",
+        headline: "`.claude/air.json` gains `journal_dir`, `air init` scaffolds that directory \
+                   with a README, and `.air/roles.md` tells both roles to keep one file per \
+                   session there. **Air reads none of it**: no gate, no condition, no count, \
+                   no check that a session wrote one.",
+        silent_break: false,
+        action: "Nothing to run and nothing refuses. Set `journal_dir` if you want the habit \
+                 and pick your own path; leave it out and nothing happens. What it is for: a \
+                 finding that is neither about the bead a worker holds nor worth the \
+                 coordinator's inbox has nowhere to go today, so it lives in a message and \
+                 dies with the recipient's session — a coordinator here hit an account limit \
+                 mid-round with the round's best material only in its memory of messages. The \
+                 distinction worth passing on: a capture says somebody should ACT and every \
+                 one is triaged; these entries say nobody should, which is why routing them to \
+                 captures is the wrong advice.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1297,6 +1332,17 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // digest must be tracked, a red run keeps its output, a build says which build it is, and
     // the overlap warning dates its holders.
     ("0.3.0", 24, 58),
+    // 2026-09-06, second half of the round: an adopter's five reports after the log was first
+    // written. handover-not-green stopped firing on successful closes, the refusal names which
+    // of four not-green states it found, and a batch records the member a batch took rather
+    // than where the branch is now.
+    ("0.3.1", 25, 59),
+    // 2026-09-06, the round's last landing: a discharged acceptance clause names the lookup
+    // that discharged it, so the report is symmetric with the unreadable branch (air-rud0).
+    ("0.3.2", 26, 60),
+    // 2026-09-06, owner-ordered after the round: every session keeps a journal of what it hit,
+    // for findings that imply no action and so have no home in a bead or a capture (air-3xww).
+    ("0.3.3", 27, 61),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?

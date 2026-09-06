@@ -245,7 +245,9 @@ const WORKTREEINCLUDE_STUB: &str = r#"# Files git does not track that a fresh wo
 /// and never edited, the rule `.claude/air.json` and the `CLAUDE.md` stub already follow.
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 pub struct ScaffoldItem {
-    pub path: &'static str,
+    /// Owned rather than `&'static str` since air-3xww: the journal's location is configured,
+    /// so one of these paths comes from `.claude/air.json` and cannot be a literal.
+    pub path: String,
     /// True when `--write` creates it. False means present, and Air leaves it alone.
     pub create: bool,
     /// What `air init` prints for this row, in dry run and after writing alike.
@@ -264,23 +266,56 @@ fn declares_verify(makefile: &str) -> bool {
     })
 }
 
+/// Where each session appends what it hit (air-3xww). The value `air init` writes into a
+/// fresh `.claude/air.json`; an existing one keeps whatever it says.
+pub const DEFAULT_JOURNAL_DIR: &str = "docs/journal";
+
+/// The README `air init` drops in the journal directory, so an empty directory is not a
+/// mystery. Says what belongs in it and, as loudly, that nothing reads it.
+const JOURNAL_README: &str = r#"# Session journal
+
+One file per session, appended as it goes: `<session>.md`, whatever name the session has.
+
+**What belongs here** is what the next session would want and the bead record will not carry:
+a bug you hit and how it presented, a wrong turn and what corrected it, a claim you later found
+was wrong, a thing you checked that turned out fine. A timestamp and a line is enough.
+
+**The pull is toward the fix; write the state you were in instead.** By the time you write, the
+fix is the part you understand best, so an entry drifts into explaining it. What the next session
+needs is what you believed when you were wrong, and why it was reasonable: that is the part you
+have least reason to record and they have most use for. The first worker to keep one took three
+attempts to stop narrating outcomes.
+
+**What does not**: anything already in a digest (what a bead did, and its proof), anything worth
+the coordinator's inbox (`air capture`), and any work journal of what you did in order.
+
+**Nothing gates on this.** Air does not read these files, nothing refuses without one, and no
+condition counts them. It exists because a round log assembled from a coordinator's memory of
+messages is lost when that coordinator hits a limit, compacts or ends — which happened the day
+this was written.
+"#;
+
 /// Pure: what the scaffold would do, given what the directory already holds. `makefile` is the
-/// Makefile's text when there is one.
-pub fn scaffold(makefile: Option<&str>, worktreeinclude_exists: bool) -> Vec<ScaffoldItem> {
+/// Makefile's text when there is one; `journal` is `(dir, its README exists)`.
+pub fn scaffold(
+    makefile: Option<&str>,
+    worktreeinclude_exists: bool,
+    journal: (&str, bool),
+) -> Vec<ScaffoldItem> {
     vec![
         match makefile {
             None => ScaffoldItem {
-                path: "Makefile",
+                path: "Makefile".to_string(),
                 create: true,
                 note: "will write a `verify` target that FAILS until you edit it",
             },
             Some(mk) if declares_verify(mk) => ScaffoldItem {
-                path: "Makefile",
+                path: "Makefile".to_string(),
                 create: false,
                 note: "present, declares `verify` (not touched)",
             },
             Some(_) => ScaffoldItem {
-                path: "Makefile",
+                path: "Makefile".to_string(),
                 create: false,
                 note: "present, NO `verify` target (not touched): add one, or \
                        `air record verify` has nothing to record and no bead can close",
@@ -288,16 +323,33 @@ pub fn scaffold(makefile: Option<&str>, worktreeinclude_exists: bool) -> Vec<Sca
         },
         if worktreeinclude_exists {
             ScaffoldItem {
-                path: ".worktreeinclude",
+                path: ".worktreeinclude".to_string(),
                 create: false,
                 note: "present (not touched)",
             }
         } else {
             ScaffoldItem {
-                path: ".worktreeinclude",
+                path: ".worktreeinclude".to_string(),
                 create: true,
                 note: "will write a comment header; list the gitignored files a fresh \
                        worktree needs to build",
+            }
+        },
+        // air-3xww. A directory with a README rather than a file: sessions create their own,
+        // and an empty directory with nothing in it to say what it is for is a directory
+        // nobody uses.
+        if journal.1 {
+            ScaffoldItem {
+                path: format!("{}/README.md", journal.0),
+                create: false,
+                note: "present (not touched)",
+            }
+        } else {
+            ScaffoldItem {
+                path: format!("{}/README.md", journal.0),
+                create: true,
+                note: "will write the session journal's README; one file per session, \
+                       appended, and nothing in Air reads them",
             }
         },
     ]
@@ -365,7 +417,17 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         .unwrap_or(false);
     let air_json_exists = dir.join(".claude/air.json").exists();
     let claude_md_exists = dir.join("CLAUDE.md").exists();
-    let scaffold = scaffold(makefile.as_deref(), dir.join(".worktreeinclude").exists());
+    // air-3xww: an existing `.claude/air.json` keeps whatever it names; a fresh repo gets
+    // the default, and the same value is written into the config below, so the scaffold and
+    // the key cannot disagree.
+    let journal =
+        crate::cmd::handover::journal_dir(&dir).unwrap_or_else(|| DEFAULT_JOURNAL_DIR.to_string());
+    let journal_readme_exists = dir.join(&journal).join("README.md").exists();
+    let scaffold = scaffold(
+        makefile.as_deref(),
+        dir.join(".worktreeinclude").exists(),
+        (&journal, journal_readme_exists),
+    );
 
     let mut plan = Plan {
         dir: dir.clone(),
@@ -491,6 +553,10 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                 "coordinator_deny": [],
                 "metis": true,
                 "adopters": false,
+                // air-3xww: where each session appends what it hit. Configured like
+                // `digest_dir` because where a repo keeps its prose is the repo's; Air reads
+                // the files themselves nowhere.
+                "journal_dir": DEFAULT_JOURNAL_DIR,
             });
             std::fs::write(
                 dir.join(".claude/air.json"),
@@ -514,11 +580,22 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             if !item.create {
                 continue;
             }
-            let body = match item.path {
+            let body = match item.path.as_str() {
                 "Makefile" => makefile_stub(),
-                _ => WORKTREEINCLUDE_STUB.to_string(),
+                ".worktreeinclude" => WORKTREEINCLUDE_STUB.to_string(),
+                _ => JOURNAL_README.to_string(),
             };
-            std::fs::write(dir.join(item.path), body).map_err(|e| format!("{}: {e}", item.path))?;
+            // The journal's README sits in a directory that may not exist yet; the other two
+            // are at the repo root.
+            if let Some(parent) = Path::new(&item.path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(dir.join(parent))
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::write(dir.join(&item.path), body)
+                .map_err(|e| format!("{}: {e}", item.path))?;
         }
         Ok(())
     })();
@@ -581,7 +658,7 @@ fn render(p: &Plan) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::{CLAUDE_MD_STUB, makefile_stub, propose_deny, scaffold};
+    use super::{CLAUDE_MD_STUB, DEFAULT_JOURNAL_DIR, makefile_stub, propose_deny, scaffold};
 
     #[test]
     fn deny_patterns_name_the_verb_not_the_tool() {
@@ -612,19 +689,27 @@ mod tests {
     #[test]
     fn the_scaffold_creates_only_what_is_absent() {
         // Fresh repo: both files are created, and the verify target Air writes fails.
-        let fresh = scaffold(None, false);
+        let fresh = scaffold(None, false, (DEFAULT_JOURNAL_DIR, false));
         assert!(fresh.iter().all(|i| i.create), "{fresh:?}");
         assert!(makefile_stub().contains("exit 1"), "{}", makefile_stub());
 
         // Present is present, whatever it holds: nothing is created either way, and the
         // Makefile with no verify target is named rather than edited.
-        let with = scaffold(Some("verify: ## the repo's own\n\t@true\n"), true);
+        let with = scaffold(
+            Some("verify: ## the repo's own\n\t@true\n"),
+            true,
+            (DEFAULT_JOURNAL_DIR, true),
+        );
         assert!(with.iter().all(|i| !i.create), "{with:?}");
         assert!(
             with.iter()
                 .any(|i| i.path == "Makefile" && i.note.contains("declares `verify`"))
         );
-        let without = scaffold(Some("build:\n\t@true\nverify-scope:\n\t@true\n"), true);
+        let without = scaffold(
+            Some("build:\n\t@true\nverify-scope:\n\t@true\n"),
+            true,
+            (DEFAULT_JOURNAL_DIR, true),
+        );
         assert!(without.iter().all(|i| !i.create), "{without:?}");
         assert!(
             without

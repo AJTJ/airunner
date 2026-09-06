@@ -194,6 +194,36 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-3xww. The anchor hard-codes the journal's path, which is the one way this can go
+    // wrong quietly: the directory stays scaffolded and a repo that configured another gets
+    // a README in a place it does not use. The created-only-when-absent rule and the
+    // no-gate assertion both survive it, so what it isolates is whether the location is
+    // really the repo's.
+    (
+        "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
+        Mutation {
+            file: "crates/cli/src/cmd/init.rs",
+            from: "                path: format!(\"{}/README.md\", journal.0),\n                create: true,",
+            to: "                path: format!(\"{DEFAULT_JOURNAL_DIR}/README.md\"),\n                create: true,",
+            also_red: &[],
+        },
+    ),
+    // air-rud0. The anchor is the discharged line's format string and nothing else: the
+    // judgement, the two honest branches and `--json`'s `how` all survive it, because none of
+    // them moved. Under it the tick is bare again and a reader scanning a nine-bead landing's
+    // verdict column sees `ok` with nothing beside it — which is the defect exactly, and one
+    // that is RIGHT in most cases, so a probe that stayed green under this was checking that
+    // discharged clauses appear rather than that they say what discharged them.
+    // Anchor as rustfmt leaves it, per air-gei.
+    (
+        "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
+        Mutation {
+            file: "crates/cli/src/cmd/acceptance.rs",
+            from: "s.push_str(&format!(\"    ok ({how}) — {text}\\n\"));",
+            to: "s.push_str(&format!(\"    ok   {text}\\n         {how}\\n\"));",
+            also_red: &[],
+        },
+    ),
     // air-hgi9. The anchor is the arm that renders the reason, and nothing else: the counts in
     // `cover`, both pure renderers, the batch-predates arm and the flaky arm all survive it.
     // Under it the four not-green states collapse back into the one sentence they shared, with
@@ -1950,6 +1980,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
+        probe_a_discharged_clause_names_its_lookup(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -1993,6 +2024,7 @@ fn all_probes() -> Vec<Probe> {
         probe_selftest_json_is_only_the_array(),
         probe_no_flow_dependent_fix_asserts_a_forbidden_repair(),
         probe_only_a_failed_handover_counts_as_an_attempt(),
+        probe_the_journal_is_scaffolded_and_nothing_reads_it(),
     ]
 }
 
@@ -8288,16 +8320,16 @@ fn probe_scaffolded_verify_fails_until_edited() -> Probe {
         name: "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
         red_fires: !placeholder_passed
             && written.contains("Makefile:verify")
-            && scaffold(None, false)
+            && scaffold(None, false, ("docs/journal", false))
                 .iter()
                 .any(|i| i.path == "Makefile" && i.create),
         // Present means untouched, both ways round: a Makefile with a verify target and one
         // without are both left alone, and only the printed sentence differs.
         green_passes: edited_passed
-            && scaffold(Some("verify:\n\t@true\n"), true)
+            && scaffold(Some("verify:\n\t@true\n"), true, ("docs/journal", true))
                 .iter()
                 .all(|i| !i.create)
-            && scaffold(Some("build:\n\t@true\n"), false)
+            && scaffold(Some("build:\n\t@true\n"), false, ("docs/journal", true))
                 .iter()
                 .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
     }
@@ -10690,5 +10722,138 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
         name: "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-rud0 (an adopter, after their batch 22, with the rendering proposed by their lane): the
+/// landing's clause report gave a REASON when it could not read a clause and a bare `ok` when
+/// it could, so the weaker claim wore the stronger form.
+///
+/// `ok` means a lookup matched — the merge touched a path the clause names, or a green is
+/// recorded at the landed sha. It does not mean anything about the clause's substance was
+/// checked. Their batch 22 printed `ok` beside a clause about sections no longer carrying a
+/// sequential number, discharged because the merge touched that file; it would have printed the
+/// same had the change renamed a variable in it. Their lane's phrase, and it is the bead's:
+/// **a lookup wearing the clothes of a judgement.** It is right in this case and right most of
+/// the time, which is what made it invisible, and a nine-bead landing is read by scanning this
+/// column.
+///
+/// Red (declared mutation: the discharged line goes back to a bare mark): a reader scanning
+/// verdicts sees `ok` with nothing beside it, which is the defect. Green: the lookup is on the
+/// SAME line as the tick and names the path that discharged it; the two honest branches are
+/// untouched, keeping their reason on the line beneath; and — the half that matters most — the
+/// JUDGEMENT is unchanged, so a clause naming a file the merge left alone is still `MISS` and
+/// prose is still `?`. Nothing here reads a clause's meaning.
+fn probe_a_discharged_clause_names_its_lookup() -> Probe {
+    use crate::cmd::acceptance::{Evidence, Verdict, judge, judge_clauses, report};
+
+    let changed = ["docs/rules/roles.md".to_string()];
+    let tree = [
+        "docs/rules/roles.md".to_string(),
+        "docs/untouched.md".to_string(),
+    ];
+    let ev = Evidence {
+        green_at_landed: true,
+        changed: &changed,
+        tree: &tree,
+    };
+    let touched = "docs/rules/roles.md names the rule.";
+    let left_alone = "docs/untouched.md gains a section.";
+    let prose = "The reviewer is happy with it.";
+
+    let r = report(&[judge_clauses(
+        "zz-1",
+        vec![touched.into(), left_alone.into(), prose.into()],
+        &ev,
+    )]);
+
+    // RED: the tick carries its lookup, on its own line, where the column is scanned.
+    let red = r.contains("ok (the merge changed docs/rules/roles.md) — docs/rules/roles.md")
+        && !r.contains("ok   docs/rules/roles.md");
+
+    // The judgement did not move: a lookup, never a reading of the clause.
+    let judged_the_same = matches!(judge(touched, &ev), Verdict::Discharged { .. })
+        && matches!(judge(left_alone, &ev), Verdict::Unevidenced { .. })
+        && matches!(judge(prose, &ev), Verdict::Undecidable { .. });
+    // The two honest branches are untouched, reason on the line beneath.
+    let honest_branches_untouched = r.contains(&format!("MISS {left_alone}"))
+        && r.contains("the merge did not change docs/untouched.md")
+        && r.contains(&format!("?    {prose}"));
+    // The discharged reason appears once, not twice: the second line went with the move.
+    let not_duplicated = r.matches("the merge changed docs/rules/roles.md").count() == 1;
+    // A green-backed clause names ITS lookup too, not just a path-backed one.
+    let g = report(&[judge_clauses(
+        "zz-2",
+        vec!["make verify green.".into()],
+        &ev,
+    )]);
+    let green_clause_named = g.contains("ok (a green verify is recorded at the landed sha) —");
+
+    let green =
+        judged_the_same && honest_branches_untouched && not_duplicated && green_clause_named;
+    Probe {
+        name: "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-3xww: the round log is assembled from the coordinator's memory of messages, and a
+/// coordinator that hits a limit, compacts or ends loses it. One did on 2026-09-06.
+///
+/// The gap is narrower than "agents should keep logs", which is why this is a directory and a
+/// habit rather than a mechanism. That round already carried 40 digests, 37 captures and 196
+/// agent-to-agent messages; what had nowhere to go was a finding that is neither about the bead
+/// you hold nor worth the coordinator's inbox. A capture says somebody should act and every one
+/// is triaged; these say nobody should.
+///
+/// **So this probe asserts the scaffolding and NOT the habit.** Air reads none of these files,
+/// nothing refuses without one, and no condition counts them — a probe that checked a session
+/// had written one would be the chore the bead rules out.
+///
+/// Red: `air init` scaffolds the journal's README under the configured directory, created only
+/// when absent, exactly as the other scaffolded items are.
+///
+/// Green: the three things that keep it from becoming a mechanism. The directory is CONFIGURED,
+/// so a repo that names another gets that one and no hard-coded path survives; a present README
+/// is left alone; and `journal_dir` is absent from every gate fact, so no refusal can depend on
+/// it.
+fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
+    use crate::cmd::init::{DEFAULT_JOURNAL_DIR, scaffold};
+
+    let fresh = scaffold(None, false, (DEFAULT_JOURNAL_DIR, false));
+    let readme = format!("{DEFAULT_JOURNAL_DIR}/README.md");
+    let scaffolds = fresh
+        .iter()
+        .any(|i| i.path == readme && i.create && i.note.contains("nothing in Air reads them"));
+    // Alongside the others, not instead of them: the bead asks for it where `digest_dir`'s
+    // neighbours are.
+    let alongside = fresh.iter().any(|i| i.path == "Makefile" && i.create)
+        && fresh
+            .iter()
+            .any(|i| i.path == ".worktreeinclude" && i.create);
+
+    // Configured, not hard-coded.
+    let elsewhere = scaffold(None, false, ("log.d", false));
+    let honours_config = elsewhere
+        .iter()
+        .any(|i| i.path == "log.d/README.md" && i.create)
+        && !elsewhere
+            .iter()
+            .any(|i| i.path.starts_with(DEFAULT_JOURNAL_DIR));
+    // Present is present: created only when absent, the rule every scaffolded item follows.
+    let untouched = scaffold(None, false, (DEFAULT_JOURNAL_DIR, true))
+        .iter()
+        .any(|i| i.path == readme && !i.create);
+
+    // Nothing gates on it: the gate's facts carry no journal, so no refusal can read one.
+    let gate_facts =
+        serde_json::to_string(&air_hooks::gate::GateFacts::default()).unwrap_or_default();
+    let no_gate = !gate_facts.contains("journal");
+
+    Probe {
+        name: "journal: air init scaffolds the session journal where the other scaffolded items go, at the configured path, and no gate reads it",
+        red_fires: scaffolds && alongside,
+        green_passes: honours_config && untouched && no_gate,
     }
 }
