@@ -149,6 +149,12 @@ pub struct Snapshot {
     /// claim and the coordinator has to decompose. Shown, not dropped, so the coordinator
     /// does not have to ask bd for the number the line used to hide inside "claimable".
     pub epic_depth: Option<usize>,
+    /// Of those epics, the ones with no OPEN child (air-84u): the count is a number, this is
+    /// the action. air-80x sat undecomposed for hours and is open again with all six children
+    /// closed, and nothing said so; the adopter's claimable depth fell to four with only epics
+    /// left and their coordinator's decomposition was the bottleneck. Empty is the normal
+    /// state and prints nothing; `None` when bd did not answer.
+    pub epics_to_decompose: Option<Vec<EpicToDecompose>>,
     /// How many beads declare no `initiative: <CODE>` line, and how many were looked at
     /// (air-g5o). `None` when bd did not answer this tick.
     ///
@@ -301,6 +307,30 @@ pub struct Landing {
     /// list and the refusal cannot disagree. `command` above is the one that matches this.
     #[serde(default)]
     pub blocked: Option<String>,
+}
+
+/// A ready epic with nothing open under it (air-84u): the coordinator's next decomposition.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct EpicToDecompose {
+    pub epic: String,
+    /// Children bd has, all of them closed. `0` is an epic that was never decomposed at all,
+    /// which is the same duty and is why the count is reported rather than required.
+    pub closed_children: usize,
+}
+
+/// Pure: is this epic the coordinator's to decompose now? Yes when no child is open — either
+/// they are all closed, or there are none. A child in any status but `closed` is work in
+/// flight (`awaiting_review` and `blocked` included), and an epic with one is not waiting on
+/// anybody: this must never name an epic that has open children, because the whole value of
+/// the line is that it costs nothing to trust.
+pub fn to_decompose(epic: &str, children: &[air_bd::Issue]) -> Option<EpicToDecompose> {
+    children
+        .iter()
+        .all(|c| c.status == "closed")
+        .then(|| EpicToDecompose {
+            epic: epic.to_string(),
+            closed_children: children.len(),
+        })
 }
 
 /// A branch ready for the verify lane's next batch (air-80x.3).
@@ -1565,6 +1595,12 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
     let mut epic_depth: Option<usize> = None;
+    // air-84u: which of those epics has nothing open under it. One `bd list --parent` per
+    // READY epic, so the cost is proportional to the condition it reports: with no ready epic
+    // — the normal state — it is zero processes, and it is never paid to print nothing. A
+    // slow bd skips it through `bd_try` and the line is silent rather than stale, which is
+    // right for an invitation nobody is refused for ignoring.
+    let mut epics_to_decompose: Option<Vec<EpicToDecompose>> = None;
     // air-g5o: counted over the answers bd has ALREADY given this tick (ready plus
     // in-progress), so the number costs no extra bd process. `None` until `ready` answers, and
     // the in-progress half joins it only if that answered too, so a partial tick reports
@@ -1585,6 +1621,22 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             let ids = split.claimable;
             claimable_depth = Some(ids.len());
             epic_depth = Some(split.epics.len());
+            // air-84u. `bd ready` lists an epic whatever is under it — children do not block
+            // their parent — so the ready set alone cannot answer this and the children have
+            // to be asked for. Checked against this repo on 2026-09-06: air-80x is ready with
+            // all six children closed.
+            epics_to_decompose = Some(
+                split
+                    .epics
+                    .iter()
+                    .filter_map(|e| {
+                        let kids = bd_try(&bd, &mut bd_slow, &mut errors, "children", |b| {
+                            air_bd::WorkLedger::children(b, e)
+                        })?;
+                        to_decompose(e, &kids)
+                    })
+                    .collect(),
+            );
             let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
             let _ = ledger.bd_cache_put("epic_depth", &split.epics.len().to_string(), &at);
             super::ready_cache::write(repo, &ids, &super::now());
@@ -1691,6 +1743,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip.
         landable: landings_for(repo),
+        epics_to_decompose,
         batch_ready: batch.0,
         not_batch_ready: batch.1,
         overlaps,
@@ -2021,6 +2074,15 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             _ => "",
         }
     ));
+    // air-84u: under the count, the epic the count is about. "1 epic to decompose" is a
+    // number the coordinator has to go and resolve against bd; this is the action. Silent
+    // when there is none, which is the normal state.
+    for e in s.epics_to_decompose.iter().flatten() {
+        out.push_str(&format!(
+            "epic ready to decompose: {} (0 open children, {} closed)\n",
+            e.epic, e.closed_children
+        ));
+    }
     // air-g5o: a count with its denominator beside it, and no verdict. Printed only when
     // there is something to say — a fleet that declares every initiative should not carry a
     // line saying so on every tick.
