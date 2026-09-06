@@ -91,6 +91,9 @@ pub struct Audit {
     /// is hit (air-d75). Three of them fail toward permitting and none of them was measured;
     /// the owner ruled on 2026-09-06 that all of them are, so this is the whole set.
     pub budgets: super::budgets::Budgets,
+    /// How often a worker took a bead it could not start (air-5nh). Read from `claims`; the
+    /// window is the audit's own `since`.
+    pub churn: Churn,
     pub duration_ms: u64,
 }
 
@@ -626,6 +629,9 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         traffic: traffic_of(days, since),
         peer: peer_effect(&warns, &edits),
         budgets: super::budgets::budgets_of(days, since),
+        // Filled in by `run` from the ledger's `claims` table (air-5nh); the event log does
+        // not hold a release, so `gather_from` reports none rather than zero.
+        churn: Churn::default(),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -744,6 +750,184 @@ pub fn latency_of(days: &[(String, String)]) -> Latency {
 /// What the gate cost, from the verify runs and the closes it let through (air-2zq). Pure over
 /// the `(worker, sha)` pairs, so `air selftest` can assert the repeat arithmetic without a
 /// ledger.
+/// One claim short enough to count as churn, printed so the rate can be checked against the
+/// record rather than believed.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ShortClaim {
+    pub bead: String,
+    pub worker: String,
+    pub seconds: i64,
+    /// `release_reason`, or `-` when the row carries none.
+    pub reason: String,
+}
+
+/// Re-claim churn: how often a worker took a bead it could not start, and put it straight back
+/// (air-5nh).
+///
+/// The ordering-edge question (air-69u, 2026-09-06) was answered with the ledger rather than
+/// with a rule. air-zzj sat in `bd ready` carrying "do not start before air-uko" in prose with
+/// no `blocks` edge, and two workers claimed and abandoned it inside twenty-odd seconds each.
+/// The candidate mechanisms were a filing command wrapping `bd create --after`, or a refusal on
+/// a child with no edge. Measured over 153 claims in fifteen days: 4 of them ended
+/// `owner-gated` inside a minute, 2.6%. That does not carry either mechanism, and Air does not
+/// wrap `bd create` on a 2.6% failure. It carries printing the number.
+///
+/// **THE THRESHOLD: 10% of claims in a round.** Above that, revisit wrapping the filing; below
+/// it, the prose edge stays and this stays a measurement. The threshold is here, beside the
+/// number it reads, because the whole point of answering with data is that the next argument is
+/// settled by re-running the command rather than by re-arguing.
+///
+/// No new recording: `claims` already holds `claimed_at`, `released_at` and `release_reason`.
+/// Removal condition: when the number stops moving, or when `bd` grows an ordering check of its
+/// own.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Churn {
+    /// Claims taken in the window.
+    pub claims: usize,
+    /// Of those, the ones released. A claim still held is not churn and is not counted against
+    /// it either: it is simply not finished yet.
+    pub released: usize,
+    pub within_60s: usize,
+    pub within_300s: usize,
+    /// Of `within_60s`, the ones whose `release_reason` names the owner. This is the population
+    /// air-69u measured: a bead a worker could not start, as opposed to one it handed back for
+    /// any other reason.
+    pub owner_gated_within_60s: usize,
+    pub owner_gated_within_300s: usize,
+    /// Owner-gated releases at any duration, so the fast ones can be read as a share.
+    pub owner_gated: usize,
+    /// `owner_gated_within_60s` over `claims`. `None` when the window holds no claim, which is
+    /// reported as such and never as zero. **This is the number the 10% threshold reads.**
+    pub rate: Option<f64>,
+    /// The rows the counts above read, longest first: released inside a minute, or
+    /// owner-gated inside five. NOT every fast release — most of those are a bead claimed and
+    /// closed quickly, which is work finishing rather than churn, and 36 such rows in one
+    /// window buried the eleven that the threshold turns on.
+    pub short: Vec<ShortClaim>,
+}
+
+/// A `release_reason` that says the owner has to act before this bead can start. Matched on a
+/// substring because the reason is free text a worker wrote: `air release --reason owner-gated`
+/// is the form the flow uses, and the label is the only thing distinguishing "could not start"
+/// from "handed it back". A reason Air fails to recognise lands in `within_60s` and NOT in the
+/// owner-gated count, so the threshold under-reads rather than over-reads: the direction that
+/// keeps a mechanism from being justified by a number Air inflated.
+fn is_owner_gated(reason: &str) -> bool {
+    let r = reason.to_ascii_lowercase();
+    r.contains("owner-gated") || r.contains("owner gated")
+}
+
+/// One `claims` row, in the order the audit's query selects it.
+pub type ClaimRow = (String, String, String, Option<String>, Option<String>);
+
+/// Pure: churn over `(bead, worker, claimed_at, released_at, release_reason)` rows.
+pub fn churn_of(rows: &[ClaimRow]) -> Churn {
+    let mut c = Churn {
+        claims: rows.len(),
+        ..Churn::default()
+    };
+    for (bead, worker, claimed_at, released_at, reason) in rows {
+        let Some(released_at) = released_at else {
+            continue;
+        };
+        c.released = c.released.saturating_add(1);
+        let reason = reason.as_deref().unwrap_or("-");
+        let gated = is_owner_gated(reason);
+        if gated {
+            c.owner_gated = c.owner_gated.saturating_add(1);
+        }
+        // A clock that ran backwards is not a fast release. Skip it rather than count a
+        // negative as churn.
+        let Some(secs) = super::status::seconds_between(claimed_at, released_at) else {
+            continue;
+        };
+        if !(0..=300).contains(&secs) {
+            continue;
+        }
+        c.within_300s = c.within_300s.saturating_add(1);
+        if gated {
+            c.owner_gated_within_300s = c.owner_gated_within_300s.saturating_add(1);
+        }
+        if secs <= 60 {
+            c.within_60s = c.within_60s.saturating_add(1);
+            if gated {
+                c.owner_gated_within_60s = c.owner_gated_within_60s.saturating_add(1);
+            }
+        }
+        if secs <= 60 || gated {
+            c.short.push(ShortClaim {
+                bead: bead.clone(),
+                worker: worker.clone(),
+                seconds: secs,
+                reason: reason.to_string(),
+            });
+        }
+    }
+    c.short.sort_by(|a, b| {
+        b.seconds
+            .cmp(&a.seconds)
+            .then_with(|| a.bead.cmp(&b.bead))
+            .then_with(|| a.worker.cmp(&b.worker))
+    });
+    // Same shape as `cost_of`'s ratio: lossless via u32, and a window with more than four
+    // billion claims reports None rather than a silently rounded rate.
+    c.rate = match (
+        u32::try_from(c.owner_gated_within_60s),
+        u32::try_from(c.claims),
+    ) {
+        (Ok(g), Ok(n)) if n > 0 => Some(f64::from(g) / f64::from(n)),
+        _ => None,
+    };
+    c
+}
+
+/// The churn section. The threshold travels with the number: a rate printed without the
+/// boundary that acts on it is one more figure nobody can decide anything with.
+pub fn render_churn(c: &Churn) -> String {
+    let mut s = format!(
+        "\nre-claim churn: {} claim(s) in window, {} released; {} within 60 s ({} owner-gated), \
+         {} within 300 s ({} owner-gated); {} owner-gated at any duration\n",
+        c.claims,
+        c.released,
+        c.within_60s,
+        c.owner_gated_within_60s,
+        c.within_300s,
+        c.owner_gated_within_300s,
+        c.owner_gated,
+    );
+    s.push_str(&match c.rate {
+        Some(r) => format!(
+            "  owner-gated inside a minute = {:.1}% of claims.\n",
+            r * 100.0
+        ),
+        // Unmeasured and zero are different facts, and the threshold below is printed either
+        // way: a boundary that appears only once it is approached is one nobody can check
+        // against a quiet window.
+        None => {
+            "  no claims in this window, so there is no rate. Not zero: unmeasured.\n".to_string()
+        }
+    });
+    s.push_str(
+        "  THRESHOLD 10%: above it, revisit wrapping the filing with an ordering edge \
+         (`bd create --after`); below it, the prose edge stays and this stays a measurement \
+         (air-5nh, from air-69u's 2.6% over 153 claims).\n",
+    );
+    if !c.short.is_empty() {
+        s.push_str(
+            "  the rows those counts read (released inside a minute, or owner-gated inside \
+             five). A fast close is work finishing, not churn, and is counted above and not \
+             listed here:\n",
+        );
+    }
+    for x in &c.short {
+        s.push_str(&format!(
+            "  {:>4} s  {}  {}  {}\n",
+            x.seconds, x.bead, x.worker, x.reason
+        ));
+    }
+    s
+}
+
 pub fn cost_of(runs: &[(String, String)], closes: usize) -> Cost {
     let distinct: std::collections::BTreeSet<&(String, String)> = runs.iter().collect();
     // A ratio of two counts. `u32::try_from` keeps the conversion lossless for any count that
@@ -871,6 +1055,7 @@ pub fn render(a: &Audit) -> String {
              counts, so a second close on an unchanged commit demands no fresh verify.\n",
         );
     }
+    s.push_str(&render_churn(&a.churn));
     s.push_str(&render_peer(&a.peer));
     s
 }
@@ -939,6 +1124,21 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
         })
         .unwrap_or_default();
     audit.cost = Some(cost_of(&runs, audit.cost.as_ref().map_or(0, |c| c.closes)));
+    // Re-claim churn (air-5nh). `claims` already holds every field; nothing new is recorded.
+    let claims: Vec<ClaimRow> = ledger
+        .conn()
+        .prepare(
+            "SELECT bead, worker, claimed_at, released_at, release_reason FROM claims \
+             WHERE claimed_at >= ?1 ORDER BY claimed_at",
+        )
+        .and_then(|mut st| {
+            st.query_map(rusqlite::params![since], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect()
+        })
+        .unwrap_or_default();
+    audit.churn = churn_of(&claims);
     let defects = audit
         .rows
         .iter()
