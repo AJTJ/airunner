@@ -66,7 +66,10 @@ Index items are 1–3 lines; detail lives behind the link.
   project is separate from theirs). The incident keeps its date, its count and its `air-` bead;
   the name, their paths, their bead ids and anything that copies their files live in `private/`,
   which is ignored. `make verify` runs `air adopter-check`, which reads the names from
-  `private/adopters.md` and skips cleanly when that file is absent.
+  `private/adopters.md`. **That file is gitignored, so a fresh clone of this repo has none and
+  the check must be turned on deliberately**: `.claude/air.json` says `"adopters": true`, and
+  declared-with-no-list is a refusal rather than a skip (air-jsz). It skipped silently for a
+  whole round, including on the sweep's own verify, which is why the declaration exists.
 - **Tests are optimized for speed, always.** They run constantly; per-test cost is a first-class
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
 - **Talking to the owner.** Plain language, short. Lead with the thing the owner has to know or
