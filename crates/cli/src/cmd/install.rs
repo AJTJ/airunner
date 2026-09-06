@@ -1999,6 +1999,13 @@ mod tests {
         );
         let lane = lane.unwrap();
         assert!(lane.contains("A lane is a worker session like any other"));
+        // air-4noi: the permission names the condition it assumes. An adopter's lane resets
+        // hard to main on every cut, so a bead it held between batches would live in a tree
+        // the next cut wipes. Through `flat` because the clause spans a hard wrap, which has
+        // broken this pin twice; and pinned as the CONDITION rather than the whole sentence,
+        // because deleting the permission would be wrong for a lane that merges main forward.
+        assert!(flat(lane).contains("it may hold one **if its worktree survives the cut**"));
+        assert!(flat(lane).contains("Air reads neither"));
         assert!(lane.contains(
             "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"
         ));
