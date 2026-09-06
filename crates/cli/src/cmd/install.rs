@@ -798,6 +798,37 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "If the line appears, run `air install` to read the notices, then \
                  `air install --write`; the line goes away with the record.",
     },
+    SurfaceChange {
+        id: "stuck-deleted",
+        since: "2026-09-06 (air-12k)",
+        headline: "The `stuck` session state and attention condition are gone: no session \
+                   reads it, no condition raises it, `air audit` no longer lists it, and \
+                   `AIR_ATTENTION_STUCK_MIN` does nothing. It was set only by the \
+                   PermissionRequest \
+                   hook, which never arrives in auto mode — zero in 39,071 event lines.",
+        silent_break: true,
+        action: "A script or dashboard that filters `air status --json` for `stuck` now reads \
+                 an empty set and says nobody is stuck, which is true and useless: it was \
+                 already always empty. Replace it with the coordinator's heartbeat — \
+                 `air status` on a timer — which is what actually caught every wedged worker; \
+                 `.air/roles.md` says so, and `air install --write` refreshes it.",
+    },
+    SurfaceChange {
+        id: "budgets-measured",
+        since: "2026-09-06 (air-d75)",
+        headline: "Every timing budget Air waits on records its elapsed time and whether it \
+                   was hit, in a `budgets` object on the event line; `air audit` prints per \
+                   budget the count, p50/p90/p99/max, hits and near misses with the fail \
+                   direction beside each, plus an unpaired-hook count for the one budget that \
+                   cannot record its own overruns. The SQLite busy timeout moves 200 ms -> 1 s \
+                   and is now a recording `busy_handler`.",
+        silent_break: false,
+        action: "Nothing to run. Event lines gain one optional key, so a reader that ignores \
+                 unknown fields is unaffected. Read `air audit`'s budget rows once a round: a \
+                 non-zero `hits` on `git` or `sqlite-lock` is a hook that failed open, which \
+                 is a refusal that did not happen. The harness's own Bash timeout is the one \
+                 budget Air cannot record; see adopting-air.md §1 step 5.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
