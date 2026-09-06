@@ -36,6 +36,36 @@ use crate::cmd::hook::{handover_gate, is_handover_command};
 /// [`probe_every_air_spawn_pins_identity`] reads this file and fails if a raw
 /// `Command::new(exe)` appears anywhere else, so the class does not come back one probe at a
 /// time.
+/// A `Write` a probe can read back (air-e21v). `run_tee` pumps a child's streams to two
+/// sinks; a probe must never pass this process's stdout, because `air selftest --json` writes
+/// its array there and anything else on that stream stops it parsing.
+#[derive(Debug, Clone, Default)]
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Shared {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn text(&self) -> String {
+        self.0
+            .lock()
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .unwrap_or_default()
+    }
+}
+
+impl std::io::Write for Shared {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut b) = self.0.lock() {
+            b.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn air_command(exe: &Path, cwd: &Path) -> Command {
     let mut c = Command::new(exe);
     c.current_dir(cwd)
@@ -145,6 +175,20 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-e21v. The anchor puts a probe's output back on this process's stdout, which is
+    // exactly what broke `--prove`: the tail still carries both streams, every other probe
+    // still passes, and only the machine-readable output stops parsing. A probe that stayed
+    // green under it would be reading the array out of the middle of the stream rather than
+    // from its first byte, which is not what a parser does.
+    (
+        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        Mutation {
+            file: "crates/cli/src/cmd/selftest.rs",
+            from: "        out_sink.clone(),\n        err_sink.clone(),",
+            to: "        std::io::stdout(),\n        std::io::stderr(),",
+            also_red: &[],
+        },
+    ),
     // air-avj. The anchor is the branch that decides what a Stop advisory prints, and nothing
     // else: the facts, the pointer, the flow-free fix and `air handover`'s own message all
     // survive it. Under it every repair is printed again, including the two a verify lane
@@ -1296,6 +1340,26 @@ pub fn prove(repo: &Path, json: bool) -> i32 {
         return 2;
     }
 
+    // air-e21v: the UNMUTATED child must parse before a single mutation is applied. It did not
+    // once, and `--prove` spent its whole run reporting every mutation BROKEN — 82 rebuilds to
+    // learn nothing, and the mutation evidence this repo leans on was dead in the meantime.
+    // One child run against 82 is a rounding error on this command and nothing at all on
+    // `make verify`, which is why the check lives here rather than in the suite.
+    match build_and_run(repo) {
+        Ok(v) if v.is_empty() => {
+            eprintln!("air: selftest --prove: the baseline run reported no probes");
+            return 2;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "air: selftest --prove stopped before applying any mutation: {e}. Every \
+                 mutation would have reported BROKEN and proved nothing."
+            );
+            return 2;
+        }
+    }
+
     for (probe, m) in MUTATIONS {
         let path = repo.join(m.file);
         let Ok(original) = std::fs::read_to_string(&path) else {
@@ -1747,6 +1811,7 @@ fn all_probes() -> Vec<Probe> {
         probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
         probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
         probe_a_row_with_no_transcript_is_named_and_never_announced(),
+        probe_selftest_json_is_only_the_array(),
     ]
 }
 
@@ -8500,7 +8565,7 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
 /// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
 /// out of a child that writes to each.
 fn probe_a_red_runs_output_is_kept() -> Probe {
-    use crate::cmd::record::run_tee;
+    use crate::cmd::record::run_tee_to;
     use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
 
     // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
@@ -8538,15 +8603,32 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     // The ceiling is a number, not a hope: 20 x 64 KiB.
     let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
 
-    // End to end: a child that writes to BOTH streams, and the tail carries both.
-    let both = run_tee(
+    // End to end: a child that writes to BOTH streams, and the tail carries both — and the
+    // two sinks get them too, which is what `run_tee` exists for and what the tail alone never
+    // showed. The sinks are in-memory, not this process's stdout: the version of this probe
+    // that used the real ones put `out` on `air selftest`'s stdout ahead of the JSON array and
+    // made `air selftest --json` unparseable, so `--prove` called every mutation BROKEN
+    // (air-e21v).
+    let out_sink = Shared::new();
+    let err_sink = Shared::new();
+    let both = run_tee_to(
         "sh",
         &["-c".into(), "echo out; echo err >&2".into()],
         &std::env::temp_dir(),
+        out_sink.clone(),
+        err_sink.clone(),
     )
     .map(|(code, _, tail)| {
         let s = String::from_utf8_lossy(&tail).to_string();
-        code == 0 && s.contains("out") && s.contains("err")
+        code == 0
+            && s.contains("out")
+            && s.contains("err")
+            // Each stream reached ITS OWN sink, and neither reached the other's: a pump wired
+            // to one stream twice would still fill the tail with both.
+            && out_sink.text().contains("out")
+            && !out_sink.text().contains("err")
+            && err_sink.text().contains("err")
+            && !err_sink.text().contains("out")
     })
     .unwrap_or(false);
 
@@ -9277,5 +9359,53 @@ fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
         name: "sessions: a row no session is behind is named in status and never announced as a worker joining, and a real one still is",
         red_fires: red,
         green_passes: announced && never_late && leave && still_rendered && quiet,
+    }
+}
+
+/// air-e21v: `air selftest --json` emitted a stray `out` before the array, so it failed to
+/// parse at line 1 column 1 — and `--prove` parses exactly that stream, so **every declared
+/// mutation reported BROKEN and the suite's mutation evidence was dead** for as long as it took
+/// anyone to run a 30-minute command. Ordinary `air selftest` was unaffected and all probes
+/// passed, which is why nothing noticed: the gate worked, only the evidence behind it did not.
+///
+/// This probe is the CONTRACT half, and it is pure. The end-to-end half — spawn
+/// `air selftest --json` and parse it — was written, measured and NOT kept: it costs a second
+/// full suite, 51 s on a quiet machine and 117 s under a round's load, against a 17 s suite and
+/// a 56-85 s `make verify`. "Tests are optimized for speed, always. Per-test cost is a
+/// first-class constraint" (CLAUDE.md) settles that. What replaces it costs nothing: `prove`
+/// checks the UNMUTATED child parses before it applies a single mutation, so the 82 runs that
+/// would each have reported BROKEN cannot happen, and the one that fails names the cause.
+///
+/// Red: the shape `--prove` requires is accepted, and a stream with anything before the array
+/// is refused — `serde_json` refuses `out\n[…]` at line 1, which is precisely what happened.
+/// Green: an empty array is not evidence of a suite either, and `baseline_defect` says what is
+/// wrong rather than only that something is.
+fn probe_selftest_json_is_only_the_array() -> Probe {
+    let good = r#"[{"name":"n","red_fires":true,"green_passes":true}]"#;
+    let polluted = "out\n[{\"name\":\"n\",\"red_fires\":true,\"green_passes\":true}]";
+    Probe {
+        name: "selftest: --prove refuses a polluted baseline instead of calling every mutation broken",
+        red_fires: baseline_defect(polluted)
+            .is_some_and(|d| d.contains("before the array") || d.contains("column 1"))
+            && baseline_defect(good).is_none(),
+        green_passes: baseline_defect("[]").is_some_and(|d| d.contains("no probes"))
+            && baseline_defect("").is_some(),
+    }
+}
+
+/// What is wrong with a child's `--json` stream, or `None` when it is what `--prove` needs
+/// (air-e21v). Pure, so the check costs nothing and the message is testable.
+fn baseline_defect(text: &str) -> Option<String> {
+    match serde_json::from_str::<Vec<ProbeOut>>(text) {
+        Ok(v) if v.is_empty() => Some("no probes in the array".to_string()),
+        Ok(_) => None,
+        Err(e) => {
+            let head: String = text.trim_start().chars().take(40).collect();
+            Some(format!(
+                "{e}; something is written before the array. `air selftest --json` must emit \
+                 ONLY the array, and a probe that writes to this process's stdout breaks it \
+                 (air-e21v: a probe passed `run_tee` the real stdout). Stream begins: {head:?}"
+            ))
+        }
     }
 }
