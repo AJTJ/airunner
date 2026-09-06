@@ -6,7 +6,7 @@ members = ["crates/ledger", "crates/bd", "crates/hooks", "crates/cli"]
 version = "0.2.19"
 edition = "2024"
 rust-version = "1.97"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/ajtj/ai_runner"
 publish = false
 
