@@ -83,6 +83,25 @@ into tasks, and lands branches. Air's channel raises a condition when something 
 an idle agent holding a task, a hand-over without a green, a branch ready to land, a lease held
 by a session that died.
 
+## What your repo provides
+
+Air records and refuses; four things have to come from the repo, and `air init` prints what is
+missing rather than guessing.
+
+- **A verify command.** Anything that exits non-zero on red. Air's one refusal reads a green
+  recorded at a commit, so a repo with no such command has nothing to record.
+- **One paragraph on how a finished task is handed on.** `.air/roles.md` deliberately does not
+  say: some repos hand over for review, some close with proof. That choice is the repo's.
+- **A `Bead: <id>` trailer on the commits that do a task's work.** Attribution reads the
+  trailer and nothing else; a commit without one is attributed to nothing.
+- **A `.worktreeinclude`**, if a build needs files git ignores (keys, `.env`). Air fills each
+  worker's worktree from it.
+
+Everything else Air leaves to you on purpose: how the verify is scoped, how code is reviewed,
+which commands are too dangerous for an agent, whether landing is `air land` or your own script.
+The first adopter keeps several thousand lines of that around Air, and none of it is Air's to
+own. `docs/notes/2026-09-06-what-a-repo-provides.md` is the audit, item by item.
+
 ## Your project and Air
 
 Your project decides what verification means, what to build, how code is reviewed, and how
