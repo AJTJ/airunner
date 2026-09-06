@@ -165,7 +165,7 @@ Two findings that change the picture relative to the prior:
    (ADR-007). One coordinator and three workers have no cross-team value stream to visualise.
 3. **Sprints, velocity, points, story-point estimation.** Not in Metis, not in the record as a
    pain. The Scrum Guide's relevant sentence (doers size) is kept; the ceremony is not.
-4. **Checkbox acceptance criteria (three per task).** the adopter's record says acceptance is the
+4. **Checkbox acceptance criteria (three per task).** The adopter's record says acceptance is the
    weak link when it is prose (plan 0002 §2.2 row 1). One runnable condition per bead.
 5. **Ralph decompose loop** as machinery. The coordinator is a live session; a Stop-hook loop
    adds nothing until decomposition is observed to stall.
@@ -176,7 +176,7 @@ Two findings that change the picture relative to the prior:
 
 ---
 
-## 5. What the live the adopter's fleet says (evidence for the cut rules)
+## 5. What the adopter's live fleet says (evidence for the cut rules)
 
 Read via a fan-out over the retrospectives, baselines, audits, and plan 0022 (file list in §13).
 Numbers are the notes' own.
