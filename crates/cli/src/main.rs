@@ -210,12 +210,13 @@ enum Cmd {
         write: bool,
     },
     /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
-    /// from `.worktreeinclude`), then `claude --worktree <name>` with role prose, deny list, env.
+    /// from `.worktreeinclude`), then runs claude IN it with role prose, deny list, env. No
+    /// `--worktree` (air-8gj): Air's PreToolUse hook is the fence.
     ///
-    /// With --tmux or --task and a tty, execs `claude --tmux`. Without a tty (the coordinator's
-    /// Bash tool, `</dev/null`) it starts a detached tmux session named <project>-<name>
-    /// instead, prints `tmux attach -t <project>-<name>`, and exits 0. AIR_CLAUDE_BIN overrides
-    /// the claude binary; AIR_TMUX_SOCKET selects a tmux socket (`tmux -L`).
+    /// With --tmux or --task and a tty, opens a tmux session here. Without a tty (the
+    /// coordinator's Bash tool, `</dev/null`) it starts a detached tmux session named
+    /// <project>-<name> instead, prints `tmux attach -t <project>-<name>`, and exits 0.
+    /// AIR_CLAUDE_BIN overrides the claude binary; AIR_TMUX_SOCKET selects a tmux socket.
     Worker {
         /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
         name: Option<String>,
@@ -297,6 +298,10 @@ enum Cmd {
     /// whether `bd` is the pinned version. (It printed one pragma while the help said
     /// "pragmas"; air-ha8.)
     Doctor,
+    /// The release-time check: every surface notice is covered by a RELEASES row and
+    /// Cargo.toml matches the last row. Run by `make release`; exit 2 names the row to append.
+    #[command(hide = true)]
+    ReleaseCheck,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest {
         /// air-682: run each probe's DECLARED mutation and report any probe that stays green.
@@ -426,6 +431,7 @@ fn main() -> ExitCode {
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
+        Cmd::ReleaseCheck => cmd::install::release_check_cmd(),
         Cmd::Selftest { prove } => {
             if prove {
                 cmd::selftest::prove(&repo, cli.json)
