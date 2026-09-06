@@ -103,6 +103,11 @@ pub struct WorkerView {
     /// recorded at and by whom, and, where it does not count, why not. `None` for a plain
     /// commit green or a plain absence.
     pub green_detail: Option<String>,
+    /// Where the newest non-green run at this head kept its output (air-5ik). `None` when the
+    /// head is green, or when the run predates the store. It rides on the `not green` phrase
+    /// rather than in `green_detail`, which is air-7wf's tree-versus-commit reason and means
+    /// something else.
+    pub red_log: Option<String>,
     pub claims: Vec<Claim>,
     /// Open claims bd shows in `awaiting_review`: still held (the files are still the
     /// worker's) but no longer work in progress (air-3eu).
@@ -1402,14 +1407,27 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                 let evidence = head
                     .as_deref()
                     .and_then(|h| super::green::at(&ledger, &path, h, Kind::Verify).ok());
+                let green_at_head = evidence.as_ref().map(super::green::Evidence::holds);
+                // air-5ik: where the red at this head kept its output. Only asked for when the
+                // head is NOT green, so a healthy fleet pays no query for it.
+                let red_log = (green_at_head == Some(false))
+                    .then(|| {
+                        head.as_deref()
+                            .and_then(|h| ledger.latest_run_at_commit(h, Kind::Verify).ok())
+                            .flatten()
+                            .filter(|r| !r.is_green())
+                            .and_then(|r| r.log_path)
+                    })
+                    .flatten();
                 views.insert(
                     name.clone(),
                     WorkerView {
                         role: super::hook::role_for(&name).to_string(),
                         worker: name,
                         head,
-                        green_at_head: evidence.as_ref().map(super::green::Evidence::holds),
+                        green_at_head,
                         green_detail: evidence.as_ref().and_then(super::green::Evidence::detail),
+                        red_log,
                         ..Default::default()
                     },
                 );
@@ -2055,6 +2073,12 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             (Some(false), Some(d)) => format!("not green ({d})"),
             (None, _) => "unknown".to_string(),
         };
+        // air-5ik: a red is the one run somebody reads, so say where it is rather than leaving
+        // the reader to know the layout.
+        let green = match w.red_log.as_deref() {
+            Some(p) => format!("{green} (output: {p})"),
+            None => green,
+        };
         let claims: Vec<String> = w
             .claims
             .iter()
@@ -2342,6 +2366,7 @@ mod tests {
             head: Some("abc".into()),
             green_at_head: green,
             green_detail: None,
+            red_log: None,
             claims,
             handed_over: vec![],
             files_held: 0,

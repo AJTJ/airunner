@@ -26,6 +26,7 @@ pub mod metis;
 pub mod privacy;
 pub mod ready_cache;
 pub mod record;
+pub mod runlog;
 pub mod selftest;
 pub mod status;
 pub mod tmux;
