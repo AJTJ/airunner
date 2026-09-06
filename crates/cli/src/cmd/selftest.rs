@@ -267,8 +267,13 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "            if m.flow_dependent {",
-            to: "            if false {",
+            // Re-anchored (air-155w): the refusal renderer gained its own
+            // `if m.flow_dependent {` when flow-dependent fixes became conditions, so the
+            // one-line anchor matched twice and read as ambiguous. This one names the arm that
+            // is unique to `stop_message` — the check-and-detail with no fix, which is exactly
+            // what the Stop advisory drops the repair for.
+            from: "                format!(\"{}: {}\", m.check, m.detail)",
+            to: "                format!(\"{}: {} — run `{}`\", m.check, m.detail, m.fix)",
             also_red: &[],
         },
     ),

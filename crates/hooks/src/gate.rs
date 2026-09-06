@@ -383,9 +383,18 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         } else {
             "refused"
         };
+        // air-155w: a flow-dependent fix states a CONDITION, not a command, so it is
+        // introduced as one. "run `a green at this head`" reads as an instruction to run
+        // something that is not a command, and nests backticks inside backticks.
         let items: Vec<String> = missing
             .iter()
-            .map(|m| format!("{}: {} — run `{}`", m.check, m.detail, m.fix))
+            .map(|m| {
+                if m.flow_dependent {
+                    format!("{}: {} — needs {}", m.check, m.detail, m.fix)
+                } else {
+                    format!("{}: {} — run `{}`", m.check, m.detail, m.fix)
+                }
+            })
             .collect();
         // air-75u: whose tree, as the ok line already says. A refusal shown in a session that
         // is not the one it is about is otherwise a true statement with no scope.
