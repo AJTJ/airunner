@@ -175,6 +175,25 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-i6fd. The anchor restores the defect exactly: main's tip read from the running cwd's
+    // HEAD instead of from the ref. Everything else survives — the green check, the skipped
+    // entries, the bead attribution, the error paths — so what it isolates is whether the
+    // answer depends on WHERE the command ran. Under it the running worker's branch compares
+    // against itself and leaves through the one silent exit, which is invisible to any check
+    // that asks whether `landable` has entries rather than whether it has the RIGHT ones.
+    // Anchored on `select`'s call rather than on `git::main_tip` itself: mutating the helper
+    // would also take out the batch-ready path and the rewound check, which is a mutation that
+    // removes the guard rather than one that reaches a branch (air-682).
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "status: landable is the same from a worktree as from the main checkout, and the running worker's own branch is never silently dropped",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "    let main_tip = match git::main_tip(repo) {\n        Ok(t) => t,\n        Err(e) => {\n            out.errors.push(format!(\"git rev-parse main: {e}\"));\n            return out;\n        }\n    };",
+            to: "    let main_tip = git::head(repo).unwrap_or_default();",
+            also_red: &[],
+        },
+    ),
     // air-72t7. The anchor restores the boundary that dropped two of select's three fields.
     // `landable` still fills, every skip still carries what it compared, and the human
     // rendering is untouched — so what it isolates is exactly whether a reader of `--json`
@@ -2008,6 +2027,7 @@ fn all_probes() -> Vec<Probe> {
         probe_an_untracked_digest_is_not_proof(),
         probe_the_peer_warning_dates_the_entry(),
         probe_the_refusal_says_which_not_green_state_it_is(),
+        probe_landable_does_not_depend_on_which_worktree_asked(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -9375,6 +9395,156 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-i6fd (alerts, 2026-09-06): the landable answer is the same from a worktree as from the
+/// main checkout, because main's tip comes from the ref rather than from the running cwd.
+///
+/// `git::head(repo)` supplied main's tip in three places, and `repo` is whatever directory the
+/// command ran in — `main.rs` passes `cli.repo` or the cwd, unnormalised. From a worktree it is
+/// that worktree's own head, so the running worker's branch was compared against ITSELF
+/// (`is_ancestor(head, head)` is always true), took `select`'s already-in-main path, and left
+/// through `Ok(false) => continue`, the one exit here that says nothing. It appeared in neither
+/// `landable` nor `skipped` — exactly what `select`'s own doc promises cannot happen (air-6u5,
+/// "nothing here is silent"). alerts read `landable: []` from its own worktree and concluded it
+/// had nothing to land, in the same snapshot where the batch-ready path — wrong the same way,
+/// surfacing differently — called that branch landable on its own.
+///
+/// Driven through `select` with the worktree as `repo`, which is precisely the value the binary
+/// passes when run there. Not through `air status --json`, and that is a finding rather than a
+/// shortcut: the snapshot carries `landable` only, so `skipped` and `errors` — the two things
+/// air-6u5 added so that a non-qualifying branch says WHY — never reach the JSON at all.
+/// Captured separately; this probe reads them where they exist.
+///
+/// Red: from inside the worktree its own branch is named, and both directories give the same
+/// answer. Green: the answer is CORRECT and not merely non-empty — a branch with no green is
+/// still skipped naming that precondition, so visibility was not bought by lowering the bar.
+fn probe_landable_does_not_depend_on_which_worktree_asked() -> Probe {
+    use crate::cmd::status::select;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let git = |at: &std::path::Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(at)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        git(&dir, &["init", "-q", "-b", "main"])?;
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "base"])?;
+
+        // Two workers: `w` green and landable, `nog` with no green at all.
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        let nog = dir.join(".claude").join("worktrees").join("nog");
+        for (name, at) in [("w", &wt), ("nog", &nog)] {
+            git(
+                &dir,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    name,
+                    &at.display().to_string(),
+                ],
+            )?;
+            git(
+                at,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    &format!("work\n\nBead: zz-{name}"),
+                ],
+            )?;
+        }
+        let w_head = git(&wt, &["rev-parse", "HEAD"])?;
+        let main_sha = git(&dir, &["rev-parse", "main"])?;
+
+        let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+        l.record_claim("zz-w", "w", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        l.record_claim("zz-nog", "nog", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "w".into(),
+            sha: w_head,
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t1".into(),
+            finished_at: "t1".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: vec![],
+            main_sha: Some(main_sha),
+        })
+        .map_err(|e| e.to_string())?;
+        drop(l);
+
+        // The same question, asked from the worktree and from the main checkout.
+        let from_wt = select(&wt);
+        let from_main = select(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let workers = |s: &crate::cmd::status::Selection| -> Vec<String> {
+            s.landings.iter().map(|l| l.worker.clone()).collect()
+        };
+        let skipped_for = |s: &crate::cmd::status::Selection, who: &str| -> Vec<&'static str> {
+            s.skipped
+                .iter()
+                .filter(|k| k.worker == who)
+                .map(|k| k.check)
+                .collect()
+        };
+
+        // RED: asked from `w`'s own worktree, `w` is named, and the two directories agree.
+        // `w` used to be compared against itself and vanish from both lists.
+        let named = workers(&from_wt).iter().any(|x| x == "w");
+        let agrees = workers(&from_wt) == workers(&from_main)
+            && skipped_for(&from_wt, "nog") == skipped_for(&from_main, "nog");
+        let red = named && agrees;
+
+        // GREEN: right, not merely non-empty. The branch with no green is still skipped naming
+        // that precondition, it is not landable, and nothing failed — an error here would mean
+        // the list was short for a reason that has nothing to do with qualification.
+        let green = skipped_for(&from_wt, "nog") == vec!["green-at-head"]
+            && !workers(&from_wt).iter().any(|x| x == "nog")
+            && from_wt.errors.is_empty()
+            && from_main.errors.is_empty();
+
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "status: landable is the same from a worktree as from the main checkout, and the running worker's own branch is never silently dropped",
         red_fires: red,
         green_passes: green,
     }
