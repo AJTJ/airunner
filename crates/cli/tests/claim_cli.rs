@@ -3278,3 +3278,100 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     assert!(out.contains("alpha"), "{out}");
     assert!(out.contains("beta"), "{out}");
 }
+
+/// air-kexg, end to end: a branch whose only commits are session-journal entries lands with no
+/// bead, and one that mixes them with anything else still needs a trailer.
+///
+/// Two workers concluded independently that a journal branch could land — the journal is per
+/// session, ungated, and explicitly not work on a bead, so a journal commit is the one commit a
+/// worker legitimately writes that names none. It could not, and the refusal sent them to amend
+/// a commit that is not about a bead.
+///
+/// The probe covers the predicate; this covers the selection, which is where the branch used to
+/// vanish: `select` emits one landing PER BEAD, so a branch with none emitted none.
+#[test]
+fn a_journal_only_branch_lands_with_no_bead_and_a_mixed_one_still_needs_a_trailer() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "journal_dir": "docs/journal"}"#,
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "chore: journal dir"]);
+
+    // A FRESH worktree off main: `land_repo`'s alpha already carries work, which would make
+    // the range genuinely mixed and prove the constraint rather than the permission.
+    let scribe = main.parent().unwrap().join("scribe");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-scribe",
+            scribe.to_str().unwrap(),
+        ],
+    );
+    let scribe = scribe.canonicalize().unwrap();
+
+    // A journal entry, with no `Bead:` trailer, as the journal's own nature implies.
+    std::fs::create_dir_all(scribe.join("docs/journal")).unwrap();
+    std::fs::write(scribe.join("docs/journal/scribe.md"), "what I hit\n").unwrap();
+    git(&scribe, &["add", "docs/journal"]);
+    git(
+        &scribe,
+        &["commit", "-q", "-m", "docs(journal): scribe, entries"],
+    );
+    assert_eq!(
+        air_env(&scribe, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+
+    let landable = |o: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["snapshot"]["landable"].clone()
+    };
+    let (_, out, _) = air_env(&main, &bd, &["--json", "status"], dead);
+    let l = landable(&out);
+    let rows = l.as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "the journal branch is landable: {out}");
+    assert_eq!(rows[0]["worker"], "scribe", "{out}");
+    // It carries no bead, and says so rather than naming one it did not touch.
+    assert!(rows[0]["bead"].is_null(), "carries no bead: {out}");
+    assert!(rows[0]["blocked"].is_null(), "not blocked: {out}");
+
+    // THE CONSTRAINT: one non-journal commit and the branch needs a trailer again.
+    std::fs::write(scribe.join("work.txt"), "real work\n").unwrap();
+    git(&scribe, &["add", "work.txt"]);
+    git(
+        &scribe,
+        &["commit", "-q", "-m", "feat: work with no trailer"],
+    );
+    assert_eq!(
+        air_env(&scribe, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let (_, out, _) = air_env(&main, &bd, &["--json", "status"], dead);
+    assert!(
+        landable(&out).as_array().is_none_or(|v| v.is_empty()),
+        "a mixed range still needs a bead: {out}"
+    );
+    // And the refusal names the journal case rather than only saying "declare a bead".
+    // Asserted on `air land`, because that is the surface that renders `skipped`: neither
+    // `air status --json` nor its text carries it, which is air-72t7 and not this bead.
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "scribe"], dead);
+    let refusal = format!("{out}{err}");
+    assert_ne!(code, 0, "a mixed range is refused: {refusal}");
+    assert!(
+        refusal.contains("docs/journal"),
+        "the refusal names the journal case and the directory: {refusal}"
+    );
+    assert!(
+        refusal.contains("touches more than that"),
+        "and says why this range is not it: {refusal}"
+    );
+}
