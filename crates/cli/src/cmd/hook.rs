@@ -1158,6 +1158,7 @@ mod tests {
                 output_bytes: None,
                 dirty: false,
                 tree: None,
+                members: vec![],
             })
             .unwrap();
         let d = stop(&ledger);
@@ -1181,6 +1182,7 @@ mod tests {
                 output_bytes: None,
                 dirty: false,
                 tree: None,
+                members: vec![],
             })
             .unwrap();
         let d = stop(&ledger);

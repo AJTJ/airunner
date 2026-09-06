@@ -180,6 +180,7 @@ mod tests {
             output_bytes: None,
             dirty: false,
             tree: Some(tree.into()),
+            members: vec![],
         }
     }
 

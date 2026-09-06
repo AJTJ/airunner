@@ -59,6 +59,10 @@ pub struct VerifyRun {
     /// commit over the same content: the landing commit `air land` builds is exactly that.
     /// `None` for rows written before v14, which never match a tree lookup.
     pub tree: Option<String>,
+    /// The worker branch heads `sha` contained that main did not, at record time (air-80x.4,
+    /// schema v18): a verify lane's batch names its members, so a red batch can be reported
+    /// by member without a landing row. Empty for a verify at a worker's own head.
+    pub members: Vec<crate::landings::Member>,
 }
 
 /// Exit codes that mean the run was KILLED rather than that it failed (air-ppm): 128 + SIGKILL
@@ -155,8 +159,9 @@ impl Ledger {
     pub fn record_verify(&self, run: &VerifyRun) -> Result<()> {
         self.conn().execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, failing_step, \
-             started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty, tree) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+             started_at, finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, \
+             members) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 run.id,
                 run.worker,
@@ -173,6 +178,7 @@ impl Ledger {
                 run.output_bytes,
                 run.dirty,
                 run.tree,
+                serde_json::to_string(&run.members)?,
             ],
         )?;
         Ok(())
@@ -204,7 +210,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
                  FROM verify_runs WHERE worker=?1 AND kind=?2 ORDER BY started_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
                 row_to_run,
@@ -226,7 +232,7 @@ impl Ledger {
                 &format!(
                     "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
                      started_at, finished_at, log_path, command, duration_ms, output_bytes, \
-                     dirty, tree FROM verify_runs WHERE sha=?1 AND kind=?2 AND {NOT_KILLED} \
+                     dirty, tree, members FROM verify_runs WHERE sha=?1 AND kind=?2 AND {NOT_KILLED} \
                      ORDER BY finished_at DESC LIMIT 1"
                 ),
                 params![sha, kind.as_str()],
@@ -245,7 +251,7 @@ impl Ledger {
                 &format!(
                     "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, \
                      started_at, finished_at, log_path, command, duration_ms, output_bytes, \
-                     dirty, tree FROM verify_runs WHERE tree=?1 AND kind=?2 AND {NOT_KILLED} \
+                     dirty, tree, members FROM verify_runs WHERE tree=?1 AND kind=?2 AND {NOT_KILLED} \
                      ORDER BY finished_at DESC LIMIT 1"
                 ),
                 params![tree, kind.as_str()],
@@ -261,9 +267,24 @@ impl Ledger {
     pub fn latest_greens(&self, kind: Kind, limit: usize) -> Result<Vec<VerifyRun>> {
         let mut st = self.conn().prepare(
             "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
              FROM verify_runs WHERE kind=?1 AND exit_code=0 \
              ORDER BY finished_at DESC LIMIT ?2",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let v = st
+            .query_map(params![kind.as_str(), limit], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    /// The newest `limit` runs of `kind` by any worker, any verdict, newest first (air-80x.4):
+    /// what `air status` reads to find a red batch and whether a later green superseded it.
+    pub fn latest_runs(&self, kind: Kind, limit: usize) -> Result<Vec<VerifyRun>> {
+        let mut st = self.conn().prepare(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
+             FROM verify_runs WHERE kind=?1 ORDER BY finished_at DESC LIMIT ?2",
         )?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let v = st
@@ -278,7 +299,7 @@ impl Ledger {
             .conn()
             .query_row(
                 "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
-                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree \
+                 finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members \
                  FROM verify_runs WHERE worker=?1 AND kind=?2 AND exit_code=0 \
                  ORDER BY finished_at DESC LIMIT 1",
                 params![worker, kind.as_str()],
@@ -392,6 +413,10 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<VerifyRun> {
         output_bytes: r.get(12)?,
         dirty: r.get::<_, i64>(13)? != 0,
         tree: r.get(14)?,
+        members: r
+            .get::<_, Option<String>>(15)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -429,6 +454,7 @@ mod tests {
             output_bytes: None,
             dirty: false,
             tree: None,
+            members: vec![],
         }
     }
 
@@ -585,6 +611,26 @@ mod tests {
         );
         // The prune is a write: the dead row is gone for the next reader too.
         assert_eq!(ledger.verifies_in_flight().unwrap().len(), 2);
+    }
+
+    /// air-80x.4: a run's members round-trip, and `latest_runs` returns every verdict newest
+    /// first (a red batch is found there, unlike `latest_greens`).
+    #[rstest]
+    fn members_round_trip_and_latest_runs_carries_every_verdict(ledger: Ledger) {
+        let mut batch = run("lane", "batch", 2, "t2");
+        batch.members = vec![crate::landings::Member {
+            worker: "alpha".into(),
+            sha: "a1".into(),
+        }];
+        ledger.record_verify(&run("alpha", "own", 0, "t1")).unwrap();
+        ledger.record_verify(&batch).unwrap();
+        let runs = ledger.latest_runs(Kind::Verify, 10).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].sha, "batch");
+        assert_eq!(runs[0].members, batch.members);
+        assert!(runs[1].members.is_empty());
+        // Greens only, so the red batch is not there.
+        assert_eq!(ledger.latest_greens(Kind::Verify, 10).unwrap().len(), 1);
     }
 
     /// air-ppm: a run that exited 143 or 137 was killed, not failed. It is no verdict: not
