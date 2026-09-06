@@ -157,8 +157,30 @@ pub fn section(description: &str) -> Vec<String> {
 pub enum Verdict {
     /// Air looked it up and it holds. `how` names the lookup, so the close is checkable.
     Discharged { how: String },
-    /// Air looked it up and it does not hold. The strongest signal: the bead names a file the
-    /// merge did not touch.
+    /// Air looked it up and the lookup did not answer: the bead names a file that exists at
+    /// the landed commit and that this merge did not touch.
+    ///
+    /// **It is not a contradiction, and calling it one was wrong** (air-k6uh). All nine
+    /// standing alerts were classified against the tree on 2026-09-06: three were true, six
+    /// were not, and the six divide into two causes the lookup cannot see. The work landed in
+    /// a DIFFERENT COMMIT than the merge — a coordinator's ruling written on main, an earlier
+    /// landing, a disjunctive clause the bead itself satisfies (air-9iz, air-8gj, air-srv). Or
+    /// the path is SUBJECT MATTER rather than a deliverable: "a note listing `.claude/air.json`
+    /// keys", "`air install` reports a stale entry in `.claude/settings.json`" — the path is a
+    /// noun in the sentence, and whether it is the thing to change is grammar (air-470,
+    /// air-80x.5, air-b5k).
+    ///
+    /// The second cause cannot be narrowed away without reading prose, which air-dqa already
+    /// refused in this module: "a stricter trimmer is the same brittleness with a longer
+    /// regex." So the fact is kept and the CLAIM is what changed — the underlying statement
+    /// ("this merge did not change X, and X exists at the landed commit") is true in all nine.
+    ///
+    /// Measured and NOT built: at the landed commit, does the named file reference the bead?
+    /// That is a lookup rather than a reading, it fired on exactly the three
+    /// satisfied-elsewhere cases and none of the true ones, and it would take nine alerts to
+    /// six. It is volume rather than correctness, needs the bead id plumbed through `Evidence`
+    /// and a git read per named path, and is worth building when the volume is the complaint
+    /// (`docs/notes/2026-09-06-landed-not-closed-classified.md` has the numbers).
     Unevidenced { how: String },
     /// Air has nothing to look up. Not a defect in the bead. `how` says why: plain prose, or a
     /// path-like token that is no file at the landed commit (air-dqa).
@@ -288,8 +310,11 @@ impl Judged {
         !self.clauses.is_empty() && self.clauses.iter().all(|(_, v)| v.discharged())
     }
 
-    /// At least one clause Air could actively REFUTE. Not "could not read" — refuted. This is
-    /// the wrong-close signal, and the only one carried past the print (air-ayp).
+    /// At least one clause names a file that exists at the landed commit and that this merge
+    /// did not change. Distinct from "could not read", and the only signal carried past the
+    /// print (air-ayp) — but NOT a contradiction (air-k6uh): six of nine such firings on
+    /// 2026-09-06 were clauses that were satisfied, in another commit or by a path the clause
+    /// merely mentions. See [`Verdict::Unevidenced`].
     pub fn refuted(&self) -> bool {
         self.clauses
             .iter()
@@ -317,9 +342,11 @@ impl Judged {
         parts.join("; ")
     }
 
-    /// One line naming only the clauses the merge CONTRADICTS, for the sentence that says so
-    /// (air-ppf). `why_open` under a CONTRADICTS headline presented every unreadable clause as
-    /// a contradiction; on 2026-08-30 that read as two wrong closes that were sound.
+    /// One line naming only the clauses whose named file the merge did not change, for the
+    /// sentence that reports them (air-ppf). `why_open` under that headline presented every
+    /// unreadable clause the same way; on 2026-08-30 that read as two wrong closes that were
+    /// sound. The headline itself stopped claiming a contradiction in air-k6uh; the split
+    /// stays, because the two groups are still different facts.
     pub fn why_contradicted(&self) -> String {
         self.clauses
             .iter()
@@ -354,7 +381,8 @@ pub fn report(judged: &[Judged]) -> String {
             "\n  {} — {}\n",
             j.bead,
             if j.refuted() {
-                "REFUTED: a clause is contradicted by what this merge contains"
+                "UNCONFIRMED: a clause names a file this merge did not change (air-k6uh: \
+                 this is a lookup that did not answer, not a contradiction; read it)"
             } else if j.all_discharged() {
                 "every clause discharged"
             } else {

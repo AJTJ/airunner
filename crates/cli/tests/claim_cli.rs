@@ -2768,7 +2768,9 @@ fn land_merges_verifies_closes_and_records() {
 /// air-ayp: `air land` closes nothing — the worker closes its own bead with proof (owner
 /// ruling, 2026-08-22). The landing PRINTS every bead beside its acceptance and Air's verdict
 /// per clause, which is the only external check on that honour system. A clause the merge
-/// CONTRADICTS is a wrong close: kept on the `landings` row and named by `air status`.
+/// A clause naming a file the merge did not change is kept on the `landings` row and
+/// named by `air status` — as a lookup that did not answer, never as a contradiction
+/// (air-k6uh: six of nine such firings were clauses that held).
 #[test]
 fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -2818,7 +2820,13 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
         "{out}"
     );
     assert!(!out.contains("did not change docs/note.md"), "{out}");
-    assert!(out.contains("zz-1 — REFUTED"), "{out}");
+    // air-k6uh: the headline reports the lookup, and says in as many words that it is
+    // not a contradiction, because six of nine were clauses that held.
+    assert!(out.contains("zz-1 — UNCONFIRMED"), "{out}");
+    assert!(
+        !out.contains("REFUTED"),
+        "no contradiction is claimed: {out}"
+    );
     // It closes NOTHING, and writes no bd status of any kind.
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
     assert!(!log.contains("close zz-1"), "{log}");
@@ -2847,7 +2855,10 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
     // flow change.
     let (_, s, _) = air(&main, &bd, &["status"]);
     assert!(
-        s.contains("zz-1 landed in") && s.contains("CONTRADICTS"),
+        s.contains("zz-1 landed in")
+            && s.contains("naming a file this merge did not change")
+            && s.contains("NOT a contradiction")
+            && !s.contains("CONTRADICTS"),
         "{s}"
     );
     // The claim really is reconciled away by now, so this is not passing by accident.
