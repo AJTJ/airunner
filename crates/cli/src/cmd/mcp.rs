@@ -592,6 +592,16 @@ fn channel_event(a: &Attention) -> Value {
 
 /// Pure: session ids that appeared or vanished since the last tick. The first tick seeds
 /// and reports nothing (the coordinator just started; existing sessions are not news).
+///
+/// **A row no session is behind is not announced as a worker arriving** (air-3jv5).
+/// Demonstrating a hook by piping a synthetic event at the real ledger pushed `session_joined`
+/// to the whole fleet for a session that did not exist. It is still seeded into `known`, so it
+/// is not announced later either, and it still gets its row and its event line — the fleet is
+/// simply not told that somebody joined who did not.
+///
+/// A LEAVE is announced whatever the row looked like: the id was in the set, it is gone, and
+/// saying so about a synthetic id costs one line, while staying silent about a real departure
+/// costs the coordinator the thing the condition exists for.
 pub fn session_changes(
     known: &mut Option<std::collections::BTreeSet<String>>,
     current: &[(String, String, status::Session)],
@@ -603,7 +613,7 @@ pub fn session_changes(
     let mut events = Vec::new();
     if let Some(prev) = known.as_ref() {
         for (w, role, s) in current {
-            if !prev.contains(&s.session_id) {
+            if !prev.contains(&s.session_id) && s.has_transcript {
                 events.push((
                     "session_joined",
                     w.clone(),
@@ -720,6 +730,7 @@ mod tests {
             project: String::new(),
             model: String::new(),
             enforce: None,
+            has_transcript: true,
             stopped: None,
         };
         let mut known = None;
