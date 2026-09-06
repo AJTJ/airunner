@@ -1414,6 +1414,18 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-06, owner-ordered after the round: every session keeps a journal of what it hit,
     // for findings that imply no action and so have no home in a bead or a capture (air-3xww).
     ("0.3.3", 27, 61),
+    // 2026-09-06, the second round of the day, four notices in one row per air-mir. The
+    // adopter's fleet reported eight defects against a frozen binary and three were real: a
+    // fast-forward that timed out after succeeding was reported and RECORDED as a refusal
+    // (air-htmn); `air capture` gained `--file`, because a capture worth writing was refused
+    // for its shape as a command line (air-45pw); and `idle-without-claim` stopped firing on a
+    // session whose verify is in flight, where its remedy told a coordinator to interrupt a
+    // batch (air-t6ap). Plus the undischarged-clause wording, which is a silent break: nothing
+    // says CONTRADICTS or prescribes reopening any more, so anyone who acted on those firings
+    // should re-read the beads (air-k6uh, air-jy99). And `air handover` now tells a worker its
+    // branch was in a red batch, and what the landing gate would say about it (air-hpp8,
+    // air-33rn).
+    ("0.3.4", 28, 65),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
