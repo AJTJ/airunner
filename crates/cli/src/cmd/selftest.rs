@@ -145,6 +145,18 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-3jv5. The anchor is the join condition alone. The status line, the seeding and
+    // the leave all survive it, so what it isolates is exactly whether a row no session is
+    // behind gets announced to the fleet as a worker arriving — which is what happened.
+    (
+        "sessions: a row no session is behind is named in status and never announced as a worker joining, and a real one still is",
+        Mutation {
+            file: "crates/cli/src/cmd/mcp.rs",
+            from: "if !prev.contains(&s.session_id) && s.has_transcript {",
+            to: "if !prev.contains(&s.session_id) {",
+            also_red: &[],
+        },
+    ),
     // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
     // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
     // Under it a green writes one too, and since the store is bounded by COUNT rather than by
@@ -1718,6 +1730,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
         probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
         probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
+        probe_a_row_with_no_transcript_is_named_and_never_announced(),
     ]
 }
 
@@ -4160,6 +4173,7 @@ fn probe_attention() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                has_transcript: true,
                 stopped: None,
             }),
             ..Default::default()
@@ -4227,6 +4241,7 @@ fn probe_standstill() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                has_transcript: true,
                 stopped: None,
             }),
             ..Default::default()
@@ -4308,6 +4323,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
+                has_transcript: true,
                 stopped: None,
             }),
             ..Default::default()
@@ -9045,5 +9061,133 @@ fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
         name: "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
         red_fires: still_there,
         green_passes: neither_is_a_batch && carries_nothing && earlier_never,
+    }
+}
+
+/// air-3jv5: a demonstration produced a worker a reader could not tell from a live one.
+///
+/// A synthetic Stop event was piped into `air hook` against the REAL ledger to show what the
+/// hook says. Air wrote a `sessions` row for it and the channel pushed `session_joined` to the
+/// whole fleet — for a session that did not exist. Nothing broke and the real session was
+/// untouched, but `sessions` is the table `air status`, every attention condition and the
+/// stopped-session line all read, so the cost was only luck.
+///
+/// **The fix reports rather than refuses, and the direction is the whole argument.** Refusing
+/// to write a row without a transcript would lose a REAL worker from `air status` the day a
+/// harness omitted the field, and losing a live worker is worse than showing a synthetic one.
+/// The id's shape was the other candidate and is worse still: it is a guess about a format
+/// Air does not own, and it fails the same wrong way.
+///
+/// Red: a row with no transcript is named `NO TRANSCRIPT` on its `air status` line, and the
+/// channel does not announce it as a worker joining.
+///
+/// Green: three things that keep this from being a filter that hides real workers. A row WITH
+/// a transcript is announced exactly as before. A synthetic row is still IN the snapshot,
+/// still rendered, still carrying its worker and state — reported, not suppressed. And a
+/// LEAVE is announced whatever the row looked like, because the id was in the set and is gone,
+/// and staying silent about a real departure costs the coordinator the thing the condition is
+/// for.
+fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
+    use crate::cmd::mcp::session_changes;
+    use crate::cmd::status::{Session, Snapshot, WorkerView, render_for_probe};
+
+    let sess = |id: &str, has_transcript: bool| Session {
+        session_id: id.into(),
+        state: "idle".into(),
+        detail: None,
+        changed_at: "2026-09-06T11:16:35Z".into(),
+        pid: Some(97487),
+        pid_alive: Some(true),
+        project: "air".into(),
+        model: String::new(),
+        enforce: None,
+        has_transcript,
+        stopped: None,
+    };
+    let row = |id: &str, has_transcript: bool| {
+        (
+            "alerts".to_string(),
+            "worker".to_string(),
+            sess(id, has_transcript),
+        )
+    };
+
+    // The demonstration, with the real worker already known: a second row appears for the same
+    // worker, from no session.
+    let mut known = Some(
+        ["a23513fb".to_string()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<String>>(),
+    );
+    let synthetic_join = session_changes(
+        &mut known,
+        &[row("a23513fb", true), row("air-avj-demo", false)],
+    );
+    // Rendered: the row is present AND named.
+    let shown = render_for_probe(&Snapshot {
+        workers: vec![WorkerView {
+            worker: "alerts".into(),
+            role: "worker".into(),
+            session: Some(sess("air-avj-demo", false)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    // And the fleet-wide count, over EVERY row rather than the rendered ones: the per-worker
+    // view keeps only the latest row per worker, so a synthetic row goes invisible there the
+    // moment the real session emits a hook — which is how the one that pushed `session_joined`
+    // sat in the table unseen.
+    let counted = render_for_probe(&Snapshot {
+        sessions: vec![row("a23513fb", true), row("air-avj-demo", false)],
+        ..Default::default()
+    });
+    let red = synthetic_join.is_empty()
+        && shown.contains("NO TRANSCRIPT")
+        && shown.contains("alerts")
+        && counted.contains("1 of 2 row(s) have no transcript");
+
+    // A real session joining is announced, exactly as before.
+    let mut known2 = Some(
+        ["a23513fb".to_string()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<String>>(),
+    );
+    let real_join = session_changes(&mut known2, &[row("a23513fb", true), row("bbbbbbbb", true)]);
+    let announced = real_join.len() == 1
+        && real_join
+            .first()
+            .is_some_and(|(k, w, _)| *k == "session_joined" && w == "alerts");
+
+    // The synthetic id was SEEDED, so it is not announced on a later tick either; and when it
+    // vanishes, the leave IS announced, because a missing id is a fact whatever wrote it.
+    let never_late = session_changes(&mut known, &[row("air-avj-demo", false)])
+        .iter()
+        .all(|(k, _, _)| *k != "session_joined");
+    let leave = session_changes(&mut known, &[])
+        .iter()
+        .any(|(k, _, _)| *k == "session_left");
+    // Reported, not suppressed: a snapshot with the synthetic row still has it.
+    // Silence means checked-and-none, not not-looked: with every row backed by a transcript
+    // the line is absent, and the count it would have printed is the whole set.
+    let quiet = !render_for_probe(&Snapshot {
+        sessions: vec![row("a23513fb", true)],
+        ..Default::default()
+    })
+    .contains("no transcript behind them");
+    let still_rendered = render_for_probe(&Snapshot {
+        workers: vec![WorkerView {
+            worker: "alerts".into(),
+            role: "worker".into(),
+            session: Some(sess("air-avj-demo", false)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .contains("idle since");
+
+    Probe {
+        name: "sessions: a row no session is behind is named in status and never announced as a worker joining, and a real one still is",
+        red_fires: red,
+        green_passes: announced && never_late && leave && still_rendered && quiet,
     }
 }
