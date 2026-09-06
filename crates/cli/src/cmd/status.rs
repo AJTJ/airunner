@@ -693,9 +693,73 @@ pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>,
     if beads.is_empty() {
         return Ok(Vec::new());
     }
-    let bd = super::claim::bd_for(repo);
-    let issues = air_bd::WorkLedger::show_all(&bd, beads)
-        .map_err(|e| format!("bd show for {}: {e}", beads.join(" ")))?;
+    let mut bd = super::claim::bd_for(repo);
+    let overridden = std::env::var_os("AIR_BD_TIMEOUT_MS").is_some();
+    if !overridden {
+        bd.timeout = acceptance_budget(beads.len());
+    }
+    acceptance_with(&bd, beads, overridden)
+}
+
+/// The bd budget for one acceptance read (air-fzv): a base for the process plus an allowance
+/// per id. It was the client's flat 10 s whatever the id count, which a fourteen-bead batch
+/// under the verify lane exceeded on adopter (2026-09-06) until they set
+/// `AIR_BD_TIMEOUT_MS=120000` by hand. Batching makes many ids the normal case. Owner ruled:
+/// size by the id count, not by reading in one process (which `show_all` already does).
+///
+/// The per-id figure is air-bp0's measurement of what bd costs per id here (~2 s). Neither
+/// number is tuned yet: air-d75 records every read's elapsed time against its budget, and
+/// the sizes follow from those numbers.
+pub const ACCEPTANCE_BASE: std::time::Duration = std::time::Duration::from_secs(10);
+pub const ACCEPTANCE_PER_ID: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub fn acceptance_budget(ids: usize) -> std::time::Duration {
+    acceptance_budget_with(ids, ACCEPTANCE_BASE, ACCEPTANCE_PER_ID)
+}
+
+/// Pure: `base + per_id × ids`, saturating.
+pub fn acceptance_budget_with(
+    ids: usize,
+    base: std::time::Duration,
+    per_id: std::time::Duration,
+) -> std::time::Duration {
+    let n = u32::try_from(ids).unwrap_or(u32::MAX);
+    base.saturating_add(per_id.saturating_mul(n))
+}
+
+/// `38 s`, `0.5 s`: whole seconds where they are whole, one decimal otherwise.
+pub fn duration_line(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    match ms.checked_rem(1000) {
+        Some(0) => format!("{} s", ms.checked_div(1000).unwrap_or(0)),
+        _ => format!("{:.1} s", d.as_secs_f64()),
+    }
+}
+
+/// The read itself, against a client whose timeout IS the budget. The error names the id
+/// count, the budget and the override, so a refusal built on it says what was hit and how to
+/// raise it.
+pub fn acceptance_with(
+    bd: &air_bd::BdCli,
+    beads: &[String],
+    overridden: bool,
+) -> Result<Vec<Vec<String>>, String> {
+    let issues = air_bd::WorkLedger::show_all(bd, beads).map_err(|e| {
+        format!(
+            "bd show for {} id(s) within a budget of {}{}: {e}",
+            beads.len(),
+            duration_line(bd.timeout),
+            if overridden {
+                " (AIR_BD_TIMEOUT_MS, set in this environment)".to_string()
+            } else {
+                format!(
+                    " ({} + {} per id; AIR_BD_TIMEOUT_MS overrides it, in milliseconds)",
+                    duration_line(ACCEPTANCE_BASE),
+                    duration_line(ACCEPTANCE_PER_ID)
+                )
+            }
+        )
+    })?;
     Ok(beads
         .iter()
         .map(|b| match issues.iter().find(|i| &i.id == b) {
