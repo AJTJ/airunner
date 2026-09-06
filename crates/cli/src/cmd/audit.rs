@@ -87,6 +87,10 @@ pub struct Audit {
     pub traffic: Vec<Traffic>,
     /// What `peer-warning` changed, per warning (air-1ra).
     pub peer: PeerEffect,
+    /// What every timing budget Air waits on actually cost, and which way each fails when it
+    /// is hit (air-d75). Three of them fail toward permitting and none of them was measured;
+    /// the owner ruled on 2026-09-06 that all of them are, so this is the whole set.
+    pub budgets: super::budgets::Budgets,
     pub duration_ms: u64,
 }
 
@@ -621,6 +625,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         latency: latency_of(days),
         traffic: traffic_of(days, since),
         peer: peer_effect(&warns, &edits),
+        budgets: super::budgets::budgets_of(days, since),
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -805,6 +810,7 @@ pub fn render(a: &Audit) -> String {
     );
     s.push_str(&latency_lines(&a.latency));
     s.push_str(&traffic_lines(&a.traffic));
+    s.push_str(&super::budgets::render(&a.budgets));
     for r in &a.rows {
         s.push_str(&format!(
             "\n{} [{}]  evaluated {} in window over {} subject(s), {} repeat(s); pushed {}\n",

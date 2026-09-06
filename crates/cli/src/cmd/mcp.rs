@@ -34,6 +34,14 @@ use serde_json::{Value, json};
 use crate::cmd::status::{self, Attention, Thresholds};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// **Fail direction: CLOSED.** A tool call that runs past this returns an error to the
+/// coordinator's session naming the command, so the coordinator is told rather than answered
+/// wrongly. It is the ceiling `status_bd_budget` is capped under: a status budget that could
+/// approach this would trade a slow answer for no answer at all (air-19u).
+///
+/// Not derived: it is a ceiling chosen against the MCP client's patience, not a distribution.
+/// Moved by `air audit`'s `mcp-tool` row — the number to watch is its p99 against
+/// `bd-status`'s, since `air status` is what the channel spends this on.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
 /// A line longer than this is an error, not a buffer we keep growing.
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -447,6 +455,7 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
 
 /// Run this binary with `--repo <repo>`; time-bounded, always reaped.
 fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String> {
+    let t0 = std::time::Instant::now();
     let child = Command::new(&ctx.exe)
         .arg("--repo")
         .arg(&ctx.repo)
@@ -457,16 +466,22 @@ fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String>
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", ctx.exe.display()))?;
-    let (status, stdout, stderr) =
-        match crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string())? {
-            Some(x) => x,
-            None => {
-                return Err(format!(
-                    "air {} timed out after {TOOL_TIMEOUT:?}",
-                    argv.join(" ")
-                ));
-            }
-        };
+    let drained = crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string());
+    air_ledger::budgets::record(
+        air_ledger::budgets::MCP_TOOL,
+        t0.elapsed(),
+        TOOL_TIMEOUT,
+        matches!(&drained, Ok(None)),
+    );
+    let (status, stdout, stderr) = match drained? {
+        Some(x) => x,
+        None => {
+            return Err(format!(
+                "air {} timed out after {TOOL_TIMEOUT:?}",
+                argv.join(" ")
+            ));
+        }
+    };
     Ok((
         status.code().unwrap_or(-1),
         String::from_utf8_lossy(&stdout).to_string(),
