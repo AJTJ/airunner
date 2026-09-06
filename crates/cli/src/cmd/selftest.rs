@@ -117,6 +117,18 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-ej4. The anchor is the `exit 1` alone: the echo, the target and the scaffold's
+    // created-only-when-absent rule all survive it, so a probe that stays green under this
+    // was testing that a Makefile exists rather than that its verify refuses.
+    (
+        "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
+        Mutation {
+            file: "crates/cli/src/cmd/init.rs",
+            from: "then delete this line'; exit 1",
+            to: "then delete this line'; exit 0",
+            also_red: &[],
+        },
+    ),
     // The ledger lane's probes, 2026-08-29. Each anchor was run by hand when the probe was
     // written, and each names ONE branch: the change-only gate, the enumeration, the
     // referenced-day protection, the join's file-and-order keys, the freshness window, the
@@ -1444,6 +1456,7 @@ fn all_probes() -> Vec<Probe> {
         probe_metis_is_the_coordinators_and_never_a_workers(),
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
+        probe_scaffolded_verify_fails_until_edited(),
     ]
 }
 
@@ -7276,5 +7289,80 @@ fn probe_no_tracked_file_names_an_adopter() -> Probe {
         name: "privacy: a tracked line naming an adopter is refused with its file and line; a clean tree and a clone with no list are not",
         red_fires: red,
         green_passes: clean && no_list && declared_only,
+    }
+}
+
+/// air-ej4: `air init --write` writes a `Makefile` into a repo that has none, because Air's one
+/// refusal reads a recorded green and a repo with no verify command has nothing to record. The
+/// hazard the scaffold creates is the opposite one: a target that Air wrote and nobody edited
+/// would let `air record verify -- make verify` record a green for an empty check, and the close
+/// gate would pass it. So the scaffolded target must FAIL until a human replaces its body.
+///
+/// Red: the target Air writes exits non-zero, and says which file to edit. Green: the same
+/// Makefile with the placeholder recipe swapped for a real command passes, so what fails is the
+/// placeholder and not a Makefile Air wrote wrong.
+///
+/// `make` when it is on PATH (the real thing); the recipe under `sh` otherwise, which is what
+/// make does with a one-line recipe. A machine without make must not produce a false red.
+fn probe_scaffolded_verify_fails_until_edited() -> Probe {
+    use crate::cmd::init::{makefile_stub, scaffold};
+
+    fn verify_succeeds(makefile: &str) -> Result<bool, String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("Makefile"), makefile).map_err(|e| e.to_string())?;
+        let ran = Command::new("make")
+            .args(["-C", &dir.to_string_lossy(), "verify"])
+            .output();
+        let ok = match ran {
+            Ok(o) => o.status.success(),
+            // No make here: run the recipe body itself, minus make's tab and `@` prefix.
+            Err(_) => {
+                let body: String = makefile
+                    .lines()
+                    .filter(|l| l.starts_with('\t'))
+                    .map(|l| l.trim_start_matches('\t').trim_start_matches('@'))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Command::new("sh")
+                    .args(["-c", &body])
+                    .output()
+                    .map_err(|e| e.to_string())?
+                    .status
+                    .success()
+            }
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(ok)
+    }
+
+    let written = makefile_stub();
+    // "Edited": the human has put a real check where the placeholder was. Anchored on the tab,
+    // so this cannot silently stop replacing anything if the wording of the echo changes.
+    let edited: String = written
+        .lines()
+        .map(|l| if l.starts_with('\t') { "\t@true" } else { l })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let res = (|| -> Result<(bool, bool), String> {
+        Ok((verify_succeeds(&written)?, verify_succeeds(&edited)?))
+    })();
+    let (placeholder_passed, edited_passed) = res.unwrap_or((true, false));
+    Probe {
+        name: "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
+        red_fires: !placeholder_passed
+            && written.contains("Makefile:verify")
+            && scaffold(None, false)
+                .iter()
+                .any(|i| i.path == "Makefile" && i.create),
+        // Present means untouched, both ways round: a Makefile with a verify target and one
+        // without are both left alone, and only the printed sentence differs.
+        green_passes: edited_passed
+            && scaffold(Some("verify:\n\t@true\n"), true)
+                .iter()
+                .all(|i| !i.create)
+            && scaffold(Some("build:\n\t@true\n"), false)
+                .iter()
+                .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
     }
 }
