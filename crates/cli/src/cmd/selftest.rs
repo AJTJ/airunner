@@ -175,6 +175,25 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-6wv2. The anchor removes the DISTINCTION and nothing else, per the bead: the refusal
+    // still names the assignee, the bd version rule and the fixing command, the claims lookup
+    // still runs, and the sentence is still printed — it just always reads as live work. What
+    // goes is the only thing this bead added.
+    //
+    // The sentence is an inline literal precisely so it can be deleted without leaving a
+    // binding unused: a mutation that does not build is reported BROKEN rather than red, which
+    // is evidence of nothing. Nothing is anchored on the ledger check that makes the sentence
+    // true — that is the green half's subject and must survive.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "claim: the assignee refusal says Air has no claim behind that assignee and offers a reopen as the cause, and live work is refused earlier by name",
+        Mutation {
+            file: "crates/cli/src/cmd/claim.rs",
+            from: "Air has no open claim behind that assignee, so it may be left over rather than live work: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. ",
+            to: "",
+            also_red: &[],
+        },
+    ),
     // air-vsvt (reopened). The anchor is the line that makes the parent list mean "what the
     // batch merged": the first parent of each merge is the lane's own line, and every other is
     // a branch it took. Under `skip(1)` the lane's own history joins the member set, so the
@@ -2093,6 +2112,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_refusal_says_which_not_green_state_it_is(),
         probe_landable_does_not_depend_on_which_worktree_asked(),
         probe_a_batch_records_the_shas_it_took_and_never_drops_one(),
+        probe_the_assignee_refusal_says_whether_anyone_holds_it(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -9461,6 +9481,127 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-6wv2: the assignee refusal says whether that assignee is actually holding the bead.
+///
+/// bd keeps an assignee through a close, so a reopened bead comes back pencilled in with nobody
+/// having assigned it — and in bd 1.2.x that blocks every other worker's `--claim`. The refusal
+/// named who was assigned and the fixing command, which only the coordinator can run, and said
+/// nothing about how a bead nobody assigned came to have an assignee. It cost the worker it
+/// blocked a round trip tonight (air-vsvt, reopened carrying `alerts`).
+///
+/// This is air-0kk at a second door. `air release` already reopens and unassigns in one bd
+/// process; the coordinator's reopen path is raw `bd update -s open` and there is no
+/// `air reopen`, deliberately — the refusal is loud and already names the fix, so what was
+/// missing is one sentence, not a command.
+///
+/// **The signal is Air's own claims, and that is a deliberate retreat from bd.** bd exposes
+/// nothing that marks a reopen: no `reopened_at`, and `closed_at` cannot be observed on an open
+/// bead without creating and reopening one, which a worker may not do. Rather than infer a
+/// signal bd does not offer, the refusal reports the fact Air holds — is there an open claim by
+/// that assignee — and words the reopen as a possibility.
+///
+/// Red: with no open claim by the assignee, the refusal says the assignee may be left over and
+/// names the reopen as a cause. Green: with the assignee actually holding a claim, it says this
+/// is live work and never suggests a reopen; and both forms still name the assignee, the bd
+/// version rule, and the fixing command, which is what the refusal was already good at.
+fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+
+        // A bd that answers with an assignee, which the shared fixture does not.
+        let script = dir.join("bd");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+             show) printf '%s\\n' \
+             '[{\"id\":\"zz-6wv2\",\"status\":\"open\",\"assignee\":\"alerts\",\"labels\":[]}]'; \
+             exit 0;;\n  *) echo '[]'; exit 0;;\nesac\n",
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let claim = || -> Result<String, String> {
+            let out = air_command(&exe, &dir)
+                .env("AIR_BD_BIN", &script)
+                .args(["claim", "zz-6wv2"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        };
+        // Every refusal must keep saying these, whichever branch it takes.
+        let names_the_basics = |s: &str| {
+            s.contains("has assignee `alerts`")
+                && s.contains("bd 1.2.x")
+                && s.contains("bd update zz-6wv2 -a \"\"")
+        };
+
+        // RED: nobody is holding it — the reopened case.
+        let stale = claim()?;
+        let red = names_the_basics(&stale)
+            && stale.contains("Air has no open claim behind that assignee")
+            && stale.contains("may be left over rather than live work")
+            && stale.contains("reopened bead can come back pencilled in");
+
+        // GREEN: the precedence that makes the red sentence TRUE rather than a guess. With a
+        // real claim recorded, the ledger check at step 1 refuses first and names the holder
+        // and `air release` — so the assignee refusal is only ever reached when Air has no
+        // claim behind the assignee, and it never describes live work as leftover.
+        //
+        // This is why the sentence is unconditional. The first version branched on whether the
+        // assignee held a claim; running it showed that branch is unreachable, which this half
+        // now pins so the dead code cannot come back.
+        let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+        l.record_claim("zz-6wv2", "alerts", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        drop(l);
+        let live = claim()?;
+        let green = live.contains("is claimed by alerts")
+            && live.contains("air release zz-6wv2 --worker alerts")
+            && !live.contains("may be left over")
+            && !live.contains("reopened bead");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "claim: the assignee refusal says Air has no claim behind that assignee and offers a reopen as the cause, and live work is refused earlier by name",
         red_fires: red,
         green_passes: green,
     }
