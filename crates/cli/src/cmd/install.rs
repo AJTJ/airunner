@@ -1786,6 +1786,11 @@ mod tests {
         // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
         // `claude --worktree` and is false without it.
         assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        // air-ahl: the tracked requirement and its route, both pinned. The route is the half
+        // that must not go missing: a worker who meets the refusal has already committed, so
+        // advice living only in the refusal arrives after the thing it prevents.
+        assert!(ROLES_MD.contains("It also has to be tracked by git"));
+        assert!(ROLES_MD.contains("commit the digest WITHOUT a `Bead:` trailer"));
         // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
         // states that the count attached to it refuses nothing. Both halves are pinned: a
         // rules file that names a count without saying it is not a gate is how a measurement
