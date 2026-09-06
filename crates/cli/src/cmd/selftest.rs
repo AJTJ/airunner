@@ -145,6 +145,21 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-avj. The anchor is the branch that decides what a Stop advisory prints, and nothing
+    // else: the facts, the pointer, the flow-free fix and `air handover`'s own message all
+    // survive it. Under it every repair is printed again, including the two a verify lane
+    // exists to stop a worker doing — which is the defect exactly, so a probe that stayed
+    // green under this was checking that the hook says SOMETHING rather than that it stopped
+    // saying the wrong thing. Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "            if m.flow_dependent {",
+            to: "            if false {",
+            also_red: &[],
+        },
+    ),
     // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
     // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
     // Under it a green writes one too, and since the store is bounded by COUNT rather than by
@@ -1683,6 +1698,7 @@ fn all_probes() -> Vec<Probe> {
         probe_epic_with_no_open_children_is_named(),
         probe_ancestor_deadlock_is_named(),
         probe_a_red_runs_output_is_kept(),
+        probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -8874,6 +8890,78 @@ fn probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list() -> Prob
 }
 
 const ADOPTER_CHECK_PROBE: &str = "privacy: adopter-check refuses a leak when run from a worktree, and refuses a repo that declares an adopter with no names instead of skipping";
+
+/// air-avj (an adopter's coordinator, 2026-09-06, after it cost three workers in one round).
+/// The Stop hook fires when a worker is choosing what to do next, and it arrives with the
+/// authority of tooling. Under a verify lane its text told them to do the two things a lane
+/// exists to prevent: `git merge main`, which moves the head off the sha the lane cut its batch
+/// at, and `air record verify`, which is the lane's job. w1 obeyed and lost its membership, w2
+/// ignored it at a round trip's cost, w3 asked instead of obeying.
+///
+/// Red (declared mutation: `flow_dependent` is always false): the Stop hook prints both repairs
+/// again, which is the defect exactly. Green: the FACTS are unchanged — every check, every
+/// detail, still there, because a worker still has to know why it will be refused; a fix that
+/// does not depend on the flow (the `Bead:` trailer) is still printed in full; the pointer to
+/// `air handover` appears only when something flow-dependent was dropped; and `air handover`'s
+/// own message keeps both repairs, since the CLI is the surface that reads the repo's flow.
+fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
+    use air_hooks::{handover_verdict, stop_message};
+
+    // A worker behind main with no green: both flow-dependent checks fire at once, which is
+    // the state the adopter's three workers were in.
+    let mut f = base_facts();
+    f.green_at_head = false;
+    f.main_is_ancestor = false;
+    f.main_sha = "aaaaaaaa".into();
+    let v = handover_verdict(&f);
+    let stop = stop_message(&v, &f.worker, &f.head);
+
+    // RED: neither repair reaches a worker at Stop.
+    let red = !stop.contains("git merge main")
+        && !stop.contains("air record verify")
+        && v.missing.iter().filter(|m| m.flow_dependent).count() == 2;
+
+    // The facts survive: a worker still has to know why it will be refused.
+    let facts_kept = v
+        .missing
+        .iter()
+        .all(|m| stop.contains(m.check) && stop.contains(&m.detail));
+    let points_at_the_command = stop.contains("air handover");
+    // The CLI is unchanged, and it is the surface that reads the repo's own flow.
+    let cli_unchanged =
+        v.message.contains("git merge main") && v.message.contains("air record verify");
+
+    // A refusal with NOTHING flow-dependent keeps its fix in full and needs no pointer: the
+    // trailer is the trailer whatever the flow is.
+    let mut g = base_facts();
+    g.bead_claimed_or_carried = false;
+    g.bead = Some("fd-1".into());
+    let cv = handover_verdict(&g);
+    let cs = stop_message(&cv, &g.worker, &g.head);
+    let flow_free_fix_kept = cv
+        .missing
+        .iter()
+        .filter(|m| !m.flow_dependent)
+        .all(|m| cs.contains(&m.fix))
+        && !cs.contains("air handover");
+
+    // A pass says what it always said.
+    let mut ok = base_facts();
+    ok.green_at_head = true;
+    let pv = handover_verdict(&ok);
+    let pass_unchanged = stop_message(&pv, &ok.worker, &ok.head) == pv.message;
+
+    let green = facts_kept
+        && points_at_the_command
+        && cli_unchanged
+        && flow_free_fix_kept
+        && pass_unchanged;
+    Probe {
+        name: "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
+        red_fires: red,
+        green_passes: green,
+    }
+}
 
 /// air-cyf: `red_batch_standing` read `latest_runs(Kind::Verify, 20)` and picked the red batch
 /// out of that window. Past 20 further verify runs a standing red batch stopped being reported,
