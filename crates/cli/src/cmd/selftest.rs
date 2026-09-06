@@ -101,6 +101,34 @@ pub struct Probe {
     pub green_passes: bool,
 }
 
+/// Why a probe could not run, when it could not (air-g7e).
+///
+/// Twenty-eight probes spawn a child, poll for a file, or open a scratch repo, and every one
+/// of them ended `.unwrap_or_else(blocked)` — so the error text saying WHAT went wrong was
+/// built and thrown away. A busy machine and a broken mechanism both rendered as
+/// `red SILENT / green BLOCKED`, which is what the coordinator saw four times at load 100-186
+/// and could do nothing with except run it again.
+///
+/// `air selftest` prints these under the probe lines. Deliberately NOT attributed to a probe
+/// by name: the reasons arrive in evaluation order and a probe can fail inside a nested
+/// closure, so an attribution would be a guess printed as a fact. The text names its own
+/// fixture.
+///
+/// Removal: when no probe needs a spawned child to make its point.
+fn blocked_reasons() -> &'static std::sync::Mutex<Vec<String>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Record why a probe could not run and answer "neither half held" — which is what every one
+/// of these sites already answered, with the reason dropped on the floor.
+fn blocked(e: String) -> (bool, bool) {
+    if let Ok(mut v) = blocked_reasons().lock() {
+        v.push(e.trim().chars().take(300).collect());
+    }
+    (false, false)
+}
+
 impl Probe {
     fn ok(&self) -> bool {
         self.red_fires && self.green_passes
@@ -317,12 +345,21 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     (
         "gate: verify-green-at-head",
         Mutation {
+            // Re-anchored 2026-09-06 (air-g7e): air-80x.1 rewrote this branch to
+            // `let green = f.green_at_head || f.batch_green.is_some();`, so the old anchor
+            // matched nothing and this mutation had been BROKEN, silently, ever since. The
+            // probe kept passing and kept having no evidence behind it.
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.green_at_head {",
-            to: "if false {",
+            from: "    if !green {",
+            to: "    if false {",
             // The enforced-gate and close-with-proof probes drive the same refusal end to end,
             // and so does the env-delivery probe, which runs the real hook (air-9dg).
             also_red: &[
+                // air-g7e: air-80x.1 made this branch SHARED — `let green = f.green_at_head
+                // || f.batch_green.is_some()` — so neutralising it takes the batch gate with
+                // it, correctly. Declared rather than worked around: the mutation really is
+                // wider than one probe now, and saying so is the honest form of that.
+                "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
                 "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
                 "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
@@ -698,8 +735,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         Mutation {
             // The matcher, which is the thing that made the count zero in the first place.
             file: "crates/cli/src/cmd/install.rs",
-            from: "Some(\"Edit|Write|MultiEdit|Bash|SendMessage\")",
-            to: "Some(\"Edit|Write|MultiEdit|Bash\")",
+            // Re-anchored 2026-09-06 (air-g7e): air-bm3 added `AskUserQuestion` to the
+            // matcher, so this anchor stopped matching and the mutation had been BROKEN
+            // since. Anchored on the `SendMessage` token alone now, which is the thing the
+            // rule is about, so the next tool added to the matcher does not break it again.
+            from: "|SendMessage|AskUserQuestion\")",
+            to: "|AskUserQuestion\")",
             also_red: &[],
         },
     ),
@@ -942,6 +983,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "selftest: every declared mutation still anchors exactly once in the file it names",
+        Mutation {
+            // Accept a dead anchor as fine, which is the state the registry was actually in
+            // for days: two mutations anchored nothing and the suite printed PASS for both
+            // probes anyway. The ambiguous case is untouched, so the mutation reaches the
+            // zero-occurrence rule alone.
+            file: "crates/cli/src/cmd/selftest.rs",
+            from: "match text.matches(m.from).count() {\n                1 => {}",
+            to: "match text.matches(m.from).count() {\n                0 | 1 => {}",
+            also_red: &[],
+        },
+    ),
+    (
         "privacy: a tracked line naming an adopter is refused with its file and line; a clean tree and a clone with no list are not",
         Mutation {
             // Match case-sensitively, which is the grep everyone writes first and the one that
@@ -972,6 +1026,20 @@ pub fn run(json: bool) -> i32 {
         }
         // air-682: the proven count rides on the ordinary run, so a probe added without a
         // declared mutation is visible without anyone remembering to look for it.
+        // air-g7e: a probe that could not RUN says why. Without this a flake and a real
+        // break are the same two words, and the only available response is to run it again.
+        if let Ok(v) = blocked_reasons().lock()
+            && !v.is_empty()
+        {
+            s.push_str(&format!(
+                "\n{} probe(s) could not run; each reason is the fixture's own error, in \
+                 evaluation order:\n",
+                v.len()
+            ));
+            for r in v.iter() {
+                s.push_str(&format!("  {r}\n"));
+            }
+        }
         s.push_str(&format!(
             "{} probes, {} with a declared mutation (`air selftest --prove`)",
             probes.len(),
@@ -1214,6 +1282,10 @@ fn build_and_run(repo: &Path) -> Result<Vec<Probe>, String> {
     let out = Command::new("cargo")
         .args(["run", "-q", "-p", "air", "--", "selftest", "--json"])
         .current_dir(repo)
+        // The anchor probe checks the registry at rest, and right now exactly one anchor is
+        // deliberately not where it says it is: the one being applied. Without this it goes
+        // red under every mutation and every one of them reads as VACUOUS (air-g7e).
+        .env("AIR_SELFTEST_PROVING", "1")
         .output()
         .map_err(|e| format!("mutated selftest did not run: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1489,6 +1561,7 @@ fn all_probes() -> Vec<Probe> {
         probe_metis_is_the_coordinators_and_never_a_workers(),
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
+        probe_every_declared_mutation_still_anchors(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
     ]
@@ -1601,7 +1674,7 @@ fn probe_conditions_logged_on_change_only() -> Probe {
         std::fs::remove_dir_all(&dir).ok();
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "status: an unchanged condition set writes one event line an hour, not one a tick",
         red_fires: red,
@@ -1639,7 +1712,7 @@ fn probe_doctor_enumerates_tables() -> Probe {
             .any(|(n, c)| n == "a_table_no_list_could_name" && *c == 0);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "doctor: every table the ledger has is counted, including one added after this probe was written",
         red_fires: red,
@@ -1788,7 +1861,7 @@ fn probe_poll_tick_pays_for_bd_rarely() -> Probe {
         let green = !cache_is_fresh(&l, now, 10) && empty_pays;
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "status: a poll tick with fresh cached counts calls bd not at all; a stale or empty cache pays once",
         red_fires: red,
@@ -1965,6 +2038,7 @@ fn probe_digest_names_its_bead() -> Probe {
         let _ = std::fs::remove_dir_all(&old);
         Some((red, declared_ok && fallback_ok))
     })();
+    // An Option, not a Result: this fixture has no error text to carry.
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "gate: a digest counts when it declares its bead; a different bead, a touch, or a name match do not",
@@ -2156,7 +2230,7 @@ fn probe_close_with_proof_sequence() -> Probe {
             first && second_free && runs == 1 && cleared,
         ))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     Probe {
         name: "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
         red_fires: res.0,
@@ -2329,7 +2403,7 @@ fn probe_landed_but_open() -> Probe {
         let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
         Ok((reported && survives_the_claim, cleared))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     let (reported, cleared) = res;
 
     Probe {
@@ -2414,7 +2488,7 @@ fn probe_refused_landing_publishes_nothing() -> Probe {
             landed_publishes_all,
         ))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     let (red, green) = res;
     Probe {
         name: "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
@@ -2519,7 +2593,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
             unreadable_is_silent && row_keeps_both,
         ))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     let (red_fires, green_passes) = res;
 
     Probe {
@@ -3332,7 +3406,7 @@ fn probe_project_is_taken_from_what_it_is_told() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     Probe {
         name: "project: the session's project comes from what it is told, not from ambient AIR_PROJECT",
         red_fires: res.0,
@@ -3633,7 +3707,7 @@ fn probe_install_refuses_unignored_air() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "install: --write refuses while .air/ is not ignored, naming the fix; ignored, it writes",
         red_fires: red,
@@ -3752,7 +3826,7 @@ fn probe_lease_take() -> Probe {
         );
         Ok((denied, taken))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "lease: healthy holder denies; dead holder is broken and taken",
         red_fires: red,
@@ -3819,7 +3893,7 @@ fn probe_enforced_gate() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red_fires, green_passes))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
         red_fires: red,
@@ -3869,7 +3943,7 @@ fn probe_claim_cas() -> Probe {
         let free = l.open_claim("zz-1").map_err(|e| e.to_string())?.is_none();
         Ok((held_by_other, free))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "claim: ledger sees another worker's open claim; release frees it",
         red_fires: red,
@@ -4182,7 +4256,7 @@ fn probe_close_releases_the_claim() -> Probe {
             handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
         ))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     Probe {
         name: "claim: a closed bead stops alarming; awaiting_review still holds it",
         red_fires: res.0,
@@ -4991,7 +5065,7 @@ fn probe_ledger_roundtrip() -> Probe {
             .is_none();
         Ok((red, green))
     })();
-    let (red, green) = ok.unwrap_or((false, false));
+    let (red, green) = ok.unwrap_or_else(blocked);
     Probe {
         name: "ledger: verify_runs round-trip",
         red_fires: red,
@@ -5065,7 +5139,7 @@ fn probe_killed_is_no_verdict() -> Probe {
             && l.runs_at("aaa", Kind::Verify).map_err(|e| e.to_string())? == (1, 1);
         Ok((killed_is_no_verdict && alone, exit_2_is_red))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
     let (red, green) = res;
     Probe {
         name: "record: a run killed by signal (143/137) records no verdict at its sha; an exit-2 failure is still red",
@@ -5167,7 +5241,7 @@ fn probe_green_follows_the_tree_only_where_declared() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "green: a landing reads green from its tree only where the repo declares verify_key tree; an unverified tree never does",
         red_fires: red,
@@ -5208,7 +5282,7 @@ fn probe_git_ancestor() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((!no, yes))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "git: is-ancestor exit codes",
         red_fires: red,
@@ -5297,8 +5371,10 @@ fn probe_worker_task_prompt() -> Probe {
             .output()
             .map_err(|e| e.to_string())?;
         let mut raw = None;
-        // Up to 10 s: a fresh executable's first exec can take seconds on macOS.
-        for _ in 0..1000 {
+        // Up to 60 s (air-g7e, was 10): a fresh executable's first exec takes seconds on
+        // macOS and tens of seconds at load 186. The deadline is not what either probe
+        // is about, and a short one turns a busy machine into a red with no reason given.
+        for _ in 0..6000 {
             if let Ok(b) = std::fs::read(&argv_file) {
                 raw = Some(b);
                 break;
@@ -5483,7 +5559,7 @@ fn probe_env_reaches_the_hook() -> Probe {
             .output()
             .map_err(|e| e.to_string())?;
         let mut got = None;
-        for _ in 0..1000 {
+        for _ in 0..6000 {
             if let (Ok(a), Ok(e)) = (
                 std::fs::read(&argv_file),
                 std::fs::read_to_string(&env_file),
@@ -5535,7 +5611,7 @@ fn probe_env_reaches_the_hook() -> Probe {
         let refused = code == 2 && err.contains("air record verify");
         Ok((red, merged && delivered && refused))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
         red_fires: red,
@@ -5660,7 +5736,7 @@ fn probe_worktree_is_airs() -> Probe {
             on_branch && placed && files_right && relaunch && refused && removed,
         ))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "worktree: Air's worktree carries .worktreeinclude's files and builds; git alone does not; removal refuses uncommitted work and keeps the branch",
         red_fires: red,
@@ -5757,6 +5833,11 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         // RED: the shape the loop had, one process per bead.
         let mut old = air_bd::BdCli::new(&dir);
         old.bin = script.clone();
+        // air-g7e: this probe counts bd PROCESSES, not seconds. At load 145 the default 10 s
+        // budget killed a stub before it appended its line, the count came up short, and the
+        // probe reported the rule broken 8 runs out of 8. A budget is a ceiling, so a
+        // generous one costs nothing when the answer arrives.
+        old.timeout = std::time::Duration::from_secs(120);
         for id in ids {
             let _ = air_bd::WorkLedger::show(&old, id);
         }
@@ -5777,6 +5858,9 @@ fn probe_status_reconcile_is_one_show() -> Probe {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let out = air_command(&exe, &dir)
             .env("AIR_BD_BIN", &script)
+            // Same reason, for the child: set, this also stops `air status` deriving its own
+            // budget from bd's measured median, which is the other way this count goes short.
+            .env("AIR_BD_TIMEOUT_MS", "120000")
             .args(["--json", "status"])
             .output()
             .map_err(|e| e.to_string())?;
@@ -5811,7 +5895,7 @@ fn probe_status_reconcile_is_one_show() -> Probe {
             && handed.1.is_some();
         Ok((red, one_show && three_processes && outputs))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "status: every claim bd no longer holds is looked up in ONE bd show, and each ends where the per-bead loop put it",
         red_fires: red,
@@ -5965,7 +6049,7 @@ fn probe_install_lag_is_named() -> Probe {
         std::fs::remove_dir_all(&dir).ok();
         Ok((red, at_binary && no_record && quiet))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "doctor: an install record older than the binary is named with both versions, the unread notices and the fix; a current or absent one is not",
         red_fires: red,
@@ -6157,6 +6241,12 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
             let mut child = air_command(&exe, &wt)
                 .arg("hook")
                 .env("AIR_BD_BIN", &script)
+                // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
+                // a shell stub inside it. At load 186 that budget becomes the thing under
+                // test's enemy rather than its subject: `confirm` returns None, the nudge
+                // stays silent BY DESIGN, and the probe reads a correct silence as the
+                // rule failing. The rule is what is under test, so the wait comes out.
+                .env("AIR_NUDGE_BD_TIMEOUT_MS", "60000")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -6193,7 +6283,7 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "hook: SubagentStop is not the worker's stop; it runs no bd and marks nothing idle",
         red_fires: red,
@@ -6259,6 +6349,12 @@ fn probe_no_session_reads_stuck() -> Probe {
             let mut child = air_command(&exe, &wt)
                 .arg("hook")
                 .env("AIR_BD_BIN", &script)
+                // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
+                // a shell stub inside it. At load 186 that budget becomes the thing under
+                // test's enemy rather than its subject: `confirm` returns None, the nudge
+                // stays silent BY DESIGN, and the probe reads a correct silence as the
+                // rule failing. The rule is what is under test, so the wait comes out.
+                .env("AIR_NUDGE_BD_TIMEOUT_MS", "60000")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -6333,7 +6429,7 @@ fn probe_no_session_reads_stuck() -> Probe {
             .any(|a| a.kind == kinds::IDLE_WITH_CLAIM);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
         red_fires: red,
@@ -6395,10 +6491,14 @@ esac
         let red = matches!(&refused, Err(m) if m.contains("14 id(s)")
             && m.contains("within a budget of 0.5 s")
             && m.contains("AIR_BD_TIMEOUT_MS"));
-        // The new shape, same base, plus an allowance per id: three times the stub's per-id
-        // cost, because the probe is about the shape and the suite runs beside a fleet's
-        // verifies (load average 53 when this was written).
-        let scaled = acceptance_budget_with(14, flat, Duration::from_millis(300));
+        // The new shape, same base, plus an allowance per id. THIRTY times the stub's per-id
+        // cost: the probe is about the SHAPE (base + per_id x n), the red half above already
+        // proves a flat budget refuses, and the margin is free because a budget is a ceiling
+        // and the stub answers in 1.4 s whatever it is set to. Three times was measured at
+        // load 53 and lost at load 186; ten times was lost again at load 145 (air-g7e), where
+        // this probe failed for the machine's reasons and took four unrelated mutations down
+        // with it as "vacuous".
+        let scaled = acceptance_budget_with(14, flat, Duration::from_millis(3000));
         let answered = acceptance_with(&client(scaled), &ids, false);
         let all_read = matches!(&answered, Ok(c) if c.len() == 14
             && c.iter().all(|clauses| clauses.len() == 1));
@@ -6407,7 +6507,7 @@ esac
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, all_read && covers_measured))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "land: the acceptance read's bd budget grows with the id count, and the refusal names the count, the budget and AIR_BD_TIMEOUT_MS",
         red_fires: red,
@@ -6484,6 +6584,12 @@ fn probe_hook_reads_from_the_worktree_root() -> Probe {
             let mut child = air_command(&exe, cwd)
                 .arg("hook")
                 .env("AIR_BD_BIN", &script)
+                // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
+                // a shell stub inside it. At load 186 that budget becomes the thing under
+                // test's enemy rather than its subject: `confirm` returns None, the nudge
+                // stays silent BY DESIGN, and the probe reads a correct silence as the
+                // rule failing. The rule is what is under test, so the wait comes out.
+                .env("AIR_NUDGE_BD_TIMEOUT_MS", "60000")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -6515,7 +6621,7 @@ fn probe_hook_reads_from_the_worktree_root() -> Probe {
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
-    let (red, green) = res.unwrap_or((false, false));
+    let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
         red_fires: red,
@@ -7116,7 +7222,7 @@ fn probe_a_hook_records_its_own_wall_clock() -> Probe {
             && at("/budgets/git/budget_ms") == Some(1500);
         Ok((recorded, git_too))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
 
     Probe {
         name: "budgets: a real hook invocation records its own wall clock and the git calls it made",
@@ -7320,7 +7426,7 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
             in_code == 0 && main_code == 0,
         ))
     })()
-    .unwrap_or((false, false));
+    .unwrap_or_else(blocked);
 
     Probe {
         name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
@@ -7519,6 +7625,103 @@ fn probe_no_tracked_file_names_an_adopter() -> Probe {
         name: "privacy: a tracked line naming an adopter is refused with its file and line; a clean tree and a clone with no list are not",
         red_fires: red,
         green_passes: clean && no_list && declared_only,
+    }
+}
+
+/// air-g7e: every declared mutation's anchor still occurs exactly once in the file it names.
+///
+/// **Two mutations had been BROKEN for days and the suite said nothing.** air-80x.1 rewrote
+/// the gate's green branch and air-bm3 widened the PreToolUse matcher; both `from` anchors
+/// stopped matching, so `gate: verify-green-at-head` and the SendMessage traffic probe kept
+/// printing PASS with no evidence behind them at all. A probe whose mutation cannot be applied
+/// is a probe nobody has seen fail, which is precisely what air-682 says is not evidence.
+///
+/// The only thing that noticed was `air selftest --prove`, and it costs 31 minutes because it
+/// rebuilds the binary once per mutation — so it is run at the end of a round, if at all, and
+/// both anchors died in between. This costs milliseconds: it reads each file once and counts a
+/// substring. No build, no spawn, no ledger.
+///
+/// Zero occurrences is a dead anchor. More than one is worse than dead: `--prove` would refuse
+/// it as ambiguous, and an ambiguous anchor is the wrong-path trap air-682 names, where the
+/// mutation lands somewhere other than the branch the probe is about.
+///
+/// Red: a table whose anchor is missing, and one whose anchor is ambiguous, are both named
+/// with their file. Green: every anchor in the REAL table resolves exactly once today.
+fn probe_every_declared_mutation_still_anchors() -> Probe {
+    // Pure over a reader, so the red half needs no scratch files and the green half reads the
+    // real tree.
+    fn stale(muts: &[(&str, Mutation)], read: impl Fn(&str) -> Option<String>) -> Vec<String> {
+        let mut out = Vec::new();
+        for (name, m) in muts {
+            let Some(text) = read(m.file) else {
+                out.push(format!("{}: cannot read {}", name, m.file));
+                continue;
+            };
+            match text.matches(m.from).count() {
+                1 => {}
+                0 => out.push(format!("{}: anchor gone from {}", name, m.file)),
+                n => out.push(format!("{}: anchor occurs {n} times in {}", name, m.file)),
+            }
+        }
+        out
+    }
+
+    let missing = [(
+        "made up",
+        Mutation {
+            file: "crates/cli/src/cmd/install.rs",
+            from: "this text is in no file",
+            to: "x",
+            also_red: &[],
+        },
+    )];
+    let ambiguous = [(
+        "made up",
+        Mutation {
+            file: "crates/cli/src/cmd/install.rs",
+            from: "twice",
+            to: "x",
+            also_red: &[],
+        },
+    )];
+    let fixture = |_: &str| Some("twice and twice again".to_string());
+    let red = stale(&missing, |_| Some("nothing like it".to_string()))
+        .first()
+        .is_some_and(|s| s.contains("anchor gone from crates/cli/src/cmd/install.rs"))
+        && stale(&ambiguous, fixture)
+            .first()
+            .is_some_and(|s| s.contains("occurs 2 times"));
+
+    // Under `--prove` one anchor is deliberately absent — the mutation in flight — so the
+    // question this probe asks has no answer then. It stands down rather than reporting a
+    // dead anchor that is a live mutation, which would mark every mutation vacuous.
+    if std::env::var_os("AIR_SELFTEST_PROVING").is_some() {
+        return Probe {
+            name: "selftest: every declared mutation still anchors exactly once in the file it names",
+            red_fires: red,
+            green_passes: true,
+        };
+    }
+
+    // The real table against the real tree.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let live = stale(MUTATIONS, |f| std::fs::read_to_string(root.join(f)).ok());
+    if !live.is_empty() {
+        eprintln!("air selftest: dead mutation anchors:");
+        for l in &live {
+            eprintln!("  {l}");
+        }
+    }
+    // The other half of the registry's health — that every key names a probe that exists — is
+    // deliberately NOT checked here. This probe is itself in `all_probes()`, so asking that
+    // question would call `all_probes()` from inside it and recurse forever (seen, on the
+    // first run of this probe). `--prove` already treats an orphan key as a hard failure, and
+    // an orphan is loud there in a way a dead anchor was not.
+
+    Probe {
+        name: "selftest: every declared mutation still anchors exactly once in the file it names",
+        red_fires: red,
+        green_passes: live.is_empty(),
     }
 }
 
