@@ -114,9 +114,21 @@ pub struct Missing {
     /// membership, w2 ignored it at the cost of a round trip, w3 asked instead of obeying.
     ///
     /// The flag exists so [`stop_message`] can drop these repairs and name the command that
-    /// computes them, while `air handover` itself keeps printing them. It is set beside each
-    /// `fix` rather than derived from a list of check names, so a new check has to decide
-    /// rather than default into being advertised at Stop time.
+    /// computes them. It is set beside each `fix` rather than derived from a list of check
+    /// names, so a new check has to decide rather than default into being advertised at Stop
+    /// time.
+    ///
+    /// **air-155w: the flag governs the fix TEXT as well, not only who prints it.** air-avj
+    /// changed what the Stop hook prints and left the refusal itself asserting
+    /// `git merge main && air record verify -- make verify`, so an adopter's w1 read the
+    /// forbidden clause from the refusal instead. That is the nastiest form of this defect:
+    /// obeying the first clause and ignoring the second is exactly right, so following the
+    /// line WORKS, the worker gets a good outcome and learns the wrong habit, and nothing ever
+    /// contradicts it. A fix that failed outright would have been found in one use.
+    ///
+    /// So a `flow_dependent` fix now states **what must become true**, not which command a
+    /// particular flow uses to make it true. `verify_lane` is still read nowhere: the repo's
+    /// flow decides who runs the verify, and Air names the condition either way.
     pub flow_dependent: bool,
 }
 
@@ -135,7 +147,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         let (detail, fix) = if let Some(p) = f.batch_predates.as_deref() {
             (
                 format!("no green verify recorded at HEAD {}; {p}", short(&f.head)),
-                "wait for the lane's next batch, or: air record verify -- make verify".to_string(),
+                "wait for the lane's next batch to cover this commit".to_string(),
             )
         } else if g > 0 && r > 0 {
             (
@@ -143,7 +155,8 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     "verify at HEAD {} is flaky: {g} green / {r} red; latest is red",
                     short(&f.head)
                 ),
-                "fix or quarantine the flaky test (file it), then: air record verify -- make verify".to_string(),
+                "fix or quarantine the flaky test (file it), then get a green at this head"
+                    .to_string(),
             )
         } else if let Some(tree) = f.tree_green.as_deref() {
             (
@@ -151,12 +164,16 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     "no green verify recorded at HEAD {}; {tree}",
                     short(&f.head)
                 ),
-                "air record verify -- make verify".to_string(),
+                "a green at this head; `air handover` names what your flow needs to \
+                 produce one"
+                    .to_string(),
             )
         } else {
             (
                 format!("no green verify recorded at HEAD {}{last}", short(&f.head)),
-                "air record verify -- make verify".to_string(),
+                "a green at this head; `air handover` names what your flow needs to \
+                 produce one"
+                    .to_string(),
             )
         };
         missing.push(Missing {
@@ -194,7 +211,12 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         missing.push(Missing {
             check: "main-merged",
             detail,
-            fix: "git merge main && air record verify -- make verify".to_string(),
+            // air-155w: merging IS right and necessary under both flows — the adopter's
+            // report says so — and recording a green is the one clause a lane forbids. So the
+            // merge stays a command and the green becomes a condition: whose job it is to
+            // produce one is the repo's flow to say, not this line's.
+            fix: "git merge main, then a green at the new head (your own, or your lane's)"
+                .to_string(),
             // Merging moves the head off the sha a lane cut its batch at.
             flow_dependent: true,
         });
@@ -315,9 +337,10 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             // over.
             let order_note = if f.green_at_head {
                 format!(
-                    "\nthen commit it, `git merge main`, and run `air record verify -- make verify` \
-                 LAST: committing the digest moves HEAD off {}, where the green is recorded, \
-                 and the next check would refuse for a green that is no longer at HEAD",
+                    "\nthen commit it and merge main BEFORE the green is taken: committing the \
+                 digest moves HEAD off {}, where the green is recorded, and the next check \
+                 would refuse for a green that is no longer at HEAD. Whoever your flow has \
+                 record that green (you, or your lane) must do it last",
                     short(&f.head)
                 )
             } else {
@@ -360,9 +383,18 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         } else {
             "refused"
         };
+        // air-155w: a flow-dependent fix states a CONDITION, not a command, so it is
+        // introduced as one. "run `a green at this head`" reads as an instruction to run
+        // something that is not a command, and nests backticks inside backticks.
         let items: Vec<String> = missing
             .iter()
-            .map(|m| format!("{}: {} — run `{}`", m.check, m.detail, m.fix))
+            .map(|m| {
+                if m.flow_dependent {
+                    format!("{}: {} — needs {}", m.check, m.detail, m.fix)
+                } else {
+                    format!("{}: {} — run `{}`", m.check, m.detail, m.fix)
+                }
+            })
             .collect();
         // air-75u: whose tree, as the ok line already says. A refusal shown in a session that
         // is not the one it is about is otherwise a true statement with no scope.
@@ -421,8 +453,13 @@ pub fn stop_message(v: &Verdict, worker: &str, head: &str) -> String {
             }
         })
         .collect();
+    // air-155w: this used to say `air handover` "reads your repo's flow", which Air does
+    // not do and deliberately does not do — `verify_lane` is read nowhere. The promise was
+    // the same defect one surface over: a claim about a decision made somewhere else. What
+    // is true is that `air handover` prints every check in full, and since that text is now
+    // flow-safe too, the pointer no longer has to promise anything about flows.
     let pointer = if v.missing.iter().any(|m| m.flow_dependent) {
-        " — run `air handover`, which reads your repo's flow and prints the repair it calls for"
+        " — run `air handover` for each check and what it needs"
     } else {
         ""
     };
@@ -632,7 +669,13 @@ mod tests {
             "{}",
             v.missing[0].detail
         );
-        assert_eq!(v.missing[0].fix, "air record verify -- make verify");
+        // air-155w: the fix names the condition, not a command a verify lane forbids.
+        assert!(v.missing[0].fix.contains("a green at this head"));
+        assert!(
+            !v.missing[0]
+                .fix
+                .contains("air record verify -- make verify")
+        );
     }
 
     /// air-4up: a refusal caused by a landing names the landing, when, and from whom, keeps
@@ -664,7 +707,10 @@ mod tests {
             m.detail
         );
         assert!(m.detail.contains("main is at 0a1b2c3"), "{}", m.detail);
-        assert_eq!(m.fix, "git merge main && air record verify -- make verify");
+        // air-155w: merging is required under both flows and stays a command; recording a
+        // green is the clause a lane forbids and is now a condition.
+        assert!(m.fix.starts_with("git merge main"));
+        assert!(!m.fix.contains("air record verify"));
 
         f.main_moved = None;
         let v = handover_verdict(&f);
@@ -728,7 +774,11 @@ mod tests {
             v.message
         );
         assert!(v.message.contains("last green: f854145"));
-        assert!(v.message.contains("air record verify"));
+        // air-155w: the refusal names the check and the condition, never a command a verify
+        // lane forbids that worker.
+        assert!(v.message.contains("verify-green-at-head"));
+        assert!(v.message.contains("a green at this head"));
+        assert!(!v.message.contains("air record verify"));
     }
 
     #[test]
