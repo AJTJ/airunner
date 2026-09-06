@@ -242,6 +242,19 @@ pub fn digest_dir(repo: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// `journal_dir` from `.claude/air.json`: where each session appends what it hit (air-3xww).
+///
+/// Configured rather than hard-coded, the same way `digest_dir` is, because where a repo keeps
+/// its prose is the repo's. **Nothing in Air reads the files themselves**: no gate, no
+/// condition, no count. This function exists so `air init` knows what to scaffold and so the
+/// value has one home.
+pub fn journal_dir(repo: &Path) -> Option<String> {
+    air_json(repo)?
+        .get("journal_dir")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Digests written at or after this instant must declare their bead in front matter; older
 /// ones may still be matched by filename and mtime.
 ///
