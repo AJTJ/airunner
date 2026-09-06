@@ -9025,7 +9025,8 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
         let named = v.missing.iter().any(|m| {
             m.check == "digest-untracked"
                 && m.detail.contains("does not track it")
-                && m.fix.contains("WITHOUT a `Bead:` trailer")
+                && m.fix.contains("carry NO `Bead:` trailer")
+                && m.fix.starts_with("git add ")
         });
 
         // Tracked: the same bytes, once git knows about them.
