@@ -1370,8 +1370,12 @@ mod tests {
         let lane = ROLES_MD
             .split("### Verification lane")
             .nth(1)
-            .and_then(|s| s.split("\n## ").next())
-            .expect("roles.md has a Verification lane section under Worker");
+            .and_then(|s| s.split("\n## ").next());
+        assert!(
+            lane.is_some(),
+            "roles.md has a Verification lane section under Worker"
+        );
+        let lane = lane.unwrap();
         assert!(lane.contains("A lane is a worker session like any other"));
         assert!(lane.contains(
             "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"
