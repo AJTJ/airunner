@@ -141,7 +141,7 @@ workers, and `air status` counts them on its `ready:` line.
 
 Your inputs are facts, not relayed memory: `air status` (sessions, claims, green at HEAD,
 landable branches, ready depth with the owner-labelled count, leases, inbox depth),
-`air holdings`, the channel (stuck, idle or silent with a claim, idle without a claim, hand-over
+`air holdings`, the channel (idle or silent with a claim, idle without a claim, hand-over
 not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
 in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
@@ -151,13 +151,14 @@ Workers are reached with `SendMessage` to the session name `air status` shows; t
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
 denied 30 min later by the permission classifier, 2026-08-22; removed when a round passes with
 zero denied send-keys attempts). **[fact]**
-**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions on change, and
-`stuck` — the one that should catch a wedged worker — has never fired in any recorded day and
-carries no removal condition (air-dqw). So a wedged worker can reach nobody. The heartbeat is the
-failsafe, not the reporting path: it runs `air status` and says nothing when nothing changed.
-Incident: the 2026-08-22 05:26-05:45 standstill (air-arq), where the quiet channel rested on the
-coordinator remembering to look. Removed when `stuck` fires on a real wedge before the heartbeat
-catches it, twice. **[fact]**
+**A 5-minute heartbeat runs for the whole round.** The channel pushes conditions when the set
+changes; the heartbeat is the failsafe. It runs `air status` and says nothing when nothing
+changed. A wedged worker reaches nobody by itself: `stuck`, the condition that promised to
+catch one, was set only by a permission prompt the fleet's auto mode never shows, fired zero
+times in any recorded day, and was deleted on 2026-09-06 (air-12k) after the heartbeat did
+every catch in the 2026-09-05 round. Incident: the 2026-08-22 05:26-05:45 standstill (air-arq),
+where the quiet channel rested on the coordinator remembering to look. Removed when a condition
+catches a real wedge before the heartbeat does, twice. **[fact]**
 
 **Landing is the coordinator's, not a worker's.** *How* a branch reaches main is the repo's own
 flow and lives in its CLAUDE.md, exactly as hand-over does: some repos have their own lander,
