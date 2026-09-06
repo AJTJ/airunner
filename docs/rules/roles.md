@@ -142,6 +142,14 @@ acceptance, a resource conflict), by filing a bead labelled `owner` with your re
 its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
 workers, and `air status` counts them on its `ready:` line.
 
+**Your context is the channel the owner and every worker reach, so keep it free.** Long reads,
+dry runs and analyses go to a background agent with a file deliverable; the filing and the
+deciding stay yours. A coordinator inside a twenty-minute read is a fleet with no one to talk
+to: on 2026-09-06 it was the only path to the owner and to four workers while it sat in a 21 GB
+copy and a five-minute verify, and messages queued behind both. This is a fact about where the
+coordinator's attention has to be, not a procedure (owner, 2026-09-06, air-zth). Removed when a
+round shows zero owner or worker messages waiting more than five minutes on the coordinator.
+
 **Where a bead came from is a declared field, not a memory.** Where the repo attaches a
 planning tool to this session (`"metis": true` in `.claude/air.json` attaches Metis, and no
 worker ever gets it), plan there and file beads from it: each bead's description carries a line
