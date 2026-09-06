@@ -215,6 +215,11 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     let mut already_mine: Option<Option<String>> = None;
     // For the tmux window label (air-5lg); empty when bd could not answer.
     let mut title = String::new();
+    // air-x1ha: the id bd RESOLVED, which is not always the string that was typed. bd accepts
+    // an unambiguous prefix and answers with the canonical id (checked against bd 1.2.2,
+    // 2026-09-06: `bd show zz-bd --json` returns `"id": "zz-bdz"`), and it refuses an
+    // ambiguous one outright, so an answer is always exactly one bead.
+    let mut canonical = bead.to_string();
     let (shown, _) = retry_once(
         || bd.show(bead),
         || {
@@ -232,6 +237,9 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     match shown {
         Ok(Some(issue)) => {
             title.clone_from(&issue.title);
+            if !issue.id.is_empty() {
+                canonical = issue.id.clone();
+            }
             if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
                 already_mine = Some(issue.updated_at.clone());
             }
@@ -339,6 +347,44 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         Err(e) => {
             eprintln!("air claim: bd show: {e}");
             return 1;
+        }
+    }
+    // air-x1ha: from here on the bead is the id BD RESOLVED, never the string that was typed.
+    // A worker typed `air-ahl`, bd claimed `air-ahlf`, Air wrote its row under the prefix, and
+    // the next status reconcile asked bd about the prefix, got nothing, and released the claim
+    // while the work continued: the coordinator saw an abandoned bead and the worker saw
+    // nothing at all. Two stores holding different ids for one bead is what air-uir prevents a
+    // layer up; this is the same failure a layer down.
+    let typed = bead;
+    let bead: &str = &canonical;
+    // The ledger's own CAS ran above on the typed string, which cannot match a row stored
+    // under the canonical id. Not a new guard — the same guard, asked about the id that is
+    // actually stored, which is the only version of it that still works now rows are
+    // canonical. Skipped when nothing was resolved, since the first check already ran on it.
+    if bead != typed {
+        match ledger.open_claim(bead) {
+            Ok(Some(c)) if c.worker != worker => {
+                let msg = format!(
+                    "refused: you typed {typed}, which bd resolves to {bead}, and {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air release {bead} --worker {} --reason reassigned`)",
+                    c.worker, c.claimed_at, c.worker
+                );
+                return fail(
+                    &ledger,
+                    &worker,
+                    "claim",
+                    inputs(serde_json::json!({"resolved": bead})),
+                    "refuse",
+                    msg,
+                    "1 ledger row",
+                    json,
+                    2,
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("air claim: ledger: {e}");
+                return 1;
+            }
         }
     }
     // 2b. Already ours in bd (a re-claim after a timeout, or a retry): no bd write, and the

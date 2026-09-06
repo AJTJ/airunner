@@ -1570,6 +1570,10 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         .as_ref()
         .map(|v| v.iter().map(|i| i.id.clone()).collect());
     let mut reconciled = 0usize;
+    // air-x1ha: claims kept because bd could not resolve the id at all, which is the opposite
+    // of a bead bd no longer holds. Named rather than counted, and the line says what was
+    // looked up, because the id itself is the defect a reader has to see.
+    let mut unresolved: Vec<String> = Vec::new();
     let open_claims = ledger.open_claims().map_err(|e| e.to_string())?;
     // Every claim bd no longer holds in_progress, looked up in ONE `bd show a b c` rather
     // than one process per bead (air-bp0): the cost is per process, ~2 s to open the store,
@@ -1609,13 +1613,36 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                 let _ = ledger.mark_handed_over(&c.bead, &c.worker, &at);
                 handed_over = true;
             } else {
-                let reason = match &status {
-                    Some(Some(i)) if i.status == "closed" => "closed",
-                    _ => "reconciled",
-                };
-                let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
-                reconciled = reconciled.saturating_add(1);
-                continue;
+                // air-x1ha: releasing needs bd to have SAID something about the id. Three
+                // cases used to collapse into one, and two of them mean the opposite of the
+                // third.
+                //
+                // `Some(Some(i))` — bd knows it and no longer holds it in progress: release,
+                // which is what this reconcile is for.
+                //
+                // `Some(None)` — bd omits an id it does not know and still exits 0, so this
+                // is "bd never had this id". A worker typed a prefix, bd claimed the full id,
+                // Air's row went under the prefix, and this released it while the work
+                // continued. The row is kept and named instead.
+                //
+                // `None` — the `show` did not answer at all. That is a failed lookup, not a
+                // fact about the bead, and reading it as one released every open claim whose
+                // bead was not in the in-progress list because one bd call timed out.
+                match &status {
+                    Some(Some(i)) => {
+                        let reason = if i.status == "closed" {
+                            "closed"
+                        } else {
+                            "reconciled"
+                        };
+                        let _ = ledger.release_claim(&c.bead, &c.worker, reason, &at);
+                        reconciled = reconciled.saturating_add(1);
+                        continue;
+                    }
+                    Some(None) => unresolved.push(format!("{} ({})", c.bead, c.worker)),
+                    // Already reported by `bd_try`; the row simply stays.
+                    None => {}
+                }
             }
         }
         let v = views.entry(c.worker.clone()).or_insert_with(|| WorkerView {
@@ -1675,6 +1702,18 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     if reconciled > 0 {
         errors.push(format!(
             "reconciled {reconciled} claim(s) whose bead bd no longer holds in_progress"
+        ));
+    }
+    // air-x1ha, and the standing requirement that a line reporting nothing found says what it
+    // looked FOR: the ids, not a count, because the id is the defect.
+    if !unresolved.is_empty() {
+        errors.push(format!(
+            "kept {} claim(s) bd could not resolve: `bd show` returned nothing for {}. \
+             An id bd never had is not an id bd no longer holds, so the row stays. Usually a \
+             claim recorded under a typed PREFIX before air-x1ha, while bd holds the full id: \
+             re-claim under the id bd knows, or `air release <id> --reason unknown`",
+            unresolved.len(),
+            unresolved.join(", ")
         ));
     }
     // A healthy answer also refreshes `.air/ready.json` for the Stop hook (air-09i); a slow

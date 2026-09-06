@@ -145,6 +145,20 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-x1ha. The anchor is the arm for "bd never had this id", and nothing else: recording
+    // the resolved id at claim time, releasing a bead bd knows and no longer holds, and the
+    // reported line all survive it. Under it that arm releases the row again, which is the
+    // defect — a claim under an id bd cannot resolve is dropped while the work continues.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "claim: a prefix claim is recorded under the id bd resolved and survives the reconcile; a bead bd no longer holds is still released",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "Some(None) => unresolved.push(format!(\"{} ({})\", c.bead, c.worker)),",
+            to: "Some(None) => {\n                        let _ = ledger.release_claim(&c.bead, &c.worker, \"reconciled\", &at);\n                        continue;\n                    }",
+            also_red: &[],
+        },
+    ),
     // air-avj. The anchor is the branch that decides what a Stop advisory prints, and nothing
     // else: the facts, the pointer, the flow-free fix and `air handover`'s own message all
     // survive it. Under it every repair is printed again, including the two a verify lane
@@ -1723,6 +1737,7 @@ fn all_probes() -> Vec<Probe> {
         probe_ancestor_deadlock_is_named(),
         probe_a_red_runs_output_is_kept(),
         probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
+        probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -9311,6 +9326,129 @@ fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
         name: "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
         red_fires: still_there,
         green_passes: neither_is_a_batch && carries_nothing && earlier_never,
+    }
+}
+
+/// air-x1ha (verify's capture, 2026-09-06, reproduced by hand): a worker typed `air-ahl`, bd
+/// resolved and claimed `air-ahlf`, Air wrote its row under the typed PREFIX, and the next
+/// status reconcile asked bd about the prefix, got nothing, and released the claim while the
+/// work continued. The coordinator saw a worker that had abandoned a bead it was still
+/// building; the worker saw nothing at all. Two stores holding different ids for one bead is
+/// what air-uir prevents a layer up.
+///
+/// The fake bd here is bd 1.2.2's real shape in the two ways that matter: `show` resolves an
+/// unambiguous prefix and answers with the CANONICAL id (checked against the real bd,
+/// 2026-09-06: `bd show zz-bd --json` → `"id": "zz-bdz"`), and it OMITS an id it does not know
+/// while still exiting 0.
+///
+/// Red (declared mutation: the reconcile releases whenever bd did not positively hold the
+/// bead): a claim under an id bd cannot resolve is released again, which is the defect. Green:
+/// `air claim` on a prefix writes the row under the id bd resolved, so a prefix claim and a
+/// full-id claim are the same row; a claim bd KNOWS and no longer holds is still released,
+/// because that is what the reconcile is for; and the kept row is reported with the id it
+/// looked up, not just a count.
+fn probe_a_prefix_claim_is_recorded_and_survives_the_reconcile() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !g.status.success() {
+            return Err(String::from_utf8_lossy(&g.stderr).to_string());
+        }
+        let script = dir.join("bd");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nd='{d}'\necho \"$@\" >> \"$d/bd.log\"\ncase \"$1\" in\n  \
+                 --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+                 show) shift; out=''\n    for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n      \
+                 case \"$id\" in\n        \
+                 zz-pre|zz-full) row='{{\"id\":\"zz-full\",\"title\":\"t\",\"status\":\"open\",\"labels\":[],\"issue_type\":\"task\"}}';;\n        \
+                 zz-gone) row='{{\"id\":\"zz-gone\",\"title\":\"t\",\"status\":\"open\",\"labels\":[],\"issue_type\":\"task\"}}';;\n        \
+                 *) row='';;\n      \
+                 esac\n      \
+                 [ -n \"$row\" ] && out=\"$out${{out:+,}}$row\"\n    done\n    \
+                 printf '%s\\n' \"[$out]\"; exit 0;;\n  \
+                 list) echo '[]'; exit 0;;\n  \
+                 ready) echo '[]'; exit 0;;\n  \
+                 *) exit 0;;\nesac\n",
+                d = dir.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let air = |args: &[&str]| -> Result<String, String> {
+            let out = air_command(&exe, &dir)
+                .env("AIR_BD_BIN", &script)
+                .args(args)
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        };
+        let rows = || -> Vec<(String, Option<String>)> {
+            rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+                .and_then(|c| {
+                    let mut st =
+                        c.prepare("SELECT bead, release_reason FROM claims ORDER BY bead")?;
+                    let v = st
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(v)
+                })
+                .unwrap_or_default()
+        };
+
+        // A worker types the PREFIX. bd resolves it to zz-full.
+        air(&["claim", "zz-pre"])?;
+        let claimed_canonical = rows().iter().any(|(b, _)| b == "zz-full")
+            && !rows().iter().any(|(b, _)| b == "zz-pre");
+
+        // A row bd KNOWS and no longer holds in progress, and a row under an id bd cannot
+        // resolve at all — the shape a pre-air-x1ha prefix claim leaves behind.
+        {
+            let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+            l.record_claim("zz-gone", "probe", &[], "t0")
+                .map_err(|e| e.to_string())?;
+            l.record_claim("zz-nope", "probe", &[], "t0")
+                .map_err(|e| e.to_string())?;
+        }
+        let status = air(&["status"])?;
+        let after = rows();
+        let held = |b: &str| after.iter().any(|(x, r)| x == b && r.is_none());
+        let released = |b: &str| after.iter().any(|(x, r)| x == b && r.is_some());
+
+        // RED: the unresolvable row survives. That is the whole bug.
+        let red = held("zz-nope");
+        let green = claimed_canonical
+            // The reconcile still does its job for a bead bd knows and no longer holds.
+            && released("zz-gone")
+            // The kept row is NAMED, with what was looked up, not just counted.
+            && status.contains("zz-nope")
+            && status.contains("could not resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "claim: a prefix claim is recorded under the id bd resolved and survives the reconcile; a bead bd no longer holds is still released",
+        red_fires: red,
+        green_passes: green,
     }
 }
 
