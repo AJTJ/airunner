@@ -1785,6 +1785,13 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
 mod tests {
     use super::*;
 
+    /// Collapse every run of whitespace to one space, so a pin can quote a sentence the way
+    /// it reads rather than the way it happens to wrap (air-ahl). Two pins this round were
+    /// written against a phrase that crossed a line break and failed on the break.
+    fn flat(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     /// The embedded roles prose is `include_str!` of docs/rules/roles.md, so the two cannot
     /// drift; this pins that, plus the lines the round added: run-to-completion and the
     /// coordinator reach/landing facts (air-arq), bd's per-type sections (air-8zz).
@@ -1838,6 +1845,16 @@ mod tests {
         // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
         // `claude --worktree` and is false without it.
         assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
+        // air-ahl: the tracked requirement and its route, both pinned. The route is the half
+        // that must not go missing: a worker who meets the refusal has already committed, so
+        // advice living only in the refusal arrives after the thing it prevents.
+        //
+        // Through `flat`, because roles.md is hard-wrapped and a pin that spans a wrap fails
+        // on the wrap rather than on the rule. That happened twice this round (air-zth, then
+        // this), so it is a helper now rather than a third carefully shortened substring.
+        let roles = flat(ROLES_MD);
+        assert!(roles.contains("It also has to be tracked by git"));
+        assert!(roles.contains("commit the digest WITHOUT a `Bead:` trailer"));
         // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
         // states that the count attached to it refuses nothing. Both halves are pinned: a
         // rules file that names a count without saying it is not a gate is how a measurement
