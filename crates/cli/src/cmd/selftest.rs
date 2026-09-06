@@ -220,6 +220,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             ],
         },
     ),
+    // air-htmn. The anchor restores the original bug exactly: a completed fast-forward
+    // reported as a refusal. ONE half, per alerts' rule — the genuinely-not-moved case and
+    // the cannot-tell case both still answer correctly under it, so what it isolates is
+    // precisely whether Air reports a landing that happened as one that did not.
+    (
+        "land: a fast-forward that completed is not reported as untouched, and a look that failed is not reported as a refusal",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        Some(true) => FfVerdict::Landed,",
+            to: "        Some(true) => FfVerdict::Refused(err.to_string()),",
+            also_red: &[],
+        },
+    ),
     // air-kexg. The anchor is the permitting half alone: under it no range is ever
     // journal-only, so a branch of journal entries is refused again and the defect returns.
     // The CONSTRAINT survives it untouched - a mixed range still needs a bead either way -
@@ -2125,6 +2138,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_journal_is_scaffolded_and_nothing_reads_it(),
         probe_status_json_says_why_a_branch_cannot_land(),
         probe_handover_says_what_the_landing_gate_would_say(),
+        probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
     ]
 }
 
@@ -11508,6 +11522,78 @@ fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
 
     Probe {
         name: "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-htmn: `air land` told an adopter's coordinator "could not fast-forward main onto the
+/// landing commit, so main is untouched … git timed out after 1.5s". **Main was at the landing
+/// commit.** `git merge --ff-only` updates the ref atomically and `git::run` kills the child on
+/// expiry, which does not undo a ref update — so an `Err` there means "I stopped waiting", never
+/// "it did not happen". They ran `air land` again, and the second call's correct refusal is the
+/// only reason they learned the first had worked.
+///
+/// **The worse half was the row.** `record("refused", …, "fast-forward")` ran on the same
+/// branch, so the ledger said refused for a landing that happened, and `landings()`,
+/// `landed_open()` and `air status` all read that row afterwards. A wrong sentence is read once;
+/// a wrong row is read by every mechanism standing on the record.
+///
+/// Air does not have to say "I do not know" here — it can look, and `merge-base --is-ancestor`
+/// settles it. Raising the 1500 ms constant would narrow the window and leave the inference
+/// exactly as unsound, which is why the fix is the look and not the number.
+///
+/// Third arrival of this round's pattern, after air-rud0 and air-k6uh: a lookup that established
+/// something weaker than the sentence built on it.
+///
+/// Red: a fast-forward that completed reads as LANDED despite the error — and the ancestry the
+/// decision reads is answered by git against a real repo whose main is at the landing commit,
+/// not by me, so this is not a probe testing its own constructor (the bead asked for that
+/// distinction explicitly).
+///
+/// Green: the two cases that must not be swept up with it. Main genuinely not moved still
+/// refuses, with its existing text. And when the look itself fails, neither is established: the
+/// message says so and **nothing is recorded**, because writing "refused" there would be this
+/// same bug one layer over.
+fn probe_a_timed_out_fast_forward_is_not_reported_as_untouched() -> Probe {
+    use crate::cmd::land::{FfVerdict, after_fast_forward};
+
+    let timeout = "git timed out after 1.5s";
+
+    // The ancestry input comes from git, against a repo where main really is at the merge.
+    let observed: Option<bool> = (|| {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let g = |args: &[&str]| crate::git::run(&dir, args).ok();
+        g(&["init", "-q", "-b", "main", "."])?;
+        g(&["config", "user.email", "a@b"])?;
+        g(&["config", "user.name", "a"])?;
+        std::fs::write(dir.join("f"), "x").ok()?;
+        g(&["add", "-A"])?;
+        g(&["commit", "-qm", "seed"])?;
+        let merge = g(&["rev-parse", "HEAD"])?;
+        let answer = crate::git::is_ancestor(&dir, &merge, "HEAD").ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        answer
+    })();
+
+    let landed = after_fast_forward(timeout, observed);
+    let red = observed == Some(true) && landed == FfVerdict::Landed;
+
+    let refused = after_fast_forward(timeout, Some(false));
+    let unknown = after_fast_forward(timeout, None);
+    let green = matches!(&refused, FfVerdict::Refused(m)
+            if m.contains("main is untouched") && m.contains(timeout))
+        && matches!(&unknown, FfVerdict::Unknown(m)
+            if m.contains("NOT established")
+                && m.contains("nothing was recorded")
+                && m.contains(timeout))
+        // Unknown is not a refusal wearing a different word: the three are distinct.
+        && refused != unknown
+        && landed != refused;
+
+    Probe {
+        name: "land: a fast-forward that completed is not reported as untouched, and a look that failed is not reported as a refusal",
         red_fires: red,
         green_passes: green,
     }
