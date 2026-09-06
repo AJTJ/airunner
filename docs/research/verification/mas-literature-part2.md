@@ -1,7 +1,7 @@
 # Verification: `multi-agent-systems-literature.md`, part 2 (lines 3500–end)
 
 **Scope.** Independent re-verification of the load-bearing claims in
-`docs/research/adopter-notes/notes/multi-agent-systems-literature.md` lines 3500–6854: §4 human
+`private/research/adopter-notes/notes/multi-agent-systems-literature.md` lines 3500–6854: §4 human
 coordination research (Brooks, Conway, Herbsleb & Grinter, Malone & Crowston, TOC, Little's law / M/M/1,
 Reinertsen/Kanban, I-PASS, WHO checklist, Ontario, Keystone, SURPASS, code ownership, code review, CRM/SBAR,
 grounding, Weick & Roberts, transactive memory, situation awareness, Perrow), §5 LLM agents (Anthropic

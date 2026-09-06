@@ -4,7 +4,7 @@
 //! committed divergence from `git diff --name-only main...HEAD`, plus journaled intent from
 //! `edit_journal`. Unit is the file (tick 0400). Prints its denominator.
 //!
-//! Every tag names its tense (air-v7o; adopter 2026-08-30, both directions in one day: a
+//! Every tag names its tense (air-v7o; the adopter 2026-08-30, both directions in one day: a
 //! worker nearly released a bead over an `uncommitted` that had evaporated, and another nearly
 //! stood down over a `journaled` from hours earlier). `uncommitted` is an instant and is read
 //! at the report's `at`; `journaled` is history and carries its age. A dirty file NO tool
@@ -15,7 +15,7 @@
 //! `--untracked-files=all` stays. Narrowing it would trade a false "someone is here" for a
 //! false "nobody is here", and for the case that produced the report (two workers each
 //! producing a plausible tree claiming the same catalog version) the second is the worse
-//! direction (adopter's reasoning, accepted on the bead). The journal is what separates an
+//! direction (the adopter's reasoning, accepted on the bead). The journal is what separates an
 //! edit from dirt; sensitivity is not the lever.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -221,7 +221,7 @@ pub fn run(repo: &Path, only: Option<&str>, json: bool) -> i32 {
 }
 
 /// Paths that are tooling state, never a worker's holding: Air's ledger, beads' store and its
-/// recovery backups, nested worktrees (adopter: a 320 MB `.beads.backup-pre-recovery/`
+/// recovery backups, nested worktrees (the adopter: a 320 MB `.beads.backup-pre-recovery/`
 /// showed up as "uncommitted main files").
 pub fn is_tooling_path(p: &str) -> bool {
     p.starts_with(".air/")

@@ -166,7 +166,7 @@ pub struct Snapshot {
     /// Branches the verify lane may merge into its next batch (air-80x.3): head contains
     /// main, no green at that head, and the commits name a bead the worker holds. A fact the
     /// lane reads when it cuts a batch; no condition pushes it. Before this the list lived in
-    /// messages, and in adopter's 2026-08-29 round the batch never formed.
+    /// messages, and in the adopter's 2026-08-29 round the batch never formed.
     pub batch_ready: Vec<BatchReady>,
     /// Every worker branch that is NOT batch-ready, with the fact it lacks (`--json`).
     pub not_batch_ready: Vec<NotBatchReady>,
@@ -261,7 +261,7 @@ pub struct Attention {
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
 /// is `air land`: the coordinator's one allowed path onto main. It names the BRANCH (air-09b):
 /// `air land <bead>` is refused the moment two branches carry the bead, and the batching lane
-/// adopter runs makes that the normal case, so the command a surface offers is the one that
+/// The adopter runs makes that the normal case, so the command a surface offers is the one that
 /// cannot be ambiguous.
 pub fn land_command(worker: &str) -> String {
     format!("air land --worker {worker}")
@@ -465,7 +465,7 @@ fn sort_by_wait(v: &mut [Landing]) {
 ///
 /// **Claimed by this worker, and not already landed.** Both halves come from tables Air
 /// writes, so neither moves when git does. There used to be a third: claimed since the branch
-/// point. It was the bug that made `air land` unusable in adopter (air-6u5) — **merging main
+/// point. It was the bug that made `air land` unusable in the adopter (air-6u5) — **merging main
 /// moves the branch point forward past the claim that started the work, and landing requires
 /// merging main**, so preparing to land was what destroyed the attribution. air-4re had
 /// already taken that narrowing off declared ids for the same reason; this takes it off the
@@ -552,7 +552,7 @@ pub struct Selection {
 /// precondition it failed and the command that fixes it, and every git or ledger failure is an
 /// error rather than an absence. `air land --all` returning `{"landed": [], "ok": true}` was
 /// the worst answer available: there was no output to disbelieve, so a caller concluded the
-/// queue was empty. adopter hit it with every precondition verified by hand and fell back to
+/// queue was empty. The adopter hit it with every precondition verified by hand and fell back to
 /// their own `make land`; this repo hit it twice the same day.
 pub fn select(repo: &Path) -> Selection {
     let mut out = Selection::default();
@@ -717,7 +717,7 @@ pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>,
 
 /// The bd budget for one acceptance read (air-fzv): a base for the process plus an allowance
 /// per id. It was the client's flat 10 s whatever the id count, which a fourteen-bead batch
-/// under the verify lane exceeded on adopter (2026-09-06) until they set
+/// under the verify lane exceeded on the adopter (2026-09-06) until they set
 /// `AIR_BD_TIMEOUT_MS=120000` by hand. Batching makes many ids the normal case. Owner ruled:
 /// size by the id count, not by reading in one process (which `show_all` already does).
 ///
@@ -877,7 +877,7 @@ pub fn carrying(repo: &Path, sha: &str) -> Vec<String> {
 
 /// Rewound landings whose merge is still carried by somebody (air-ob0), newest first.
 ///
-/// adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
+/// The adopter, 2026-08-23: *"A rollback un-lands a branch from main but cannot un-merge it from
 /// anyone who took it."* A worker who merged main during the armed window — the documented
 /// thing to do when main moves — keeps the rewound commits. That is a recorded green for a tree
 /// main will never have, with `air handover` passing and `air land` merging it back in.
@@ -942,7 +942,7 @@ pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> 
 }
 
 /// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
-/// a verify is ~420 s in adopter's repo, so a minutes-only reading rounds most of it to 0.
+/// a verify is ~420 s in the adopter's repo, so a minutes-only reading rounds most of it to 0.
 pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
     let elapsed = seconds_between(&f.started_at, at)
         .map(|s| format!("{s}s"))
@@ -1081,7 +1081,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             None => {}
         }
         // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
-        // every claim it holds is not-green for the SAME reason and the same fix; adopter's
+        // every claim it holds is not-green for the SAME reason and the same fix; the adopter's
         // status printed eleven lines for one worker, which is one fact eleven times. The
         // single-claim wording is unchanged, because that is the case that reads well already.
         //
@@ -1133,8 +1133,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     }
     // A lease defect is addressed to whoever WANTS the resource, and never to the holder
     // (air-q9c). It used to name the holder and tell them to `air lease break` the lease they
-    // were using; adopter saw six of those in a day while the simulator and API were
-    // genuinely running (their ad-m07x). Staleness is a signal for other agents by
+    // were using; the adopter saw six of those in a day while the simulator and API were
+    // genuinely running (their). Staleness is a signal for other agents by
     // construction — the holder knows perfectly well they hold it.
     //
     // No audience, no condition: `lease_take` takes a defective lease automatically
@@ -1386,16 +1386,16 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // Open claims, reconciled against bd first: a bead that bd no longer holds as
     // in_progress (closed, awaiting_review, reopened) is not "held" by anyone, whatever the
     // ledger row says. The row is released with the bd status as reason so the history is
-    // honest and no condition ever fires on it (adopter round: ~38 noise pushes, A3).
+    // honest and no condition ever fires on it (the adopter's round: ~38 noise pushes, A3).
     //
     // bd is enrichment, not the spine. It gets a short budget (`AIR_BD_TIMEOUT_MS` overrides)
     // and after one timeout no further bd call is made this tick; the counts fall back to the
     // last answer cached in the ledger. Under load bd took 20 s, the same as the MCP tool
-    // budget, so the channel got nothing exactly when the fleet was busiest (adopter
+    // budget, so the channel got nothing exactly when the fleet was busiest (the adopter
     // 2026-08-22, air-19u).
     //
     // The budget is DERIVED from what bd costs here today, not a constant (air-p61): a flat
-    // 2 s left 356 ms of headroom over bd's measured p99 and sat below adopter's median
+    // 2 s left 356 ms of headroom over bd's measured p99 and sat below the adopter's median
     // entirely. `status_bd_budget` reads the same measurement `air status` prints.
     let today_latency = super::bd_latency::for_day(ledger.dir(), &super::today());
     let mut bd = super::claim::bd_for(repo);
@@ -2167,7 +2167,7 @@ mod tests {
                     "a",
                     Some("working"),
                     &under(),
-                    vec![claim("fd-1", "a", &past(), 0)],
+                    vec![claim("zz-1", "a", &past(), 0)],
                     Some(true),
                 ),
                 worker("b", Some("idle"), &past(), vec![], Some(true)), // idle without claim is fine
@@ -2185,28 +2185,28 @@ mod tests {
                     "idle",
                     Some("idle"),
                     &past(),
-                    vec![claim("fd-2", "idle", &past(), 0)],
+                    vec![claim("zz-2", "idle", &past(), 0)],
                     None,
                 ),
                 worker(
                     "silent",
                     Some("running"),
                     &past(),
-                    vec![claim("fd-3", "silent", &past(), 0)],
+                    vec![claim("zz-3", "silent", &past(), 0)],
                     None,
                 ),
                 worker(
                     "gone",
                     None,
                     &past(),
-                    vec![claim("fd-4", "gone", &past(), 0)],
+                    vec![claim("zz-4", "gone", &past(), 0)],
                     None,
                 ),
                 worker(
                     "red",
                     Some("working"),
                     &under(),
-                    vec![claim("fd-5", "red", &under(), 2)],
+                    vec![claim("zz-5", "red", &under(), 2)],
                     Some(false),
                 ),
             ],
@@ -2247,7 +2247,7 @@ mod tests {
     #[test]
     fn a_bead_waiting_on_review_is_not_a_claim_in_progress() {
         let mut w = worker("w", Some("idle"), &past(), vec![], Some(false));
-        w.handed_over = vec![claim("fd-1", "w", &past(), 1)];
+        w.handed_over = vec![claim("zz-1", "w", &past(), 1)];
         let s = Snapshot {
             workers: vec![w.clone()],
             ready_depth: Some(0),
@@ -2279,7 +2279,7 @@ mod tests {
                 "new",
                 None,
                 &under(),
-                vec![claim("fd-1", "new", &under(), 0)],
+                vec![claim("zz-1", "new", &under(), 0)],
                 None,
             )],
             ..Default::default()
@@ -2290,7 +2290,7 @@ mod tests {
             "w",
             Some("idle"),
             &under(),
-            vec![claim("fd-2", "w", &past(), 0)],
+            vec![claim("zz-2", "w", &past(), 0)],
             None,
         );
         idle.session.as_mut().unwrap().pid = Some(1);
@@ -2511,7 +2511,7 @@ mod tests {
                 "x",
                 Some("idle"),
                 "garbage",
-                vec![claim("fd-9", "x", "garbage", 0)],
+                vec![claim("zz-9", "x", "garbage", 0)],
                 None,
             )],
             ..Default::default()

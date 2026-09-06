@@ -157,7 +157,7 @@ enum Cmd {
     ///
     /// **The branch is the unit, and `--worker <name>` names it** (air-09b). A bead id names a
     /// branch only while exactly one branch carries it; a bead on two branches (a batching
-    /// lane and the worker it batched, adopter 2026-08-30) is refused with every carrier and
+    /// lane and the worker it batched, the adopter 2026-08-30) is refused with every carrier and
     /// the `--worker` command for each, never resolved by ordering or by which one happens to
     /// be landable. `--worker` lands that branch with every bead its merge range names, and
     /// so does naming a bead: the argument SELECTS the branch, it does not filter what the
@@ -302,6 +302,11 @@ enum Cmd {
     /// Cargo.toml matches the last row. Run by `make release`; exit 2 names the row to append.
     #[command(hide = true)]
     ReleaseCheck,
+    /// No tracked file names an adopter (air-bpj). Names are read from `private/adopters.md`,
+    /// which is ignored, so a clone without it skips cleanly. Run by `make verify`; exit 2
+    /// names every offending line.
+    #[command(hide = true)]
+    AdopterCheck,
     /// Red/green probes for every check (a check that matches nothing prints red).
     Selftest {
         /// air-682: run each probe's DECLARED mutation and report any probe that stays green.
@@ -432,6 +437,7 @@ fn main() -> ExitCode {
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
         Cmd::ReleaseCheck => cmd::install::release_check_cmd(),
+        Cmd::AdopterCheck => cmd::privacy::run(&repo, cli.json),
         Cmd::Selftest { prove } => {
             if prove {
                 cmd::selftest::prove(&repo, cli.json)

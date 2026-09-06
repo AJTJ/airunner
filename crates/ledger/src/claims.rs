@@ -181,26 +181,26 @@ mod tests {
     #[test]
     fn claim_stamp_release_round_trip() {
         let l = Ledger::open_in_memory().unwrap();
-        l.record_claim("fd-1", "w1", &["a.rs".into()], "t0")
+        l.record_claim("zz-1", "w1", &["a.rs".into()], "t0")
             .unwrap();
-        let c = l.open_claim("fd-1").unwrap().unwrap();
+        let c = l.open_claim("zz-1").unwrap().unwrap();
         assert_eq!(
             (c.worker.as_str(), c.declared_files[0].as_str()),
             ("w1", "a.rs")
         );
-        assert!(l.stamp_handover("fd-1", "w1", "t1").unwrap());
-        assert!(l.stamp_handover("fd-1", "w1", "t2").unwrap());
-        let c = l.open_claim("fd-1").unwrap().unwrap();
+        assert!(l.stamp_handover("zz-1", "w1", "t1").unwrap());
+        assert!(l.stamp_handover("zz-1", "w1", "t2").unwrap());
+        let c = l.open_claim("zz-1").unwrap().unwrap();
         assert_eq!(c.first_handover_at.as_deref(), Some("t1"));
         assert_eq!(c.last_handover_at.as_deref(), Some("t2"));
         assert_eq!(c.handover_attempts, 2);
-        assert!(!l.stamp_handover("fd-1", "w2", "t3").unwrap());
-        assert!(l.release_claim("fd-1", "w1", "landed", "t4").unwrap());
-        assert!(l.open_claim("fd-1").unwrap().is_none());
-        assert!(!l.release_claim("fd-1", "w1", "landed", "t5").unwrap());
+        assert!(!l.stamp_handover("zz-1", "w2", "t3").unwrap());
+        assert!(l.release_claim("zz-1", "w1", "landed", "t4").unwrap());
+        assert!(l.open_claim("zz-1").unwrap().is_none());
+        assert!(!l.release_claim("zz-1", "w1", "landed", "t5").unwrap());
         // Re-claim after release resets the counters.
-        l.record_claim("fd-1", "w1", &[], "t6").unwrap();
-        let c = l.open_claim("fd-1").unwrap().unwrap();
+        l.record_claim("zz-1", "w1", &[], "t6").unwrap();
+        let c = l.open_claim("zz-1").unwrap().unwrap();
         assert_eq!((c.handover_attempts, c.claimed_at.as_str()), (0, "t6"));
     }
 
@@ -208,11 +208,11 @@ mod tests {
     #[test]
     fn mark_handed_over_is_idempotent_and_leaves_the_claim_open() {
         let l = Ledger::open_in_memory().unwrap();
-        l.record_claim("fd-2", "w1", &["a.rs".into()], "t0")
+        l.record_claim("zz-2", "w1", &["a.rs".into()], "t0")
             .unwrap();
-        assert!(l.mark_handed_over("fd-2", "w1", "t1").unwrap());
-        assert!(!l.mark_handed_over("fd-2", "w1", "t2").unwrap());
-        let c = l.open_claim("fd-2").unwrap().unwrap();
+        assert!(l.mark_handed_over("zz-2", "w1", "t1").unwrap());
+        assert!(!l.mark_handed_over("zz-2", "w1", "t2").unwrap());
+        let c = l.open_claim("zz-2").unwrap().unwrap();
         assert_eq!(c.first_handover_at.as_deref(), Some("t1"));
         assert_eq!(c.last_handover_at.as_deref(), Some("t1"));
         assert_eq!(
@@ -221,8 +221,8 @@ mod tests {
             "no attempt counted, claim still open, original time kept"
         );
         // A worker's own hand-over still counts as an attempt on top of the mark.
-        assert!(l.stamp_handover("fd-2", "w1", "t3").unwrap());
-        let c = l.open_claim("fd-2").unwrap().unwrap();
+        assert!(l.stamp_handover("zz-2", "w1", "t3").unwrap());
+        let c = l.open_claim("zz-2").unwrap().unwrap();
         assert_eq!(
             (c.handover_attempts, c.first_handover_at.as_deref()),
             (1, Some("t1"))
@@ -234,10 +234,10 @@ mod tests {
     #[test]
     fn release_claims_on_closes_many_in_one_transaction() {
         let l = Ledger::open_in_memory().unwrap();
-        for (bead, worker) in [("fd-1", "alpha"), ("fd-2", "beta"), ("fd-3", "alpha")] {
+        for (bead, worker) in [("zz-1", "alpha"), ("zz-2", "beta"), ("zz-3", "alpha")] {
             l.record_claim(bead, worker, &[], "t0").unwrap();
         }
-        let beads: Vec<String> = ["fd-1", "fd-2", "fd-9"]
+        let beads: Vec<String> = ["zz-1", "zz-2", "zz-9"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -245,12 +245,12 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                ("fd-1".to_string(), "alpha".to_string()),
-                ("fd-2".to_string(), "beta".to_string()),
+                ("zz-1".to_string(), "alpha".to_string()),
+                ("zz-2".to_string(), "beta".to_string()),
             ]
         );
-        assert!(l.open_claim("fd-1").unwrap().is_none());
-        assert!(l.open_claim("fd-3").unwrap().is_some(), "untouched");
+        assert!(l.open_claim("zz-1").unwrap().is_none());
+        assert!(l.open_claim("zz-3").unwrap().is_some(), "untouched");
         // Idempotent: a second pass releases nothing.
         assert!(
             l.release_claims_on(&beads, "landed", "t2")

@@ -309,7 +309,7 @@ All of these are *(inference)* unless a metis file is cited saying so.
 10. **No file watching / push updates**; freshness = re-sync per call (§1.5), and MCP is stdio-only in practice (`lib.rs:180`), one server per client process.
 11. **Metrics/costs**: nothing tracks iterations, tokens, wall time, or outcomes per task beyond the `iteration` counter in the state file.
 
-What metis *does* give us that fills a real hole in adopter-style setups: a durable, agent-writable *task document* format with a phase machine and an MCP surface that models actually use well — that is the "working memory" layer, and it composes with (rather than replaces) a coordinator like beads. *(inference)*
+What metis *does* give us that fills a real hole in the adopter-style setups: a durable, agent-writable *task document* format with a phase machine and an MCP surface that models actually use well — that is the "working memory" layer, and it composes with (rather than replaces) a coordinator like beads. *(inference)*
 
 ---
 
