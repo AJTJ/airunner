@@ -766,6 +766,19 @@ pub const SURFACE: &[SurfaceChange] = &[
                  of verifying) goes in your CLAUDE.md, not in roles.md. Without a lane nothing \
                  changes: a green at HEAD containing `main` still closes exactly as before.",
     },
+    SurfaceChange {
+        id: "install-lag-is-named",
+        since: "2026-09-06 (air-d61)",
+        headline: "`air doctor` and `air status` print one line when `.air/installed.json` \
+                   records an older crate or surface version than the running binary: both \
+                   versions, the count of unread notices, and the fix. adopter's hooks ran \
+                   0.2.18 for days on a record that said 0.1.0 / surface 2, with the ledger \
+                   already migrated and the installed skills stale, and nothing said so. \
+                   Printed, never refused; a repo with no record at all stays silent.",
+        silent_break: false,
+        action: "If the line appears, run `air install` to read the notices, then \
+                 `air install --write`; the line goes away with the record.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -871,6 +884,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.2.17", 21, 40),
     // 2026-09-05: the verification lane, gate acceptance (air-80x.1) and roles section (air-80x.6).
     ("0.2.18", 22, 41),
+    // 2026-09-06: doctor and status name an install record that lags the binary (air-d61).
+    ("0.2.19", 23, 42),
 ];
 
 /// The surface's version: monotonic, and **derived from [`RELEASES`] so it cannot drift from
@@ -906,6 +921,88 @@ pub fn read_installed(air_dir: &Path) -> Installed {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// The install record is older than the running binary (air-d61).
+///
+/// The downgrade refusal (air-w9d) guards one direction: an old binary may not write over a
+/// newer record. Nothing stated the other: adopter's `.air/installed.json` said 0.1.0 /
+/// surface 2 while its hooks had run 0.2.18 for days (the ledger already at schema v16, the
+/// installed `air-*` skills still telling workers to run a refused command), and `air doctor`
+/// said nothing. A repo whose hooks run a binary newer than the one it installed is exactly
+/// the repo that has not read its notices. Fact, not gate: printed, never refused.
+///
+/// Removal condition: when the hook itself runs `air install --write` on first sight of a
+/// newer binary, so the record cannot lag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InstallLag {
+    pub recorded_crate: String,
+    pub recorded_surface: Option<u32>,
+    pub running_crate: String,
+    pub running_surface: u32,
+    /// Notices the record has not seen: what `air install` would print.
+    pub unread: usize,
+}
+
+/// A dotted version as numbers, so `0.2.18` is newer than `0.2.9`. Non-numeric parts read as
+/// zero; an empty string has no parts and compares below everything.
+fn version_parts(v: &str) -> Vec<u64> {
+    v.trim()
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse::<u64>().unwrap_or(0))
+        .collect()
+}
+
+/// Pure: does the record lag `crate_version` / `surface_version`? `None` when there is no
+/// record (told about nothing, the case air-w9d deliberately allows) or the record is at the
+/// binary or newer. Compared as versions, not as strings, because the crate version is what a
+/// record written before `surface_version` existed still carries.
+pub fn lag_against(
+    rec: &Installed,
+    crate_version: &str,
+    surface_version: u32,
+) -> Option<InstallLag> {
+    if rec.air_version.is_empty() && rec.surface_version.is_none() {
+        return None;
+    }
+    let crate_older = !rec.air_version.is_empty()
+        && version_parts(&rec.air_version) < version_parts(crate_version);
+    let surface_older = rec.surface_version.is_some_and(|s| s < surface_version);
+    (crate_older || surface_older).then(|| InstallLag {
+        recorded_crate: rec.air_version.clone(),
+        recorded_surface: rec.surface_version,
+        running_crate: crate_version.to_string(),
+        running_surface: surface_version,
+        unread: surface_diff(&rec.surface).len(),
+    })
+}
+
+/// The lag of the record in `air_dir` against THIS binary.
+pub fn lag(air_dir: &Path) -> Option<InstallLag> {
+    lag_against(
+        &read_installed(air_dir),
+        env!("CARGO_PKG_VERSION"),
+        SURFACE_VERSION,
+    )
+}
+
+/// The one line `air doctor` and `air status` print for it.
+pub fn lag_line(l: &InstallLag) -> String {
+    let surface = |s: Option<u32>| s.map_or("none".to_string(), |v| v.to_string());
+    format!(
+        "install record lags the binary: installed {} / surface {}, running {} / surface {}, \
+         {} notice(s) unread; fix: air install --write",
+        if l.recorded_crate.is_empty() {
+            "?"
+        } else {
+            &l.recorded_crate
+        },
+        surface(l.recorded_surface),
+        l.running_crate,
+        l.running_surface,
+        l.unread
+    )
 }
 
 fn write_installed(air_dir: &Path, at: &str) -> Result<(), String> {

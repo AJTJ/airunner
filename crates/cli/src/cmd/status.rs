@@ -162,6 +162,9 @@ pub struct Snapshot {
     /// The newest red verify at a batch head that no later green has superseded (air-80x.4),
     /// with the members it was recorded with. The lane splits by hand; nothing lands on it.
     pub red_batch: Option<super::batch::RedBatch>,
+    /// The install record is older than this binary (air-d61); the same line `air doctor`
+    /// prints, so the coordinator sees it without asking.
+    pub install_lag: Option<super::install::InstallLag>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
     /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
     /// red land leaves behind. The message at rewind time is not the only copy.
@@ -1597,6 +1600,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         verifies_in_flight: verifies_in_flight(&ledger),
         landings_in_flight: landings_in_flight(&ledger),
         red_batch: super::batch::red_batch_standing(&ledger, repo),
+        install_lag: super::install::lag(ledger.dir()),
         rewound_carried: rewound_carried(repo, &ledger, git::head(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip.
@@ -1817,6 +1821,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
     if let Some(b) = &s.red_batch {
         out.push_str(&format!("{}\n", super::batch::red_batch_line(b)));
+    }
+    // air-d61: one line while the record lags; gone the moment `air install --write` runs.
+    if let Some(l) = &s.install_lag {
+        out.push_str(&format!("{}\n", super::install::lag_line(l)));
     }
     // air-bxe: the merge commit exists for minutes before the verify decides whether it stays.
     for f in &s.landings_in_flight {
