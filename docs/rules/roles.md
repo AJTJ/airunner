@@ -96,6 +96,35 @@ Worker launches set `AIR_ENFORCE=1` and the hook names the fixing command. Enfor
 first bypass of the advisory gate (tty-fix, 2026-08-22 06:00, air-i59); removed when a full
 round passes with zero `handover-not-green` events. **[Air enforces]**
 
+### Verification lane (a worker whose work is verifying other branches)
+
+A lane is a worker session like any other: same launcher, same deny list, same claims. While
+it batches it holds no bead; between batches it may hold one (air-80x.6). Facts and refusals
+only, nothing about cadence or who the lane is: that is the repo's flow, in its CLAUDE.md.
+
+**What Air records.** A batch is a commit on the lane's branch that contains `main` and the
+member branches at the shas it merged. `air record verify -- <cmd>` at that commit records the
+green or red, and the landing row names the member heads the batch contained (air-80x.2).
+`air status` lists the branches that are batch-ready as a fact, `batch-ready: <worker> at
+<sha> (<beads>)`: head contains `main`, no green at that head, a `Bead:` trailer naming a bead
+the worker holds; `--json` gives the first fact each other branch lacks (air-80x.3). A red
+batch is reported by member, in `air record`'s output and in `air status`, until a newer batch
+supersedes it; nothing lands, closes or claims differently on a red (air-80x.4). **[fact]**
+
+**What Air refuses, and what it accepts.** The close gate accepts a green at a verified commit
+that contains `main` and every commit carrying the bead's trailer: a worker closes on the
+lane's green with no verify run of its own (air-80x.1). A bead with a commit after the cut is
+refused, naming that commit. Landing stays the coordinator's: `air land --worker <lane>` lands
+the batch and attributes every bead its range names by trailer (air-80x.2). The in-flight
+refusal treats the lane's verify like any other (air-4cr). **[Air enforces]**
+
+**Two ordering facts.** A batch is cut at specific shas, so a worker's commit after the cut is
+not in it and waits for the next. A lane merges branches it did not write, so a branch that
+conflicts is dropped from the batch and named, never resolved by the lane. **[fact]**
+
+Removed when verify is cheap enough (scoped, or under a minute) that a round shows no batch of
+more than one branch; the role is a worker again.
+
 ## Coordinator (the main checkout, holding no lane)
 
 Two modes (owner, 2026-08-21). **Active:** every online worker has work: keep the ready list
