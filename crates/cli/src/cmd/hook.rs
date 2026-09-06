@@ -118,6 +118,13 @@ fn inner_env(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| repo.to_path_buf());
+    // air-1r6: the tool's cwd is wherever the shell last cd'd, and every path the hook joins
+    // (digest_dir, the ready cache, `.claude/air.json`) is relative to the worktree root. So
+    // the root is resolved ONCE here and everything below reads it; a persisted `cd crates`
+    // refused three closes on adopter's w1 whose digests were there. Same class as air-dws
+    // and air-75u: a check that reads where it runs. A cwd outside any repository stays as
+    // it is, and `open` fails on it as before.
+    let cwd = git::toplevel(&cwd).unwrap_or(cwd);
     let (ledger, derived) = open(&cwd)?;
     // air-75u: who this session is comes from its launcher, not from where its shell sits.
     let worker = identity_from(role, actor, &derived);

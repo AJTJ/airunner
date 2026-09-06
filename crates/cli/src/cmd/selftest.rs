@@ -205,6 +205,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
+        Mutation {
+            // Keep the cwd as the tool gave it: the root is looked up and thrown away, which
+            // is the code before air-1r6. The probe's subdirectory run then differs from the
+            // root run.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "    let cwd = git::toplevel(&cwd).unwrap_or(cwd);",
+            to: "    let cwd = git::toplevel(&cwd).map(|_| cwd.clone()).unwrap_or(cwd);",
+            also_red: &[],
+        },
+    ),
+    (
         "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
         Mutation {
             // Bring the deleted arm back: a PermissionRequest writes `stuck` again. The probe's
@@ -1280,6 +1292,7 @@ fn all_probes() -> Vec<Probe> {
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
+        probe_hook_reads_from_the_worktree_root(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -6126,6 +6139,114 @@ fn probe_no_session_reads_stuck() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-1r6: the hook joins `digest_dir` (and every other repo-relative path) to the worktree
+/// ROOT, not to the Bash tool's cwd. A persisted `cd crates` made the gate refuse "no digest"
+/// for a digest that was there; adopter's w1 hit it three times on 2026-09-06.
+///
+/// Red: a real `air hook` gate run on `bd close` from a subdirectory says exactly what the
+/// same run from the root says, and neither names a missing digest while the digest exists.
+/// Green: with the digest removed, both runs name it missing, so the refusal for a truly
+/// absent digest is unchanged.
+fn probe_hook_reads_from_the_worktree_root() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ])?;
+        // `.claude/air.json` is read from the MAIN checkout (`handover::air_json`); the digest
+        // itself is joined to the worker's own tree.
+        let digests = wt.join("docs").join("log.d");
+        std::fs::create_dir_all(&digests).map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".claude").join("air.json"),
+            r#"{"digest_dir": "docs/log.d"}"#,
+        )
+        .map_err(|e| e.to_string())?;
+        let digest = digests.join("2026-09-06-w-ad-1r6.md");
+        std::fs::write(&digest, "---\nbead: ad-1r6\n---\n# ours\n").map_err(|e| e.to_string())?;
+        let sub = wt.join("crates");
+        std::fs::create_dir_all(&sub).map_err(|e| e.to_string())?;
+        let script = fake_bd_script(&dir)?;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        // The gate's answer, advisory (no AIR_ENFORCE): stdout carries the context, stderr
+        // anything the hook says on its own. Both together are "what the gate said".
+        let gate = |cwd: &Path| -> Result<String, String> {
+            use std::io::Write;
+            let input = serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "air-1r6-probe",
+                "cwd": cwd.display().to_string(),
+                "tool_name": "Bash",
+                "tool_input": {"command": "bd close ad-1r6 --reason done"},
+            });
+            let mut child = air_command(&exe, cwd)
+                .arg("hook")
+                .env("AIR_BD_BIN", &script)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            let out = child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        };
+        let from_root = gate(&wt)?;
+        let from_sub = gate(&sub)?;
+        let names_missing = |s: &str| s.contains("no digest in docs/log.d");
+        let red = !from_root.is_empty()
+            && from_sub == from_root
+            && !names_missing(&from_root)
+            && !names_missing(&from_sub);
+        std::fs::remove_file(&digest).map_err(|e| e.to_string())?;
+        let root_missing = gate(&wt)?;
+        let sub_missing = gate(&sub)?;
+        let green = names_missing(&root_missing) && names_missing(&sub_missing);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
         red_fires: red,
         green_passes: green,
     }
