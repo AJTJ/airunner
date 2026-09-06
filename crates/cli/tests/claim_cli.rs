@@ -1299,6 +1299,71 @@ fn install_reports_a_stale_bd_prime_hook() {
     assert!(!out.contains("STALE HOOK"), "{out}");
 }
 
+/// air-80x.3, end to end: alpha claims fd-1, commits with the trailer, merges main: batch-ready.
+/// A green at its head: gone, reason `green-at-head`. main moves: gone, reason `behind-main`.
+#[test]
+fn status_lists_batch_ready_branches_as_a_fact() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "fd-1"]).0, 0);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("fd-1")],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    let head = git(&alpha, &["rev-parse", "HEAD"]);
+    let read = |out: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["snapshot"].clone()
+    };
+
+    let (code, out, err) = air(&main, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let s = read(&out);
+    assert_eq!(s["batch_ready"][0]["worker"], "alpha", "{out}");
+    assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
+    assert_eq!(s["batch_ready"][0]["beads"][0], "fd-1", "{out}");
+    let (_, text, _) = air(&main, &bd, &["status"]);
+    assert!(
+        text.contains(&format!("batch-ready: alpha at {} (fd-1)", &head[..8])),
+        "{text}"
+    );
+
+    // Green at the head: landable on its own, so not for a batch.
+    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (_, out, _) = air(&main, &bd, &["--json", "status"]);
+    let s = read(&out);
+    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{out}");
+    assert!(
+        s["not_batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["worker"] == "alpha" && n["check"] == "green-at-head"),
+        "{out}"
+    );
+
+    // main moves: behind, and the reason says so. Another commit so the green is off the head.
+    std::fs::write(main.join("README"), "b\n").unwrap();
+    git(&main, &["commit", "-q", "-am", "docs: readme"]);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", "more work"],
+    );
+    let (_, out, _) = air(&main, &bd, &["--json", "status"]);
+    let s = read(&out);
+    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{out}");
+    assert!(
+        s["not_batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["worker"] == "alpha" && n["check"] == "behind-main"),
+        "{out}"
+    );
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
