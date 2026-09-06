@@ -194,8 +194,10 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "landed-not-closed",
         class: "attention",
-        what: "A bead that landed while the merge CONTRADICTS one of its acceptance clauses: \
-               a wrong close, not merely one Air could not read.",
+        what: "A bead that landed with an acceptance clause naming a file the merge did not \
+               change. A lookup that did not answer, not a contradiction and not by itself a \
+               wrong close: of nine standing firings on 2026-09-06, six were clauses that held \
+               (air-k6uh).",
         added: "2026-08-22 (air-ayp)",
         source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
         fires: Fires::Condition("landed-not-closed"),

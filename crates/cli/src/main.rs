@@ -183,8 +183,10 @@ enum Cmd {
     /// acceptance criteria and Air's verdict on each clause — the only external check on that.
     /// Air discharges a clause only by lookup: a green verify recorded at the landed sha, or a
     /// path the merge changed. Everything else it reports as unreadable rather than judging.
-    /// A clause the merge CONTRADICTS is a wrong close, kept on the landings row and named by
-    /// `air status` (air-ayp).
+    /// A clause naming a file the merge did not change is kept on the landings row and named
+    /// by `air status` (air-ayp) — as a lookup that did not answer, never as a contradiction
+    /// and never by itself as a wrong close: six of nine such firings were clauses that held
+    /// (air-k6uh).
     Land {
         bead: Vec<String>,
         /// Land this worker's branch (`worktree-<name>`), whatever beads it carries. The

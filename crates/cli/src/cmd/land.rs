@@ -330,6 +330,21 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
 /// `air land` for such a branch (air-y3v), and `branch_check`'s refusal names the same one, so
 /// the list and the refusal say the same thing.
 ///
+/// The summary `air land` prints when a landing carries clauses Air could not discharge.
+///
+/// A const so the probe reads the SHIPPED string. air-jy99: this said "either reopen it or file
+/// what is left", and an adopter's flow forbids reopening — Air told their coordinator to do what
+/// their own rules deny. The clause is rendered twice, here and in `status.rs`, and air-155w's
+/// defect survived its first fix because one renderer was corrected and the other kept teaching
+/// the forbidden thing. So this states the CONDITION and hands the decision back.
+///
+/// The "not a contradiction" half is air-k6uh's residual: that bead fixed the per-bead line and
+/// left this summary asserting the stronger claim.
+pub const REFUTED_SUMMARY: &str = "bead(s) landed with a clause naming a file this merge did not change — a lookup that did \
+     not answer, not a contradiction. `air status` names them: read the bead, then see that \
+     nothing left over is untracked. How a closed bead's remainder gets tracked is this repo's \
+     flow to say; Air prescribes nothing here.";
+
 /// air-155w: this was character-for-character the string that taught an adopter's worker to
 /// record a green under a verify lane, on the COORDINATOR's surface — which is why it was easy
 /// to miss. The coordinator may record a verify; this line is advice about a WORKER, and under
@@ -773,10 +788,7 @@ pub fn run(
     // lands (owner ruling, 2026-08-22); this command merges, verifies, and reports.
     let refuted = held_open.iter().filter(|o| o.refuted).count();
     if refuted > 0 {
-        lines.push(format!(
-            "{refuted} bead(s) landed with a clause this merge CONTRADICTS. `air status` names \
-             them: read the bead, then either reopen it or file what is left."
-        ));
+        lines.push(format!("{refuted} {REFUTED_SUMMARY}"));
     }
     let msg = lines.join("\n");
     log_event(
