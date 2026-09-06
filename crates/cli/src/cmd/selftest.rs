@@ -998,6 +998,33 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "make: the verify target runs adopter-check and selftest, and release runs release-check before verify",
+        Mutation {
+            // Read the whole file instead of one target's recipe, which is the grep this probe
+            // exists to be better than. The real Makefile still contains every command name
+            // somewhere, so the RED half stays green and only the decoy half falls — the decoy
+            // being a file where the names appear in a comment and in another target.
+            file: "crates/cli/src/cmd/selftest.rs",
+            from: "            if line.starts_with(&format!(\"{target}:\")) {",
+            to: "            if true || line.starts_with(&format!(\"{target}:\")) {",
+            also_red: &[],
+        },
+    ),
+    (
+        "batch: a landing records exactly the branches its batch merged, once each, and never one already in main",
+        Mutation {
+            // Stop excluding a worker whose head has reached main. The batch it merged is
+            // unchanged, so the RED half still names the two it merged; what falls is the
+            // green half, where w1 has landed and would be re-listed on every landing after
+            // its own. One condition, and the wrong one to lose quietly: the members row is
+            // what a red batch is reported by.
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "        if in_batch && !in_main {",
+            to: "        if in_batch {",
+            also_red: &[],
+        },
+    ),
+    (
         "selftest: every declared mutation still anchors exactly once in the file it names",
         Mutation {
             // Accept a dead anchor as fine, which is the state the registry was actually in
@@ -1577,6 +1604,8 @@ fn all_probes() -> Vec<Probe> {
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
         probe_every_declared_mutation_still_anchors(),
+        probe_a_batch_records_exactly_the_branches_it_merged(),
+        probe_the_gate_runs_what_the_makefile_says(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -8029,5 +8058,197 @@ fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
             // "Usage limit reset" and the fired one says "continuing automatically", so a
             // reader of the words would have them backwards.
             && stop_kind(&fired) != stop_kind(&stale),
+    }
+}
+
+/// air-lpd: what a landing records as a batch's members, on a real repo with real worktrees.
+///
+/// `batch::members_of` had neither a probe nor a unit test, measured by air-g7e's coverage pass
+/// over every function this round added. It decides the `members` on a landing row, which is
+/// the fleet's only record of what a batch contained and the thing a red batch is reported by
+/// (air-80x.4). The same pass predicted air-9ij from a gap of exactly this shape before the
+/// incident report arrived: the untested function was the one that broke.
+///
+/// Ancestry only, never commit messages, so the fixture is four worktrees and a merge.
+///
+/// Red: a lane that merged two of three workers records exactly those two, by worker and by
+/// head, and not the third. Green: the two exclusions that are easy to lose. A worker whose
+/// head has reached main is NOT a member — otherwise every landing re-lists everyone who ever
+/// landed — and the lane never lists itself. A worker merged twice appears once, which comes
+/// free from iterating worktrees rather than merges, and is asserted so that a rewrite reading
+/// merges instead cannot pass.
+fn probe_a_batch_records_exactly_the_branches_it_merged() -> Probe {
+    use crate::cmd::batch::members_of;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |cwd: &Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&dir, &["init", "-q", "-b", "main"])?;
+        g(&dir, &["commit", "-q", "--allow-empty", "-m", "base"])?;
+
+        // Four worker worktrees where the launcher puts them, so `worker_name_for` reads the
+        // names off the paths exactly as it does in a live fleet.
+        let wt = |name: &str| dir.join(".claude").join("worktrees").join(name);
+        for name in ["w1", "w2", "w3", "lane"] {
+            g(
+                &dir,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    name,
+                    &wt(name).display().to_string(),
+                ],
+            )?;
+            g(&wt(name), &["commit", "-q", "--allow-empty", "-m", name])?;
+        }
+        let head_of =
+            |name: &str| -> Result<String, String> { g(&wt(name), &["rev-parse", "HEAD"]) };
+
+        // The lane merges w1 and w2, and w1 twice, which a real lane does whenever a worker
+        // pushes another commit into a batch that already carried it.
+        for name in ["w1", "w2", "w1"] {
+            g(
+                &wt("lane"),
+                &["merge", "-q", "--no-ff", "-m", "batch", name],
+            )?;
+        }
+        let lane_head = head_of("lane")?;
+        let main_tip = g(&dir, &["rev-parse", "main"])?;
+
+        let members = members_of(&dir, "lane", &lane_head, &main_tip);
+        let named: Vec<(String, String)> = members
+            .iter()
+            .map(|m| (m.worker.clone(), m.sha.clone()))
+            .collect();
+        let red = named
+            == vec![
+                ("w1".to_string(), head_of("w1")?),
+                ("w2".to_string(), head_of("w2")?),
+            ];
+
+        // Main advances to contain w1's work, which is what landing the batch does. w1's head
+        // is now an ancestor of main and stops being a member; w2's is not and stays one.
+        g(&dir, &["merge", "-q", "--ff-only", "w1"])?;
+        let moved_tip = g(&dir, &["rev-parse", "main"])?;
+        let after = members_of(&dir, "lane", &lane_head, &moved_tip);
+        let only_w2 = after.len() == 1 && after.first().is_some_and(|m| m.worker == "w2");
+        // The lane is never its own member, whatever it merged.
+        let not_itself = !after.iter().any(|m| m.worker == "lane")
+            && !members.iter().any(|m| m.worker == "lane");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, only_w2 && not_itself))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "batch: a landing records exactly the branches its batch merged, once each, and never one already in main",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-o1m: the gate runs what the Makefile says it runs.
+///
+/// Two of this round's mechanisms are enforced only because a line in a Makefile invokes them:
+/// `air release-check` (air-mir) and `air adopter-check` (air-bpj). Nothing read that file, so
+/// deleting either line left `make verify` green while checking less — one gap behind two
+/// mechanisms, failing toward permitting, found by air-g7e's coverage pass.
+///
+/// **It parses the targets rather than grepping the file**, because a grep is satisfied by the
+/// name appearing anywhere: in the comment above the target, in a different target, or in a
+/// line somebody commented out. What a target's recipe actually contains is the question.
+///
+/// The two live in different targets and the probe says which, because the bead's own wording
+/// put both in `verify` and only one is: `verify` runs `adopter-check`, and `release` runs
+/// `release-check` before delegating to `verify` (air-mir moved it there, so a lane's notice
+/// does not force a release). A probe that accepted either target would have let air-mir's
+/// move go unnoticed in the other direction too.
+///
+/// Red: the recipe of `verify` invokes `adopter-check` and `selftest`, and `release` invokes
+/// `release-check` and `verify` — each named, so a renamed target cannot silently satisfy it.
+/// Green: the parse is not a substring search — a line that only mentions a command in a
+/// comment, or that sits in another target, does not count.
+fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
+    /// The recipe lines of one target: the tab-indented block under `name:`, comments and
+    /// blank lines dropped. Pure, so the green half can feed it a file that would fool a grep.
+    fn recipe(makefile: &str, target: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut inside = false;
+        for line in makefile.lines() {
+            if line.starts_with(&format!("{target}:")) {
+                inside = true;
+                continue;
+            }
+            if inside {
+                let Some(body) = line.strip_prefix('\t') else {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    break;
+                };
+                let body = body.trim_start_matches(['@', '-']).trim();
+                if !body.starts_with('#') && !body.is_empty() {
+                    out.push(body.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    let runs = |lines: &[String], cmd: &str| lines.iter().any(|l| l.contains(cmd));
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Makefile");
+        let mk = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let verify = recipe(&mk, "verify");
+        let release = recipe(&mk, "release");
+        if verify.is_empty() || release.is_empty() {
+            return Err("Makefile has no `verify:` or no `release:` recipe".into());
+        }
+        Ok((
+            runs(&verify, "air -- adopter-check")
+                && runs(&verify, "air -- selftest")
+                && runs(&release, "air -- release-check")
+                && runs(&release, "verify"),
+            true,
+        ))
+    })();
+    let (red, _) = res.unwrap_or_else(blocked);
+
+    // A file built to fool a grep: both command names are present, one in a comment above the
+    // target and one in an unrelated target, and neither is in `verify`'s recipe.
+    let decoy = "# verify runs air -- adopter-check, honestly\nverify:\n\tcargo test\n\nother:\n\tcargo run -q -p air -- adopter-check\n";
+    let green = !runs(&recipe(decoy, "verify"), "air -- adopter-check")
+        && runs(&recipe(decoy, "other"), "air -- adopter-check")
+        && recipe(decoy, "verify") == vec!["cargo test".to_string()];
+
+    Probe {
+        name: "make: the verify target runs adopter-check and selftest, and release runs release-check before verify",
+        red_fires: red,
+        green_passes: green,
     }
 }
