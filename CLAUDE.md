@@ -143,7 +143,13 @@ because `.air/roles.md` deliberately does not say it (air-8zu). Air states what 
 what it refuses; the sequence is ours.
 
 **A worker closes its own bead with proof** (owner, 2026-08-22, air-7o3). No `awaiting_review`,
-no waiting for review:
+no waiting for review. Two variants; **which one is in force is the `verify_lane` key in
+`.claude/air.json`**: `"verify_lane": "<worker>"` names the lane and puts variant B in force
+for everyone, and an absent key means variant A. Air reads neither variant; it refuses the same
+thing under both (a close needs a green at a commit containing `main`, at HEAD or at a verified
+descendant, air-80x.1).
+
+**Variant A, no verify lane** (`verify_lane` absent):
 
     air claim <id> [--files a,b]
     … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
@@ -152,6 +158,24 @@ no waiting for review:
     air record verify -- make verify        # last, so the green is at the commit containing main
     bd close <id> --reason "<proof>"
     … next bead
+
+**Variant B, a verify lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
+The worker does **not** run verify: the batch only forms if workers stop verifying individually,
+which is what adopter's 2026-08-29 round learned by parking a lane whose batch never came.
+
+    air claim <id> [--files a,b]
+    … implement; write and commit the digest as above, with a `Bead: <id>` trailer on the work
+    git merge main                          # your branch now shows in `air status` as batch-ready
+    … wait for the lane's green; `air handover` says when the close would pass
+    bd close <id> --reason "<proof: the lane's green at <sha>, which contains your commits>"
+    … next bead; a commit made after the lane cut its batch waits for the next batch
+
+The lane's own sequence, and it holds no bead while it batches: read `air status` (the
+`batch-ready:` lines, or `--json` `batch_ready`), `git merge main` plus every batch-ready branch
+at the sha listed, `air record verify -- make verify`, then signal the coordinator with the
+members; a branch that conflicts is dropped from the batch and named to its worker, never
+resolved by the lane. The coordinator lands the batch with `air land --worker <lane>`, which
+attributes every bead the range names. A red batch lands nothing and is reported by member.
 
 The digest's front matter is what the hand-over gate reads (air-agq). It used to find a
 digest by looking for the worker's name in a filename and an mtime newer than the claim, which
