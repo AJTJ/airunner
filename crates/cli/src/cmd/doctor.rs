@@ -95,6 +95,10 @@ pub fn dated_rules(now: jiff::Timestamp) -> Vec<DatedRule> {
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub bd: BdCheck,
+    /// Which binary this is (air-dwq5): version, the commit it was built from, and its surface
+    /// version. `air doctor` is where somebody goes when a repo behaves unexpectedly, and "am I
+    /// running the binary I think I am" was the one question it could not answer.
+    pub air: serde_json::Value,
     /// Dated rules and whether their cutoff has passed (air-24e).
     pub dated_rules: Vec<DatedRule>,
     pub air_dir: String,
@@ -165,6 +169,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
     let rows = table_rows(ledger.conn());
     let report = Report {
         bd: bd_check(repo),
+        air: crate::cmd::install::version_json(),
         dated_rules: dated_rules(
             crate::cmd::now()
                 .parse()
@@ -186,7 +191,8 @@ pub fn run(repo: &Path, json: bool) -> i32 {
     };
     emit(json, &report, || {
         let mut s = format!(
-            "air dir: {}\nworker: {}\nledger: {} bytes, journal_mode={}, schema v{}\n",
+            "{}\nair dir: {}\nworker: {}\nledger: {} bytes, journal_mode={}, schema v{}\n",
+            crate::cmd::install::version_line(),
             report.air_dir,
             report.worker,
             report.ledger_bytes,
