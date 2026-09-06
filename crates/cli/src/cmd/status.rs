@@ -1179,6 +1179,16 @@ pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
     )
 }
 
+/// Is one of `s.verifies_in_flight` this worker's? (air-t6ap.)
+///
+/// A verify is progress, and it is progress that must not be interrupted: a land invalidates
+/// every run in flight (air-4cr) and a lane that claims a bead mid-batch cannot cut the batch.
+/// The dead-pid pruning happens in `verifies_in_flight`, so a row that reaches the snapshot is
+/// a live run.
+pub fn verify_running(s: &Snapshot, worker: &str) -> bool {
+    s.verifies_in_flight.iter().any(|f| f.worker == worker)
+}
+
 /// Seconds between two RFC 3339 timestamps; None when either does not parse.
 pub fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
@@ -1241,10 +1251,27 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     // the threshold rather than renaming a field. The condition now fires
                     // strictly less often, and what it means is narrower and truer — "there is
                     // work this worker could start", not "the queue is non-empty".
+                    //
+                    // air-t6ap: and not while this worker's own verify is running. An
+                    // adopter's verify lane was offered 58 claimable beads 945 SECONDS into a
+                    // batch verify, with `air status` printing `verify in flight: w4 started
+                    // 945s ago` three lines above the condition contradicting it. A lane holds
+                    // no bead while it batches — roles.md says so in those words (air-80x.6) —
+                    // so the condition fired on a documented state, and its remedy is worse
+                    // than useless there: a lane that claims a bead mid-batch cannot cut the
+                    // batch, and three workers were waiting on that run. Their coordinator
+                    // checked the run was alive and did not prompt; an unattended one would
+                    // have interrupted it at minute fifteen.
+                    //
+                    // "No claim" was standing in for "nothing in progress", and a running
+                    // verify is progress. Same shape as air-uir moving this very condition
+                    // from bd's raw depth to the claimable count: keyed to the instance rather
+                    // than to the meaning.
                     "idle"
                         if !has_claim
                             && w.role == "worker"
                             && sess.pid_alive != Some(false)
+                            && !verify_running(s, &w.worker)
                             && s.claimable_depth.is_some_and(|n| n > 0)
                             && age >= t.idle_noclaim_min =>
                     {

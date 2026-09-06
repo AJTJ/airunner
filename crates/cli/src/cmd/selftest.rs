@@ -613,6 +613,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     // referenced-day protection, the join's file-and-order keys, the freshness window, the
     // bookkeeping overlap, the push deny.
     (
+        "attention: idle-without-claim is silent for a worker whose own verify is in flight",
+        Mutation {
+            // Restores the predicate exactly as it stood when it offered an adopter's lane 58
+            // beads 945 s into a batch verify: every other term kept, only the one that reads
+            // the in-flight field removed.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "                            && !verify_running(s, &w.worker)\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2107,6 +2119,7 @@ fn all_probes() -> Vec<Probe> {
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
         probe_idle_without_claim_counts_claimable_only(),
+        probe_idle_without_claim_silent_while_verifying(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -3761,6 +3774,77 @@ fn probe_idle_without_claim_counts_claimable_only() -> Probe {
         && render_for_probe(&at(3, 3)).contains("ready: 3\n");
     Probe {
         name: "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-t6ap: `idle-without-claim` is silent for a worker whose own verify is running.
+///
+/// An adopter's verify lane was told to claim one of 58 beads **945 seconds into a batch
+/// verify**, while `air status` printed `verify in flight: w4 started 945s ago` three lines
+/// above. A lane holds no bead while it batches — roles.md says so in those words (air-80x.6)
+/// — so the condition fired on a documented state, and the remedy it named is the failure it
+/// exists to prevent: a lane that claims a bead mid-batch cannot cut the batch, and three
+/// workers were waiting on that run. Their coordinator checked the run was alive and did not
+/// prompt. An unattended one would have interrupted it at minute fifteen.
+///
+/// The discriminating fact was never missing. `verifies_in_flight` is a field on the same
+/// snapshot this predicate reads, populated by the same `gather`, printed by the same command.
+///
+/// Red: an in-flight verify for this worker silences the condition. Green: the same worker with
+/// no verify running is still reported, and a verify belonging to somebody else does not
+/// silence it — so the fix cannot be a blanket suppression.
+fn probe_idle_without_claim_silent_while_verifying() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention};
+
+    // Whoever the in-flight row names; None for no row at all.
+    let at = |running: Option<&str>| Snapshot {
+        at: "2026-09-06T12:30:00Z".into(),
+        workers: vec![crate::cmd::status::WorkerView {
+            worker: "w4".into(),
+            role: "worker".into(),
+            session: Some(crate::cmd::status::Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                changed_at: "2026-09-06T12:00:00Z".into(),
+                pid_alive: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(58),
+        claimable_depth: Some(58),
+        verifies_in_flight: running
+            .map(|w| {
+                vec![air_ledger::verify::InFlight {
+                    id: "01J".into(),
+                    worker: w.into(),
+                    sha: "cafe1234".into(),
+                    kind: air_ledger::verify::Kind::Verify,
+                    command: "make verify".into(),
+                    pid: Some(4242),
+                    started_at: "2026-09-06T12:14:15Z".into(),
+                }]
+            })
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    let fires = |s: &Snapshot| {
+        attention(s, "2026-09-06T12:30:00Z", Thresholds::default())
+            .iter()
+            .any(|a| a.kind == "idle-without-claim")
+    };
+
+    // The reported state, to the second: idle 30 min, 58 claimable, own verify 945 s in.
+    let red = !fires(&at(Some("w4")));
+    let green =
+        // Without the run, this is an ordinary idle worker and the condition is the point.
+        fires(&at(None))
+        // Somebody else's verify says nothing about whether w4 can take a bead.
+        && fires(&at(Some("other")));
+    Probe {
+        name: "attention: idle-without-claim is silent for a worker whose own verify is in flight",
         red_fires: red,
         green_passes: green,
     }
