@@ -205,6 +205,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
+        Mutation {
+            // Bring the deleted arm back: a PermissionRequest writes `stuck` again. The probe's
+            // real hook run sees the state change; nothing else in the suite drives that event.
+            file: "crates/cli/src/cmd/hook.rs",
+            from: "        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
+            to: "        HookEvent::PermissionRequest => {\n            let prev = set_session(ledger, input, worker, \"stuck\", None)?;\n            Dispatched::new(HookOutcome::Allow { context: None }, \"stuck\", transition(&prev, \"stuck\"))\n        }\n        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
+            also_red: &[],
+        },
+    ),
+    (
         "record: a red at a batch head is reported by member and lands nothing; a red at a worker's own head is not a batch",
         Mutation {
             // Drop the members filter: every red run becomes a "batch", including a worker's
@@ -1268,6 +1279,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_green_closes_the_bead_it_covers(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
+        probe_no_session_reads_stuck(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -4361,7 +4373,7 @@ fn probe_channel_dedupe() -> Probe {
     use crate::cmd::status::Attention;
     let a = |m: i64| Attention {
         worker: "w".into(),
-        kind: "stuck",
+        kind: "idle-with-claim",
         detail: String::new(),
         for_minutes: m,
         fingerprint: String::new(),
@@ -4729,7 +4741,7 @@ fn probe_status_tests_hold_one_instant() -> Probe {
         red_fires: instants == 1,
         green_passes: src.contains("fn past_every_line_min() -> i64")
             && src.contains("fn under_every_line_min() -> i64")
-            && src.contains("fn every_line() -> [i64; 5]"),
+            && src.contains("fn every_line() -> [i64; 4]"),
     }
 }
 
@@ -5974,6 +5986,146 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "hook: SubagentStop is not the worker's stop; it runs no bd and marks nothing idle",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-12k: no session ever reads `stuck`. The state was written only by
+/// `HookEvent::PermissionRequest`, which the fleet's auto mode never sends, so the condition
+/// built on it fired zero times in any recorded day (case 3b, air-byw) and was deleted on the
+/// owner's ruling with the heartbeat as the failsafe.
+///
+/// Red: a real `air hook` PermissionRequest leaves the session's state exactly as it was, no
+/// attention kind or registry row is named `stuck`, and a session row that somehow holds the
+/// state raises nothing. Green: the arm that replaced it is live, so an idle session holding a
+/// claim still raises `idle-with-claim`.
+fn probe_no_session_reads_stuck() -> Probe {
+    use crate::cmd::mechanisms::{Fires, MECHANISMS};
+    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention, kinds};
+    use air_ledger::claims::Claim;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let wt = dir.join(".claude").join("worktrees").join("w");
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ])?;
+        let script = fake_bd_script(&dir)?;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let hook = |event: &str, tool: &str| -> Result<(), String> {
+            use std::io::Write;
+            let input = serde_json::json!({
+                "hook_event_name": event,
+                "session_id": "air-12k-probe",
+                "cwd": wt.display().to_string(),
+                "tool_name": tool,
+            });
+            let mut child = air_command(&exe, &wt)
+                .arg("hook")
+                .env("AIR_BD_BIN", &script)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(input.to_string().as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            child.wait_with_output().map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        let state = || -> Option<String> {
+            rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+                .ok()?
+                .query_row(
+                    "SELECT state FROM sessions WHERE session_id='air-12k-probe'",
+                    [],
+                    |r| r.get(0),
+                )
+                .ok()
+        };
+        hook("PreToolUse", "Read")?;
+        let before = state();
+        hook("PermissionRequest", "Bash")?;
+        let after = state();
+        let _ = std::fs::remove_dir_all(&dir);
+        let unchanged = before.is_some() && before == after;
+        let unnamed = !kinds::ALL.contains(&"stuck")
+            && !MECHANISMS
+                .iter()
+                .any(|m| m.id == "stuck" || matches!(m.fires, Fires::Condition("stuck")));
+
+        let session = |state: &str| Session {
+            state: state.into(),
+            changed_at: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let held = |worker: &str| Claim {
+            bead: "ad-12k".into(),
+            worker: worker.into(),
+            claimed_at: "2026-01-01T00:00:00Z".into(),
+            declared_files: Vec::new(),
+            first_handover_at: None,
+            last_handover_at: None,
+            handover_attempts: 0,
+            released_at: None,
+            release_reason: None,
+        };
+        let view = |worker: &str, state: &str| WorkerView {
+            worker: worker.into(),
+            session: Some(session(state)),
+            claims: vec![held(worker)],
+            ..Default::default()
+        };
+        let now = "2026-01-01T02:00:00Z";
+        let raised = |state: &str| {
+            attention(
+                &Snapshot {
+                    workers: vec![view("w", state)],
+                    ..Default::default()
+                },
+                now,
+                Thresholds::default(),
+            )
+        };
+        let unread = raised("stuck").is_empty();
+        let red = unchanged && unnamed && unread;
+        let green = raised("idle")
+            .iter()
+            .any(|a| a.kind == kinds::IDLE_WITH_CLAIM);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
         red_fires: red,
         green_passes: green,
     }

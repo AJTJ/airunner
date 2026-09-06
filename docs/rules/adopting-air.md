@@ -272,7 +272,7 @@ their tree.
 | "Do not set awaiting_review without green" | Hand-over gate: green at HEAD, main merged, claim held, digest present (advisory; `AIR_ENFORCE=1` refuses) |
 | "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode |
 | "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
-| "Check on the fleet every N minutes" | Channel push: stuck, idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
+| "Check on the fleet every N minutes" | Channel push: idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
 | "The owner merges every green branch at the end of the round" | Landing is the coordinator's, and a branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
 | "Close the landed beads one by one" | `air close <id>… --reason "<why>"`: one `bd` process for the whole pass, and the matching claims released in one ledger transaction. `bd` costs ~1.4 s per process here whatever it is asked, so the count of processes IS the cost (air-869) |
 | "Do not set awaiting_review without green" (advisory) | Refused, not advised: worker launches set `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fixing command (air-i59) |

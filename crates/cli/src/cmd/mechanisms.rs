@@ -91,9 +91,18 @@ pub struct Mechanism {
 ///   window and never in any recorded day. A dead session holding a claim falls through to the
 ///   ordinary session states, which do fire.
 /// - `cross-project-fence` (2026-08-22, removed 2026-08-29, air-9u6): zero firings ever.
-///
-/// `stuck` was proposed for deletion by air-dqw on zero firings and is NOT deleted. Its silence
-/// measures the fleet's permission mode, not the mechanism: see its row below.
+/// - `stuck` (2026-08-20, plan 0004; removed 2026-09-06, air-12k, owner ruling "sure, both"):
+///   a session waiting on a permission prompt past a threshold. Zero firings in every recorded
+///   day, and the zero was case 3b, not case 1: the state was set only by
+///   `HookEvent::PermissionRequest`, and `hook.PermissionRequest` arrived 0 times in 39,071
+///   event lines over 8 days because the fleet runs in auto mode (`permissions.defaultMode:
+///   auto`, `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing waits on
+///   one (air-byw). Proposed for deletion on the count by air-dqw and reverted on that finding;
+///   deleted now on a different ground: a condition whose input the configuration suppresses
+///   is a promise, not a mechanism, and the coordinator's 5-minute heartbeat did every catch
+///   in the 2026-09-05 round. The heartbeat is the failsafe (`docs/rules/roles.md`). A wedge
+///   that auto mode would show as a prompt is now caught by `idle-with-claim` or the
+///   heartbeat, not by a state nothing ever wrote.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -212,33 +221,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     // `owner-decision-waiting` was here (plan 0006): captures sitting in the owner queue,
     // with the age of the oldest. DELETED by air-uef (owner, 2026-09-05) with the queue it
     // watched; the owner's queue is beads labelled `owner`, counted on the `ready:` line.
-    Mechanism {
-        id: "stuck",
-        class: "attention",
-        what: "A session waiting on a permission prompt past the stuck threshold.",
-        added: "2026-08-20 (plan 0004)",
-        source: "crates/cli/src/cmd/status.rs; the state is set only by hook.rs PermissionRequest",
-        fires: Fires::Condition("stuck"),
-        // Zero firings in every recorded day, and that number settles NOTHING in either
-        // direction (air-dqw, corrected by air-byw before the deletion shipped; ledger reverted
-        // it on the finding).
-        //
-        // The state is set in exactly ONE place, `HookEvent::PermissionRequest`, and
-        // `hook.PermissionRequest` has fired 0 times in 39,071 event lines over 8 days. The hook
-        // is not broken and not misnamed: the harness inventory lists `PermissionRequest` as
-        // "permission prompt needed", and `install.rs` registers it correctly. It never arrives
-        // because the fleet runs in AUTO MODE (`permissions.defaultMode: auto`,
-        // `skipAutoPermissionPrompt: true`), so no prompt is ever shown and nothing ever waits on
-        // one. Every `PermissionDenied` event says "Blocked by classifier": that classifier
-        // deciding instead of asking.
-        //
-        // Dormant, not dead. Turn auto mode off and this fires immediately with no code change.
-        // A zero is evidence only when the subject occurred and the mechanism stayed silent
-        // (air-txa); this is the case where the input is suppressed by configuration.
-        removal: Removal::Judgement(
-            "a round in which permission prompts are actually shown (auto mode off) records zero stuck conditions; until then the silence measures the permission configuration and cannot settle this in either direction",
-        ),
-    },
+    // `stuck` was here (plan 0004). DELETED by air-12k (owner, 2026-09-06); the record is in
+    // this file's header list so nobody re-adds it on the zero that never justified it.
     // air-sze: the five condition kinds that shipped with no row at all. An unregistered
     // DECISION was merely uncounted (air-8br); an unregistered CONDITION was invisible, because
     // the audit can only count kinds the registry already names. All five read zero over
@@ -271,13 +255,12 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-20 (plan 0004)",
         source: "crates/cli/src/cmd/status.rs, Thresholds::idle_with_claim_min",
         fires: Fires::Condition("idle-with-claim"),
-        // KEPT on the wedge argument, not on its count. `stuck` has never fired either and
-        // records no removal condition, so with both of these gone nothing at all notices a
-        // worker that has stalled holding work — which is the gap the coordinator's 5-minute
-        // heartbeat was added to cover (air-arq). Delete the detector and the heartbeat is the
-        // only thing left looking.
+        // KEPT on the wedge argument, not on its count. With `stuck` deleted (air-12k) this is
+        // the one condition that notices a worker stalled holding work; the coordinator's
+        // 5-minute heartbeat (air-arq) is the failsafe behind it. Delete the detector and the
+        // heartbeat is the only thing left looking.
         removal: Removal::Judgement(
-            "the heartbeat or `stuck` catches a stalled worker holding a bead first, twice, so this is the second thing to notice rather than the only one",
+            "the heartbeat catches a stalled worker holding a bead first, twice, so this is the second thing to notice rather than the only one",
         ),
     },
     Mechanism {
