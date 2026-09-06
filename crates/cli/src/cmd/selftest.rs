@@ -174,6 +174,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-cyf. The anchor puts the window back, at the value it had. Everything else
+    // survives: the batch is still found, supersession still decides, a plain red and a
+    // killed run are still not batches. What changes is only whether a busy day can age a
+    // standing red out of view, which is the failure the bead records and the one a probe
+    // reading fewer than 21 later runs would not have seen.
+    (
+        "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
+        Mutation {
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "let run = ledger.latest_red_batch(Kind::Verify).ok()??;",
+            to: "let run = ledger.latest_runs(Kind::Verify, 20).ok()?.into_iter().find(|r| r.verdict() == air_ledger::verify::Verdict::Red && !r.members.is_empty())?;",
+            also_red: &[],
+        },
+    ),
     // air-btz. The anchor is the walk's bound, so the `blocks` filter, the rendering and the
     // two bd calls all survive it: what changes is only how far up the check looks. Under it
     // the parent case is still found — and bd already refuses that one on every route, so a
@@ -1719,6 +1733,7 @@ fn all_probes() -> Vec<Probe> {
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
         probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list(),
+        probe_a_standing_red_batch_is_not_aged_out_by_later_runs(),
     ]
 }
 
@@ -8945,5 +8960,178 @@ fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
         name: "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
         red_fires: red,
         green_passes: green,
+    }
+}
+
+/// air-cyf: `red_batch_standing` read `latest_runs(Kind::Verify, 20)` and picked the red batch
+/// out of that window. Past 20 further verify runs a standing red batch stopped being reported,
+/// with nothing said — **and a report that was dropped looked exactly like one that was fixed.**
+/// The 20 had no test and no reason recorded beside it, and it failed toward permitting in the
+/// one place the fleet is told that nothing may land.
+///
+/// A round here records dozens of verify runs in an evening (`air audit` counts them), so this
+/// is not a theoretical horizon.
+///
+/// Red: a red batch with 25 later verify runs on top of it is STILL reported. That is the exact
+/// case the window dropped, and the number is one more than the window that used to exist plus
+/// margin, so a smaller window than 25 cannot pass it either.
+///
+/// Green: the only reason a standing red stops being reported is that it was fixed — a later
+/// green that carries EVERY member supersedes it, and one that carries only some does not. And
+/// two runs that are not batches are not reported as one: a red at a worker's own head carries
+/// no members, and a killed run is no verdict at all rather than a red.
+fn probe_a_standing_red_batch_is_not_aged_out_by_later_runs() -> Probe {
+    use crate::cmd::batch::{RedBatch, red_batch_standing, superseded_by};
+    use air_ledger::landings::Member;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let l = Ledger::open_in(&dir).map_err(|e| e.to_string())?;
+        let mut at: u32 = 0;
+        let mut record = |sha: &str, exit: i32, members: Vec<Member>| -> Result<String, String> {
+            at = at.saturating_add(1);
+            let t = format!("2026-09-06T00:{at:02}:00Z");
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "lane".into(),
+                sha: sha.into(),
+                kind: Kind::Verify,
+                exit_code: exit,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: t.clone(),
+                finished_at: t.clone(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: None,
+                members,
+                main_sha: None,
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(t)
+        };
+        let m = |w: &str, sha: &str| Member {
+            worker: w.into(),
+            sha: sha.into(),
+        };
+        let members = vec![m("alpha", "a1a1a1a1a1"), m("beta", "b2b2b2b2b2")];
+
+        // The batch goes red, then the fleet keeps working: 25 ordinary runs on top of it,
+        // five past the window that used to exist.
+        let red_at = record("batch1234", 2, members.clone())?;
+        for i in 0..25 {
+            record(&format!("worker{i:04}"), i32::from(i % 3 == 0), Vec::new())?;
+        }
+        // `repo` is a directory with no git in it, so `is_ancestor` answers false for every
+        // pair: no green here carries anything, which isolates the AGE question from the
+        // supersession one.
+        let still_there = red_batch_standing(&l, &dir).is_some_and(|b| b.sha == "batch1234");
+
+        // Not a batch: a red at a worker's own head carries no members, and a killed run is no
+        // verdict. Neither may be reported as a standing red batch.
+        let dir2 = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir2).map_err(|e| e.to_string())?;
+        let l2 = Ledger::open_in(&dir2).map_err(|e| e.to_string())?;
+        l2.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "w".into(),
+            sha: "plainred1".into(),
+            kind: Kind::Verify,
+            exit_code: 2,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "2026-09-06T01:00:00Z".into(),
+            finished_at: "2026-09-06T01:00:00Z".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: Vec::new(),
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        l2.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "lane".into(),
+            sha: "killedbatch".into(),
+            kind: Kind::Verify,
+            // 137, not any non-zero: `KILLED_EXITS` is [137, 143] and a probe that used 130
+            // would be asserting that an ordinary red batch is not a batch.
+            exit_code: 137,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "2026-09-06T02:00:00Z".into(),
+            finished_at: "2026-09-06T02:00:00Z".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: members.clone(),
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        let neither_is_a_batch = red_batch_standing(&l2, &dir2).is_none();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = red_at;
+        Ok((still_there, neither_is_a_batch))
+    })();
+    let (still_there, neither_is_a_batch) = res.unwrap_or((false, false));
+
+    // Supersession, pure: only a green carrying EVERY member fixes the batch. Driven through
+    // an ancestry oracle rather than a repo, so the rule is visible instead of inferred.
+    let red = RedBatch {
+        sha: "batch1234".into(),
+        worker: "lane".into(),
+        at: "2026-09-06T00:01:00Z".into(),
+        members: vec![
+            Member {
+                worker: "alpha".into(),
+                sha: "a1".into(),
+            },
+            Member {
+                worker: "beta".into(),
+                sha: "b2".into(),
+            },
+        ],
+    };
+    let green = |sha: &str, at: &str| VerifyRun {
+        id: new_id(),
+        worker: "lane".into(),
+        sha: sha.into(),
+        kind: Kind::Verify,
+        exit_code: 0,
+        trigger: "selftest".into(),
+        failing_step: None,
+        started_at: at.into(),
+        finished_at: at.into(),
+        log_path: None,
+        command: None,
+        duration_ms: None,
+        output_bytes: None,
+        dirty: false,
+        tree: None,
+        members: Vec::new(),
+        main_sha: None,
+    };
+    // An empty directory: `is_ancestor` cannot answer, so nothing carries anything.
+    let nowhere = Path::new("/nonexistent-air-selftest");
+    let carries_nothing = !superseded_by(nowhere, &red, &[green("g1", "2026-09-06T09:00:00Z")]);
+    // A green BEFORE the batch never supersedes it, whatever it carries.
+    let earlier_never = !superseded_by(nowhere, &red, &[green("g0", "2026-09-06T00:00:00Z")]);
+
+    Probe {
+        name: "batch: a standing red batch is reported until a green carries every member, and is never aged out by later runs",
+        red_fires: still_there,
+        green_passes: neither_is_a_batch && carries_nothing && earlier_never,
     }
 }
