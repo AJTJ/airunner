@@ -152,6 +152,13 @@ pub struct Snapshot {
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
     pub landable: Vec<Landing>,
+    /// Branches the verify lane may merge into its next batch (air-80x.3): head contains
+    /// main, no green at that head, and the commits name a bead the worker holds. A fact the
+    /// lane reads when it cuts a batch; no condition pushes it. Before this the list lived in
+    /// messages, and in adopter's 2026-08-29 round the batch never formed.
+    pub batch_ready: Vec<BatchReady>,
+    /// Every worker branch that is NOT batch-ready, with the fact it lacks (`--json`).
+    pub not_batch_ready: Vec<NotBatchReady>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
     /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
     /// red land leaves behind. The message at rewind time is not the only copy.
@@ -271,6 +278,164 @@ pub struct Landing {
     /// list and the refusal cannot disagree. `command` above is the one that matches this.
     #[serde(default)]
     pub blocked: Option<String>,
+}
+
+/// A branch ready for the verify lane's next batch (air-80x.3).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct BatchReady {
+    pub worker: String,
+    pub head: String,
+    /// The beads the branch names by `Bead:` trailer that this worker holds a claim on.
+    pub beads: Vec<String>,
+}
+
+/// Why a worker branch is not batch-ready: the one fact it lacks, first failing fact wins.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct NotBatchReady {
+    pub worker: String,
+    pub head: String,
+    /// `behind-main` | `green-at-head` | `no-claimed-bead`
+    pub check: &'static str,
+    pub detail: String,
+}
+
+/// The facts the batch-ready rule reads, one worktree's worth.
+#[derive(Debug, Clone, Default)]
+pub struct BatchFacts {
+    pub worker: String,
+    pub head: String,
+    /// `git merge-base --is-ancestor main <head>`.
+    pub contains_main: bool,
+    /// `green::at(head)` holds: the branch is landable on its own and needs no batch.
+    pub green_at_head: bool,
+    /// Beads declared by `Bead:` trailers in `main..head`.
+    pub carried: Vec<String>,
+    /// Beads this worker holds an open claim on.
+    pub held: Vec<String>,
+}
+
+/// THE batch-ready rule, pure (air-80x.3): a branch whose head contains main, that has no
+/// green at that head, and whose commits name a bead the worker holds. All three, in that
+/// order, so the reason a branch is absent is the first fact it lacks. Nothing here is a
+/// judgement: each fact is a git or ledger lookup the lane could make itself.
+///
+/// Removal: when the harness or bd carries a branch-ready state Air can read instead.
+pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
+    let short = f.head.get(..8).unwrap_or(&f.head);
+    let not = |check: &'static str, detail: String| NotBatchReady {
+        worker: f.worker.clone(),
+        head: f.head.clone(),
+        check,
+        detail,
+    };
+    if !f.contains_main {
+        return Err(not(
+            "behind-main",
+            format!(
+                "{} at {short} does not contain main; `git merge main` first",
+                f.worker
+            ),
+        ));
+    }
+    if f.green_at_head {
+        return Err(not(
+            "green-at-head",
+            format!(
+                "{} at {short} is already green: landable on its own, nothing to batch",
+                f.worker
+            ),
+        ));
+    }
+    let beads: Vec<String> = f
+        .carried
+        .iter()
+        .filter(|b| f.held.contains(b))
+        .cloned()
+        .collect();
+    if beads.is_empty() {
+        return Err(not(
+            "no-claimed-bead",
+            format!(
+                "{} at {short}: no commit in main..{short} names a bead {} holds a claim on (carried: {}; held: {})",
+                f.worker,
+                f.worker,
+                if f.carried.is_empty() {
+                    "none".to_string()
+                } else {
+                    f.carried.join(" ")
+                },
+                if f.held.is_empty() {
+                    "none".to_string()
+                } else {
+                    f.held.join(" ")
+                },
+            ),
+        ));
+    }
+    Ok(BatchReady {
+        worker: f.worker.clone(),
+        head: f.head.clone(),
+        beads,
+    })
+}
+
+/// Every worker worktree through [`batch_ready_rule`]: git and the ledger only, no bd. The
+/// same green predicate `select` uses (air-7wf), so a branch is never both landable and
+/// batch-ready.
+pub fn batch_ready_for(
+    ledger: &Ledger,
+    repo: &Path,
+) -> (Vec<BatchReady>, Vec<NotBatchReady>, Vec<String>) {
+    let mut ready = Vec::new();
+    let mut not = Vec::new();
+    let mut errors = Vec::new();
+    let worktrees = match git::worktrees(repo) {
+        Ok(w) => w,
+        Err(e) => {
+            errors.push(format!("git worktree list: {e}"));
+            return (ready, not, errors);
+        }
+    };
+    let main_tip = git::head(repo).unwrap_or_default();
+    let claims = ledger.open_claims().unwrap_or_default();
+    for (path, _) in worktrees {
+        let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
+        if super::hook::role_for(&worker) != "worker" {
+            continue;
+        }
+        let head = match git::head(&path) {
+            Ok(h) => h,
+            Err(e) => {
+                errors.push(format!("{worker}: git rev-parse HEAD: {e}"));
+                continue;
+            }
+        };
+        let green_at_head = match super::green::at(ledger, &path, &head, Kind::Verify) {
+            Ok(e) => e.holds(),
+            Err(e) => {
+                errors.push(format!("{worker}: green lookup: {e}"));
+                continue;
+            }
+        };
+        let facts = BatchFacts {
+            contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
+            green_at_head,
+            carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
+                .declared,
+            held: claims
+                .iter()
+                .filter(|c| c.worker == worker)
+                .map(|c| c.bead.clone())
+                .collect(),
+            worker,
+            head,
+        };
+        match batch_ready_rule(&facts) {
+            Ok(b) => ready.push(b),
+            Err(n) => not.push(n),
+        }
+    }
+    (ready, not, errors)
 }
 
 /// Longest wait first, the order `air land --all` uses, so what `air status` lists is the
@@ -1401,6 +1566,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             (!who.is_empty()).then(|| (l.resource.clone(), who))
         })
         .collect();
+    // air-80x.3: the verify lane's one fact, from git and the ledger only.
+    let batch = batch_ready_for(&ledger, repo);
+    errors.extend(batch.2.iter().cloned());
     Ok(Snapshot {
         at,
         workers: views.into_values().collect(),
@@ -1429,6 +1597,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip.
         landable: landings_for(repo),
+        batch_ready: batch.0,
+        not_batch_ready: batch.1,
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1661,6 +1831,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 .unwrap_or("")
                 .trim_start_matches("refused: "),
             l.command
+        ));
+    }
+    // air-80x.3: what the verify lane merges next. A fact, printed where the lane reads it;
+    // the reasons a branch is absent are in `--json` (`not_batch_ready`).
+    for b in &s.batch_ready {
+        out.push_str(&format!(
+            "batch-ready: {} at {} ({})\n",
+            b.worker,
+            b.head.get(..8).unwrap_or(&b.head),
+            b.beads.join(" ")
         ));
     }
     // air-ob0: a rewind un-lands from main and cannot un-merge from whoever took it.
