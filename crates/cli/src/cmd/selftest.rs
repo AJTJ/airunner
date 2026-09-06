@@ -468,12 +468,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             from: "if let Some(t) = prompt.filter(|t| !t.trim().is_empty()) {",
             to: "if let Some(t) = prompt.filter(|t| t.trim().is_empty()) {",
             also_red: &[
-                "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+                "launch: --task reaches claude as the prompt by file; the task text is not in argv, and claude runs in the worktree Air made rather than being handed it",
             ],
         },
     ),
     (
-        "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+        "launch: --task reaches claude as the prompt by file; the task text is not in argv, and claude runs in the worktree Air made rather than being handed it",
         Mutation {
             // Put the task back into argv, which is the shape that killed adopter's workers
             // (air-er0). The file is still written; only the prompt regresses.
@@ -845,6 +845,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    (
+        "release: a lane's notice passes verify and waits for the round; the release check refuses it, naming the row",
+        Mutation {
+            // Put the equality back: a notice beyond the last row fails `make verify` again,
+            // which is the state that cost nineteen releases and five row collisions in a day.
+            // The release check is untouched, so the probe's GREEN half stays green and the
+            // mutation is shown to reach the verify-time rule alone.
+            file: "crates/cli/src/cmd/install.rs",
+            from: "    len >= last",
+            to: "    len == last",
+            also_red: &[],
+        },
+    ),
 ];
 
 pub fn run(json: bool) -> i32 {
@@ -1155,7 +1168,7 @@ fn restore(path: &Path, original: &str) -> Result<(), String> {
 /// session is triggered. Green: with no task, argv opens on a flag and carries no positional at
 /// all, so there is nothing for claude to answer.
 fn probe_no_task_no_prompt() -> Probe {
-    use crate::cmd::launch::{task_is_prompt, worker_argv_tmux};
+    use crate::cmd::launch::{task_is_prompt, worker_argv_prompt};
     let base = vec![
         "--append-system-prompt-file".to_string(),
         "/r/.air/roles.md".to_string(),
@@ -1163,10 +1176,10 @@ fn probe_no_task_no_prompt() -> Probe {
         "Bash(git push *)".to_string(),
     ];
     let task = "work air-1";
-    let with = worker_argv_tmux(base.clone(), false, None, Some(task));
-    let without = worker_argv_tmux(base.clone(), false, None, None);
+    let with = worker_argv_prompt(base.clone(), Some(task));
+    let without = worker_argv_prompt(base.clone(), None);
     // A blank task is not a task: it must not become an empty prompt either.
-    let blank = worker_argv_tmux(base.clone(), false, None, Some("   "));
+    let blank = worker_argv_prompt(base.clone(), Some("   "));
     Probe {
         name: "launch: a task is the prompt; no task means no prompt, so an untriggered worker never runs",
         red_fires: with.first().is_some_and(|a| a == task) && task_is_prompt(&with, task),
@@ -1372,6 +1385,7 @@ fn all_probes() -> Vec<Probe> {
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
         probe_an_unpaired_hook_is_counted_from_the_installed_matchers(),
+        probe_a_notice_waits_for_the_round_and_the_release_refuses(),
     ]
 }
 
@@ -3557,7 +3571,7 @@ fn probe_digest_refusal_names_the_order_only_with_a_green() -> Probe {
 /// exec. Green: a detached tmux session is actually created (pure check only when tmux is
 /// absent; the probe name says so).
 fn probe_launch_no_tty() -> Probe {
-    use crate::cmd::launch::{Launch, launch_mode, tmux_detached_argv};
+    use crate::cmd::launch::{Launch, launch_mode, tmux_session_argv};
     let red =
         launch_mode(false, true) == Launch::Detached && launch_mode(true, true) == Launch::Exec;
     if Command::new("tmux").arg("-V").output().is_err() {
@@ -3569,11 +3583,12 @@ fn probe_launch_no_tty() -> Probe {
     }
     let socket = format!("air-selftest-{}", std::process::id());
     let name = "air-selftest";
-    let argv = tmux_detached_argv(
+    let argv = tmux_session_argv(
         name,
         Path::new("/"),
         Some(&socket),
         &[],
+        true,
         "sh",
         &["-c".to_string(), "sleep 30".to_string()],
     );
@@ -5141,10 +5156,15 @@ fn probe_worker_task_prompt() -> Probe {
         // the stub directly. Either way the file appears; the socket keeps tmux private.
         let stub = dir.join("claude-stub");
         let argv_file = dir.join("argv");
+        let cwd_file = dir.join("cwd");
+        // The cwd as well as the argv, since air-8gj: `--worktree` is gone from the line and
+        // the worktree IS the cwd, so the argv alone can no longer show the isolation.
+        // Written first; the argv file is still the readiness signal.
         std::fs::write(
             &stub,
             format!(
-                "#!/bin/sh\nprintf '%s\\0' \"$@\" > {}.tmp && mv {}.tmp {}\n",
+                "#!/bin/sh\npwd > {}\nprintf '%s\\0' \"$@\" > {}.tmp && mv {}.tmp {}\n",
+                cwd_file.display(),
                 argv_file.display(),
                 argv_file.display(),
                 argv_file.display()
@@ -5180,12 +5200,10 @@ fn probe_worker_task_prompt() -> Probe {
             .output();
         let task_path = dir.join(".air").join("tasks").join("w.md");
         let on_disk = std::fs::read_to_string(&task_path).unwrap_or_default();
-        let worktree_made = dir
-            .join(".claude")
-            .join("worktrees")
-            .join("w")
-            .join(".git")
-            .is_file();
+        let worktree = dir.join(".claude").join("worktrees").join("w");
+        let worktree_made = worktree.join(".git").is_file();
+        let ran_in = std::fs::read_to_string(&cwd_file).unwrap_or_default();
+        let ran_in_worktree = ran_in.trim() == worktree.to_string_lossy();
         let _ = std::fs::remove_dir_all(&dir);
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
@@ -5197,21 +5215,21 @@ fn probe_worker_task_prompt() -> Probe {
             .map(str::to_string)
             .collect();
         let prompt = task_prompt(&task_path);
-        // air-fdz: the lane's worktree exists before claude runs, and claude is still handed
-        // it by name (the isolation the harness enforces is keyed on that flag).
-        let wt_made = worktree_made;
+        // air-fdz: the lane's worktree exists before claude runs. air-8gj: claude is no longer
+        // HANDED it by name — it is started IN it, and the cwd is what holds the lane there.
+        // Both halves are asserted, because dropping the flag without the cwd would be a
+        // worker running loose in the main checkout.
         Ok(!argv.iter().any(|a| a.contains(marker))
             && argv.first().is_some_and(|a| *a == prompt)
             && task_is_prompt(&argv, &prompt)
             && on_disk == format!("{task}\n")
-            && wt_made
-            && argv.windows(2).any(|w| {
-                w.first().is_some_and(|a| a == "--worktree") && w.get(1).is_some_and(|b| b == "w")
-            }))
+            && worktree_made
+            && ran_in_worktree
+            && !argv.iter().any(|a| a == "--worktree"))
     })()
     .unwrap_or(false);
     Probe {
-        name: "launch: --task reaches claude as the prompt by file; the task text is not in argv",
+        name: "launch: --task reaches claude as the prompt by file; the task text is not in argv, and claude runs in the worktree Air made rather than being handed it",
         red_fires: red,
         green_passes: green,
     }
@@ -6854,5 +6872,44 @@ fn probe_an_unpaired_hook_is_counted_from_the_installed_matchers() -> Probe {
         green_passes: h.post_unmatched == 1
             && paired.contains(&"Edit".to_string())
             && !paired.contains(&"SendMessage".to_string()),
+    }
+}
+
+/// air-mir: releases are cut per round, not per notice-bearing landing. Owner ruled 2026-09-06
+/// after nineteen releases in one day, five release-row number collisions between lanes
+/// re-numbered by coordinator message, and a tag/verify/install cycle of several minutes on
+/// main for every landing that carried a notice.
+///
+/// The invariant did not move: a surface notice never ships without a `RELEASES` row, so
+/// `Installed` never claims a version it cannot identify (air-w9d). WHEN it is asked did — at
+/// `make release`, not at every `make verify`.
+///
+/// Red: a tree with an unreleased notice passes verify and is refused by the release check,
+/// and the refusal names the count and the row to append rather than saying no. Green: the
+/// directions that must still fail do — a notice REMOVED or a row edited to say less is
+/// refused at verify time, and a crate version disagreeing with the last row is refused at
+/// release time even with the count right.
+///
+/// Every number here is read from the real last row, so a released count cannot be copied into
+/// the fixture and rot beside it (air-jc0).
+fn probe_a_notice_waits_for_the_round_and_the_release_refuses() -> Probe {
+    use crate::cmd::install::{RELEASES, release_check, verify_rows_ok};
+
+    let (version, surface, count) = RELEASES.last().copied().unwrap_or(("0.0.0", 0, 0));
+    let one_more = count.saturating_add(1);
+
+    let refusal = release_check(version, one_more);
+    let names_the_row = refusal.as_ref().err().is_some_and(|m| {
+        m.contains(&one_more.to_string())
+            && m.contains(&surface.saturating_add(1).to_string())
+            && m.contains("append")
+    });
+
+    Probe {
+        name: "release: a lane's notice passes verify and waits for the round; the release check refuses it, naming the row",
+        red_fires: verify_rows_ok(count, one_more) && names_the_row,
+        green_passes: !verify_rows_ok(count, count.saturating_sub(1))
+            && release_check(version, count).is_ok()
+            && release_check(&format!("{version}-not"), count).is_err(),
     }
 }
