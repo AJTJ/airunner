@@ -206,6 +206,23 @@ impl Dispatched {
     }
 }
 
+/// The one thing Air says at SessionStart (air-1n3).
+///
+/// An account limit stops a session with no hook firing at the limit or at the reset, and the
+/// harness arms its own auto-continue only sometimes: on 2026-09-06, five of seven sessions on
+/// one machine armed one and recovered within 70 s of the reset, and of the two that did not,
+/// the one with no scheduled task sat dead for 79 minutes while the other came back on its
+/// heartbeat's next firing. A scheduled task keeps firing while the session is limited, and
+/// cannot pile up because the harness does not catch up missed fires.
+///
+/// Air cannot install this: `CronCreate` is a tool, there is no settings key and no launcher
+/// flag, and the launcher's task prompt is not an option because a worker launched with no task
+/// gets no prompt at all (`probe_no_task_no_prompt`). So it is said, once, here.
+const WAKE_CONTEXT: &str = "air: create your recovery wake now if you have none \
+    (`CronCreate`, every 5 minutes, prompt: \"if you owe work, continue it; otherwise say \
+    nothing\"). It is what brings this session back after an account limit resets, and it \
+    stays silent when there is nothing to do. See .air/roles.md.";
+
 fn dispatch(
     ledger: &Ledger,
     worker: &str,
@@ -216,8 +233,15 @@ fn dispatch(
         HookEvent::SessionStart => {
             let prev = set_session(ledger, input, worker, "working", None)?;
             // Quiet: the event line records it; a human reads every line a hook prints.
+            // The ONE exception is the wake (air-1n3). Only a session can create its own
+            // scheduled task — there is no settings key and no launcher flag for it — so this
+            // is the belt to roles.md's braces, for a session that did not read the prose
+            // closely. Once per session, on the first SessionStart, and never again: a
+            // resumed session already has its unexpired tasks back.
             Dispatched::new(
-                HookOutcome::Allow { context: None },
+                HookOutcome::Allow {
+                    context: (prev.is_none()).then(|| WAKE_CONTEXT.to_string()),
+                },
                 "registered",
                 transition(&prev, "working"),
             )
@@ -428,12 +452,93 @@ fn dispatch(
             }))
             .denominator("4 checks")
         }
+        // air-1n3: the two events that carry "this session stopped, and not because it
+        // finished". No hook fires at a usage limit or at its reset; these are the nearest
+        // the harness has, and `Notification`'s `quota_auto_resume_*` types are the only
+        // first-party word about the auto-continue.
+        //
+        // RECORDING ONLY. No refusal, no wake, no relaunch: the fact is what the rest
+        // depends on, and Air had none of it on 2026-09-06, when it could see a lane was
+        // silent and not that it was stopped.
+        HookEvent::Notification | HookEvent::StopFailure => {
+            let kind = stop_kind(input);
+            let text: String = input
+                .message
+                .clone()
+                .unwrap_or_default()
+                .chars()
+                .take(400)
+                .collect();
+            // A notification that is not about a stop (a permission prompt, an idle prompt)
+            // is logged like any other event and writes nothing: `air status` must not report
+            // a session stopped because it asked for permission.
+            if is_stop_kind(&kind) {
+                let _ = mark_stopped(ledger, &input.session_id, &kind, &text);
+            }
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
+                if is_stop_kind(&kind) {
+                    "stopped"
+                } else {
+                    "observed"
+                },
+                text.clone(),
+            )
+            .inputs(serde_json::json!({"session_id": input.session_id, "kind": kind}))
+        }
         _ => Dispatched::new(
             HookOutcome::Allow { context: None },
             "ignored",
             "no handler",
         ),
     })
+}
+
+/// What kind of stop this hook is reporting: the harness's own `notification_type` when it
+/// sends one, `stop_failure` for a turn that ended on an API error, and `notification`
+/// when a `Notification` arrives with no type (an older harness, or a type Air has not seen).
+///
+/// The value is READ from a declared field, never guessed from the message text. The message
+/// wording is the harness's and changes between versions; the type is a documented matcher
+/// value (`quota_auto_resume_fired`, `idle_prompt`, `permission_prompt`, …).
+pub fn stop_kind(input: &HookInput) -> String {
+    if input.event() == HookEvent::StopFailure {
+        return "stop_failure".to_string();
+    }
+    input
+        .notification_type
+        .clone()
+        .unwrap_or_else(|| "notification".to_string())
+}
+
+/// Whether a kind means the session stopped and did not mean to.
+///
+/// `stop_failure` is one by definition. The `quota_auto_resume_*` types are the harness
+/// telling us about its own recovery, and each of the three is worth recording for a
+/// different reason: `_fired` means the recovery ran (the session is coming back on its own,
+/// so nothing should touch it), `_stale` and `_disabled` mean it did not.
+///
+/// Everything else a `Notification` carries is about the session wanting attention, not about
+/// it stopping: a permission prompt, an idle prompt, a completed agent. Those are logged and
+/// write nothing. The list is a set of DECLARED values, so a type Air has not seen reads as
+/// "not a stop" and the event line still records it — the direction that under-reports rather
+/// than inventing a stopped session.
+pub fn is_stop_kind(kind: &str) -> bool {
+    kind == "stop_failure" || kind.starts_with("quota_auto_resume")
+}
+
+/// Record why a session stopped (schema v20). Best effort: this is an observation, and a
+/// failure to write it must never turn into a refusal.
+fn mark_stopped(ledger: &Ledger, session_id: &str, kind: &str, text: &str) -> Result<(), String> {
+    ledger
+        .conn()
+        .execute(
+            "UPDATE sessions SET stopped_at=?2, stopped_kind=?3, stopped_text=?4 \
+             WHERE session_id=?1",
+            params![session_id, now(), kind, text],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Did `worker` claim anything in the 10 minutes after `nudged_at`? The nudge measurement
@@ -1036,10 +1141,14 @@ mod tests {
             (got[3].0.as_str(), got[3].1.as_str()),
             ("hook.PermissionRequest", "ignored")
         );
+        // air-1n3: Notification has a handler now, so it is `observed` rather than
+        // `ignored` — and a notification carrying no type is still not a stop, which is what
+        // separates recording the event from inventing a stopped session.
         assert_eq!(
             (got[4].0.as_str(), got[4].1.as_str()),
-            ("hook.Notification", "ignored")
+            ("hook.Notification", "observed")
         );
+        assert_eq!(ev[4]["inputs"]["kind"], "notification");
         assert_eq!(
             (got[5].0.as_str(), got[5].1.as_str(), got[5].2.as_str()),
             ("hook.PermissionDenied", "denied", "denied by lease-guard")

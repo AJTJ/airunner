@@ -80,6 +80,19 @@ Facts available to you: `air holdings` (who is in which file), `air status`, `ai
 `air handover` (what is missing and the command that fixes it). A warning that a peer holds a
 file you are opening arrives once per session. **[fact]**
 
+**Create one recurring wake when you start, and leave it alone.** `CronCreate` a task every
+5 minutes whose prompt is "if you owe work, continue it; otherwise say nothing", pointing at
+`air status` and your claim rather than restating a queue that will be stale by the time it
+fires. It exists because an account limit stops a session without any hook firing, and the
+harness only sometimes arms its own auto-continue: on 2026-09-06 five of seven sessions on this
+machine armed one and were working within 70 s of the reset, while the two that did not were the
+two that stayed down, and the one of those with no wake sat dead for 79 minutes. **A scheduled
+task keeps firing while the session is limited** — measured, six fires over 24 minutes — and the
+first fire after the reset is the recovery. It cannot pile up: the harness does not catch up
+missed fires, so a stopped session accrues one wake, not a stack. Say nothing when there is
+nothing to do; a wake that reports is noise 288 times a day. Removed when the harness arms its
+own wait for every session it stops, for a whole round (air-1n3). **[fact]**
+
 Things that need a shared resource (a port, the simulator, Docker, the browser):
 `air lease take <resource> --reason "<why>"`; release when done. A held lease names its holder;
 do not route around it. **[Air enforces: a healthy holder is not broken by `take`]**
@@ -167,6 +180,23 @@ not green, landable branch, lease held by a dead session, session joined or left
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
 in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
 under which it goes: `air audit`.
+
+**You need the same recurring wake a worker does, for the same reason and more urgently.**
+On 2026-09-06 Air detected the stopped lane and pushed `silent-with-claim` to every session at
+06:55:21; the coordinator was itself limited at that moment, and after its own reset it took the
+problem to the owner instead of messaging the lane, which cost 53 further minutes. Its heartbeat
+is what brought it back at all: five firings through the outage, and the sixth, four seconds
+after the reset window opened, did real work. **[fact]**
+
+**What Air records about a stopped session, and what it does not do about it.** A `Notification`
+or `StopFailure` hook writes `stopped_at`, `stopped_kind` and `stopped_text` on the session row
+(schema v20), and `air status` prints `STOPPED at <t>` on that session's line with the kind
+spelled out. Nothing is refused, nothing is woken, nothing is relaunched: it is a fact for you to
+act on. **Read the kind before acting, because the two states call for opposite moves**: a
+`quota_auto_resume_fired` session is being brought back by the harness and typing at it CANCELS
+that recovery, while `quota_auto_resume_stale`, `quota_auto_resume_disabled` and `stop_failure`
+mean nothing is coming and one message is right. Silence alone is not the trigger; the kind is
+(air-1n3). **[fact]**
 
 Workers are reached with `SendMessage` to the session name `air status` shows; tmux panes are
 for the owner to watch, not for the coordinator to type into (send-keys was allowed once and
