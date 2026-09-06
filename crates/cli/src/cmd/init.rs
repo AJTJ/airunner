@@ -165,12 +165,32 @@ struct Plan {
     prefix: String,
     gitignore: &'static str,
     air_json: &'static str,
+    /// What `air init` will do about Metis (air-g5o): initialise it, leave an existing
+    /// workspace alone, or name the install step. Printed in the dry run, like every other
+    /// step, so nothing is done that was not shown first.
+    metis: String,
     proposed_deny: Vec<String>,
     claude_md: &'static str,
     written: bool,
 }
 
 const CLAUDE_MD_STUB: &str = "# CLAUDE.md\n\nThis repo runs a small fleet with Air. Roles, the loop, and what Air enforces: `.air/roles.md`\n(appended to every session by `air worker` / `air coordinator`). Work is tracked in beads\n(`bd ready`, `air claim`, `air capture`). Domain rules for this codebase go below.\n";
+
+/// What `air init` will do about Metis, said before it does it (air-g5o). Three states, and
+/// only one of them runs anything: an existing `.metis/` is the coordinator's plan and is never
+/// re-initialised, and a missing binary is an install step named rather than a failure.
+fn metis_plan(dir: &Path) -> String {
+    if dir.join(".metis").is_dir() {
+        return "present (not touched)".to_string();
+    }
+    if crate::cmd::metis::on_path() {
+        return "will run `metis init <prefix>`".to_string();
+    }
+    "not installed; `air coordinator` will launch without it. Install from \
+     https://github.com/colliery-io/metis, then re-run `air init --write`, or set \
+     \"metis\": false in .claude/air.json"
+        .to_string()
+}
 
 pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     let dir = match dir.canonicalize() {
@@ -239,8 +259,9 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         air_json: if air_json_exists {
             "present (not touched)"
         } else {
-            "will write with proposed deny patterns"
+            "will write with proposed deny patterns and \"metis\": true"
         },
+        metis: metis_plan(&dir),
         proposed_deny: proposed_deny.clone(),
         claude_md: if claude_md_exists {
             "present (not touched)"
@@ -327,12 +348,26 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         }
         if !air_json_exists {
             std::fs::create_dir_all(dir.join(".claude")).map_err(|e| format!(".claude: {e}"))?;
-            let v = json!({"worker_deny": proposed_deny, "coordinator_deny": []});
+            // `"metis": true` by default (air-g5o, owner ruling 2026-09-06). It costs nothing
+            // in a repo with no metis installed — the coordinator prints one line and
+            // launches — and a default of false would mean the rule the owner asked to be
+            // programmatic arrives off.
+            let v = json!({
+                "worker_deny": proposed_deny,
+                "coordinator_deny": [],
+                "metis": true,
+            });
             std::fs::write(
                 dir.join(".claude/air.json"),
                 format!("{}\n", serde_json::to_string_pretty(&v).unwrap_or_default()),
             )
             .map_err(|e| format!("air.json: {e}"))?;
+        }
+        // Metis's own workspace, once, and only when metis can make it (air-g5o). Never
+        // re-run over an existing `.metis/`: its documents are the coordinator's plan, and
+        // `metis init` is not this command's to re-apply to them.
+        if crate::cmd::metis::on_path() && !dir.join(".metis").is_dir() {
+            run_in(&dir, "metis", &["init", &prefix])?;
         }
         if !claude_md_exists {
             std::fs::write(dir.join("CLAUDE.md"), CLAUDE_MD_STUB)
@@ -378,6 +413,7 @@ fn render(p: &Plan) -> String {
     s.push_str(&format!("beads:    {} (prefix {})\n", p.beads, p.prefix));
     s.push_str(&format!("gitignore: {}\n", p.gitignore));
     s.push_str(&format!("air.json: {}\n", p.air_json));
+    s.push_str(&format!("metis: {}\n", p.metis));
     for d in &p.proposed_deny {
         s.push_str(&format!("  deny {d}\n"));
     }
