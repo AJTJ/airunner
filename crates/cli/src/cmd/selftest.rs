@@ -145,6 +145,48 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-84u. The anchor is the quantifier and nothing else: the rendering, the count and the
+    // ready-set filter all survive it, so a probe that stays green under `any` was checking
+    // that the line exists rather than that it names only an epic with nothing open under it.
+    // That is the one direction this line must not fail in — naming an epic somebody is
+    // working on costs the line its credibility, and nothing refuses on it to make up for that.
+    (
+        "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            // The anchor is what rustfmt LEFT, not what was typed: written as one expression
+            // it was reflowed onto three lines and the anchor matched nothing, which
+            // `air selftest --prove` calls BROKEN and `make verify` does not check at all.
+            from: "all(|c| c.status == \"closed\")",
+            to: "any(|c| c.status == \"closed\")",
+            also_red: &[],
+        },
+    ),
+    // air-5nh. The anchor is the owner-gated test alone, so every count, the sort, the
+    // 300 s bucket and the printed threshold survive it: what changes is only WHICH
+    // population the rate reads. Under it an ordinary fast release counts as a bead the
+    // worker could not start, and the number that refused two mechanisms inflates.
+    (
+        "audit: re-claim churn is counted from claims alone, and the rate reads the owner-gated-inside-a-minute population with its 10% threshold beside it",
+        Mutation {
+            file: "crates/cli/src/cmd/audit.rs",
+            from: "r.contains(\"owner-gated\") || r.contains(\"owner gated\")",
+            to: "r.contains(\"owner-gated\") || !r.is_empty()",
+            also_red: &[],
+        },
+    ),
+    // air-ej4. The anchor is the `exit 1` alone: the echo, the target and the scaffold's
+    // created-only-when-absent rule all survive it, so a probe that stays green under this
+    // was testing that a Makefile exists rather than that its verify refuses.
+    (
+        "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
+        Mutation {
+            file: "crates/cli/src/cmd/init.rs",
+            from: "then delete this line'; exit 1",
+            to: "then delete this line'; exit 0",
+            also_red: &[],
+        },
+    ),
     // The ledger lane's probes, 2026-08-29. Each anchor was run by hand when the probe was
     // written, and each names ONE branch: the change-only gate, the enumeration, the
     // referenced-day protection, the join's file-and-order keys, the freshness window, the
@@ -1491,6 +1533,9 @@ fn all_probes() -> Vec<Probe> {
         probe_every_air_spawn_pins_identity(),
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
+        probe_batch_green_survives_main_moving_under_it(),
+        probe_epic_with_no_open_children_is_named(),
+        probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
@@ -1517,6 +1562,8 @@ fn all_probes() -> Vec<Probe> {
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
         probe_every_declared_mutation_still_anchors(),
+        probe_scaffolded_verify_fails_until_edited(),
+        probe_reclaim_churn_reads_the_owner_gated_population(),
     ]
 }
 
@@ -2139,6 +2186,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 dirty: false,
                 tree: None,
                 members: vec![],
+                main_sha: None,
             })
             .map_err(|e| e.to_string())
         };
@@ -3837,6 +3885,7 @@ fn probe_enforced_gate() -> Probe {
             dirty: false,
             tree: None,
             members: vec![],
+            main_sha: None,
         })
         .map_err(|e| e.to_string())?;
         let green = handover_gate(&l, "probe", &dir, cmd, true)?;
@@ -5003,6 +5052,7 @@ fn probe_ledger_roundtrip() -> Probe {
             dirty: false,
             tree: None,
             members: vec![],
+            main_sha: None,
         };
         l.record_verify(&run).map_err(|e| e.to_string())?;
         let green = l
@@ -5057,6 +5107,7 @@ fn probe_killed_is_no_verdict() -> Probe {
             dirty: false,
             tree: Some("T".into()),
             members: vec![],
+            main_sha: None,
         };
         l.record_verify(&run("aaa", 0, "t1"))
             .map_err(|e| e.to_string())?;
@@ -5166,6 +5217,7 @@ fn probe_green_follows_the_tree_only_where_declared() -> Probe {
             dirty: false,
             tree: Some(tree.clone()),
             members: vec![],
+            main_sha: None,
         })
         .map_err(|e| e.to_string())?;
 
@@ -5882,6 +5934,7 @@ fn probe_red_batch_is_reported_by_member_and_lands_nothing() -> Probe {
         dirty: false,
         tree: None,
         members,
+        main_sha: None,
     };
     let m = |w: &str, sha: &str| Member {
         worker: w.into(),
@@ -6800,6 +6853,196 @@ fn probe_landing_state() -> Probe {
     }
 }
 
+/// An empty scratch directory for a probe. The caller runs [`probe_git`] in it and removes it.
+fn probe_repo() -> Result<std::path::PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// `git -C <dir> <args>`, with an identity, failing loudly. The probes below build real
+/// histories rather than fixtures because both facts air-9ij fixed are ancestry facts.
+fn probe_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "air")
+        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+        .env("GIT_COMMITTER_NAME", "air")
+        .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// air-9ij, limb 3, the one the adopter measured: a batch green stopped covering the bead it
+/// covers the moment main moved. `contains main` was asked of CURRENT main at query time, so a
+/// green recorded over the main of its moment was disqualified by any later write to main — a
+/// landing, or the coordinator's own prose commit, which is what invalidated an adopter's
+/// whole batch on 2026-09-06. The window was not closed by the worker; it was closed by
+/// somebody else. The question is now asked of the run's recorded `main_sha`.
+///
+/// Red (the declared mutation is on the row: `main_sha: None`, exactly a pre-v19 row, which
+/// can only ask about current main): with main moved, the batch green covers nothing. Green:
+/// the same green with its recorded main covers the bead after main has moved, and a green
+/// naming a main it does not contain covers nothing, so the gate is not widened.
+fn probe_batch_green_survives_main_moving_under_it() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            let base = g(&["rev-parse", "HEAD"])?;
+            // The worker's commit for fd-1, then a lane batch over main plus that commit.
+            g(&["checkout", "-q", "-b", "w"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work\n\nBead: fd-1\n",
+            ])?;
+            g(&["checkout", "-q", "-b", "lane", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "batch: w"])?;
+            let batch = g(&["rev-parse", "HEAD"])?;
+            // Main moves after the cut by an ordinary commit: nothing landed, nothing merged.
+            g(&["checkout", "-q", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "docs: prose"])?;
+            let moved = g(&["rev-parse", "HEAD"])?;
+            g(&["checkout", "-q", "w"])?;
+            g(&["merge", "-q", "main", "-m", "merge main"])?;
+
+            let covered = |main_sha: Option<&str>| -> Result<bool, String> {
+                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+                l.record_verify(&VerifyRun {
+                    id: new_id(),
+                    worker: "lane".into(),
+                    sha: batch.clone(),
+                    kind: Kind::Verify,
+                    exit_code: 0,
+                    trigger: "selftest".into(),
+                    failing_step: None,
+                    started_at: "t".into(),
+                    finished_at: "t".into(),
+                    log_path: None,
+                    command: None,
+                    duration_ms: None,
+                    output_bytes: None,
+                    dirty: false,
+                    tree: None,
+                    members: vec![],
+                    main_sha: main_sha.map(str::to_string),
+                })
+                .map_err(|e| e.to_string())?;
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                    .covering
+                    .is_some())
+            };
+            let red = !covered(None)?;
+            let green = covered(Some(&base))? && !covered(Some(&moved))?;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: a batch green goes on covering its bead after main moves, because `contains main` is asked of the main the run was recorded over",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-9ij, limb 1, and the judgement it forced: **when every commit of a bead is already in
+/// main, the close passes.** `main..HEAD` is empty then, and reading that as "this bead has no
+/// commits" refused the close of a bead Air had itself landed, in any repo that keys green by
+/// commit. The landing gate already demanded a green at a head containing main, and the commit
+/// main is fast-forwarded onto carries that green's tree (air-odv), so the proof this gate
+/// asks for is the proof the work arrived with. Requiring a fresh green naming the merge would
+/// have Air refuse the close it nags for as `landed-not-closed`.
+///
+/// Red (declared mutation: the landing row says `refused` rather than `landed`): the work is
+/// not on main, so an empty range closes nothing. Green: the `landed` row closes it, a row
+/// that named a different bead does not, and a landing whose merge commit main no longer
+/// contains does not either — a worker that claimed a bead and committed nothing has no row
+/// and still has nothing to close on.
+fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
+    use air_ledger::landings::Landing;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            // A commit main never gets, to stand for a landing that was rewound.
+            g(&["checkout", "-q", "-b", "stray"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "stray"])?;
+            let stray = g(&["rev-parse", "HEAD"])?;
+            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work\n\nBead: fd-1\n",
+            ])?;
+            g(&["checkout", "-q", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
+            let merge = g(&["rev-parse", "HEAD"])?;
+            // The worker's next `git merge main` fast-forwards: main..HEAD is now empty.
+            g(&["checkout", "-q", "w"])?;
+            g(&["merge", "-q", "--ff-only", "main"])?;
+            let empty = crate::cmd::batch::bead_commits(&dir, "fd-1").is_empty();
+
+            let landed = |result: &str, beads: &[&str], at: &str| -> Result<bool, String> {
+                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+                l.record_landing(&Landing {
+                    id: new_id(),
+                    worker: "lane".into(),
+                    sha: "wwww".into(),
+                    tip_sha: None,
+                    result: result.into(),
+                    failing_step: None,
+                    verify_run_id: None,
+                    attempt_no: 1,
+                    beads: beads.iter().map(|b| (*b).to_string()).collect(),
+                    open_beads: vec![],
+                    merge_commit: Some(at.to_string()),
+                    pid: None,
+                    started_at: "t0".into(),
+                    finished_at: "t1".into(),
+                    despite_inflight: vec![],
+                    members: vec![],
+                })
+                .map_err(|e| e.to_string())?;
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                    .landed
+                    .is_some())
+            };
+            let red = empty && !landed("refused", &["fd-1"], &merge)?;
+            let green = landed("landed", &["fd-1"], &merge)?
+                && landed("landed-refuted", &["fd-1"], &merge)?
+                && !landed("landed", &["fd-2"], &merge)?
+                && !landed("landed", &["fd-1"], &stray)?;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or((false, false));
+    Probe {
+        name: "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-d75: Air waits on ten budgets and recorded none of them, so "zero timeouts" in the
 /// event log meant nobody was counting. The owner ruled 2026-09-06 "measure all of them from
 /// henceforth", and the recording is the deliverable.
@@ -7479,5 +7722,223 @@ fn probe_every_declared_mutation_still_anchors() -> Probe {
         name: "selftest: every declared mutation still anchors exactly once in the file it names",
         red_fires: red,
         green_passes: live.is_empty(),
+    }
+}
+
+/// air-ej4: `air init --write` writes a `Makefile` into a repo that has none, because Air's one
+/// refusal reads a recorded green and a repo with no verify command has nothing to record. The
+/// hazard the scaffold creates is the opposite one: a target that Air wrote and nobody edited
+/// would let `air record verify -- make verify` record a green for an empty check, and the close
+/// gate would pass it. So the scaffolded target must FAIL until a human replaces its body.
+///
+/// Red: the target Air writes exits non-zero, and says which file to edit. Green: the same
+/// Makefile with the placeholder recipe swapped for a real command passes, so what fails is the
+/// placeholder and not a Makefile Air wrote wrong.
+///
+/// `make` when it is on PATH (the real thing); the recipe under `sh` otherwise, which is what
+/// make does with a one-line recipe. A machine without make must not produce a false red.
+fn probe_scaffolded_verify_fails_until_edited() -> Probe {
+    use crate::cmd::init::{makefile_stub, scaffold};
+
+    fn verify_succeeds(makefile: &str) -> Result<bool, String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("Makefile"), makefile).map_err(|e| e.to_string())?;
+        let ran = Command::new("make")
+            .args(["-C", &dir.to_string_lossy(), "verify"])
+            .output();
+        let ok = match ran {
+            Ok(o) => o.status.success(),
+            // No make here: run the recipe body itself, minus make's tab and `@` prefix.
+            Err(_) => {
+                let body: String = makefile
+                    .lines()
+                    .filter(|l| l.starts_with('\t'))
+                    .map(|l| l.trim_start_matches('\t').trim_start_matches('@'))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Command::new("sh")
+                    .args(["-c", &body])
+                    .output()
+                    .map_err(|e| e.to_string())?
+                    .status
+                    .success()
+            }
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(ok)
+    }
+
+    let written = makefile_stub();
+    // "Edited": the human has put a real check where the placeholder was. Anchored on the tab,
+    // so this cannot silently stop replacing anything if the wording of the echo changes.
+    let edited: String = written
+        .lines()
+        .map(|l| if l.starts_with('\t') { "\t@true" } else { l })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let res = (|| -> Result<(bool, bool), String> {
+        Ok((verify_succeeds(&written)?, verify_succeeds(&edited)?))
+    })();
+    let (placeholder_passed, edited_passed) = res.unwrap_or((true, false));
+    Probe {
+        name: "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
+        red_fires: !placeholder_passed
+            && written.contains("Makefile:verify")
+            && scaffold(None, false)
+                .iter()
+                .any(|i| i.path == "Makefile" && i.create),
+        // Present means untouched, both ways round: a Makefile with a verify target and one
+        // without are both left alone, and only the printed sentence differs.
+        green_passes: edited_passed
+            && scaffold(Some("verify:\n\t@true\n"), true)
+                .iter()
+                .all(|i| !i.create)
+            && scaffold(Some("build:\n\t@true\n"), false)
+                .iter()
+                .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
+    }
+}
+
+/// air-84u (owner, 2026-09-06: "the coordinator isn't automatically doing that thing to turn
+/// epics into beads"). `air status` already counted the ready epics; the count is a number the
+/// coordinator then has to resolve against bd by hand, and twice on 2026-09-06 nobody did.
+/// air-80x sat undecomposed for hours and is ready again with all six children closed. The
+/// line names which epic, so the count becomes an action.
+///
+/// Red (declared mutation: `all(closed)` becomes `any(closed)`): an epic with one open child
+/// is named, which is the one thing this must never do — a line that names an epic somebody is
+/// working on costs its own credibility. Green: an epic whose children are all closed is
+/// named with the count, an epic with no children at all is named with 0, a child in any
+/// status but `closed` keeps its epic silent, and a snapshot with no such epic prints no line.
+fn probe_epic_with_no_open_children_is_named() -> Probe {
+    use crate::cmd::status::{EpicToDecompose, Snapshot, render_for_probe, to_decompose};
+
+    let kid = |status: &str| air_bd::Issue {
+        id: "zz-1".into(),
+        status: status.into(),
+        ..air_bd::Issue::default()
+    };
+    let closed = [kid("closed"), kid("closed")];
+
+    // RED: an epic with work under it stays silent, in every status that is not `closed`.
+    let red = ["open", "in_progress", "blocked", "awaiting_review"]
+        .iter()
+        .all(|s| to_decompose("zz-e", &[kid("closed"), kid(s)]).is_none());
+
+    let named = to_decompose("zz-e", &closed);
+    let never = to_decompose("zz-e", &[]);
+    let line = render_for_probe(&Snapshot {
+        epics_to_decompose: Some(vec![EpicToDecompose {
+            epic: "zz-e".into(),
+            closed_children: 6,
+        }]),
+        ..Snapshot::default()
+    });
+    let silent = render_for_probe(&Snapshot::default());
+    let green = named
+        == Some(EpicToDecompose {
+            epic: "zz-e".into(),
+            closed_children: 2,
+        })
+        // An epic nobody has ever decomposed is the same duty, and says 0.
+        && never
+            == Some(EpicToDecompose {
+                epic: "zz-e".into(),
+                closed_children: 0,
+            })
+        && line.contains("epic ready to decompose: zz-e (0 open children, 6 closed)")
+        && !silent.contains("epic ready to decompose");
+
+    Probe {
+        name: "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-5nh: `air audit` prints re-claim churn, so "a worker took a bead it could not start"
+/// is a number instead of an argument. air-69u measured it once by hand (4 of 153 claims,
+/// 2.6%) and used it to refuse two mechanisms: a filing command wrapping `bd create --after`,
+/// and a refusal on a child with no ordering edge. A number that decides that has to be
+/// re-runnable, and it has to read the right population.
+///
+/// Red: the shape air-69u found comes back out. Two workers claim one bead and release it
+/// `owner-gated` inside half a minute each; a third claim is released fast for an unrelated
+/// reason; a fourth is owner-gated but hours later; a fifth is still held. The counts separate
+/// all five, and the printed section carries the 10% threshold beside the rate.
+///
+/// Green: the RATE reads the owner-gated-inside-a-minute population and nothing wider, so a
+/// fast release for an ordinary reason cannot inflate the number that would justify the
+/// mechanism. And a window with no claims reports no rate at all rather than 0%, because
+/// unmeasured and zero are different facts.
+fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
+    use crate::cmd::audit::{churn_of, render_churn};
+
+    let row = |bead: &str, worker: &str, from: &str, to: Option<&str>, why: Option<&str>| {
+        (
+            bead.to_string(),
+            worker.to_string(),
+            from.to_string(),
+            to.map(str::to_string),
+            why.map(str::to_string),
+        )
+    };
+    let rows = vec![
+        row(
+            "air-zzj",
+            "ledger",
+            "2026-09-05T10:00:00Z",
+            Some("2026-09-05T10:00:20Z"),
+            Some("owner-gated"),
+        ),
+        row(
+            "air-zzj",
+            "verify",
+            "2026-09-05T11:00:00Z",
+            Some("2026-09-05T11:00:22Z"),
+            Some("owner-gated: waiting on air-uko"),
+        ),
+        // Fast, but handed back for an ordinary reason: churn by duration, not the population
+        // the threshold reads.
+        row(
+            "air-aaa",
+            "alerts",
+            "2026-09-05T12:00:00Z",
+            Some("2026-09-05T12:00:30Z"),
+            Some("took the wrong bead"),
+        ),
+        // Owner-gated, but discovered hours in: not a bead the worker could not START.
+        row(
+            "air-bbb",
+            "launch",
+            "2026-09-05T13:00:00Z",
+            Some("2026-09-05T16:00:00Z"),
+            Some("owner-gated"),
+        ),
+        // Still held. Not churn, and not counted against it either.
+        row("air-ccc", "ledger", "2026-09-05T14:00:00Z", None, None),
+    ];
+    let c = churn_of(&rows);
+    let out = render_churn(&c);
+    let empty = churn_of(&[]);
+
+    Probe {
+        name: "audit: re-claim churn is counted from claims alone, and the rate reads the owner-gated-inside-a-minute population with its 10% threshold beside it",
+        red_fires: (c.claims, c.released, c.within_60s, c.within_300s) == (5, 4, 3, 3)
+            && c.owner_gated == 3
+            && c.short.len() == 3
+            // Longest first, so the tail of the distribution is readable.
+            && c.short.first().is_some_and(|x| x.seconds == 30)
+            && out.contains("THRESHOLD 10%")
+            && out.contains("air-zzj"),
+        green_passes: c.owner_gated_within_60s == 2
+            && c.owner_gated_within_300s == 2
+            // 2 of 5, not 3 of 5: the ordinary fast release is in `within_60s` and out of the
+            // rate. A number that justifies a mechanism must not be inflated by Air.
+            && c.rate.is_some_and(|r| (r - 0.4).abs() < 1e-9)
+            // Unmeasured is not zero.
+            && empty.rate.is_none()
+            && render_churn(&empty).contains("Not zero: unmeasured"),
     }
 }

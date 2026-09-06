@@ -20,9 +20,11 @@ pub struct GateFacts {
     /// (air-7wf). Only for the message: it names the re-verify as the price of a
     /// commit-keyed repo rather than as an absence.
     pub tree_green: Option<String>,
-    /// A green recorded at a verified commit that contains main and every commit of the
-    /// bead(s) being handed over (air-80x.1): the verify lane's batch. Counts as green. The
-    /// sentence is the ok line: "green at C (batch by W) contains every commit of <bead>".
+    /// A green recorded at a verified commit that contains every commit of the bead(s) being
+    /// handed over, and the main THAT RUN WAS RECORDED OVER (air-80x.1, air-9ij): the verify
+    /// lane's batch. Counts as green. Main moving afterwards does not retract it — that is the
+    /// landing gate's question, not this one. Also carries the landed case, where the bead has
+    /// no commit outside main because Air landed it and the landing required a green.
     pub batch_green: Option<String>,
     /// A batch green that contains main and some of the bead's commits but not the newest:
     /// the batch predates the worker's last commit (air-80x.1). For the refusal only.

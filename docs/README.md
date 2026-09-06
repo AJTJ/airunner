@@ -11,6 +11,7 @@
 | What exists in the wild (Rust first) — use vs borrow vs build | [`research/prior-art-landscape.md`](research/prior-art-landscape.md) |
 | Whether Air is a lesser version of something that already exists: the harness layer, 186 orchestrators read one by one, what is commodity, what is contested, what is still ours, and where to look next (refresh monthly) | [`research/harness-and-orchestrator-landscape.md`](research/harness-and-orchestrator-landscape.md) |
 | beads / Gas Town in depth (the coordination layer) | [`research/beads-and-gastown.md`](research/beads-and-gastown.md) |
+| Wondering whether to replace `bd`: the exact surface Air uses, what a replacement must provide, the candidates, and what the swap costs | [`research/bd-alternatives.md`](research/bd-alternatives.md) |
 | How a supervisor can drive/constrain Claude Code; §0 is the dated live inventory of what the harness already ships | [`research/claude-code-control-surfaces.md`](research/claude-code-control-surfaces.md) |
 | The full inventory of everything Air ships (commands, ledger tables, hooks, MCP surface, integrations incl. beads, env vars, mechanisms, probes) with why each exists, what already does it, and a verdict | [`plans/0007-surface-audit.md`](plans/0007-surface-audit.md) |
 | Subscription vs API billing, mixed-backend cost arithmetic (primary sources) | [`research/claude-code-billing.md`](research/claude-code-billing.md) |

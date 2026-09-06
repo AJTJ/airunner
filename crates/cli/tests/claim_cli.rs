@@ -2974,3 +2974,168 @@ fn land_refuses_a_worker_and_an_unlandable_bead() {
     assert!(out.contains("no green branch names zz-9"), "{out}");
     assert!(out.contains("air status"), "{out}");
 }
+
+/// air-9ij, end to end, and the limb the adopter measured: **a batch green goes on covering
+/// its bead after main moves.** alpha commits for fd-1, a lane batches and records the only
+/// green, then main gains an ordinary prose commit — no landing, nothing to do with alpha —
+/// and alpha merges it. The close used to be refused with no mention of the batch at all,
+/// because `contains main` was asked of main as it stood at the moment of the question. The
+/// window was never closed by the worker; it was closed by whoever last wrote to main.
+///
+/// The same test carries the limb that did NOT bite, because it was reported as if it had:
+/// starting the next bead costs nothing. The gate is content-based on the bead's own trailer
+/// commits and never compares the batch with HEAD, so a commit for fd-2 leaves fd-1 closable.
+#[test]
+fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_starts() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
+    git(&alpha, &["add", "more.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let ask = || -> serde_json::Value {
+        let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+        serde_json::from_str(&out).unwrap()
+    };
+    let batch = git(&lane, &["rev-parse", "--short=8", "HEAD"]);
+    let v = ask();
+    assert_eq!(v["pass"], true, "{v}");
+
+    // The next bead starts on the same branch. fd-1's own commits are unchanged, so the batch
+    // still covers it; this limb was reported as a separate failure and is not one.
+    std::fs::write(alpha.join("next.txt"), "next\n").unwrap();
+    git(&alpha, &["add", "next.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the next bead\n\nBead: fd-2\n"],
+    );
+    let v = ask();
+    assert_eq!(v["pass"], true, "next bead must not close the window: {v}");
+
+    // Main moves under everyone: an ordinary commit by the coordinator, no landing involved.
+    std::fs::write(main.join("PROSE.md"), "coordinator prose\n").unwrap();
+    git(&main, &["add", "PROSE.md"]);
+    git(&main, &["commit", "-q", "-m", "docs: prose"]);
+    // Before merging it, the refusal is about main not being an ancestor and NOTHING else:
+    // the batch green is still the batch green.
+    let v = ask();
+    let msg = v["message"].as_str().unwrap().to_string();
+    assert_eq!(v["pass"], false, "{msg}");
+    assert!(msg.contains("main-merged"), "{msg}");
+    assert!(!msg.contains("verify-green-at-head"), "{msg}");
+
+    // Merge it, as the roles flow says to, and the close passes on the batch cut before it.
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    let v = ask();
+    let msg = v["message"].as_str().unwrap().to_string();
+    assert_eq!(v["pass"], true, "{msg}");
+    assert!(
+        msg.contains(&batch),
+        "must name the batch it passed on: {msg}"
+    );
+    assert!(msg.contains("every commit of fd-1"), "{msg}");
+}
+
+/// air-9ij, limb 1: **a bead whose every commit is already in main closes on the landing that
+/// put it there.** The lane's batch lands, so the worker's next `git merge main` is a
+/// fast-forward and `main..HEAD` is empty; the gate read that as "this bead has no commits"
+/// and refused, in this repo and in every adopter that keys green by commit. The landing had
+/// already required a green at a head containing main, so the proof was never missing.
+///
+/// A repo keyed by tree never saw this: the landing commit's tree is the batch's tree, so a
+/// tree-keyed green stood at HEAD anyway. `land_repo` keys by commit, which is why it bites
+/// here.
+#[test]
+fn a_bead_already_in_main_closes_on_its_landing() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "fd-1"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
+    git(&alpha, &["add", "more.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    acceptance(&main, "- Verify recorded green at HEAD.\n");
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+
+    git(&alpha, &["merge", "-q", "main"]);
+    assert_eq!(
+        git(&alpha, &["log", "--format=%H", "main..HEAD"]),
+        "",
+        "the landing leaves the worker nothing main does not have"
+    );
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let msg = v["message"].as_str().unwrap().to_string();
+    assert_eq!(v["pass"], true, "{msg}");
+    assert!(msg.contains("already in main"), "{msg}");
+    assert!(msg.contains("required a green containing main"), "{msg}");
+
+    // A bead nothing landed is still refused: the landing row is what proves the work is
+    // there, so an empty range on its own closes nothing.
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-9"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["pass"], false, "{out}");
+}

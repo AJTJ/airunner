@@ -195,7 +195,10 @@ enum Cmd {
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
     /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
-    /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills. Dry run by default.
+    /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills, and the
+    /// empty-but-ready scaffold (a failing Makefile verify target, .worktreeinclude, and a
+    /// CLAUDE.md stub carrying the work flow and the `Bead:` trailer rule), each created only
+    /// when absent and never edited. Dry run by default.
     Init {
         /// Beads issue prefix (default: from the directory name).
         #[arg(long)]
@@ -274,6 +277,11 @@ enum Cmd {
     /// was asked for. Three of them fail toward permitting, and the hook's own cap cannot
     /// record its overruns at all, so `hook pairing` counts what a killed hook leaves instead
     /// (air-d75).
+    ///
+    /// And `re-claim churn`: how often a worker took a bead it could not start, from the
+    /// claims table alone. The ordering-edge question was answered with that number rather
+    /// than with a rule (air-69u), so the number has to be re-runnable and the `THRESHOLD 10%`
+    /// that would reopen the question is printed beside it (air-5nh).
     Audit {
         /// Inclusive YYYY-MM-DD to count from (default: today).
         #[arg(long)]
