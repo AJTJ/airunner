@@ -90,6 +90,7 @@ pub fn probe_bd(repo: &Path) -> BdCli {
         .unwrap_or(5000);
     BdCli {
         timeout: std::time::Duration::from_millis(ms).min(bd.timeout),
+        label: air_ledger::budgets::BD_PROBE,
         ..bd
     }
 }
@@ -103,6 +104,7 @@ fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {
         .and_then(|v| v.parse().ok())
         .unwrap_or(5000);
     probe.timeout = std::time::Duration::from_millis(ms).min(bd.timeout);
+    probe.label = air_ledger::budgets::BD_PROBE;
     (0..2).any(|_| {
         matches!(
             probe.show(bead),

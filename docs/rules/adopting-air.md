@@ -90,6 +90,17 @@ first. Whether the gate should require N-of-M agreement is an owner policy, not 
    exact tree is green at <sha> by <worker>, but this repo keys green by commit)` when it
    does not.
 
+5. **Set the harness's Bash timeout above the repo's longest verify, or run verifies
+   detached.** Claude Code's Bash tool defaults to a 10-minute cap and kills the command at
+   it; `BASH_MAX_TIMEOUT_MS` raises it (adopter sets 900000, 15 minutes). A verify killed at
+   the cap is not a red, it is nothing: the run leaves no green, the worker cannot close, and
+   the reason does not appear in Air's record because Air never saw the process end.
+   adopter's verify lane hit exactly this on 2026-09-06 — a batch verify of 1622 s against a
+   900 s cap. Take the repo's longest recent verify from `air record`'s durations, double it,
+   and set the cap there; if that is beyond what the harness will allow, the lane runs
+   `air record verify` detached and reads the result back rather than waiting on it. This is
+   the one budget in Air's world that Air does not own (air-d75).
+
 ## 2. Coexistence, not retirement (default adoption model)
 
 **[adopter, owner reframing 2026-08-21]** Do not retire the repo's make targets and

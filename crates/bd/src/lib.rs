@@ -174,6 +174,12 @@ pub struct BdCli {
     pub bin: PathBuf,
     pub cwd: PathBuf,
     pub timeout: Duration,
+    /// Which budget this bd is spending, for the record (air-d75). Five call sites set five
+    /// different timeouts on the same struct — the status reconcile derives one from bd's
+    /// measured median, the acceptance read grows one with the id count — and a single `bd`
+    /// row would report the largest of them as if it were the budget every wait ran against.
+    /// One of [`air_ledger::budgets`]'s `BD*` names.
+    pub label: &'static str,
 }
 
 impl BdCli {
@@ -182,13 +188,21 @@ impl BdCli {
             bin: PathBuf::from("bd"),
             cwd: cwd.to_path_buf(),
             timeout: Duration::from_secs(10),
+            label: air_ledger::budgets::BD,
         }
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
         let t0 = std::time::Instant::now();
         let out = self.run_inner(args);
-        stats::record(u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX));
+        let elapsed = t0.elapsed();
+        stats::record(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
+        air_ledger::budgets::record(
+            self.label,
+            elapsed,
+            self.timeout,
+            matches!(out, Err(BdError::Timeout(_))),
+        );
         out
     }
 

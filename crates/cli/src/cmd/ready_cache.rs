@@ -109,6 +109,7 @@ pub fn confirm(repo: &Path) -> Option<Vec<String>> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3000);
     bd.timeout = std::time::Duration::from_millis(ms);
+    bd.label = air_ledger::budgets::BD_NUDGE;
     let ids = claimable(&air_bd::WorkLedger::ready(&bd).ok()?);
     write(repo, &ids, &crate::cmd::now());
     Some(ids)

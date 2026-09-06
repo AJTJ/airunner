@@ -694,6 +694,9 @@ pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>,
         return Ok(Vec::new());
     }
     let mut bd = super::claim::bd_for(repo);
+    // Labelled whether or not the budget is overridden: the label names the SITE, and the
+    // recorded `budget_ms` names whatever budget was actually in force there.
+    bd.label = air_ledger::budgets::BD_ACCEPTANCE;
     let overridden = std::env::var_os("AIR_BD_TIMEOUT_MS").is_some();
     if !overridden {
         bd.timeout = acceptance_budget(beads.len());
@@ -1385,6 +1388,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // entirely. `status_bd_budget` reads the same measurement `air status` prints.
     let today_latency = super::bd_latency::for_day(ledger.dir(), &super::today());
     let mut bd = super::claim::bd_for(repo);
+    bd.label = air_ledger::budgets::BD_STATUS;
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
         bd.timeout = super::bd_latency::status_bd_budget(today_latency.map(|l| l.median_ms));
     }

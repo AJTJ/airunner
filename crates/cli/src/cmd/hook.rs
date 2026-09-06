@@ -29,14 +29,27 @@ use rusqlite::params;
 use crate::cmd::{handover, log_event, now, open, ready_cache};
 use crate::git;
 
+/// The wall-clock cap Claude Code enforces on `air hook`, mirrored from
+/// `install::HOOK_TIMEOUT_SECS` — the number this process is measured against is the one
+/// `air install` writes into `settings.json`.
+///
+/// **Fail direction: OPEN, and worse than open — silent.** Claude Code KILLS a hook at this
+/// cap. A killed hook writes no event line, so a PreToolUse gate that never ran and a
+/// PreToolUse gate that allowed look identical in the record. That is why the measurement
+/// below is paired with `air audit`'s unpaired-hook count: this distribution is censored at
+/// the cap and cannot show its own tail.
+const HOOK_BUDGET: std::time::Duration =
+    std::time::Duration::from_secs(super::install::HOOK_TIMEOUT_SECS);
+
 pub fn run(repo: &Path) -> i32 {
+    let t0 = std::time::Instant::now();
     // Everything below is wrapped so a panic or error becomes "allow" + a log line.
     let mut raw = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut raw) {
         eprintln!("air hook: fail-open: {e}");
         return 0;
     }
-    let result = std::panic::catch_unwind(|| inner(repo, &raw));
+    let result = std::panic::catch_unwind(|| inner(repo, &raw, t0));
     match result {
         Ok(Ok((event, outcome))) => {
             let code = outcome.exit_code();
@@ -94,12 +107,17 @@ fn log_fail_open(repo: &Path, raw: &str, error: &str) {
     }
 }
 
-fn inner(repo: &Path, raw: &str) -> Result<(HookEvent, HookOutcome), String> {
+fn inner(
+    repo: &Path,
+    raw: &str,
+    t0: std::time::Instant,
+) -> Result<(HookEvent, HookOutcome), String> {
     inner_env(
         repo,
         raw,
         std::env::var("AIR_ROLE").ok().as_deref(),
         std::env::var("BEADS_ACTOR").ok().as_deref(),
+        t0,
     )
 }
 
@@ -111,6 +129,7 @@ fn inner_env(
     raw: &str,
     role: Option<&str>,
     actor: Option<&str>,
+    t0: std::time::Instant,
 ) -> Result<(HookEvent, HookOutcome), String> {
     let input = HookInput::parse(raw).map_err(|e| e.to_string())?;
     let cwd = input
@@ -137,6 +156,15 @@ fn inner_env(
             m.insert("tool".into(), t.clone().into());
         }
     }
+    // Recorded here, not after `log_event`: the line carries this invocation's own cost, and
+    // the append itself is the last thing the process does.
+    let elapsed = t0.elapsed();
+    air_ledger::budgets::record(
+        air_ledger::budgets::HOOK,
+        elapsed,
+        HOOK_BUDGET,
+        elapsed >= HOOK_BUDGET,
+    );
     log_event(
         &ledger,
         &worker,
@@ -917,7 +945,7 @@ mod tests {
         let mut v = body;
         v["session_id"] = "s1".into();
         v["cwd"] = repo.to_string_lossy().to_string().into();
-        inner_env(repo, &v.to_string(), None, None).unwrap();
+        inner_env(repo, &v.to_string(), None, None, std::time::Instant::now()).unwrap();
     }
 
     fn events(repo: &Path) -> Vec<serde_json::Value> {
