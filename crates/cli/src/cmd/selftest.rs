@@ -175,6 +175,32 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-vsvt (reopened). The anchor is the line that makes the parent list mean "what the
+    // batch merged": the first parent of each merge is the lane's own line, and every other is
+    // a branch it took. Under `skip(1)` the lane's own history joins the member set, so the
+    // recorded shas stop being the ones the batch merged, which is the rule this probe names.
+    // The name resolution, the unattributed fallback and the lane exclusion all survive it, so
+    // the green half holds and the mutation reaches one branch rather than removing the guard.
+    // It does NOT restore the pre-fix defect and is not claimed to; it neutralises the rule.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "batch: a run records the shas its batch merged, keeping one whose branch has moved off it, unattributed rather than dropped",
+        Mutation {
+            file: "crates/cli/src/cmd/batch.rs",
+            from: "for p in line.split_whitespace().skip(2) {",
+            to: "for p in line.split_whitespace().skip(1) {",
+            // Declared after RUNNING the mutation and seeing this one fall too, not predicted.
+            // It genuinely shares the rule: both probes assert the recorded member list, and
+            // "which parents are members" is the single fact underneath both. Declaring a
+            // shared red is a claim about the rule and deserves the same scrutiny as the probe
+            // — it is also how a flake gets laundered into a permanent shared-rule assertion —
+            // so the test applied here was whether the OTHER probe would still be checking
+            // something true if this rule were removed. It would not.
+            also_red: &[
+                "batch: a landing records exactly the branches its batch merged, once each, and never one already in main",
+            ],
+        },
+    ),
     // air-kexg. The anchor is the permitting half alone: under it no range is ever
     // journal-only, so a branch of journal entries is refused again and the defect returns.
     // The CONSTRAINT survives it untouched - a mixed range still needs a bead either way -
@@ -1434,13 +1460,15 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // its own. One condition, and the wrong one to lose quietly: the members row is
             // what a red batch is reported by.
             //
-            // air-vsvt re-anchored this: the test is now on the MERGE BASE rather than on the
-            // worktree's head, and the two `is_ancestor` calls collapsed into one. The
-            // condition being neutralised is the same one — "already in main" — and the
-            // anchor is the line as rustfmt leaves it, per air-gei.
+            // air-vsvt re-anchored this twice. First onto the MERGE BASE rather than the
+            // worktree's head; now onto the sha filter, because the reopened bead moved the
+            // sha source from the live worktrees to the batch commit's own parents, and the
+            // line the previous anchor named no longer exists. The condition being neutralised
+            // is the same one throughout — "already in main" — and it is still the only
+            // condition this mutation touches. Anchor as rustfmt leaves it, per air-gei.
             file: "crates/cli/src/cmd/batch.rs",
-            from: "if !git::is_ancestor(repo, &base, tip).unwrap_or(false) {",
-            to: "if true {",
+            from: ".filter(|sha| !git::is_ancestor(repo, sha, tip).unwrap_or(false))",
+            to: ".filter(|_sha| true)",
             also_red: &[],
         },
     ),
@@ -2064,6 +2092,7 @@ fn all_probes() -> Vec<Probe> {
         probe_the_peer_warning_dates_the_entry(),
         probe_the_refusal_says_which_not_green_state_it_is(),
         probe_landable_does_not_depend_on_which_worktree_asked(),
+        probe_a_batch_records_the_shas_it_took_and_never_drops_one(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -9432,6 +9461,156 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-vsvt (reopened): a batch's members come from the batch COMMIT, and a sha it took is
+/// never dropped for want of a name.
+///
+/// `members_of` enumerated the worktrees and kept each one's merge-base with the batch if it
+/// was not yet in main. Two defects, both reproduced in a fixture before anything was changed:
+///
+/// - **A member that resets to main drops out, with main held still.** Its branch no longer
+///   contains the work the batch took, so the merge-base collapses to main and the filter
+///   removes it. The row that results looks complete — plausible workers, plausible shas, and
+///   nothing saying a member is missing.
+/// - **A branch the lane never merged is named.** If w4 forks off w3's branch and the lane
+///   merges only w3, `merge_base(w4, batch)` is w3's sha: w4 is recorded as a member, carrying
+///   another worker's sha.
+///
+/// The batch commit already holds the answer. Its non-first merge parents are exactly what it
+/// took, and they do not move when branches do.
+///
+/// **Ancestry recovers shas and not names**, which is proven rather than assumed: w3 and w4
+/// both contain w3's sha, and the tie-break — w3's head still equalling it — is gone the moment
+/// w3 commits again. So a sha with no unambiguous branch is recorded UNATTRIBUTED. An omission
+/// wearing a complete-looking row is every symptom on this bead; an empty worker is visible.
+///
+/// Red: the set of shas is exactly what the batch merged — after a member resets to main with
+/// main held still, and with a forked branch present that the lane never took. Green: what must
+/// survive — a member is named with the sha the batch took rather than its current head, and the
+/// lane is never its own member.
+fn probe_a_batch_records_the_shas_it_took_and_never_drops_one() -> Probe {
+    use crate::cmd::batch::members_of;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |at: &std::path::Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(at)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let wt = |n: &str| dir.join(".claude").join("worktrees").join(n);
+        g(&dir, &["init", "-q", "-b", "main"])?;
+        g(&dir, &["commit", "-q", "--allow-empty", "-m", "base"])?;
+        for n in ["w1", "w2", "w3", "lane"] {
+            g(
+                &dir,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    n,
+                    &wt(n).display().to_string(),
+                ],
+            )?;
+            g(&wt(n), &["commit", "-q", "--allow-empty", "-m", n])?;
+        }
+        // w4 forks off w3's BRANCH, not off main, and the lane never merges it.
+        g(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "w4",
+                &wt("w4").display().to_string(),
+                "w3",
+            ],
+        )?;
+        g(&wt("w4"), &["commit", "-q", "--allow-empty", "-m", "w4"])?;
+
+        // The lane cuts a batch: one merge at a time, the realistic shape.
+        for n in ["w1", "w2", "w3"] {
+            g(&wt("lane"), &["merge", "-q", "--no-ff", "-m", "batch", n])?;
+        }
+        let batch = g(&wt("lane"), &["rev-parse", "HEAD"])?;
+        let main_tip = g(&dir, &["rev-parse", "main"])?;
+        let at_cut = |n: &str| -> Result<String, String> { g(&dir, &["rev-parse", n]) };
+        let (w1, w2, w3) = (at_cut("w1")?, at_cut("w2")?, at_cut("w3")?);
+
+        let shas = |ms: &[air_ledger::landings::Member]| -> Vec<String> {
+            let mut v: Vec<String> = ms.iter().map(|m| m.sha.clone()).collect();
+            v.sort();
+            v
+        };
+        let mut want = vec![w1.clone(), w2.clone(), w3.clone()];
+        want.sort();
+
+        // w3 keeps going after the cut. The ordinary case, and it must be unchanged.
+        g(&wt("w3"), &["commit", "-q", "--allow-empty", "-m", "more"])?;
+        let moved = members_of(&dir, "lane", &batch, &main_tip);
+        // All three shas, at the cut, and w1/w2 still named. w3's sha is now in two branches
+        // (its own and w4's), so it is recorded unattributed rather than guessed at.
+        // Deliberately NOT restating red's claim about the sha set: these are the properties
+        // that must SURVIVE the declared mutation, so that a failure of both halves reads as a
+        // mutation removing the guard rather than one reaching a branch.
+        let ordinary = moved.iter().any(|m| m.worker == "w1" && m.sha == w1)
+            && moved.iter().any(|m| m.worker == "w2" && m.sha == w2)
+            && !moved.iter().any(|m| m.worker == "lane");
+
+        // RED 1: w3 resets to main, main held still. Its sha must survive.
+        g(&wt("w3"), &["reset", "-q", "--hard", "main"])?;
+        let after_reset = members_of(&dir, "lane", &batch, &main_tip);
+        let main_unmoved = g(&dir, &["rev-parse", "main"])? == main_tip;
+        let kept = shas(&after_reset) == want && main_unmoved;
+
+        // RED 2: the forked branch's OWN commit was never merged and is never a member.
+        // Asserted on the SHA, not the name: once w3 abandons its work, w4 is the only branch
+        // still containing w3's sha, so the name resolution hands w4 that entry. Found by
+        // running this probe, and recorded on `members_of` as a limitation rather than papered
+        // over — a name can migrate to a fork when the owner walks away from its own work, and
+        // no amount of ancestry fixes it. The sha stays right, which is the fact that matters.
+        let w4_head = g(&wt("w4"), &["rev-parse", "HEAD"])?;
+        let no_w4 = !after_reset.iter().any(|m| m.sha == w4_head)
+            && !moved.iter().any(|m| m.sha == w4_head);
+        // Nothing is dropped for want of a name. Asserted on the PRE-reset snapshot, where w3
+        // and w4 both hold w3's sha so no name can be chosen: that entry is recorded with an
+        // empty worker rather than guessed at or omitted. After the reset only w4 holds it, so
+        // it reads as unambiguous and takes w4's name — wrongly, which is the name-migration
+        // limitation recorded on `members_of`. Found by running this, not by reasoning: the
+        // first version asserted it here and went red because the ambiguity had resolved.
+        let unattributed_not_dropped = moved.iter().filter(|m| m.worker.is_empty()).count() == 1
+            && moved.iter().any(|m| m.worker.is_empty() && m.sha == w3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((kept && no_w4 && unattributed_not_dropped, ordinary))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "batch: a run records the shas its batch merged, keeping one whose branch has moved off it, unattributed rather than dropped",
         red_fires: red,
         green_passes: green,
     }
