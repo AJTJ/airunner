@@ -84,7 +84,7 @@ Index items are 1–3 lines; detail lives behind the link.
   grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
   read the line cited. Applies in both directions and to commands most of all. **Check even
   when you agree. Agreement is when checking feels least necessary and is most valuable.**
-  Owner, via the 2026-08-22 ai_runner/the adopter exchange: three corrections, all caught by the
+  Owner, via the 2026-08-22 exchange with an adopter's coordinator: three corrections, all caught by the
   receiver opening the file, none by the sender flagging; and a fourth that both sides held and
   neither checked, plausibly *because* the other had said it.
   **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
@@ -103,7 +103,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | What Claude Code itself already provides (live inventory, dated, with the limits that matter) | [`docs/research/claude-code-control-surfaces.md`](docs/research/claude-code-control-surfaces.md) §0 |
 | Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
 | Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
-| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it on the adopter | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
+| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it in an adopter's repo | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
 | Integrating Air into a target repo (install, rules to change, self-maintenance) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | What comes next, in order | [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md) |
 | The whole change list from the 2026-08-24/25 audit and the adopter's round logs, ruled item by item, with a path for each | [`docs/plans/0008-consolidated-changes.md`](docs/plans/0008-consolidated-changes.md) |

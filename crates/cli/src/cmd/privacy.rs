@@ -1,8 +1,10 @@
 //! `air adopter-check`: no tracked file names an adopter (air-bpj).
 //!
-//! Owner ruling, 2026-09-06: *"no adopter content should be public. The Air project should be
-//! separate from the adopter project."* Everything that names an adopter, quotes their files
-//! or copies their corpus moved to an ignored `private/`; tracked text says "an adopter".
+//! Owner ruling, 2026-09-06: no adopter's content should be public, and the Air project should
+//! be separate from theirs. Everything that names an adopter, quotes their files or copies
+//! their corpus moved to an ignored `private/`; tracked text says "an adopter". The ruling's
+//! own words are in the bead and in `private/README.md`, because they name the adopter and
+//! this check would refuse the file quoting them — which is the check working.
 //!
 //! **Why this is a check and not a rule in CLAUDE.md.** A rule that must be remembered fails
 //! toward publishing, and publishing is the direction that cannot be undone: one push and the
