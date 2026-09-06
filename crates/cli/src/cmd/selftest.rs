@@ -1054,6 +1054,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        Mutation {
+            // Count an untracked file as tracked, which is the gate exactly as it stood: the
+            // directory is read and git is never asked. The Missing case and the refusal text
+            // are untouched, so the mutation reaches the tracked rule alone.
+            file: "crates/cli/src/cmd/handover.rs",
+            from: "        if tracked.contains(&e.file_name().to_string_lossy().to_string()) {",
+            to: "        if true {",
+            also_red: &[],
+        },
+    ),
+    (
         "docs: every flag and condition kind the README and the rules name still exists",
         Mutation {
             // Check the command word and stop, which is what air-w91's check already does
@@ -1684,6 +1696,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_batch_records_exactly_the_branches_it_merged(),
         probe_the_gate_runs_what_the_makefile_says(),
         probe_docs_name_real_flags_and_kinds(),
+        probe_an_untracked_digest_is_not_proof(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -2117,7 +2130,7 @@ fn probe_land_selection_is_never_silent() -> Probe {
 /// has the worker's name in it. Green: the digest that declares this bead is accepted, and a
 /// pre-cutoff digest with no front matter still passes so today's work is not invalidated.
 fn probe_digest_names_its_bead() -> Probe {
-    use crate::cmd::handover::{declared_bead, digest_for_bead};
+    use crate::cmd::handover::{Digest, declared_bead, digest_for_bead};
 
     let res = (|| -> Option<(bool, bool)> {
         let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -2127,6 +2140,11 @@ fn probe_digest_names_its_bead() -> Probe {
         // is accepted. The lenient cutoff below is the history case.
         let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().ok()?;
         let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).ok();
+        // air-ahl: this probe is about DECLARING a bead, not about tracking, so everything it
+        // writes is declared tracked and the tracked rule is probed separately.
+        let all_tracked = |names: &[&str]| -> std::collections::BTreeSet<String> {
+            names.iter().map(|n| (*n).to_string()).collect()
+        };
         // A digest for ANOTHER bead, by this worker, written now.
         write(
             "2026-08-23-beta-air-other.md",
@@ -2136,11 +2154,15 @@ fn probe_digest_names_its_bead() -> Probe {
 
         // Red: it declares a different bead, so it is not this bead's digest, whatever its
         // name or mtime say.
-        let wrong_bead = !digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&["2026-08-23-beta-air-other.md"]);
+        let wrong_bead =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
         // Red: a file carrying the worker's name and no declaration, written after the
         // cutoff, is not a substitute — this is the `touch` case and the substring case.
         write("2026-08-23-beta-notes.md", "# just some notes\n")?;
-        let undeclared_after_cutoff = !digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&["2026-08-23-beta-air-other.md", "2026-08-23-beta-notes.md"]);
+        let undeclared_after_cutoff =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
         let red =
             wrong_bead && undeclared_after_cutoff && declared_bead("# no front matter").is_none();
 
@@ -2149,7 +2171,13 @@ fn probe_digest_names_its_bead() -> Probe {
             "2026-08-23-beta-air-agq.md",
             "---\nbead: air-agq\n---\n# ours\n",
         )?;
-        let declared_ok = digest_for_bead(dir, "beta", &ours, None, cut);
+        let tracked = all_tracked(&[
+            "2026-08-23-beta-air-other.md",
+            "2026-08-23-beta-notes.md",
+            "2026-08-23-beta-air-agq.md",
+        ]);
+        let declared_ok =
+            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Tracked;
 
         // Green: history still passes. A digest written before the cutoff with no front
         // matter is matched the old way, so the change does not invalidate what exists.
@@ -2157,7 +2185,14 @@ fn probe_digest_names_its_bead() -> Probe {
         std::fs::create_dir_all(&old).ok()?;
         std::fs::write(old.join("2026-08-22-beta-air-old.md"), "# old\n").ok()?;
         let far_future: jiff::Timestamp = "2999-01-01T00:00:00Z".parse().ok()?;
-        let fallback_ok = digest_for_bead(&old, "beta", &ours, None, far_future);
+        let fallback_ok = digest_for_bead(
+            &old,
+            "beta",
+            &ours,
+            None,
+            far_future,
+            &all_tracked(&["2026-08-22-beta-air-old.md"]),
+        ) == Digest::Tracked;
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&old);
         Some((red, declared_ok && fallback_ok))
@@ -4917,6 +4952,7 @@ fn base_facts() -> GateFacts {
         bead_claimed_or_carried: true,
         runs_at_head: (1, 0),
         digest_present: None,
+        digest_untracked: false,
         digest_dir: None,
         bead: None,
         held_beads: vec![],
@@ -8754,3 +8790,128 @@ fn probe_adopter_check_refuses_from_a_worktree_and_when_it_has_no_list() -> Prob
 }
 
 const ADOPTER_CHECK_PROBE: &str = "privacy: adopter-check refuses a leak when run from a worktree, and refuses a repo that declares an adopter with no names instead of skipping";
+
+/// air-ahl: a digest that git does not track is not proof, and the refusal says which fix.
+///
+/// Reported by an adopter against their own worker's interest: their w2 used the gap
+/// deliberately and told them anyway. `digest_for_bead` read the directory and never asked git,
+/// so a file that existed for nobody but one worktree satisfied the gate — and a green then
+/// said nothing about whether a digest would exist for the next reader, which is the whole
+/// purpose of the check.
+///
+/// The requirement did not ship alone, because the need it served is real: a worker must be
+/// able to close without invalidating the batch its lane cut. **That route already existed and
+/// needed no new mechanism**, which is the finding rather than the fix. `batch::bead_commits`
+/// filters `main..HEAD` by the `Bead:` trailer ONLY, so a digest commit carrying no trailer
+/// never joins the set the batch green has to cover: the worker commits the digest, the head
+/// moves, and the close still passes at the batch it was cut at. Demonstrated end to end on a
+/// real branch, and the refusal below says so where a worker meets it.
+///
+/// Rejected: accepting a STAGED digest. `git add` alone does make a file tracked and does leave
+/// HEAD where it was, so it would have satisfied both halves — but a staged file is still one
+/// worktree's, and the gate exists for the reader who was not there.
+///
+/// Red: a digest declaring the bead, present in the directory and untracked, is `Untracked`,
+/// and the gate refuses it under its own check name with a fix naming the untrailered commit.
+/// Green: the same file once git tracks it is `Tracked` and passes; a directory with no
+/// declaring file at all is `Missing` and gets the other sentence, so the two refusals cannot
+/// collapse into one; and a tracked digest beside an untracked stray still passes, or a scratch
+/// copy would mask the real one.
+fn probe_an_untracked_digest_is_not_proof() -> Probe {
+    use crate::cmd::handover::{Digest, digest_for_bead, tracked_in};
+    use air_hooks::{GateFacts, handover_verdict};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+
+        let digests = dir.join("docs").join("digests");
+        std::fs::create_dir_all(&digests).map_err(|e| e.to_string())?;
+        let beads = vec!["air-ahl".to_string()];
+        let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().map_err(|_| "cutoff")?;
+        let state = || {
+            digest_for_bead(
+                &digests,
+                "w1",
+                &beads,
+                None,
+                cut,
+                &tracked_in(&dir, &digests),
+            )
+        };
+
+        // Nothing written yet.
+        let missing = state() == Digest::Missing;
+
+        // Written, and git has never heard of it: exactly the adopter's case.
+        let path = digests.join("2026-09-06-w1-air-ahl.md");
+        std::fs::write(&path, "---\nbead: air-ahl\n---\nproof\n").map_err(|e| e.to_string())?;
+        let untracked = state() == Digest::Untracked;
+
+        // The refusal a worker actually meets, from the real gate.
+        let facts = GateFacts {
+            worker: "w1".into(),
+            head: "0123456789abcdef".into(),
+            green_at_head: true,
+            main_is_ancestor: true,
+            bead_claimed_or_carried: true,
+            runs_at_head: (1, 0),
+            digest_present: Some(false),
+            digest_untracked: true,
+            digest_dir: Some("docs/digests".into()),
+            held_beads: beads.clone(),
+            ..GateFacts::default()
+        };
+        let v = handover_verdict(&facts);
+        let named = v.missing.iter().any(|m| {
+            m.check == "digest-untracked"
+                && m.detail.contains("does not track it")
+                && m.fix.contains("WITHOUT a `Bead:` trailer")
+        });
+
+        // Tracked: the same bytes, once git knows about them.
+        g(&["add", "docs/digests/2026-09-06-w1-air-ahl.md"])?;
+        let tracked_ok = state() == Digest::Tracked;
+
+        // A stray untracked copy beside a tracked digest must not mask it.
+        std::fs::write(
+            digests.join("scratch.md"),
+            "---\nbead: air-ahl\n---\nnote to self\n",
+        )
+        .map_err(|e| e.to_string())?;
+        let stray_ok = state() == Digest::Tracked;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((untracked && named, missing && tracked_ok && stray_ok))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
