@@ -101,13 +101,40 @@ impl Ledger {
         Ok(())
     }
 
-    /// Stamp a hand-over attempt on the worker's open claim. No-op without a claim.
+    /// Stamp a FAILED hand-over attempt on the worker's open claim. No-op without a claim.
+    ///
+    /// air-zqmi: this used to be stamped on every hand-over command the gate saw, passes
+    /// included, so `handover_attempts` counted attempts rather than failures while the
+    /// condition reading it says "handed over N times without green verify at HEAD". An
+    /// adopter's w3 closed three beads cleanly and the channel reported it had handed over
+    /// without a green; the coordinator asked for the refusal text and there was none, because
+    /// there had been no refusal.
+    ///
+    /// Same class as air-eiv, one layer over: that was a QUERY counting as an attempt
+    /// (`air handover`, the documented diagnostic, raising the alarm on the worker running
+    /// it), this is a SUCCESS counting as one. The rule both settle on: only a hand-over that
+    /// did not go through is an attempt.
     pub fn stamp_handover(&self, bead: &str, worker: &str, at: &str) -> Result<bool> {
         let n = self.conn.execute(
             "UPDATE claims SET first_handover_at=COALESCE(first_handover_at, ?3), \
              last_handover_at=?3, handover_attempts=handover_attempts+1 \
              WHERE bead=?1 AND worker=?2 AND released_at IS NULL",
             params![bead, worker, at],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// A hand-over went through, so there are no outstanding failed attempts on this claim
+    /// (air-zqmi). Without this the counter is a high-water mark: one refusal early on, then a
+    /// clean close, and the condition still reports a worker that has already succeeded.
+    ///
+    /// Keeps `first_handover_at`, which records when the worker first tried and is history
+    /// rather than state.
+    pub fn clear_handover_attempts(&self, bead: &str, worker: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE claims SET handover_attempts=0 \
+             WHERE bead=?1 AND worker=?2 AND released_at IS NULL",
+            params![bead, worker],
         )?;
         Ok(n > 0)
     }
