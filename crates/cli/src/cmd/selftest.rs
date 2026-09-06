@@ -313,6 +313,11 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // The enforced-gate and close-with-proof probes drive the same refusal end to end,
             // and so does the env-delivery probe, which runs the real hook (air-9dg).
             also_red: &[
+                // air-g7e: air-80x.1 made this branch SHARED — `let green = f.green_at_head
+                // || f.batch_green.is_some()` — so neutralising it takes the batch gate with
+                // it, correctly. Declared rather than worked around: the mutation really is
+                // wider than one probe now, and saying so is the honest form of that.
+                "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
                 "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
                 "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
@@ -936,6 +941,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "selftest: every declared mutation still anchors exactly once in the file it names",
+        Mutation {
+            // Accept a dead anchor as fine, which is the state the registry was actually in
+            // for days: two mutations anchored nothing and the suite printed PASS for both
+            // probes anyway. The ambiguous case is untouched, so the mutation reaches the
+            // zero-occurrence rule alone.
+            file: "crates/cli/src/cmd/selftest.rs",
+            from: "match text.matches(m.from).count() {\n                1 => {}",
+            to: "match text.matches(m.from).count() {\n                0 | 1 => {}",
+            also_red: &[],
+        },
+    ),
+    (
         "privacy: a tracked line naming an adopter is refused with its file and line; a clean tree and a clone with no list are not",
         Mutation {
             // Match case-sensitively, which is the grep everyone writes first and the one that
@@ -1222,6 +1240,10 @@ fn build_and_run(repo: &Path) -> Result<Vec<Probe>, String> {
     let out = Command::new("cargo")
         .args(["run", "-q", "-p", "air", "--", "selftest", "--json"])
         .current_dir(repo)
+        // The anchor probe checks the registry at rest, and right now exactly one anchor is
+        // deliberately not where it says it is: the one being applied. Without this it goes
+        // red under every mutation and every one of them reads as VACUOUS (air-g7e).
+        .env("AIR_SELFTEST_PROVING", "1")
         .output()
         .map_err(|e| format!("mutated selftest did not run: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1494,6 +1516,7 @@ fn all_probes() -> Vec<Probe> {
         probe_metis_is_the_coordinators_and_never_a_workers(),
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
+        probe_every_declared_mutation_still_anchors(),
     ]
 }
 
@@ -7359,5 +7382,102 @@ fn probe_no_tracked_file_names_an_adopter() -> Probe {
         name: "privacy: a tracked line naming an adopter is refused with its file and line; a clean tree and a clone with no list are not",
         red_fires: red,
         green_passes: clean && no_list && declared_only,
+    }
+}
+
+/// air-g7e: every declared mutation's anchor still occurs exactly once in the file it names.
+///
+/// **Two mutations had been BROKEN for days and the suite said nothing.** air-80x.1 rewrote
+/// the gate's green branch and air-bm3 widened the PreToolUse matcher; both `from` anchors
+/// stopped matching, so `gate: verify-green-at-head` and the SendMessage traffic probe kept
+/// printing PASS with no evidence behind them at all. A probe whose mutation cannot be applied
+/// is a probe nobody has seen fail, which is precisely what air-682 says is not evidence.
+///
+/// The only thing that noticed was `air selftest --prove`, and it costs 31 minutes because it
+/// rebuilds the binary once per mutation — so it is run at the end of a round, if at all, and
+/// both anchors died in between. This costs milliseconds: it reads each file once and counts a
+/// substring. No build, no spawn, no ledger.
+///
+/// Zero occurrences is a dead anchor. More than one is worse than dead: `--prove` would refuse
+/// it as ambiguous, and an ambiguous anchor is the wrong-path trap air-682 names, where the
+/// mutation lands somewhere other than the branch the probe is about.
+///
+/// Red: a table whose anchor is missing, and one whose anchor is ambiguous, are both named
+/// with their file. Green: every anchor in the REAL table resolves exactly once today.
+fn probe_every_declared_mutation_still_anchors() -> Probe {
+    // Pure over a reader, so the red half needs no scratch files and the green half reads the
+    // real tree.
+    fn stale(muts: &[(&str, Mutation)], read: impl Fn(&str) -> Option<String>) -> Vec<String> {
+        let mut out = Vec::new();
+        for (name, m) in muts {
+            let Some(text) = read(m.file) else {
+                out.push(format!("{}: cannot read {}", name, m.file));
+                continue;
+            };
+            match text.matches(m.from).count() {
+                1 => {}
+                0 => out.push(format!("{}: anchor gone from {}", name, m.file)),
+                n => out.push(format!("{}: anchor occurs {n} times in {}", name, m.file)),
+            }
+        }
+        out
+    }
+
+    let missing = [(
+        "made up",
+        Mutation {
+            file: "crates/cli/src/cmd/install.rs",
+            from: "this text is in no file",
+            to: "x",
+            also_red: &[],
+        },
+    )];
+    let ambiguous = [(
+        "made up",
+        Mutation {
+            file: "crates/cli/src/cmd/install.rs",
+            from: "twice",
+            to: "x",
+            also_red: &[],
+        },
+    )];
+    let fixture = |_: &str| Some("twice and twice again".to_string());
+    let red = stale(&missing, |_| Some("nothing like it".to_string()))
+        .first()
+        .is_some_and(|s| s.contains("anchor gone from crates/cli/src/cmd/install.rs"))
+        && stale(&ambiguous, fixture)
+            .first()
+            .is_some_and(|s| s.contains("occurs 2 times"));
+
+    // Under `--prove` one anchor is deliberately absent — the mutation in flight — so the
+    // question this probe asks has no answer then. It stands down rather than reporting a
+    // dead anchor that is a live mutation, which would mark every mutation vacuous.
+    if std::env::var_os("AIR_SELFTEST_PROVING").is_some() {
+        return Probe {
+            name: "selftest: every declared mutation still anchors exactly once in the file it names",
+            red_fires: red,
+            green_passes: true,
+        };
+    }
+
+    // The real table against the real tree.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let live = stale(MUTATIONS, |f| std::fs::read_to_string(root.join(f)).ok());
+    if !live.is_empty() {
+        eprintln!("air selftest: dead mutation anchors:");
+        for l in &live {
+            eprintln!("  {l}");
+        }
+    }
+    // The other half of the registry's health — that every key names a probe that exists — is
+    // deliberately NOT checked here. This probe is itself in `all_probes()`, so asking that
+    // question would call `all_probes()` from inside it and recurse forever (seen, on the
+    // first run of this probe). `--prove` already treats an orphan key as a hard failure, and
+    // an orphan is loud there in a way a dead anchor was not.
+
+    Probe {
+        name: "selftest: every declared mutation still anchors exactly once in the file it names",
+        red_fires: red,
+        green_passes: live.is_empty(),
     }
 }
