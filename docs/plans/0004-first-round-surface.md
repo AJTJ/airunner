@@ -4,7 +4,7 @@ Status: decided and built, 2026-08-20 (owner decisions in [`../decisions.md`](..
 under that date). Extends [`0001-first-slice.md`](0001-first-slice.md); supersedes its §4 check 4
 ("CAS owned by the ledger") and its §9 non-goal on MCP.
 
-## 1. What the first the adopter's round needs, and why each piece exists
+## 1. What the adopter's first round needs, and why each piece exists
 
 | Piece | Named pain it removes | Probe |
 |---|---|---|

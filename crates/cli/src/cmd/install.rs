@@ -1007,6 +1007,45 @@ pub const SURFACE: &[SurfaceChange] = &[
                  harness that sends these events; on one that does not, the columns stay \
                  NULL and nothing changes.",
     },
+    SurfaceChange {
+        id: "ancestor-deadlock-named",
+        since: "2026-09-06 (air-btz)",
+        headline: "`air status` names a bead blocked by one of its own ancestors, with the \
+                   edge and the `bd dep remove` that clears it. Such a bead can never become \
+                   ready — the ancestor cannot finish until its descendants do — and bd shows \
+                   it as \"not ready yet\" like any queued bead. bd 1.2.2 refuses the edge on \
+                   nine routes but NOT from `bd create --graph` or `bd create --parent X \
+                   --deps <ancestor>`, because its guard is a parent-child row on the pair \
+                   plus a dotted-id prefix test, not an ancestor walk.",
+        silent_break: false,
+        action: "Nothing to run, and silent unless a repo has the shape. It costs one \
+                 `bd list --status …` per tick, plus one `bd dep list` only when a bead that \
+                 has a parent also has an edge. If you file waves with `bd create --graph`, \
+                 read `bd dep tree <epic> --json` after each one for an edge from a child to \
+                 ANY ancestor: `bd dep cycles` does not report this shape, because the \
+                 hierarchy is definitional rather than an edge.",
+    },
+    SurfaceChange {
+        id: "adopters-declared",
+        since: "2026-09-06 (air-jsz)",
+        headline: "`air adopter-check` no longer skips silently when it has no names. \
+                   `.claude/air.json` gains `\"adopters\"`: declared true with no \
+                   `private/adopters.md` is now a REFUSAL naming the file to write; \
+                   undeclared with no list still skips, which is the clone-with-no-adopter \
+                   case. The list is read from the MAIN checkout, beside the declaration, so \
+                   a worktree's copy cannot disagree with it. `air init` writes \
+                   `\"adopters\": false`.",
+        silent_break: true,
+        action: "If your repo quotes an adopter, set `\"adopters\": true` AND write \
+                 `private/adopters.md` in the main checkout BEFORE upgrading, or your next \
+                 verify goes red. If it quotes nobody, do nothing: the default is false and \
+                 the behaviour is unchanged. Why this changed: the check ran for a whole \
+                 round here having never once been given a list — the file was absent \
+                 everywhere and every green verify printed `Skipped`, so the one mechanism \
+                 guarding the no-adopter-content rule would have passed over any leak. A \
+                 count of zero firings meant nothing, because the input never arrived. Check \
+                 your own verify output for that line before assuming yours has ever run.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

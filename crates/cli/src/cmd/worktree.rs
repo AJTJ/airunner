@@ -26,7 +26,7 @@
 //!   (`La()?.worktreePath` in 2.1.261) and exists only with the flag. Dropping the flag would
 //!   remove a working enforcement that roles.md promises, for a coupling argument with no
 //!   incident behind it (do-less). What changes is who creates and who removes.
-//! - **WorktreeCreate hook.** the adopter's file says configuring one "replaces git's worktree
+//! - **WorktreeCreate hook.** The adopter's file says configuring one "replaces git's worktree
 //!   logic entirely and this file stops being processed". Checked against 2.1.261's messages
 //!   rather than exercised: the harness uses the hook's returned path in place of its own git
 //!   logic ("Cannot create agent worktree: not in a git repository and no WorktreeCreate hooks
