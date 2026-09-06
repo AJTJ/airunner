@@ -175,6 +175,21 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-45pw. The anchor truncates the file route at 500 chars — a generous command line, and
+    // exactly the shape of the bug: the capture is still filed, still long, still reads as a
+    // capture. A probe asserting "non-empty" or "long enough" stays green here, which is why the
+    // green half asserts byte-for-byte equality with the file. The refusals, the positional
+    // route and the ledger write all survive it, so it reaches one branch rather than the guard.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "capture: --file files the finding whole, byte for byte, and passing both routes or neither is refused naming both",
+        Mutation {
+            file: "crates/cli/src/cmd/capture.rs",
+            from: "Ok(s) => Ok(s.trim().to_string()),",
+            to: "Ok(s) => Ok(s.trim().chars().take(500).collect()),",
+            also_red: &[],
+        },
+    ),
     // air-6wv2. The anchor removes the DISTINCTION and nothing else, per the bead: the refusal
     // still names the assignee, the bd version rule and the fixing command, the claims lookup
     // still runs, and the sentence is still printed — it just always reads as live work. What
@@ -2111,6 +2126,7 @@ fn all_probes() -> Vec<Probe> {
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
+        probe_capture_takes_a_file_whole(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
@@ -2751,6 +2767,101 @@ fn probe_audit_registry() -> Probe {
 /// still bites, which is the half worth keeping. Green: claim, close, take the next bead, close
 /// again on an UNCHANGED HEAD, all on one verify run. So the second close is free and the
 /// sequence in CLAUDE.md's work flow does not stall.
+/// air-45pw: `air capture` took one positional and nothing else, so a finding long enough to be
+/// worth writing went through the harness's command classifier as a command line and was refused
+/// for its shape. An adopter's worker shortened a finding in order to file it. Capture is the
+/// intake for everything the coordinator triages, and a shortened capture looks exactly like a
+/// capture, so the loss is invisible.
+///
+/// The assertion is byte-for-byte equality with the file, deliberately, and not "non-empty" or
+/// "long enough". What this bug produces is a TRUNCATION, and a probe that checks for presence
+/// passes over the exact failure — the same shape as an anchor where everything reads as fine.
+/// The fixture is far longer than any sensible command line and carries its last sentence as a
+/// sentinel, so a cut anywhere is a failure and not a smaller pass.
+///
+/// Red: both routes at once, and neither, are each refused, and each refusal names both routes —
+/// the person reading it has just had a capture refused and needs to be told the other way in.
+/// Green: the long file round-trips through the real `capture` into the ledger unchanged, and
+/// the positional route still works beside it.
+fn probe_capture_takes_a_file_whole() -> Probe {
+    use crate::cmd::capture::{capture, resolve_text};
+    use crate::cmd::open;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+
+        // Longer than any command line anyone would write, with interior blank lines, quotes and
+        // apostrophes — the shapes that make a classifier refuse — and a sentinel last sentence.
+        let mut finding = String::new();
+        for i in 0..60 {
+            finding.push_str(&format!(
+                "Paragraph {i}: the worker's own words, with \"quotes\", a $dollar and a `tick`, \
+                 running past the length at which a shell argument stops being reasonable.\n\n"
+            ));
+        }
+        finding.push_str("SENTINEL: the last sentence, which a truncation eats first.");
+        let path = dir.join("finding.md");
+        std::fs::write(&path, &finding).map_err(|e| e.to_string())?;
+
+        // Red: neither route, and both at once. Each refusal must name BOTH ways in.
+        let names_both = |e: &str| e.contains("--file") && e.contains("text");
+        let neither = resolve_text(None, None);
+        let both = resolve_text(Some("a line"), Some(&path));
+        let refusals_are_useful =
+            matches!(&neither, Err(e) if names_both(e)) && matches!(&both, Err(e) if names_both(e));
+
+        // Green: the real path. `capture` writes to the repo's ledger; read it back out.
+        let filed = capture(&dir, None, Some(&path), "coordinator", true) == 0;
+        let (ledger, _) = open(&dir)?;
+        let items = ledger.inbox().map_err(|e| e.to_string())?;
+        // Byte for byte against the file, not "non-empty" and not "long": a truncation is what
+        // the bug produces and it is what this must catch.
+        let whole = items.len() == 1
+            && items.first().is_some_and(|c| {
+                c.text == finding
+                    && c.text.len() == finding.len()
+                    && c.text.ends_with("a truncation eats first.")
+            });
+
+        // The positional still works: the file route is an addition, not a replacement, because
+        // most captures are one-liners.
+        let line_ok = capture(&dir, Some("  a one-liner  "), None, "coordinator", true) == 0;
+        let both_filed = ledger
+            .inbox()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c.text == "a one-liner");
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((refusals_are_useful, filed && whole && line_ok && both_filed))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: "capture: --file files the finding whole, byte for byte, and passing both routes or neither is refused naming both",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
 fn probe_close_with_proof_sequence() -> Probe {
     use crate::cmd::hook::handover_gate;
     use air_hooks::HookOutcome;
