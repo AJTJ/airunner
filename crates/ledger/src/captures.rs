@@ -19,6 +19,26 @@ pub type TriageItem = (String, String, Option<String>, Option<String>);
 /// What a capture pointed at before a triage: `(status, bead)`.
 pub type Was = (String, Option<String>);
 
+/// Where a capture was written, as far as Air could tell (air-6dj4).
+///
+/// A capture's time is on the row and its subject is in the body, and the body is what gets
+/// quoted into a bead, a message or a log — so "the batch is red" arrives elsewhere with no way
+/// to say which batch. The sha is what a later reader needs; the writer is the one who forgets
+/// it and Air is the one that already knows it.
+///
+/// An enum rather than two loose strings so the caller cannot record both or half of one. The
+/// **third** state is `Option::None` around this: a row written before v21, about which Air
+/// observed nothing at all. That is deliberately not a variant — "nobody looked" is the absence
+/// of this fact, not a kind of it, and giving it a variant invites rendering it like `Absent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum Head {
+    /// The worktree's HEAD at capture time.
+    At(String),
+    /// Air looked and there was none, with the reason: no repo, an unborn branch, git failed.
+    /// Never an empty sha — an empty string and "there is no head" must not read alike.
+    Absent(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Capture {
     pub id: String,
@@ -32,10 +52,13 @@ pub struct Capture {
     pub note: Option<String>,
     /// Always `coordinator` on a new row (air-uef). Older rows may still say `owner`.
     pub audience: String,
+    /// Where it was written (air-6dj4). `None` on a row from before v21: Air observed nothing,
+    /// which is not the same claim as `Absent` and must never render as one.
+    pub head: Option<Head>,
 }
 
-const COLS: &str =
-    "id, worker, session_id, text, captured_at, status, resolved_at, bead, note, audience";
+const COLS: &str = "id, worker, session_id, text, captured_at, status, resolved_at, bead, \
+                    note, audience, head_sha, head_absent";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Capture> {
     Ok(Capture {
@@ -49,6 +72,16 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Capture> {
         bead: r.get(7)?,
         note: r.get(8)?,
         audience: r.get(9)?,
+        // Both NULL is "no such fact on this row" and stays `None`; a sha wins over a reason
+        // if a future writer ever set both, since a sha is the stronger observation.
+        head: match (
+            r.get::<_, Option<String>>(10)?,
+            r.get::<_, Option<String>>(11)?,
+        ) {
+            (Some(sha), _) => Some(Head::At(sha)),
+            (None, Some(why)) => Some(Head::Absent(why)),
+            (None, None) => None,
+        },
     })
 }
 
@@ -60,10 +93,19 @@ impl Ledger {
         session_id: Option<&str>,
         text: &str,
         at: &str,
+        head: Option<&Head>,
     ) -> Result<()> {
+        // air-6dj4: exactly one of the two columns is ever set, so the three states stay apart
+        // in the store rather than being reconstructed by a reader.
+        let (sha, absent) = match head {
+            Some(Head::At(s)) => (Some(s.as_str()), None),
+            Some(Head::Absent(why)) => (None, Some(why.as_str())),
+            None => (None, None),
+        };
         self.conn.execute(
-            "INSERT INTO captures (id, worker, session_id, text, captured_at, audience) VALUES (?1,?2,?3,?4,?5,'coordinator')",
-            params![id, worker, session_id, text, at],
+            "INSERT INTO captures (id, worker, session_id, text, captured_at, audience, \
+             head_sha, head_absent) VALUES (?1,?2,?3,?4,?5,'coordinator',?6,?7)",
+            params![id, worker, session_id, text, at, sha, absent],
         )?;
         Ok(())
     }
@@ -140,8 +182,9 @@ mod tests {
     #[test]
     fn inbox_orders_oldest_first_and_triage_closes_it() {
         let l = Ledger::open_in_memory().unwrap();
-        l.capture("b", "w1", Some("s"), "second", "t2").unwrap();
-        l.capture("a", "w2", None, "first", "t1").unwrap();
+        l.capture("b", "w1", Some("s"), "second", "t2", None)
+            .unwrap();
+        l.capture("a", "w2", None, "first", "t1", None).unwrap();
         let inbox = l.inbox().unwrap();
         assert_eq!(
             inbox.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
@@ -166,7 +209,7 @@ mod tests {
     fn resolve_captures_triages_a_pass_and_repoints() {
         let l = Ledger::open_in_memory().unwrap();
         for (id, text) in [("a", "one"), ("b", "two"), ("c", "three")] {
-            l.capture(id, "w1", None, text, "t0").unwrap();
+            l.capture(id, "w1", None, text, "t0", None).unwrap();
         }
         let items = vec![
             item("a", "promoted", Some("zz-1"), None),
