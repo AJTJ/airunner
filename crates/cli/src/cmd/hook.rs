@@ -891,14 +891,14 @@ pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
             Some(&"update") => {
                 let closed = rest.windows(2).any(
                     |w| matches!(w, [a, b] if (*a == "-s" || *a == "--status") && *b == "closed"),
-                ) || rest.iter().any(|t| *t == "--status=closed");
+                ) || rest.contains(&"--status=closed");
                 if closed {
                     return Some("bd update -s closed");
                 }
                 let review = rest.windows(2).any(|w| {
                     matches!(w, [a, b] if (*a == "-s" || *a == "--status")
                         && *b == "awaiting_review")
-                }) || rest.iter().any(|t| *t == "--status=awaiting_review");
+                }) || rest.contains(&"--status=awaiting_review");
                 if review {
                     return Some("bd update -s awaiting_review");
                 }
