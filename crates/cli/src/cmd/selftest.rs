@@ -4642,6 +4642,12 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
     // Both halves of the suppression, so the declared mutation takes this half and only this
     // half: nothing survives from six clean holders, and from a mixed set only the live ones do.
     let red_clean = colliding(&clean).is_empty();
+    // The six clean ones plus a single live editor, built rather than sliced.
+    let one_live = {
+        let mut v = clean.clone();
+        v.push(h("ledger", true, false, true));
+        v
+    };
 
     // One dirty, one with unlanded commits, four remembered.
     let mut mixed = clean.clone();
@@ -4655,7 +4661,7 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
         && names == ["ledger", "alerts"]
         // One live holder among six clean ones is not an overlap — the case measured on
         // status.rs, where the old line named all ten holders for one live editor.
-        && colliding(&mixed[..7]).len() == 1;
+        && colliding(&one_live).len() == 1;
 
     // The green half asserts what must SURVIVE, and every clause of it holds with the filter
     // removed as well — so the mutation below cannot take both halves and claim more than it
