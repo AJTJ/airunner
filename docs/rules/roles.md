@@ -192,7 +192,19 @@ Never set `assignee` on an open
 bead: in bd 1.2.x it blocks every other worker's claim. Workers pull; there is no cap on work in
 flight. **Idle:** feed no one. Naming a bead at a worker reserves nothing: `air claim` is the
 reservation, and a bead named in a message and not claimed is still every worker's to take
-(the adopter lost two that way,; owner, 2026-09-05). **[fact]**
+(the adopter lost two that way; owner, 2026-09-05). **[fact]**
+**So put the craft notes on the bead, not in the message**: `bd comment <id> --file <notes>`.
+Whoever pulls it gets what you know, the note outlives the session that wrote it, and you are
+not relying on a reservation that does not exist. Naming the bead at a worker as well is fine —
+it reserves nothing, so expect any worker to take it and say nothing that implies otherwise.
+That sentence above stated only the consequence, and between 2026-09-05 and 2026-09-07 it was
+read, agreed with, and worked around five times: two beads lost at an adopter, two dispatched
+twice here, and once the Stop hook itself told an idle worker to claim a bead already spoken
+for — correct instruction, correct inputs, invisible reservation (air-u3l7). A rule that names
+a hazard without naming the alternative reads as "be careful", and careful is what everyone
+already was. **Removed when** a round passes with no bead named at a worker outside its own
+bead; if a sixth instance happens instead, prose has failed twice and the answer is recording
+the offer with an expiry.
 Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
 acceptance, a resource conflict), by filing a bead labelled `owner` with your recommendation in
 its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
