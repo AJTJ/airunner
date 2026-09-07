@@ -176,7 +176,7 @@ descendant, air-80x.1).
     … append anything the digest will not carry to docs/journal/<session>.md as you go
     git merge main
     air record verify -- make verify        # last, so the green is at the commit containing main
-    bd close <id> --reason "<proof>"
+    bd close <id> --reason "<proof>"      # or --reason-file <path>; see below
     … next bead
 
 **Variant B, a verify lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
@@ -189,6 +189,7 @@ which is what the adopter's 2026-08-29 round learned by parking a lane whose bat
     git merge main                          # your branch now shows in `air status` as batch-ready
     … wait for the lane's green; `air handover` says when the close would pass
     bd close <id> --reason "<proof: the lane's green at <sha>, which contains your commits>"
+    …   or --reason-file <path>; see below
     … next bead; a commit made after the lane cut its batch waits for the next batch
 
 The lane's own sequence, and it holds no bead while it batches: read `air status` (the
@@ -208,6 +209,13 @@ the journal is a bug you hit, a wrong turn and what corrected it, a claim you la
 a thing you checked that was fine. It is also not a capture: a capture says somebody should act
 and the coordinator triages every one, while these say nobody should. Nothing in Air reads the
 files. `journal_dir` in `.claude/air.json` names the directory.
+
+**Use `--reason-file <path>` once the proof is more than a line or two, and it usually is.** The
+harness classifies a long `--reason "…"` by the shape of the command line and refuses it, and the
+obvious next move is to shorten the proof — so this rule and the one below pull against each other
+at exactly the length where proof becomes worth having (air-45pw's failure, hit one command over
+while closing air-gazh). Nothing about the content changes, only the route. `air capture` gained
+`--file` for the same reason; `air close` has not (air-lyjr).
 
 **Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
 the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, with the
