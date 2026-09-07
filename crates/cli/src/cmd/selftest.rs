@@ -757,6 +757,18 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "doctor: the running binary is named against the checkout it runs in, and only where that comparison means something",
+        Mutation {
+            // Drops the guard that decides whether this is Air's checkout, so the line fires
+            // in any repo with a workspace version — which is every adopting repo, where the
+            // comparison is meaningless.
+            file: "crates/cli/src/cmd/doctor.rs",
+            from: "    if !cli.lines().any(|l| l.trim() == r#\"name = \"air\"\"#) {\n        return None;\n    }\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2258,6 +2270,7 @@ fn all_probes() -> Vec<Probe> {
         probe_idle_without_claim_silent_while_verifying(),
         probe_handover_names_a_red_batch_you_are_in(),
         probe_epic_count_carries_no_instruction(),
+        probe_doctor_names_the_binary_against_the_checkout(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4498,6 +4511,83 @@ fn probe_epic_count_carries_no_instruction() -> Probe {
         && !cached.contains("epic ready to decompose");
     Probe {
         name: "status: the epic count carries no instruction, and the line that knows which epics are undecomposed carries it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-ilh4: `air doctor` names the running binary against the checkout it is run in, and does
+/// it only where that comparison means something.
+///
+/// The round of 2026-09-07 ran `air` 0.2.19 against a checkout that had reached 0.3.5 and
+/// quoted both interchangeably for twelve hours. Every number read from `air status`, `air
+/// audit` or the ledger described the frozen binary; every digest's probe count described the
+/// tree. It cost a red verify with a null `log_path` that could not be diagnosed — air-5ik,
+/// which writes run logs, landed after that binary was cut — and it nearly cost a filed defect
+/// reading "the runlog mechanism fires 1 in 13", where twelve of the thirteen were recorded by
+/// a binary that has no runlog. `air doctor` compared the install RECORD against the running
+/// binary and never the running binary against main.
+///
+/// Red: in Air's own checkout at a different version, the line names both and says which side
+/// each kind of number comes from. Green: **a checkout that is not Air's gets nothing**, which
+/// is the half that matters — in an adopting repo `main` is their code and a line here would
+/// fire everywhere and be true nowhere — and neither does a checkout that agrees with the
+/// binary.
+fn probe_doctor_names_the_binary_against_the_checkout() -> Probe {
+    use crate::cmd::doctor::{air_checkout_version, build_gap, build_gap_line};
+
+    let make = |dir: &std::path::Path, crate_name: &str, version: &str| -> std::io::Result<()> {
+        std::fs::create_dir_all(dir.join("crates/cli"))?;
+        std::fs::write(
+            dir.join("crates/cli/Cargo.toml"),
+            format!("[package]\nname = \"{crate_name}\"\nversion.workspace = true\n"),
+        )?;
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = [\"crates/cli\"]\n\n\
+                 [workspace.package]\nversion = \"{version}\"\nedition = \"2024\"\n"
+            ),
+        )
+    };
+
+    let res = (|| -> std::io::Result<(bool, bool)> {
+        let tmp = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&tmp)?;
+        let (ours, theirs, same) = (tmp.join("air"), tmp.join("adopter"), tmp.join("same"));
+        make(&ours, "air", "0.3.5")?;
+        // An adopting repo that happens to have a `crates/cli` of its own. This is the fixture
+        // the guard exists for: without it the version read succeeds and the line fires here.
+        make(&theirs, "their-cli", "9.9.9")?;
+        make(&same, "air", "0.2.19")?;
+
+        let g = build_gap(&ours, "0.2.19");
+        let line = g.as_ref().map(build_gap_line).unwrap_or_default();
+        let red = g.is_some()
+            && line.contains("running air 0.2.19")
+            && line.contains("builds 0.3.5")
+            // Which side each kind of number comes from, said rather than left to be derived.
+            && line.contains("`air status`")
+            && line.contains("make verify");
+
+        let green =
+            // Not Air's checkout: silent, even though the version is right there to read.
+            build_gap(&theirs, "0.2.19").is_none()
+            && air_checkout_version(&theirs).is_none()
+            // Air's checkout, agreeing: nothing to disambiguate, so nothing said.
+            && build_gap(&same, "0.2.19").is_none()
+            // The version itself still reads, so the silence above is the comparison and not
+            // a failure to parse.
+            && air_checkout_version(&same).as_deref() == Some("0.2.19")
+            && air_checkout_version(&ours).as_deref() == Some("0.3.5")
+            // No Cargo.toml at all — an installed repo, not a checkout.
+            && build_gap(&tmp, "0.2.19").is_none();
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(|e| blocked(e.to_string()));
+    Probe {
+        name: "doctor: the running binary is named against the checkout it runs in, and only where that comparison means something",
         red_fires: red,
         green_passes: green,
     }
