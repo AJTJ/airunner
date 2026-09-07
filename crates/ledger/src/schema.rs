@@ -306,88 +306,32 @@ ALTER TABLE sessions ADD COLUMN stopped_kind TEXT;
 ALTER TABLE sessions ADD COLUMN stopped_text TEXT;
 "#;
 
+/// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
+///
+/// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
+/// hand-written blocks and each migration test built its own starting database from a
+/// hand-picked subset — `[V13, V14, V15, V16, V17]` stamped as version 17, skipping V2 through
+/// V12. That is a schema no ledger has ever been in, so those tests proved the migration works
+/// against a database that cannot occur, and they went red the first time a migration altered a
+/// table created after V1 (air-6dj4). A test that constructs its own premise is checking the
+/// constructor.
+///
+/// Indexing the same table from both places is what makes the fixture unable to drift from the
+/// upgrade path: a test asks for "the state a real ledger was in at version N" and gets exactly
+/// what production would have produced.
+const MIGRATIONS: &[&str] = &[
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20,
+];
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(V1)?;
-        conn.pragma_update(None, "user_version", 1)?;
-    }
-    if version < 2 {
-        conn.execute_batch(V2)?;
-        conn.pragma_update(None, "user_version", 2)?;
-    }
-    if version < 3 {
-        conn.execute_batch(V3)?;
-        conn.pragma_update(None, "user_version", 3)?;
-    }
-    if version < 4 {
-        conn.execute_batch(V4)?;
-        conn.pragma_update(None, "user_version", 4)?;
-    }
-    if version < 5 {
-        conn.execute_batch(V5)?;
-        conn.pragma_update(None, "user_version", 5)?;
-    }
-    if version < 6 {
-        conn.execute_batch(V6)?;
-        conn.pragma_update(None, "user_version", 6)?;
-    }
-    if version < 7 {
-        conn.execute_batch(V7)?;
-        conn.pragma_update(None, "user_version", 7)?;
-    }
-    if version < 8 {
-        conn.execute_batch(V8)?;
-        conn.pragma_update(None, "user_version", 8)?;
-    }
-    if version < 9 {
-        conn.execute_batch(V9)?;
-        conn.pragma_update(None, "user_version", 9)?;
-    }
-    if version < 10 {
-        conn.execute_batch(V10)?;
-        conn.pragma_update(None, "user_version", 10)?;
-    }
-    if version < 11 {
-        conn.execute_batch(V11)?;
-        conn.pragma_update(None, "user_version", 11)?;
-    }
-    if version < 12 {
-        conn.execute_batch(V12)?;
-        conn.pragma_update(None, "user_version", 12)?;
-    }
-    if version < 13 {
-        conn.execute_batch(V13)?;
-        conn.pragma_update(None, "user_version", 13)?;
-    }
-    if version < 14 {
-        conn.execute_batch(V14)?;
-        conn.pragma_update(None, "user_version", 14)?;
-    }
-    if version < 15 {
-        conn.execute_batch(V15)?;
-        conn.pragma_update(None, "user_version", 15)?;
-    }
-    if version < 16 {
-        conn.execute_batch(V16)?;
-        conn.pragma_update(None, "user_version", 16)?;
-    }
-    if version < 17 {
-        conn.execute_batch(V17)?;
-        conn.pragma_update(None, "user_version", 17)?;
-    }
-    if version < 18 {
-        conn.execute_batch(V18)?;
-        conn.pragma_update(None, "user_version", 18)?;
-    }
-    if version < 19 {
-        conn.execute_batch(V19)?;
-        conn.pragma_update(None, "user_version", 19)?;
-    }
-    if version < 20 {
-        conn.execute_batch(V20)?;
-        conn.pragma_update(None, "user_version", 20)?;
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let to = i as i64 + 1;
+        if version < to {
+            conn.execute_batch(sql)?;
+            conn.pragma_update(None, "user_version", to)?;
+        }
     }
     Ok(())
 }
