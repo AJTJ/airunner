@@ -154,10 +154,8 @@ pub fn air_checkout_version(repo: &Path) -> Option<String> {
             in_workspace_package = t == "[workspace.package]";
             continue;
         }
-        if in_workspace_package {
-            if let Some(v) = t.strip_prefix("version = ") {
-                return Some(v.trim_matches('"').to_string());
-            }
+        if in_workspace_package && let Some(v) = t.strip_prefix("version = ") {
+            return Some(v.trim_matches('"').to_string());
         }
     }
     None

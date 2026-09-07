@@ -4585,7 +4585,7 @@ fn probe_doctor_names_the_binary_against_the_checkout() -> Probe {
         let _ = std::fs::remove_dir_all(&tmp);
         Ok((red, green))
     })();
-    let (red, green) = res.map_or_else(|e| blocked(e.to_string()), |x| x);
+    let (red, green) = res.unwrap_or_else(|e| blocked(e.to_string()));
     Probe {
         name: "doctor: the running binary is named against the checkout it runs in, and only where that comparison means something",
         red_fires: red,
