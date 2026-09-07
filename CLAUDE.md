@@ -51,9 +51,11 @@ Index items are 1–3 lines; detail lives behind the link.
   five row collisions in one day was the cost of checking at every verify. Never edit a row;
   append. **Appending the row is not the whole round-end duty; two things go with it, both the
   coordinator's and both earned on 2026-09-07** (air-wt1v, air-ilh4). **Sweep every landing of the
-  round against `install::SURFACE`** and append what is missing: a sweep of 66 landings found
-  twelve gaps, so the detection rate without one was **one in six**, and both hand-catches that
-  round were accidents of looking for something else. No check can do it — Air can see a
+  round against `install::SURFACE`** and append what is missing. Two populations, two numbers,
+  both from 2026-09-07 and neither interchangeable: a sweep of **66 landings** found twelve gaps
+  and put the detection rate at **one in six** (air-wt1v); a separate re-check of the **12
+  content-changing `roles.md` commits** in its window found **3 of 12** lacking full coverage
+  (air-bh6n). Both hand-catches that round were accidents of looking for something else. No check can do it — Air can see a
   signature change and cannot see a condition's *meaning* change, which is exactly what an
   adopter needs told. And **a round-end number names the binary that produced it**: one read from
   `air status`, `air audit` or the ledger describes the **running** binary, one from `make verify`
