@@ -50,6 +50,36 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         .as_deref()
         .map(|tip| super::batch::members_of(repo, &worker, &head, tip))
         .unwrap_or_default();
+    // air-88av: an unresolved merge is not a verdict about the code. The suite fails on
+    // conflict markers, `air record` writes a RED at this sha, and that red is then read as
+    // evidence by everything downstream — `flaky-at-head`, the close gate, the landing gate,
+    // and any later question about whether this tree was ever green. A false red is the record
+    // being wrong about a fact nobody will re-derive.
+    //
+    // Refused rather than recorded-and-flagged, because there is no verdict to keep: the run
+    // would be measuring conflict markers. Distinguishable from a red by never writing a row
+    // and by saying so — a reader must not see "no green at this sha" and conclude the suite
+    // failed here.
+    //
+    // NOT a dirty-tree refusal. `air record` is deliberately usable on a dirty tree, the
+    // `dirty` column exists for exactly that, and verifying uncommitted work is normal.
+    // Unmerged is not dirty: it is a state git will not let you commit.
+    match git::unmerged_files(repo) {
+        Ok(paths) if !paths.is_empty() => {
+            eprintln!(
+                "air record: refusing to record — {} path(s) have an unresolved merge conflict, \
+                 so a run here would measure conflict markers and write a red that is not a \
+                 verdict about the code. NOTHING was recorded and this is not a failing suite. \
+                 Resolve, then re-run:\n  {}",
+                paths.len(),
+                paths.join("\n  ")
+            );
+            return 2;
+        }
+        Ok(_) => {}
+        // A lookup that cannot run is not evidence of a conflict; carry on and record.
+        Err(e) => eprintln!("air record: could not check for unmerged paths ({e}); continuing"),
+    }
     let Some((prog, args)) = command.split_first() else {
         eprintln!("air record: missing command after --");
         return 1;
