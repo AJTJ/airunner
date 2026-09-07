@@ -1197,6 +1197,36 @@ pub fn rewind_propagation(merge: &str, carried_by: &[String]) -> Vec<String> {
     )]
 }
 
+/// The holders of one file that can actually collide (air-pwvk).
+///
+/// A holder with nothing uncommitted and no commits outside `main` has nothing to collide
+/// with: its work is landed and the row is a memory. The `overlap:` line named every holder a
+/// row existed for, so on a long-lived shared file it named essentially everyone who had ever
+/// touched it, forever — six holders on `CLAUDE.md` in this repo, **every one `clean now`, true
+/// positives zero**, and the same shape reached an adopter's worker three times in a night with
+/// no true positive either.
+///
+/// **This is not a threshold and no age cutoff fixes it.** The entries were not wrong: each
+/// carried its own age and its own `clean now`, rendered since air-et0o. A reader facing six
+/// clean holders is not judging a fact, they are skipping a list — which is measurable rather
+/// than arguable, because the coordinator ran every `air status` of that round through
+/// `grep -vE '^overlap'`. A line whose reader has built a filter for it has already failed, and
+/// the filter is the measurement.
+///
+/// `clean now` alone is the wrong test and the bead said so: a holder that committed and has
+/// not landed still overlaps. Both halves are already computed by `holdings::compute` —
+/// `uncommitted` from `git status` in that worktree, `committed` from `main...HEAD` — and the
+/// predicate used neither.
+///
+/// `air holdings` is untouched and still shows every holder, journaled-only included:
+/// suppressing a summary and hiding a fact are different things.
+pub fn colliding(holders: &[holdings::Holding]) -> Vec<&holdings::Holding> {
+    holders
+        .iter()
+        .filter(|h| h.uncommitted || h.committed)
+        .collect()
+}
+
 /// Verifies running right now, oldest first, with dead pids pruned on the way out (air-4cr).
 /// Shared by `air status` and `air land`, so both answer the question the same way.
 pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> {
@@ -1900,13 +1930,18 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         v.files_held = v.files_held.saturating_add(1);
                     }
                 }
-                if holders.len() > 1 {
+                // air-pwvk: only the holders that can collide. `files_held` above still
+                // counts every one, because "how many files is this worker in" is a different
+                // question from "who could collide here".
+                let live = colliding(&holders);
+                if live.len() > 1 {
                     // air-v7o: the same tags `air holdings` prints, so the two cannot
-                    // diverge and the coordinator reads a tense here too.
+                    // diverge and the coordinator reads a tense here too. Every holder that
+                    // survives `colliding` carries `uncommitted now` or `committed` or both,
+                    // so the line says which of the two each one is without a new string.
                     overlaps.insert(
                         file,
-                        holders
-                            .iter()
+                        live.iter()
                             .map(|h| format!("{}[{}]", h.worker, holdings::tags(h, &rep.at)))
                             .collect(),
                     );
