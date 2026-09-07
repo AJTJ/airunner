@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-gazh. The anchor widens the ledger half from "bd said this bead is CLOSED" to "the
+    // claim ended somehow", which is the failure that would make this condition worthless
+    // rather than absent: every landed bead has a released claim, so the line would fire on
+    // ordinary completed work and a reader would learn to skip it. It compiles, the condition
+    // still renders, and the quiet case is still quiet — only the discrimination goes, which
+    // is the rule the probe names.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "status: a closed bead whose commits reached no tree but its author's worktree is named, and a claim that merely ended is not",
+        Mutation {
+            file: "crates/ledger/src/claims.rs",
+            from: "WHERE release_reason = 'closed' ORDER BY released_at DESC",
+            to: "WHERE released_at IS NOT NULL ORDER BY released_at DESC",
+            also_red: &[],
+        },
+    ),
     // air-jy99. The anchor RESTORES the prescription, in `land.rs` rather than `status.rs`,
     // deliberately: the probe checks both renderers and a mutation in either must take it red.
     // Restoring it in the renderer that is NOT the bead's headline surface is the stronger
@@ -2155,6 +2171,7 @@ fn all_probes() -> Vec<Probe> {
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
         probe_no_flow_dependent_prescription_when_a_clause_is_undischarged(),
+        probe_closed_bead_not_landed_is_named(),
         probe_capture_takes_a_file_whole(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
@@ -2974,6 +2991,99 @@ fn probe_no_flow_dependent_prescription_when_a_clause_is_undischarged() -> Probe
     .unwrap_or_else(blocked);
     Probe {
         name: "status/land: an undischarged clause names the condition and no flow-dependent action, in both renderers",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
+/// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
+/// An adopter had six at once, derived independently by their coordinator and their worker from
+/// different joins — same six — and there is no error anywhere in how they got there: closed on
+/// a batch green, main moved, the batch stopped containing main, later cuts redded or were
+/// killed. Bead closed, branch green, tree clean. `landable` needs a branch containing main so
+/// it goes quiet the moment main moves; `landed-not-closed` needs a landing. Nothing joined
+/// closed ∩ NOT landed.
+///
+/// **Both halves are pinned deliberately**, per the bead: the value of this line is that it
+/// fires rarely, so a version that fires on a landed bead or on an open one is worse than
+/// nothing. A landed bead cannot reach the join at all — `select` drops a branch already in
+/// main — so the half this probe has to prove is the OPEN one, which reaches the join and must
+/// be rejected there.
+///
+/// Red: a closed bead on a branch that has not landed is named, with its worker and head.
+/// Green: an open bead on the same unlanded branch produces nothing, and neither does a closed
+/// bead whose claim was released for any other reason — the join reads the `closed` release
+/// reason and not merely "the claim ended".
+fn probe_closed_bead_not_landed_is_named() -> Probe {
+    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        // Three beads on one worker's unlanded branch, released three ways. Only the one the
+        // reconcile marked `closed` is this condition's subject.
+        for (bead, reason) in [
+            ("zz-closed", "closed"),
+            ("zz-landed", "landed"),
+            ("zz-abandoned", "abandoned"),
+        ] {
+            l.record_claim(bead, "alpha", &[], "t0")
+                .map_err(|e| e.to_string())?;
+            l.release_claim(bead, "alpha", reason, "t1")
+                .map_err(|e| e.to_string())?;
+        }
+        // ...and one still open, which is the ordinary state of work in flight.
+        l.record_claim("zz-open", "alpha", &[], "t0")
+            .map_err(|e| e.to_string())?;
+
+        let closed: std::collections::BTreeSet<String> = l
+            .closed_claims()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|c| c.bead)
+            .collect();
+        // The ledger half: `closed` alone, not "the claim ended". Released-as-landed and
+        // released-as-abandoned are both claim endings and neither is this.
+        let reads_the_reason = closed.len() == 1 && closed.contains("zz-closed");
+
+        // The join half, through the real condition. A `Snapshot` with these beads on an
+        // unlanded branch is what `select` produces for a branch behind main.
+        let snap = Snapshot {
+            closed_not_landed: vec![crate::cmd::status::ClosedNotLanded {
+                bead: "zz-closed".into(),
+                worker: "alpha".into(),
+                head: "abcdef1234".into(),
+                blocked: Some("refused: branch does not contain main".into()),
+            }],
+            ..Default::default()
+        };
+        let att = attention(&snap, "2026-09-07T00:00:00Z", Thresholds::default());
+        let named: Vec<_> = att
+            .iter()
+            .filter(|a| a.kind == kinds::CLOSED_NOT_LANDED)
+            .collect();
+        let names_it = named.len() == 1
+            && named.first().is_some_and(|a| {
+                a.worker == "alpha"
+                    && a.detail.contains("zz-closed")
+                    && a.detail.contains("abcdef12")
+                    && a.detail.contains("does not contain main")
+            });
+
+        // An empty join says nothing at all: the quiet case is the common one and must stay
+        // silent, or the line stops being worth reading when it does fire.
+        let quiet = attention(
+            &Snapshot::default(),
+            "2026-09-07T00:00:00Z",
+            Thresholds::default(),
+        )
+        .iter()
+        .all(|a| a.kind != kinds::CLOSED_NOT_LANDED);
+
+        Ok((reads_the_reason && names_it, quiet))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: "status: a closed bead whose commits reached no tree but its author's worktree is named, and a claim that merely ended is not",
         red_fires: res.0,
         green_passes: res.1,
     }
