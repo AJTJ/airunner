@@ -94,6 +94,27 @@ pub fn either(
     }
 }
 
+/// Where this capture is being written (air-6dj4), looked up once, here.
+///
+/// **In the CLI command, never on a hook path.** `air capture` is a CLI command and stays one;
+/// nothing in `air hook` calls it, and this git call must not become the first thing that does.
+/// The hooks budget ~100 ms and fail open, and a `rev-parse` per hook invocation is the kind of
+/// cost that arrives invisibly (air-cmn, air-bp0 removed exactly this shape from the status
+/// poll).
+///
+/// An absence is RECORDED with its reason rather than left empty: no repo, an unborn branch, a
+/// git that did not answer. An empty sha and "there is no head" must not read alike, which is
+/// the branch this could get wrong quietly — a capture with `head_sha = ""` would render as a
+/// head nobody can look up, and nothing downstream would ever raise it.
+pub(crate) fn head_now(repo: &Path) -> Option<air_ledger::captures::Head> {
+    Some(match crate::git::head(repo) {
+        Ok(sha) if !sha.trim().is_empty() => air_ledger::captures::Head::At(sha.trim().to_string()),
+        // git answered with nothing: an unborn branch (`git init` with no commit) reaches here.
+        Ok(_) => air_ledger::captures::Head::Absent("git named no commit (unborn branch?)".into()),
+        Err(e) => air_ledger::captures::Head::Absent(format!("git rev-parse HEAD: {e}")),
+    })
+}
+
 pub fn capture(
     repo: &Path,
     text: Option<&str>,
@@ -133,7 +154,8 @@ pub fn capture(
     let id = air_ledger::verify::new_id();
     let at = now();
     let session = std::env::var("CLAUDE_SESSION_ID").ok();
-    if let Err(e) = ledger.capture(&id, &worker, session.as_deref(), text, &at) {
+    let head = head_now(repo);
+    if let Err(e) = ledger.capture(&id, &worker, session.as_deref(), text, &at, head.as_ref()) {
         eprintln!("air capture: {e}");
         return 1;
     }
@@ -154,6 +176,22 @@ pub fn capture(
         || msg.clone(),
     );
     0
+}
+
+/// Where a capture was written, for the inbox row (air-6dj4).
+///
+/// **Three states, three renderings, and that is the point of the bead.** A sha is shown short;
+/// an absence Air observed says so WITH its reason; and a row from before v21 says nothing at
+/// all, because Air never looked and printing "no head" there would assert something nobody
+/// established. An empty sha would render as a commit that cannot be found and nothing
+/// downstream would ever raise it — the failure looking exactly like the success.
+pub(crate) fn where_written(head: Option<&air_ledger::captures::Head>) -> String {
+    use air_ledger::captures::Head;
+    match head {
+        Some(Head::At(sha)) => format!(" at {}", sha.get(..8).unwrap_or(sha)),
+        Some(Head::Absent(why)) => format!(" [no head: {why}]"),
+        None => String::new(),
+    }
 }
 
 pub fn inbox(repo: &Path, json: bool) -> i32 {
@@ -179,8 +217,12 @@ pub fn inbox(repo: &Path, json: bool) -> i32 {
         let mut s = format!("{} open capture(s)\n", items.len());
         for c in &items {
             s.push_str(&format!(
-                "{}  {}  {}  {}\n",
-                c.id, c.captured_at, c.worker, c.text
+                "{}  {}  {}{}  {}\n",
+                c.id,
+                c.captured_at,
+                c.worker,
+                where_written(c.head.as_ref()),
+                c.text
             ));
         }
         s

@@ -558,6 +558,41 @@ fn capture_takes_a_whole_file_and_refuses_both_routes_or_neither() {
     assert!(out.contains("--file"), "{out}");
 }
 
+/// air-6dj4: a capture records where it was written, and `air inbox` shows it.
+///
+/// Through the real binary, against `git rev-parse HEAD` rather than a value the test built —
+/// the acceptance says the stored sha must equal the worktree's head, and a test that compares
+/// Air's answer with Air's own answer proves nothing.
+///
+/// The reported cause was "a capture carries no timestamp", which is false: the row has always
+/// carried `captured_at`. The real defect is that the time is on the ROW and the subject is in
+/// the BODY, and the body is what gets quoted onward — so "the batch is red" arrives elsewhere
+/// with no way to say which batch.
+#[test]
+fn a_capture_records_the_head_it_was_written_at() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = air(&repo, &bd, &["--json", "capture", "the batch is red"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // The stored value IS git's answer, not a shape that looks like one.
+    let (_c, out, err) = air(&repo, &bd, &["--json", "inbox"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["captures"][0]["head"]["At"].as_str(),
+        Some(head.as_str()),
+        "{out}{err}"
+    );
+
+    // And the reader sees it on the row, short.
+    let (_c, out, err) = air(&repo, &bd, &["inbox"]);
+    assert!(out.contains(&format!("at {}", &head[..8])), "{out}{err}");
+    assert!(!out.contains("no head"), "{out}{err}");
+}
+
 #[test]
 fn capture_inbox_triage_round_trip() {
     let dir = scratch_repo();
