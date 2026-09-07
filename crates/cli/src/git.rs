@@ -202,6 +202,22 @@ pub fn dirty_files(cwd: &Path) -> Result<Vec<String>> {
 // change is genuinely in the way. `git::dirty_files` is a different function and still used
 // by `air record` for the dirty-tree flag.
 
+/// Paths with an unresolved merge conflict (air-88av).
+///
+/// `git diff --diff-filter=U` names exactly the unmerged paths and is silent on a merely dirty
+/// tree — checked both ways in a fixture before this was written, because the two states look
+/// alike from a distance and only one of them is a reason to refuse anything.
+///
+/// **`MERGE_HEAD` is deliberately NOT the signal**, though it is the obvious one. It is still
+/// present after conflicts are resolved and staged, before the merge is committed — a tree in
+/// that state is consistent, and verifying it before committing is a normal thing to do.
+/// Refusing on `MERGE_HEAD` would block that. Unmerged PATHS is the fact; a merge in progress
+/// is not.
+pub fn unmerged_files(cwd: &Path) -> Result<Vec<String>> {
+    let out = run(cwd, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(out.lines().map(str::to_string).collect())
+}
+
 /// Files changed on this branch relative to `base` (committed divergence).
 pub fn changed_since(cwd: &Path, base: &str) -> Result<Vec<String>> {
     let out = run(cwd, &["diff", "--name-only", &format!("{base}...HEAD")])?;
