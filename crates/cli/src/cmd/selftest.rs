@@ -769,6 +769,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "status: the overlap line names only holders that can collide, so six clean ones produce no line",
+        Mutation {
+            // Back to "a row exists", which is the predicate that named ten workers on a file
+            // with one live editor.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "        .filter(|h| h.uncommitted || h.committed)\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2271,6 +2282,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_names_a_red_batch_you_are_in(),
         probe_epic_count_carries_no_instruction(),
         probe_doctor_names_the_binary_against_the_checkout(),
+        probe_overlap_names_only_holders_that_can_collide(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4588,6 +4600,90 @@ fn probe_doctor_names_the_binary_against_the_checkout() -> Probe {
     let (red, green) = res.unwrap_or_else(|e| blocked(e.to_string()));
     Probe {
         name: "doctor: the running binary is named against the checkout it runs in, and only where that comparison means something",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-pwvk: the overlap line names only holders that can collide, so six clean ones produce
+/// no line at all.
+///
+/// The predicate was "a row exists", so on a long-lived shared file it named everyone who had
+/// ever touched it. Measured in this repo at the time: `CLAUDE.md` held by six workers, every
+/// one `clean now`, true positives zero; `crates/cli/src/cmd/status.rs` held by TEN, of which
+/// exactly one was live. An adopter saw the same shape reach a worker three times in a night
+/// with no true positive, and their reader wrote *"I checked with air holdings all three
+/// times; the fourth time I would not have."*
+///
+/// **The failure this removes is a line nobody reads**, so a probe asserting the line EXISTS
+/// would pass straight over it — which is why the red half is the silence.
+///
+/// Red: six journaled-only holders collide with nobody. Green: two live holders are still
+/// reported and are still told apart, `committed` counts as live because unlanded commits
+/// really do overlap, and a single live holder among many clean ones is not an overlap.
+fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
+    use crate::cmd::holdings::Holding;
+    use crate::cmd::status::colliding;
+
+    let h = |worker: &str, uncommitted: bool, committed: bool, journaled: bool| Holding {
+        worker: worker.into(),
+        uncommitted,
+        committed,
+        journaled,
+        last_edit: Some("2026-08-22T00:00:00Z".into()),
+        ..Default::default()
+    };
+
+    // The reported state: six holders, every one journaled-only and clean.
+    let clean: Vec<Holding> = ["alpha", "diligence", "landing", "gate", "launch", "verify"]
+        .iter()
+        .map(|w| h(w, false, false, true))
+        .collect();
+    // Both halves of the suppression, so the declared mutation takes this half and only this
+    // half: nothing survives from six clean holders, and from a mixed set only the live ones do.
+    let red_clean = colliding(&clean).is_empty();
+    // The six clean ones plus a single live editor, built rather than sliced.
+    let one_live = {
+        let mut v = clean.clone();
+        v.push(h("ledger", true, false, true));
+        v
+    };
+
+    // One dirty, one with unlanded commits, four remembered.
+    let mut mixed = clean.clone();
+    mixed.push(h("ledger", true, false, true));
+    mixed.push(h("alerts", false, true, true));
+    let live = colliding(&mixed);
+    let names: Vec<&str> = live.iter().map(|x| x.worker.as_str()).collect();
+
+    // "Only they do" belongs to the red half: it is an assertion about what is REMOVED.
+    let red = red_clean
+        && names == ["ledger", "alerts"]
+        // One live holder among six clean ones is not an overlap — the case measured on
+        // status.rs, where the old line named all ten holders for one live editor.
+        && colliding(&one_live).len() == 1;
+
+    // The green half asserts what must SURVIVE, and every clause of it holds with the filter
+    // removed as well — so the mutation below cannot take both halves and claim more than it
+    // proved. The risk this guards is the opposite of the bug: a suppression that also
+    // silences a real overlap.
+    let green = live.iter().any(|x| x.worker == "ledger")
+        && live.iter().any(|x| x.worker == "alerts")
+        // A committed-only holder is live: unlanded commits overlap even with a clean tree.
+        && colliding(&[h("alerts", false, true, true)]).len() == 1
+        // And when there IS something to say, the line still says it.
+        && crate::cmd::status::render_for_probe(&crate::cmd::status::Snapshot {
+            overlaps: [(
+                "CLAUDE.md".to_string(),
+                vec!["ledger[uncommitted now]".to_string(), "alerts[committed]".to_string()],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })
+        .contains("overlap: CLAUDE.md held by ledger[uncommitted now], alerts[committed]");
+    Probe {
+        name: "status: the overlap line names only holders that can collide, so six clean ones produce no line",
         red_fires: red,
         green_passes: green,
     }
