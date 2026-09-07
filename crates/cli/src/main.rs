@@ -147,9 +147,14 @@ enum Cmd {
     Close {
         #[arg(required = true)]
         bead: Vec<String>,
-        /// Why they closed; bd records it on every id.
+        /// Why they closed; bd records it on every id. Exactly one of this or --reason-file.
         #[arg(long)]
-        reason: String,
+        reason: Option<String>,
+        /// Read the reason from this file instead, whole and untruncated — for proof too long
+        /// to survive a command line (air-lyjr). Exactly one of this or --reason. The same
+        /// reason is recorded on every id named, exactly as --reason already is.
+        #[arg(long)]
+        reason_file: Option<PathBuf>,
     },
     /// Coordinator: land a green branch on main. The one allowed path onto main; it pushes
     /// nothing.
@@ -439,7 +444,17 @@ fn main() -> ExitCode {
         Cmd::Triage { id, bead, drop } => {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)
         }
-        Cmd::Close { bead, reason } => cmd::close::run(&repo, &bead, &reason, cli.json),
+        Cmd::Close {
+            bead,
+            reason,
+            reason_file,
+        } => cmd::close::run(
+            &repo,
+            &bead,
+            reason.as_deref(),
+            reason_file.as_deref(),
+            cli.json,
+        ),
         Cmd::Land {
             bead,
             worker,

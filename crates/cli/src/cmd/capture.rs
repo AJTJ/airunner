@@ -54,16 +54,42 @@ not guess which is the capture.";
 /// Removal: when the harness accepts a several-hundred-word argument, or when no adopter files
 /// through the CLI.
 pub fn resolve_text(text: Option<&str>, file: Option<&Path>) -> Result<String, String> {
-    match (text, file) {
-        (Some(_), Some(_)) => Err(BOTH_ROUTES.to_string()),
-        (None, None) => Err(NOTHING_TO_CAPTURE.to_string()),
+    either(
+        text,
+        file,
+        "air capture",
+        "--file",
+        BOTH_ROUTES,
+        NOTHING_TO_CAPTURE,
+    )
+}
+
+/// The same rule for any command with an inline route and a file route (air-lyjr).
+///
+/// Extracted rather than copied when `air close` needed it. The reason is the third clause: a
+/// file that cannot be read is an ERROR and never an empty value, and that is the branch a
+/// second implementation gets wrong quietly — a missing path recorded as an empty reason closes
+/// the bead with no proof, and reads afterwards exactly like a close nobody wrote a reason for.
+/// One implementation means one place where that is true.
+///
+/// Trimming matches the inline route: a trailing newline is how a file ends, not something the
+/// person wrote. Nothing inside the text is touched — no line limit, no byte limit, no
+/// truncation anywhere on this path.
+pub fn either(
+    inline: Option<&str>,
+    file: Option<&Path>,
+    cmd: &str,
+    flag: &str,
+    both: &str,
+    neither: &str,
+) -> Result<String, String> {
+    match (inline, file) {
+        (Some(_), Some(_)) => Err(both.to_string()),
+        (None, None) => Err(neither.to_string()),
         (Some(t), None) => Ok(t.trim().to_string()),
         (None, Some(p)) => match std::fs::read_to_string(p) {
             Ok(s) => Ok(s.trim().to_string()),
-            Err(e) => Err(format!(
-                "air capture: cannot read --file {}: {e}",
-                p.display()
-            )),
+            Err(e) => Err(format!("{cmd}: cannot read {flag} {}: {e}", p.display())),
         },
     }
 }

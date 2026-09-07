@@ -214,8 +214,10 @@ files. `journal_dir` in `.claude/air.json` names the directory.
 harness classifies a long `--reason "…"` by the shape of the command line and refuses it, and the
 obvious next move is to shorten the proof — so this rule and the one below pull against each other
 at exactly the length where proof becomes worth having (air-45pw's failure, hit one command over
-while closing air-gazh). Nothing about the content changes, only the route. `air capture` gained
-`--file` for the same reason; `air close` has not (air-lyjr).
+while closing air-gazh). Nothing about the content changes, only the route. Every command that
+takes long text now has one: `bd close --reason-file`, `air close --reason-file` (air-lyjr) and
+`air capture --file` (air-45pw). `air close` applies one file to every id it is given, exactly as
+`--reason` already did.
 
 **Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
 the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, with the
