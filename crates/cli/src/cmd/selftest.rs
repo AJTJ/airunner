@@ -175,6 +175,23 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-lyjr. The anchor truncates the close reason at 500 chars — a generous command line,
+    // and the same neutralisation air-45pw declared for capture, but anchored in close.rs so it
+    // reaches THIS probe rather than both. Under it the reason still records, still reads long,
+    // still closes both beads, and passes any check that asks whether a reason is there. Only
+    // the byte-for-byte and length assertions catch it, which is the clause this bead was
+    // written around. The refusals and the inline route survive, so the green half holds.
+    // `get(..500)` rather than a slice: a mutation that panics is a crash, not a red.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "close: --reason-file records the file whole for every bead named, and an unreadable path is an error rather than an empty reason",
+        Mutation {
+            file: "crates/cli/src/cmd/close.rs",
+            from: "    let reason = reason.as_str();",
+            to: "    let reason = reason.get(..500).unwrap_or(reason.as_str());",
+            also_red: &[],
+        },
+    ),
     // air-jy99. The anchor RESTORES the prescription, in `land.rs` rather than `status.rs`,
     // deliberately: the probe checks both renderers and a mutation in either must take it red.
     // Restoring it in the renderer that is NOT the bead's headline surface is the stronger
@@ -2185,6 +2202,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landable_does_not_depend_on_which_worktree_asked(),
         probe_a_batch_records_the_shas_it_took_and_never_drops_one(),
         probe_the_assignee_refusal_says_whether_anyone_holds_it(),
+        probe_close_takes_a_reason_file_whole(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -9886,6 +9904,151 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-lyjr: `air close` takes the reason from a file, whole, for every bead named.
+///
+/// air-45pw one command over, and worse here: `air close` is the command this repo demands the
+/// LONGEST argument for. A close carries proof — a command and its output and the counts from
+/// the run — and a reason of that length goes through the harness's classifier as a command
+/// line and is refused for its shape. The obvious next move is to shorten the proof, which is
+/// the failure. Observed on `bd close` while closing air-gazh at ~2,500 characters; bd's own
+/// `--reason-file` took the identical text on the next attempt with nothing about it changed.
+///
+/// **Byte-for-byte AND by length, never "non-empty"** (air-45pw's finding, and the clause this
+/// bead was written around). What the bug produces is a TRUNCATION: a cut reason still records,
+/// still reads long, still closes the bead, and passes every check that asks whether a reason is
+/// there. The fixture carries a sentinel last sentence, because that is what a truncation eats
+/// first.
+///
+/// The reason is read back from the argv bd actually received, not from what was passed in —
+/// the wiring between them is the part that can silently drop bytes.
+///
+/// Red is the new capability, end to end: the whole file reaches bd unchanged, for EVERY id
+/// named — `--reason` already applied one string to several beads and the file route changes
+/// nothing about that — and `--help` names the route, because the person who needs it is the
+/// person whose close was just refused.
+///
+/// Green is what must survive it: both routes at once and neither are each refused naming both
+/// ways in, a path that cannot be read is an ERROR rather than an empty reason — the branch that
+/// would close a bead with no proof and read afterwards exactly like a close nobody wrote one
+/// for — and the inline route still works, since this is an addition and most closes are one
+/// line.
+fn probe_close_takes_a_reason_file_whole() -> Probe {
+    use crate::cmd::close::resolve_reason;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<(), String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+
+        // Proof of the length this repo's rules ask for, with the shapes that make a classifier
+        // refuse, and a sentinel a truncation eats first.
+        let mut proof = String::new();
+        for i in 0..60 {
+            proof.push_str(&format!(
+                "Step {i}: `make verify` green, with \"quotes\", a $dollar and a `tick`, and the \
+                 counts from the run rather than from any earlier one.\n\n"
+            ));
+        }
+        proof.push_str("SENTINEL: the last sentence, which a truncation eats first.");
+        let path = dir.join("proof.md");
+        std::fs::write(&path, &proof).map_err(|e| e.to_string())?;
+
+        // A bd that records the exact bytes it was handed after `--reason`.
+        let script = dir.join("bd");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nd='{d}'\ncase \"$1\" in\n  --version) echo 'bd version 1.2.2'; \
+                 exit 0;;\nesac\nprev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = '--reason' ]; \
+                 then printf '%s' \"$a\" > \"$d/reason.txt\"; fi\n  prev=\"$a\"\ndone\n\
+                 printf '%s\\n' \"$@\" | head -20 > \"$d/argv.txt\"\nexit 0\n",
+                d = dir.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        // RED 1: neither route and both routes, each refused naming both ways in.
+        let names_both = |e: &str| e.contains("--reason-file") && e.contains("--reason");
+        let neither = resolve_reason(None, None);
+        let both = resolve_reason(Some("a line"), Some(&path));
+        // RED 2: a path that cannot be read is an ERROR, never an empty reason.
+        let missing = resolve_reason(None, Some(&dir.join("nope.md")));
+        let refusals = matches!(&neither, Err(e) if names_both(e))
+            && matches!(&both, Err(e) if names_both(e))
+            && matches!(&missing, Err(e) if e.contains("cannot read --reason-file"));
+
+        // The real path, through a spawned `air close` so the fake bd is reachable without
+        // setting an env var in this process: `set_var` is unsafe in edition 2024 and a probe
+        // is not the place for it, and a child is closer to how the command is really run.
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let close = |args: &[&str]| -> Result<i32, String> {
+            let out = air_command(&exe, &dir)
+                .env("AIR_BD_BIN", &script)
+                .arg("close")
+                .args(args)
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(out.status.code().unwrap_or(-1))
+        };
+        let code = close(&["zz-1", "zz-2", "--reason-file", &path.display().to_string()])?;
+        let got = std::fs::read_to_string(dir.join("reason.txt")).unwrap_or_default();
+        let trimmed = proof.trim();
+        let whole = code == 0
+            && got == trimmed
+            && got.len() == trimmed.len()
+            && got.ends_with("a truncation eats first.");
+        // One reason, both ids, one bd process — the fan-out `--reason` already had.
+        let argv = std::fs::read_to_string(dir.join("argv.txt")).unwrap_or_default();
+        let both_ids = argv.contains("zz-1") && argv.contains("zz-2");
+
+        // The inline route still works: this is an addition, not a replacement.
+        let _ = std::fs::remove_file(dir.join("reason.txt"));
+        let inline = close(&["zz-1", "zz-2", "--reason", "  short and obvious  "])? == 0
+            && std::fs::read_to_string(dir.join("reason.txt")).unwrap_or_default()
+                == "short and obvious";
+
+        // `--help` names the route, for the reader who just had a close refused.
+        let help = air_command(&exe, &dir)
+            .args(["close", "--help"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let help_names_it = String::from_utf8_lossy(&help.stdout).contains("--reason-file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((whole && both_ids && help_names_it, refusals && inline))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "close: --reason-file records the file whole for every bead named, and an unreadable path is an error rather than an empty reason",
         red_fires: red,
         green_passes: green,
     }
