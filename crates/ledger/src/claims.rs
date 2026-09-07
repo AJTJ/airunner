@@ -81,6 +81,28 @@ impl Ledger {
         Ok(v)
     }
 
+    /// Beads whose claim the reconcile released because **bd said the bead is closed**
+    /// (`release_reason = "closed"`, set in `status::gather` and nowhere else), newest first.
+    ///
+    /// air-gazh: this is how Air knows a bead is closed without asking bd. `landed-not-closed`
+    /// is a ledger fact and never a bd status (air-ayp), and its inverse is the same fact from
+    /// the other side, so it reads the same store. The alternative was a `bd show` per tick on
+    /// the beads of every unlanded branch, which is the cost air-bp0 and air-cmn spent two
+    /// beads removing from this exact code path.
+    ///
+    /// The limit, which is real: a bead closed without a claim Air recorded is invisible here.
+    /// Every bead in this repo's flow is claimed with `air claim` first, and a bead nobody
+    /// claimed has no worktree to be stranded in.
+    pub fn closed_claims(&self) -> Result<Vec<Claim>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM claims WHERE release_reason = 'closed' ORDER BY released_at DESC"
+        ))?;
+        let v = st
+            .query_map([], row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// Record a claim. Caller has already run `bd update --claim` successfully. A prior
     /// released row for the same (bead, worker) is replaced (re-claim after release).
     pub fn record_claim(
