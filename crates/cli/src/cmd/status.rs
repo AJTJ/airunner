@@ -2560,7 +2560,30 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 let owner = r.saturating_sub(c).saturating_sub(epics);
                 let mut parts = vec![format!("{c} claimable")];
                 if epics > 0 {
-                    parts.push(format!("{epics} epic(s) to decompose, not claimable"));
+                    // air-3vkg: the COUNT, with no instruction attached. `epic_depth` is
+                    // every epic in the ready set, decomposed or not, and this line used to
+                    // call all of them "to decompose". An adopter audited all six of theirs
+                    // on the strength of that phrase and every one was already at its correct
+                    // frontier — including one fully cut with thirteen claimable children.
+                    //
+                    // The honest number is `epics_to_decompose` (air-84u: no OPEN child), and
+                    // it prints two lines below as `epic ready to decompose: <id>`, so the
+                    // instruction is carried by the line that can tell. Third instance in one
+                    // day of a line whose discriminating fact is on the same struct.
+                    //
+                    // The count stays on `epic_depth` rather than moving to the honest field,
+                    // and the reason is the cache path: `epic_depth` is cached (:2000) and
+                    // restored when bd is slow (:2013), while `epics_to_decompose` needs a
+                    // `children` call per epic and is `None` there. Re-pointing the count
+                    // would make it silent exactly when bd is slow, which is when a
+                    // coordinator is most likely reading a cached status. Checked in the
+                    // source rather than taken from the bead, which said so as a reading.
+                    //
+                    // Nothing marks the cache path here because the ready line already
+                    // does: `(cached; bd not called this tick)` is appended below, so
+                    // "asked, none to decompose" and "not asked" are already distinguishable
+                    // by a reader of the same line.
+                    parts.push(format!("{epics} epic(s), not claimable"));
                 }
                 if owner > 0 {
                     parts.push(format!(

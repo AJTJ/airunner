@@ -717,6 +717,21 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "status: the epic count carries no instruction, and the line that knows which epics are undecomposed carries it",
+        Mutation {
+            // Puts the instruction back on the count of every ready epic, which is the
+            // sentence the adopter audited six epics against.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "{epics} epic(s), not claimable",
+            to: "{epics} epic(s) to decompose, not claimable",
+            // air-f10's probe pins the whole rendered line, wording included, so it is
+            // legitimately red under this and is named rather than left to look like spread.
+            also_red: &[
+                "status: the ready line names epics apart from claimable work; a set of only epics and owner beads is zero claimable, and the split is exactly bd's set",
+            ],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2217,6 +2232,7 @@ fn all_probes() -> Vec<Probe> {
         probe_idle_without_claim_counts_claimable_only(),
         probe_idle_without_claim_silent_while_verifying(),
         probe_handover_names_a_red_batch_you_are_in(),
+        probe_epic_count_carries_no_instruction(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4395,6 +4411,72 @@ fn probe_handover_names_a_red_batch_you_are_in() -> Probe {
     }
 }
 
+/// air-3vkg: the epic COUNT carries no instruction, and the line that can tell carries it.
+///
+/// `air status` said "N epic(s) to decompose, not claimable" where N is `epic_depth` — every
+/// epic in the ready set, decomposed or not. An adopter's coordinator audited all six of
+/// theirs on the strength of that phrase and **every one was already at its correct
+/// frontier**, one of them fully cut with thirteen claimable children. The honest number is
+/// `epics_to_decompose` (air-84u: no OPEN child), and it prints two lines below as `epic ready
+/// to decompose: <id>` — so Air computed the right answer, printed it directly underneath, and
+/// attached the action-word to the other one. Third time in a day that a line's discriminating
+/// fact was on the same struct.
+///
+/// **The count stays on `epic_depth` on purpose**, and this probe pins that rather than
+/// leaving it to the comment. `epic_depth` is cached and restored when bd is slow;
+/// `epics_to_decompose` needs a `children` call per epic and is `None` there. Re-pointing the
+/// count would make the line silent exactly when bd is slow, which is when a coordinator is
+/// most likely to be reading a cached status.
+///
+/// Red: neither rendering attaches an instruction to the count — the fresh path and the cache
+/// path both. Green: the named line below names the undecomposed epic and NOT the cut one,
+/// and the cache path still reports the count while marking itself cached, so "asked, none to
+/// decompose" and "not asked" stay distinguishable on the same line.
+fn probe_epic_count_carries_no_instruction() -> Probe {
+    use crate::cmd::status::{EpicToDecompose, Snapshot, render_for_probe};
+
+    // Two epics in ready. One is fully cut (thirteen open children, so not this coordinator's
+    // to decompose); one has nothing open under it and is.
+    let fresh = render_for_probe(&Snapshot {
+        ready_depth: Some(5),
+        claimable_depth: Some(3),
+        epic_depth: Some(2),
+        epics_to_decompose: Some(vec![EpicToDecompose {
+            epic: "zz-open".into(),
+            closed_children: 4,
+        }]),
+        ..Default::default()
+    });
+    // bd was slow: the count survives from the cache, the per-epic children calls did not run.
+    let cached = render_for_probe(&Snapshot {
+        ready_depth: Some(5),
+        claimable_depth: Some(3),
+        epic_depth: Some(2),
+        epics_to_decompose: None,
+        bd_source: "cache",
+        ..Default::default()
+    });
+
+    let red = !fresh.contains("epic(s) to decompose") && !cached.contains("epic(s) to decompose");
+    let green =
+        // The count is `epic_depth` — 2, not the 1 that is to decompose. Asserted without
+        // the surrounding wording, so the declared mutation takes out the red half only.
+        fresh.contains("2 epic(s)")
+        // The instruction is on the line that can tell, and it names only the epic it is true of.
+        && fresh.contains("epic ready to decompose: zz-open (0 open children, 4 closed)")
+        && !fresh.contains("zz-cut")
+        // The cache path still answers, and says which path it is, so silence there is not
+        // read as "nothing to decompose".
+        && cached.contains("2 epic(s)")
+        && cached.contains("(cached; bd not called this tick)")
+        && !cached.contains("epic ready to decompose");
+    Probe {
+        name: "status: the epic count carries no instruction, and the line that knows which epics are undecomposed carries it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
 /// observe a merge conflict.
 ///
@@ -4779,9 +4861,7 @@ fn probe_ready_split_names_epics_apart() -> Probe {
     let red_fires = s.claimable.is_empty()
         && s.epics == ["zz-7vw", "zz-w00"]
         && s.owner.len() == 9
-        && line.contains(
-            "ready: 11 (0 claimable; 2 epic(s) to decompose, not claimable; 9 owner-labelled",
-        )
+        && line.contains("ready: 11 (0 claimable; 2 epic(s), not claimable; 9 owner-labelled")
         && stop_nudge("worker", false, &claimable(&ready), false).is_none();
 
     ready.push(issue("zz-task", &[], "task"));
