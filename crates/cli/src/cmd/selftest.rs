@@ -175,6 +175,22 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-6dj4. The anchor records an EMPTY SHA where there is no head, which is the exact
+    // shape the bead named as the branch this could get wrong quietly. It compiles, the row is
+    // written, `head_sha` is set, and the inbox prints " at " followed by nothing — a commit
+    // nobody can look up, with every other check passing. Nothing downstream distinguishes it
+    // from a real head, which is why the probe asserts the absence carries a REASON rather than
+    // asserting that something was recorded.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "capture: the row records the worktree's real head, and a capture written where there is no head says so with a reason rather than an empty sha",
+        Mutation {
+            file: "crates/cli/src/cmd/capture.rs",
+            from: "Err(e) => air_ledger::captures::Head::Absent(format!(\"git rev-parse HEAD: {e}\")),",
+            to: "Err(_) => air_ledger::captures::Head::At(String::new()),",
+            also_red: &[],
+        },
+    ),
     // air-lyjr. The anchor truncates the close reason at 500 chars — a generous command line,
     // and the same neutralisation air-45pw declared for capture, but anchored in close.rs so it
     // reaches THIS probe rather than both. Under it the reason still records, still reads long,
@@ -2189,6 +2205,7 @@ fn all_probes() -> Vec<Probe> {
         probe_land_names_a_branch(),
         probe_no_flow_dependent_prescription_when_a_clause_is_undischarged(),
         probe_closed_bead_not_landed_is_named(),
+        probe_capture_records_where_it_was_written(),
         probe_capture_takes_a_file_whole(),
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
@@ -3102,6 +3119,106 @@ fn probe_closed_bead_not_landed_is_named() -> Probe {
     .unwrap_or_else(blocked);
     Probe {
         name: "status: a closed bead whose commits reached no tree but its author's worktree is named, and a claim that merely ended is not",
+        red_fires: res.0,
+        green_passes: res.1,
+    }
+}
+
+/// air-6dj4: a capture records WHEN it was written but not WHERE, so a fact in its body travels
+/// without its sha. The time is on the row and the subject is in the body, and the body is what
+/// gets quoted into a bead or a message — "the batch is red" arrives elsewhere with no way to
+/// say which batch. The reported cause ("a capture carries no timestamp") was false; `air inbox`
+/// renders `captured_at`. The real defect is that the timestamp is DETACHABLE, and that
+/// correction is what picked this fix over rendering an age.
+///
+/// **The half that can go wrong quietly is the absence**, which is why it is half this probe. A
+/// capture written where there is no head must record that Air looked and found none, with the
+/// reason — not an empty sha, which would render as a commit nobody can find while every other
+/// check passed. And a row from before this column must say nothing at all, because Air observed
+/// nothing there and "no head" is a claim somebody has to have made.
+///
+/// Red: the stored sha is the worktree's real HEAD, compared against `git rev-parse` rather than
+/// a constructed value; and the three states render three ways.
+/// Green: no head is recorded WITH a reason rather than as an empty string, and a pre-v21 row
+/// (both columns NULL) stays silent instead of borrowing the absence's wording.
+fn probe_capture_records_where_it_was_written() -> Probe {
+    use crate::cmd::open;
+    use air_ledger::captures::Head;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        // The answer this must match: git's own, not a value this probe built.
+        let real_head = g(&["rev-parse", "HEAD"])?;
+
+        // The real path, through the CLI command that does the lookup.
+        let code =
+            crate::cmd::capture::capture(&dir, Some("the batch is red"), None, "coordinator", true);
+        let (ledger, _) = open(&dir)?;
+        let items = ledger.inbox().map_err(|e| e.to_string())?;
+        let stored_is_the_head = code == 0
+            && items.len() == 1
+            && items
+                .first()
+                .is_some_and(|c| c.head == Some(Head::At(real_head.clone())));
+
+        // Three states, three renderings, none of them each other.
+        let at = crate::cmd::capture::where_written(Some(&Head::At(real_head.clone())));
+        let absent = crate::cmd::capture::where_written(Some(&Head::Absent("no repo".into())));
+        let never = crate::cmd::capture::where_written(None);
+        let three_ways = at.contains(real_head.get(..8).unwrap_or(&real_head))
+            && absent.contains("no head")
+            && absent.contains("no repo")
+            && never.is_empty()
+            && at != absent;
+
+        // A directory that is no repo: the absence is RECORDED with its reason. An empty sha
+        // here would render as a commit nobody can look up and nothing would raise it.
+        let bare = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&bare).map_err(|e| e.to_string())?;
+        let l2 = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let none_here = crate::cmd::capture::head_now(&bare);
+        let names_the_absence =
+            matches!(&none_here, Some(Head::Absent(why)) if !why.trim().is_empty());
+        l2.capture("c1", "probe", None, "text", "t0", none_here.as_ref())
+            .map_err(|e| e.to_string())?;
+        // ...and a row written with nothing recorded stays `None`, not `Absent("")`.
+        l2.capture("c2", "probe", None, "text", "t0", None)
+            .map_err(|e| e.to_string())?;
+        let rows = l2.inbox().map_err(|e| e.to_string())?;
+        let kept_apart = rows
+            .iter()
+            .any(|c| c.id == "c1" && matches!(&c.head, Some(Head::Absent(w)) if !w.is_empty()))
+            && rows.iter().any(|c| c.id == "c2" && c.head.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&bare).ok();
+        Ok((
+            stored_is_the_head && three_ways,
+            names_the_absence && kept_apart,
+        ))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: "capture: the row records the worktree's real head, and a capture written where there is no head says so with a reason rather than an empty sha",
         red_fires: res.0,
         green_passes: res.1,
     }
