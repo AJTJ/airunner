@@ -2329,6 +2329,127 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
     assert_eq!(land_verifies, 0, "landing re-verifies nothing");
 }
 
+/// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
+///
+/// Through the real path, because the join is the thing that did not exist — both halves were
+/// already computed and nothing put them together. The probe pins the ledger half and the
+/// rendering; this pins that `select` and the closed set actually meet.
+///
+/// The setup IS the reported incident, minus the lane: two green landable branches, one lands,
+/// which moves main and leaves the other behind it through nobody's error. Then that worker's
+/// bead closes. Nothing is wrong locally — bead closed, branch green, tree clean — and the
+/// commits exist in exactly one worktree.
+#[test]
+fn a_closed_bead_on_a_branch_behind_main_is_named_and_an_open_one_is_not() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let root = main.parent().unwrap().to_path_buf();
+    let beta = root.join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let bd = fake_bd(&main);
+
+    for (wt, bead, file) in [(&alpha, "zz-1", "a.txt"), (&beta, "zz-2", "b.txt")] {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0);
+        std::fs::write(wt.join(file), "work\n").unwrap();
+        git(wt, &["add", file]);
+        git(
+            wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("feat: work\n\nBead: {bead}\n"),
+            ],
+        );
+        git(wt, &["merge", "-q", "main", "-m", "merge main"]);
+        assert_eq!(air(wt, &bd, &["record", "verify", "--", "true"]).0, 0);
+    }
+
+    let stranded = |out: &str| -> Vec<(String, String)> {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["snapshot"]["closed_not_landed"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|c| {
+                (
+                    c["bead"].as_str().unwrap_or_default().to_string(),
+                    c["worker"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    };
+
+    // Land zz-1. Main moves, so beta is now behind it — no error anywhere.
+    std::fs::write(main.join("bd.in_progress"), "zz-2\n").unwrap();
+    let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // zz-2 is OPEN on that unlanded branch, which is the ordinary state of work in flight and
+    // must say nothing. Pinned through the real path, not asserted of the join alone: this is
+    // the half that reaches the join and has to be rejected there.
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    assert!(stranded(&out).is_empty(), "{out}{err}");
+
+    // Now zz-2 closes. bd no longer holds it in progress and reports it closed, which is what
+    // the reconcile reads; nothing about beta's tree or branch changes.
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        main.join("bd.issue.json"),
+        r#"[{"id":"zz-2","status":"closed","labels":[]}]"#,
+    )
+    .unwrap();
+
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    assert_eq!(
+        stranded(&out),
+        vec![("zz-2".to_string(), "beta".to_string())],
+        "{out}{err}"
+    );
+    // zz-1 is closed AND landed, and produces nothing: its branch is in main, so it never
+    // reaches the join at all.
+    assert!(
+        !stranded(&out).iter().any(|(b, _)| b == "zz-1"),
+        "{out}{err}"
+    );
+
+    // It is a CONDITION, not only a printed line (air-gazh): the reporting incident is a
+    // coordinator with the fleet view who was not looking.
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let fired: Vec<String> = v["attention"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter(|a| a["kind"] == "closed-not-landed")
+        .map(|a| a["detail"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(fired.len(), 1, "{out}{err}");
+    let detail = fired.first().map(String::as_str).unwrap_or_default();
+    assert!(
+        detail.contains("zz-2") && detail.contains("beta"),
+        "{detail}"
+    );
+
+    // And the printed surface says it too, for a reader arriving after the push went quiet.
+    let (_c, out, err) = air(&main, &bd, &["status"]);
+    assert!(
+        out.contains("closed, not landed: beta (zz-2)"),
+        "{out}{err}"
+    );
+}
+
 /// air-y3v: after a land, the branches left behind read as needing a re-merge, and `air land`
 /// refuses them with the same reason the list gave.
 ///

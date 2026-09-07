@@ -39,6 +39,11 @@ pub mod kinds {
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
     pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
+    /// air-gazh: the inverse of the one above. Closed ∩ landed was reported; closed ∩ NOT
+    /// landed was not, and nothing else in this list covers it — `landable` needs a branch
+    /// containing main so it goes quiet the moment main moves, and `landed-not-closed` needs a
+    /// landing to have happened.
+    pub const CLOSED_NOT_LANDED: &str = "closed-not-landed";
     // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
     // Its subject was the owner capture queue, which is gone: the owner's queue is beads
     // labelled `owner`, counted on the `ready:` line of `air status`.
@@ -55,6 +60,7 @@ pub mod kinds {
         LANDABLE,
         REWOUND_AND_CARRIED,
         LANDED_NOT_CLOSED,
+        CLOSED_NOT_LANDED,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
     ];
@@ -144,6 +150,11 @@ pub struct Snapshot {
     /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
     /// fact, never a bd status (air-ayp).
     pub landed_open: Vec<air_ledger::landings::LandedOpen>,
+    /// air-gazh: the inverse. Beads bd has closed whose commits are in no tree but their
+    /// author's worktree. Joined from two things already computed — `landable` (which names
+    /// every bead on a branch not yet in main, blocked or not) and the ledger's `closed`
+    /// release reason — so it costs no git walk and no bd call of its own.
+    pub closed_not_landed: Vec<ClosedNotLanded>,
     /// Every session row (two sessions in one checkout are two entries; the per-worker view
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
@@ -698,6 +709,36 @@ pub fn attributable_for_test(
     worker: &str,
 ) -> Result<Vec<String>, String> {
     known_beads(ledger, ids, worker)
+}
+
+/// A bead bd has closed whose commits have not reached main (air-gazh).
+///
+/// **How this state is reached with no error anywhere.** A worker closes on a batch green,
+/// legitimately: the close gate passes. The coordinator then commits to main, so that batch no
+/// longer contains main and stops being landable. The lane folds the members into the next cut;
+/// that one reds, the one after is killed, the one after lands different workers. The branch has
+/// simply not landed — no refusal, no red, nothing wrong locally. From inside the worktree the
+/// bead reads closed, the branch is green and the tree is clean, so **the party best placed to
+/// notice is the last who will**: every local signal is correct. An adopter had six at once,
+/// found by their coordinator while answering an unrelated question, and derived independently
+/// by their worker from a different join — same six.
+///
+/// **Removal condition, and it is not "when it stops firing"** (air-gazh is explicit): this
+/// state becomes unreachable when landing stops depending on a branch containing main at the
+/// moment someone looks — that is, when a green recorded for a tree can be landed after main
+/// moves without a re-merge, so a closed bead's commits cannot be stranded by main moving
+/// underneath them. Delete it then. Until then a quiet round is the mechanism working, not
+/// evidence against it: this repo had zero on 2026-09-07 only because its coordinator landed
+/// every branch within minutes of its close, and a fleet that batches leaves this residue
+/// whenever a batch stops being landable.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClosedNotLanded {
+    pub bead: String,
+    pub worker: String,
+    pub head: String,
+    /// Why the branch is not landable right now, when that is known — the same sentence
+    /// `landable` shows. `None` when the branch could land as it stands and simply has not.
+    pub blocked: Option<String>,
 }
 
 /// A branch that is not landable, and why. Never silent (air-6u5).
@@ -1508,6 +1549,32 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             fingerprint: format!("{bead}/{why}"),
         });
     }
+
+    // air-gazh: the inverse of the condition above, and the state no other condition reaches.
+    // `landable` goes quiet the moment main moves; `landed-not-closed` needs a landing. A bead
+    // closed on a batch green whose batch then stopped containing main satisfies neither, and
+    // an adopter had six of them at once with no error anywhere in how they got there.
+    //
+    // It is a CONDITION rather than only a printed line because the reporting incident is
+    // exactly a coordinator who had the fleet view and was not looking: theirs surfaced while
+    // answering an unrelated question. A line nobody reads is what this already had.
+    for c in &s.closed_not_landed {
+        let (bead, worker) = (&c.bead, &c.worker);
+        let short = c.head.get(..8).unwrap_or(&c.head);
+        let why = match &c.blocked {
+            Some(b) => format!("that branch cannot land as it stands: {b}"),
+            None => "that branch could land as it stands and has not".to_string(),
+        };
+        out.push(Attention {
+            worker: worker.clone(),
+            kind: kinds::CLOSED_NOT_LANDED,
+            detail: format!(
+                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at                  {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch                  is green and the tree is clean — which is why the person best placed to see                  this is the last who will (air-gazh). The work exists in one place and no                  backup of that place is a landing."
+            ),
+            for_minutes: 0,
+            fingerprint: format!("{bead}/{}", c.head),
+        });
+    }
     out
 }
 
@@ -2044,6 +2111,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.
+        closed_not_landed: closed_not_landed(&ledger, &selection.landings),
         landable: selection.landings,
         land_skipped: selection.skipped,
         land_errors: selection.errors,
@@ -2064,6 +2132,43 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             (false, false) => "live",
         },
     })
+}
+
+/// Beads bd has closed whose commits are in no tree but their author's worktree (air-gazh).
+///
+/// **This is a join, not a scan.** `landable` already names every bead on a worktree branch that
+/// is not yet in main — `select` drops a branch already in main through its one silent exit, so
+/// a landed bead cannot appear here at all — and the ledger already records `closed` as a
+/// release reason when the reconcile saw bd say so. Both halves existed and nothing joined them.
+/// A second git walk was the obvious shape and would have been a second implementation of
+/// `select`'s predicate, which is what air-y3v was.
+///
+/// The closed set is read once and used as a set, so this is O(landable) with no per-bead
+/// lookup: the beads of unlanded branches are few and the closed rows are one query.
+fn closed_not_landed(ledger: &Ledger, landable: &[Landing]) -> Vec<ClosedNotLanded> {
+    let closed: std::collections::BTreeSet<String> = match ledger.closed_claims() {
+        Ok(v) => v.into_iter().map(|c| c.bead).collect(),
+        // A failed lookup is not a fact about any bead (air-x1ha). Reporting nothing here is
+        // reporting "nothing found", which is why the error path stays empty rather than
+        // guessing: `gather` already surfaces ledger failures on its own errors list.
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<ClosedNotLanded> = Vec::new();
+    for l in landable {
+        // A journal-only branch carries `None` and closes no bead (air-kexg).
+        let Some(bead) = &l.bead else { continue };
+        if !closed.contains(bead) {
+            continue; // open on an unlanded branch is the normal state, and says nothing
+        }
+        out.push(ClosedNotLanded {
+            bead: bead.clone(),
+            worker: l.worker.clone(),
+            head: l.head.clone(),
+            blocked: l.blocked.clone(),
+        });
+    }
+    out.sort_by(|a, b| (&a.worker, &a.bead).cmp(&(&b.worker, &b.bead)));
+    out
 }
 
 /// The ancestor-deadlock scan (air-btz), and what it costs, gated so the common repo pays one
@@ -2382,6 +2487,21 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 .unwrap_or("")
                 .trim_start_matches("refused: "),
             l.command
+        ));
+    }
+    // air-gazh: printed as well as pushed. The condition is the part that matters — the
+    // reporting incident is a coordinator with the fleet view not looking — but a reader who
+    // runs `air status` after the push has gone quiet still needs to see the state.
+    for c in &s.closed_not_landed {
+        out.push_str(&format!(
+            "closed, not landed: {} ({}) at {} — {}\n",
+            c.worker,
+            c.bead,
+            c.head.get(..8).unwrap_or(&c.head),
+            c.blocked
+                .as_deref()
+                .unwrap_or("could land as it stands")
+                .trim_start_matches("refused: "),
         ));
     }
     // air-80x.3: what the verify lane merges next. A fact, printed where the lane reads it;
