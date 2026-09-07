@@ -1512,6 +1512,63 @@ pub const SURFACE: &[SurfaceChange] = &[
                  in a batch, because Air knows membership only from what the run recorded, and \
                  a run that recorded none is indistinguishable from no batch at all.",
     },
+    // ---- 2026-09-07, air-bh6n --------------------------------------------------------
+    // Three notices the sweep owed and did not cut, because it excluded `roles.md` by CLASS:
+    // prose, in a file that ships whole, refreshed by `air install --write`. That reasoning is
+    // about the ARTIFACT and presupposes the adopter runs install — which under a freeze they
+    // do not, and nothing prompts them to. The test that should have been applied is about the
+    // EFFECT: does a reader of the shipped text now do, or believe they may do, something
+    // different? `roles.md` is embedded in the binary and written to `.air/roles.md`, so a
+    // change to it that alters a permission or a duty is a surface change like any other.
+    SurfaceChange {
+        id: "lane-between-batches-conditional",
+        since: "2026-09-06 (air-4noi), notice cut 2026-09-07 (air-bh6n)",
+        headline: "The verify lane's permission to hold a bead BETWEEN batches is conditional: \
+                   it may, `if its worktree survives the cut`. A lane that resets hard to main \
+                   on every cut would hold that bead in a tree it is about to wipe; a lane that \
+                   merges main forward and integrates on a throwaway branch keeps it. Which of \
+                   the two a repo runs is its own flow, and Air reads neither.",
+        silent_break: true,
+        action: "Read `.air/roles.md`'s verification-lane section again, and if it says only \
+                 \"between batches it may hold one\" with no condition, your copy predates \
+                 this and your lane has been reading an unconditional permission. **The \
+                 decision is yours and you may not have known it was**: whether your lane can \
+                 hold a bead between batches depends on how your lane makes a batch contain \
+                 main. `air install --write` refreshes the file; if you are under an install \
+                 freeze, read this notice as the change itself. Nothing refuses either way.",
+    },
+    SurfaceChange {
+        id: "coordinator-context-is-the-channel",
+        since: "2026-09-06 (air-zth), notice cut 2026-09-07 (air-bh6n)",
+        headline: "`roles.md` tells the coordinator its context IS the channel the owner and \
+                   every worker reach, so long reads, dry runs and analyses go to a background \
+                   agent with a file deliverable while the filing and the deciding stay with \
+                   the coordinator.",
+        silent_break: false,
+        action: "Nothing refuses and nothing is measured. Worth passing to your coordinator \
+                 because it came from a recorded outage rather than from taste: on 2026-09-06 \
+                 a coordinator inside a twenty-minute read was the only path to the owner and \
+                 to four workers, and messages queued behind it. Re-run `air install --write` \
+                 to refresh `.air/roles.md`. Cut on a WIDER test than the sweep's, and \
+                 deliberately: nothing an adopter already acts on becomes false here, so the \
+                 sweep's \"a fact they act on becomes false\" would exclude it — but a reader \
+                 of the shipped text now delegates work they previously did inline, which is a \
+                 duty changing, and that is the line (air-bh6n).",
+    },
+    SurfaceChange {
+        id: "digest-without-a-trailer-under-a-lane",
+        since: "2026-09-06 (air-ahl), notice cut 2026-09-07 (air-bh6n)",
+        headline: "Under a verify lane, commit the digest WITHOUT a `Bead:` trailer once the \
+                   lane has cut a batch at your head. The batch green must contain every commit \
+                   that NAMES the bead, so an untrailered commit never joins that set: your \
+                   head moves and the close still passes against the batch you were cut at.",
+        silent_break: false,
+        action: "The `air-ahlf` notice above covers the refusal (a digest git does not track is \
+                 not proof) and stops there; this is the other half of the same `roles.md` \
+                 change, and it is the half a lane needs. Trailer the work, not the digest, \
+                 once your batch is cut. Appended rather than folded into that row because a \
+                 shipped row is never edited.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
