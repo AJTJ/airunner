@@ -1699,6 +1699,15 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // branch was in a red batch, and what the landing gate would say about it (air-hpp8,
     // air-33rn).
     ("0.3.4", 28, 65),
+    // 2026-09-07. Seventeen notices, twelve of them found by a sweep rather than written when
+    // the change landed (air-wt1v): 66 landings over the day were read against SURFACE and one
+    // in six of the changes that needed a notice had one. **Two of the twelve were named in the
+    // 0.3.4 row's comment above and had no notice.** `air install` prints SURFACE and never
+    // RELEASES, so that comment reached no adopter while reading exactly like coverage — a
+    // prose sentence in the wrong table, which is worse than silence because it answers the
+    // question a checker would ask. Nothing here substitutes for a notice; the notices are the
+    // notices. The round-end sweep is now part of the coordinator's review.
+    ("0.3.5", 29, 82),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
