@@ -175,6 +175,31 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-88av. The anchor widens the lookup from "unmerged" to "everything but a deletion" —
+    // lowercase in `--diff-filter` EXCLUDES, so `d` matches every modified path. Verified in a
+    // fixture rather than reasoned about, after my first comment here claimed the opposite.
+    //
+    // So it neutralises the DISTINCTION rather than the refusal, and the half that falls is the
+    // GREEN one: a merely dirty tree starts being refused. That is deliberate and it is the
+    // better target. "Do not turn this into a dirty-tree refusal" is the clause most at risk —
+    // `air record` is meant to work on a dirty tree, the `dirty` column exists for it, and a
+    // collapse there breaks the normal case in a way a green suite would call correct. The red
+    // half survives, because a conflicted tree is still refused; what is lost is that a clean-
+    // but-dirty one is not.
+    //
+    // Anchored on the LOOKUP rather than on the refusal branch: mutating the refusal would
+    // leave a probe checking whether Air says something, and this bead is about whether Air
+    // asks the right question.
+    // Anchor taken from the file AFTER rustfmt, per air-gei.
+    (
+        "record: an unresolved merge is refused with its paths and no row written, while a dirty tree and a resolved-but-uncommitted merge both still record",
+        Mutation {
+            file: "crates/cli/src/git.rs",
+            from: "run(cwd, &[\"diff\", \"--name-only\", \"--diff-filter=U\"])",
+            to: "run(cwd, &[\"diff\", \"--name-only\", \"--diff-filter=d\"])",
+            also_red: &[],
+        },
+    ),
     // air-6dj4. The anchor records an EMPTY SHA where there is no head, which is the exact
     // shape the bead named as the branch this could get wrong quietly. It compiles, the row is
     // written, `head_sha` is set, and the inbox prints " at " followed by nothing — a commit
@@ -2253,6 +2278,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_batch_records_the_shas_it_took_and_never_drops_one(),
         probe_the_assignee_refusal_says_whether_anyone_holds_it(),
         probe_close_takes_a_reason_file_whole(),
+        probe_record_refuses_an_unresolved_merge_but_not_a_dirty_tree(),
         probe_scaffolded_verify_fails_until_edited(),
         probe_reclaim_churn_reads_the_owner_gated_population(),
         probe_a_stopped_session_is_recorded_and_says_whether_it_recovers(),
@@ -10211,6 +10237,127 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
     Probe {
         name: "gate: a digest git does not track is not proof, and the refusal names the untrailered commit that fixes it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-88av: `air record` refuses over an unresolved merge, and still records a merely dirty
+/// tree.
+///
+/// A conflicted tree makes the suite fail on conflict markers, and `air record` wrote that as a
+/// RED at the sha. The red is then read as evidence by everything downstream — `flaky-at-head`,
+/// the close gate, the landing gate, and any later question about whether this tree was ever
+/// green. A false red is the record being wrong about a fact nobody will re-derive, which is
+/// the same class as air-htmn, where a landing that happened was recorded as refused. I wrote
+/// two of these tonight by chaining `git merge` and `air record` in one command.
+///
+/// **Not a dirty-tree refusal, and the probe pins both halves for that reason.** `air record`
+/// is deliberately usable on a dirty tree, the `dirty` column exists for it, and verifying
+/// uncommitted work is normal. Collapsing the two would break the normal case in a way a green
+/// suite would call correct.
+///
+/// **`MERGE_HEAD` is not the signal**, though it is the obvious one: it is still present once
+/// conflicts are resolved and staged, and verifying that tree before committing the merge is a
+/// reasonable thing to do. Checked in a fixture rather than assumed. Unmerged PATHS is the
+/// fact.
+///
+/// Red: a real conflicted repo — an actual failed `git merge`, not a constructed flag — is
+/// refused, the paths are named, no row is written, and the refusal says it is not a failing
+/// suite. Green: a merely dirty tree still records with `dirty` set, and a tree whose conflicts
+/// have been resolved but not committed records too, because `MERGE_HEAD` is not what is being
+/// asked about.
+fn probe_record_refuses_an_unresolved_merge_but_not_a_dirty_tree() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let write = |name: &str, body: &str| -> Result<(), String> {
+            std::fs::write(dir.join(name), body).map_err(|e| e.to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        write("f.txt", "base\n")?;
+        g(&["add", "f.txt"])?;
+        g(&["commit", "-q", "-m", "base"])?;
+        g(&["checkout", "-q", "-b", "other"])?;
+        write("f.txt", "theirs\n")?;
+        g(&["commit", "-q", "-am", "theirs"])?;
+        g(&["checkout", "-q", "main"])?;
+        write("f.txt", "ours\n")?;
+        g(&["commit", "-q", "-am", "ours"])?;
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let record = || -> Result<(i32, String), String> {
+            let out = air_command(&exe, &dir)
+                .args(["record", "verify", "--", "true"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok((
+                out.status.code().unwrap_or(-1),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+            ))
+        };
+        let rows = || -> Result<i64, String> {
+            let conn = rusqlite::Connection::open(dir.join(".air").join("ledger.db"))
+                .map_err(|e| e.to_string())?;
+            conn.query_row("SELECT count(*) FROM verify_runs", [], |r| r.get(0))
+                .map_err(|e| e.to_string())
+        };
+
+        // GREEN 1: merely dirty. Records, and says so as dirty.
+        write("f.txt", "ours\nedited\n")?;
+        write("untracked.txt", "scratch\n")?;
+        let (dirty_code, dirty_said) = record()?;
+        let dirty_recorded = dirty_code == 0 && rows()? == 1 && dirty_said.contains("dirty");
+        g(&["checkout", "-q", "--", "f.txt"])?;
+        std::fs::remove_file(dir.join("untracked.txt")).map_err(|e| e.to_string())?;
+
+        // RED: a real conflicted merge, not a constructed flag.
+        let _ = g(&["merge", "other"]);
+        let unmerged = crate::git::unmerged_files(&dir)
+            .map_err(|e| e.to_string())?
+            .contains(&"f.txt".to_string());
+        let before = rows()?;
+        let (code, said) = record()?;
+        let refused = code == 2
+            && said.contains("unresolved merge conflict")
+            && said.contains("f.txt")
+            && said.contains("not a failing suite")
+            && rows()? == before;
+
+        // GREEN 2: conflicts resolved and staged, merge not committed. `MERGE_HEAD` is still
+        // there, and this must still record — refusing here would block a reasonable check.
+        write("f.txt", "resolved\n")?;
+        g(&["add", "f.txt"])?;
+        let mid_merge = dir.join(".git").join("MERGE_HEAD").exists();
+        let (resolved_code, _) = record()?;
+        let records_when_resolved =
+            mid_merge && resolved_code == 0 && rows()? == before.saturating_add(1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((refused && unmerged, dirty_recorded && records_when_resolved))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+
+    Probe {
+        name: "record: an unresolved merge is refused with its paths and no row written, while a dirty tree and a resolved-but-uncommitted merge both still record",
         red_fires: red,
         green_passes: green,
     }
