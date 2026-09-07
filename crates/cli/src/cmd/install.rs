@@ -1274,6 +1274,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  batch is red\" used to arrive somewhere else with no way to say which batch.",
     },
     SurfaceChange {
+        id: "craft-notes-on-the-bead",
+        since: "2026-09-07 (air-u3l7)",
+        headline: "`roles.md`'s Coordinator section now names the route: put craft notes on the \
+                   bead with `bd comment <id> --file <notes>`, not in the message that names \
+                   the bead at a worker. The rule that naming a bead reserves nothing is \
+                   unchanged; what is added is what to do instead.",
+        silent_break: false,
+        action: "Re-run `air install --write` to refresh `.air/roles.md`. Worth reading if your \
+                 coordinator dispatches by message: the old line stated only the CONSEQUENCE \
+                 (your reservation will not hold), and between 2026-09-05 and 2026-09-07 it \
+                 was read, agreed with and worked around five times — two beads lost at one \
+                 repo, two dispatched twice at another, and once the Stop hook itself told an \
+                 idle worker to claim a bead already spoken for, from correct inputs. No new \
+                 state, nothing refuses, and the hook is unchanged: a ready bead is available \
+                 again once nothing is reserved outside the bead.",
+    },
+    SurfaceChange {
         id: "digest-must-be-tracked",
         since: "2026-09-06 (air-ahlf)",
         headline: "The hand-over gate REFUSES a digest git does not track, under its own check \
@@ -2339,6 +2356,12 @@ mod tests {
                 && !ROLES_MD.contains("the main checkout is blocked natively"),
             "roles.md must not promise the harness's block once the flag is gone (air-8gj)"
         );
+        // air-u3l7: the reserves-nothing line states a consequence; between 2026-09-05 and
+        // 2026-09-07 it was read, agreed with and worked around five times, once by the Stop
+        // hook itself. What it was missing is the alternative, so the alternative is what is
+        // pinned — a consequence with no procedure beside it reads as "be careful".
+        assert!(ROLES_MD.contains("So put the craft notes on the bead, not in the message"));
+        assert!(ROLES_MD.contains("bd comment <id> --file <notes>"));
         // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
         assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
         assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
