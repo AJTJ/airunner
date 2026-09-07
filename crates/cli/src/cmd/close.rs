@@ -18,6 +18,43 @@ use air_bd::{BdError, WorkLedger};
 
 use crate::cmd::{emit, log_event, now, open};
 
+/// Neither route was given (air-lyjr). Names both, because `--reason` is right for the one
+/// line that closes an obvious bead and the file route is right for the case that sent you
+/// here.
+pub const NO_REASON: &str = "air close: no reason. Pass it inline (--reason \"<why>\"), or \
+--reason-file <path> for proof too long to survive a command line.";
+
+/// Both routes were given. Air will not guess which one is the reason.
+pub const BOTH_REASONS: &str = "air close: pass --reason OR --reason-file <path>, not both. \
+Air will not guess which is the reason.";
+
+/// ONE reason across every id, from either route (air-lyjr).
+///
+/// `air close` takes several beads and `--reason` already applied one string to all of them, so
+/// `--reason-file` is the same string read from a file and nothing about the fan-out changes.
+/// Stated because the file route invites the other reading — one file per bead — and a reader
+/// who assumed it would be closing beads with each other's proof.
+///
+/// Why this exists at all: the command that demands the longest proof in this repo was the one
+/// that refused it. A close here carries a command and its output, and a reason of that length
+/// goes through the harness's classifier as a command line and is refused for its shape — the
+/// obvious next move being to shorten the proof, which is the failure. Observed on `bd close`
+/// while closing air-gazh at ~2,500 characters; bd's own `--reason-file` took the identical
+/// text on the next attempt with nothing about it changed. air-45pw is the same defect one
+/// command over, on `air capture`.
+///
+/// Removal: when the harness accepts a several-hundred-word argument.
+pub fn resolve_reason(reason: Option<&str>, file: Option<&Path>) -> Result<String, String> {
+    super::capture::either(
+        reason,
+        file,
+        "air close",
+        "--reason-file",
+        BOTH_REASONS,
+        NO_REASON,
+    )
+}
+
 /// Who may run `air close`. Pure, so `air selftest` can prove the refusal fires.
 /// air-29a: the same guard as `land::may_land`, with the same input, so it had the same hole.
 /// `worker` here is now the caller's actual location (`land::where_i_am`), never
@@ -43,11 +80,29 @@ pub fn may_close(worker: Option<&str>) -> Result<(), String> {
     ))
 }
 
-pub fn run(repo: &Path, beads: &[String], reason: &str, json: bool) -> i32 {
+pub fn run(
+    repo: &Path,
+    beads: &[String],
+    reason: Option<&str>,
+    reason_file: Option<&Path>,
+    json: bool,
+) -> i32 {
     if beads.is_empty() {
         eprintln!("air close: name at least one bead");
         return 1;
     }
+    // air-lyjr: an unreadable file is an ERROR here, never an empty reason. A bead closed with
+    // an empty reason reads afterwards exactly like one nobody wrote proof for.
+    let reason = match resolve_reason(reason, reason_file) {
+        Ok(r) => r,
+        Err(e) => {
+            emit(json, &serde_json::json!({"ok": false, "reason": e}), || {
+                e.clone()
+            });
+            return 2;
+        }
+    };
+    let reason = reason.as_str();
     if reason.trim().is_empty() {
         eprintln!("air close: --reason must say why (bd records it on every id)");
         return 1;
