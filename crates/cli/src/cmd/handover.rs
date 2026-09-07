@@ -124,6 +124,9 @@ pub fn facts(
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
     Ok(GateFacts {
         worker: worker.to_string(),
+        // air-kcns: `air handover` IS the hand-over query, so there is no command to name and
+        // the sentence keeps its old subject. The hook path sets this from what it matched.
+        refused_command: None,
         head,
         green_at_head,
         tree_green,

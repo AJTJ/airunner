@@ -41,6 +41,10 @@ pub struct GateFacts {
     /// The most recent green sha for this worker, if any (for the message).
     pub last_green_sha: Option<String>,
     /// `git merge-base --is-ancestor main HEAD`.
+    /// The hand-over command the gate matched, when a command triggered this (air-kcns).
+    /// `None` from `air handover`, which IS the hand-over query, and from any caller with no
+    /// command to name — there the subject really is the gate.
+    pub refused_command: Option<String>,
     pub main_is_ancestor: bool,
     /// `git rev-parse main` at the moment the facts were read (air-5wq). Empty when unknown.
     pub main_sha: String,
@@ -403,10 +407,16 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             containing_main(&f.main_sha)
         )
     } else {
-        let mode = if f.advisory {
-            "would refuse"
-        } else {
-            "refused"
+        // air-kcns: name what was refused. `handover refused` is true of the gate and false
+        // of the reader when the command was a `bd close` — the reader's hand-over succeeded,
+        // and the sentence reports the thing that succeeded as failing. With no command to
+        // name, the subject really is the hand-over and the wording is unchanged.
+        let subject = f.refused_command.as_deref().unwrap_or("handover");
+        let mode = match (f.refused_command.is_some(), f.advisory) {
+            (true, true) => "would be refused",
+            (true, false) => "refused",
+            (false, true) => "would refuse",
+            (false, false) => "refused",
         };
         // air-155w: a flow-dependent fix states a CONDITION, not a command, so it is
         // introduced as one. "run `a green at this head`" reads as an instruction to run
@@ -424,7 +434,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         // air-75u: whose tree, as the ok line already says. A refusal shown in a session that
         // is not the one it is about is otherwise a true statement with no scope.
         format!(
-            "handover {mode} for {} at {}: {}",
+            "{subject} {mode} for {} at {}: {}",
             f.worker,
             short(&f.head),
             items.join("; ")
@@ -544,6 +554,7 @@ mod tests {
     fn facts() -> GateFacts {
         GateFacts {
             worker: "backend-leaning".into(),
+            refused_command: None,
             head: "f854145abcdef".into(),
             green_at_head: true,
             tree_green: None,

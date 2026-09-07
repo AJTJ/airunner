@@ -779,7 +779,9 @@ pub fn handover_gate(
     enforce: bool,
 ) -> Result<Dispatched, String> {
     let bead = handover_bead(cmd);
-    let f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
+    let mut f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
+    // air-kcns: the gate knows what it matched; the message used to discard it.
+    f.refused_command = handover_command_label(cmd).map(str::to_string);
     let v = handover_verdict(&f);
     // air-zqmi: only a hand-over that did NOT go through is an attempt. Stamping every
     // command the gate saw made `handover_attempts` count successes, and the condition that
@@ -847,6 +849,21 @@ pub fn closes_bead(cmd: &str) -> Option<String> {
 /// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
 /// awaiting_review|closed`. Deliberately narrow: WIP commits and merges are never matched.
 pub fn is_handover_command(cmd: &str) -> bool {
+    handover_command_label(cmd).is_some()
+}
+
+/// WHICH hand-over this command is, for the refusal to name (air-kcns).
+///
+/// The gate said `handover refused for w3 at <sha>` whatever it had matched, so a worker that
+/// had just run its hand-over successfully and then ran `bd close` read the thing that
+/// succeeded being reported as failing. An adopter's worker met exactly that; the remedy it
+/// implies — re-run the hand-over — costs 350 to 700 seconds there and fixes nothing. The
+/// refusal was a true statement about the gate and a false one about what the reader just did.
+///
+/// Returns the MATCHED PATTERN, never a slice of the command: reasons run to several hundred
+/// words here and a truncation would put arbitrary user text in a refusal. What the gate
+/// matches is unchanged — this is the same walk, returning which arm hit instead of `true`.
+pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
     let toks: Vec<&str> = cmd.split_whitespace().collect();
     // `bd` must start a command: first token, or right after a shell separator.
     let starts: Vec<usize> = toks
@@ -870,22 +887,26 @@ pub fn is_handover_command(cmd: &str) -> bool {
     for i in starts {
         let rest = toks.get(i.saturating_add(1)..).unwrap_or(&[]);
         match rest.first() {
-            Some(&"close") => return true,
+            Some(&"close") => return Some("bd close"),
             Some(&"update") => {
-                let hit = rest.windows(2).any(|w| {
+                let closed = rest.windows(2).any(
+                    |w| matches!(w, [a, b] if (*a == "-s" || *a == "--status") && *b == "closed"),
+                ) || rest.iter().any(|t| *t == "--status=closed");
+                if closed {
+                    return Some("bd update -s closed");
+                }
+                let review = rest.windows(2).any(|w| {
                     matches!(w, [a, b] if (*a == "-s" || *a == "--status")
-                        && (*b == "awaiting_review" || *b == "closed"))
-                }) || rest
-                    .iter()
-                    .any(|t| *t == "--status=awaiting_review" || *t == "--status=closed");
-                if hit {
-                    return true;
+                        && *b == "awaiting_review")
+                }) || rest.iter().any(|t| *t == "--status=awaiting_review");
+                if review {
+                    return Some("bd update -s awaiting_review");
                 }
             }
             _ => {}
         }
     }
-    false
+    None
 }
 
 /// Role is a property of the checkout (research: agent-roles-and-confinement §1): the main
