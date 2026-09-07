@@ -322,92 +322,32 @@ ALTER TABLE captures ADD COLUMN head_sha TEXT;
 ALTER TABLE captures ADD COLUMN head_absent TEXT;
 "#;
 
+/// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
+///
+/// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
+/// hand-written blocks and each migration test built its own starting database from a
+/// hand-picked subset — `[V13, V14, V15, V16, V17]` stamped as version 17, skipping V2 through
+/// V12. That is a schema no ledger has ever been in, so those tests proved the migration works
+/// against a database that cannot occur, and they went red the first time a migration altered a
+/// table created after V1 (air-6dj4). A test that constructs its own premise is checking the
+/// constructor.
+///
+/// Indexing the same table from both places is what makes the fixture unable to drift from the
+/// upgrade path: a test asks for "the state a real ledger was in at version N" and gets exactly
+/// what production would have produced.
+const MIGRATIONS: &[&str] = &[
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
+];
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(V1)?;
-        conn.pragma_update(None, "user_version", 1)?;
-    }
-    if version < 2 {
-        conn.execute_batch(V2)?;
-        conn.pragma_update(None, "user_version", 2)?;
-    }
-    if version < 3 {
-        conn.execute_batch(V3)?;
-        conn.pragma_update(None, "user_version", 3)?;
-    }
-    if version < 4 {
-        conn.execute_batch(V4)?;
-        conn.pragma_update(None, "user_version", 4)?;
-    }
-    if version < 5 {
-        conn.execute_batch(V5)?;
-        conn.pragma_update(None, "user_version", 5)?;
-    }
-    if version < 6 {
-        conn.execute_batch(V6)?;
-        conn.pragma_update(None, "user_version", 6)?;
-    }
-    if version < 7 {
-        conn.execute_batch(V7)?;
-        conn.pragma_update(None, "user_version", 7)?;
-    }
-    if version < 8 {
-        conn.execute_batch(V8)?;
-        conn.pragma_update(None, "user_version", 8)?;
-    }
-    if version < 9 {
-        conn.execute_batch(V9)?;
-        conn.pragma_update(None, "user_version", 9)?;
-    }
-    if version < 10 {
-        conn.execute_batch(V10)?;
-        conn.pragma_update(None, "user_version", 10)?;
-    }
-    if version < 11 {
-        conn.execute_batch(V11)?;
-        conn.pragma_update(None, "user_version", 11)?;
-    }
-    if version < 12 {
-        conn.execute_batch(V12)?;
-        conn.pragma_update(None, "user_version", 12)?;
-    }
-    if version < 13 {
-        conn.execute_batch(V13)?;
-        conn.pragma_update(None, "user_version", 13)?;
-    }
-    if version < 14 {
-        conn.execute_batch(V14)?;
-        conn.pragma_update(None, "user_version", 14)?;
-    }
-    if version < 15 {
-        conn.execute_batch(V15)?;
-        conn.pragma_update(None, "user_version", 15)?;
-    }
-    if version < 16 {
-        conn.execute_batch(V16)?;
-        conn.pragma_update(None, "user_version", 16)?;
-    }
-    if version < 17 {
-        conn.execute_batch(V17)?;
-        conn.pragma_update(None, "user_version", 17)?;
-    }
-    if version < 18 {
-        conn.execute_batch(V18)?;
-        conn.pragma_update(None, "user_version", 18)?;
-    }
-    if version < 19 {
-        conn.execute_batch(V19)?;
-        conn.pragma_update(None, "user_version", 19)?;
-    }
-    if version < 20 {
-        conn.execute_batch(V20)?;
-        conn.pragma_update(None, "user_version", 20)?;
-    }
-    if version < 21 {
-        conn.execute_batch(V21)?;
-        conn.pragma_update(None, "user_version", 21)?;
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let to = i64::try_from(i).unwrap_or(i64::MAX).saturating_add(1);
+        if version < to {
+            conn.execute_batch(sql)?;
+            conn.pragma_update(None, "user_version", to)?;
+        }
     }
     Ok(())
 }
@@ -416,6 +356,41 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// The database a real ledger was in at `version`: every migration up to it, in order,
+    /// from the same table [`migrate`] walks (air-z7rh).
+    ///
+    /// Every migration test used to build its start state from a hand-picked subset — the v18
+    /// test applied V1 and `[V13, V14, V15, V16, V17]`, stamped 17, and never ran V2 through
+    /// V12. That is a schema no ledger has ever been in. They passed anyway, for twenty
+    /// migrations, on the luck of which tables got altered: every ALTER happened to touch a
+    /// table V1 creates. v21 was the first to touch one created later (`captures`, from V2) and
+    /// four tests went red at once.
+    ///
+    /// The four reds were the symptom. The silent half is that those tests had been passing for
+    /// a reason other than the property they name — the inverse of the failure-looks-like-
+    /// success shape this round kept finding, and the same question either way: what would have
+    /// to be true for this to fail, and is that the thing it claims to measure.
+    ///
+    /// Indexing `MIGRATIONS` rather than naming versions by hand is the whole point. A fixture
+    /// that picks its own subset can drift from the upgrade path; one that asks for "the state
+    /// at version N" cannot.
+    fn at_version(version: usize) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        for sql in &MIGRATIONS[..version] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", i64::try_from(version).unwrap())
+            .unwrap();
+        conn
+    }
+
+    /// air-z7rh: the table IS the upgrade path. A migration added without extending it would be
+    /// silently unreachable, and `at_version` would hand every test a stale ceiling.
+    #[test]
+    fn the_migration_table_covers_every_version() {
+        assert_eq!(i64::try_from(MIGRATIONS.len()).unwrap(), CURRENT_VERSION);
+    }
 
     #[test]
     fn migrate_is_idempotent_and_sets_version() {
@@ -442,17 +417,13 @@ mod tests {
     /// in the one state no real ledger is ever in.
     #[test]
     fn v12_adds_the_model_column_to_a_populated_sessions_table() {
-        let conn = Connection::open_in_memory().unwrap();
-        // Stop at v11, the state every live ledger was in before this change.
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
+        let conn = at_version(11);
         conn.execute(
             "INSERT INTO sessions (session_id, worker, state, changed_at, started_at) \
              VALUES ('s1','diligence','working','t','t')",
             [],
         )
         .unwrap();
-        conn.pragma_update(None, "user_version", 11).unwrap();
 
         migrate(&conn).unwrap();
 
@@ -476,23 +447,13 @@ mod tests {
     /// air-80x.4: v18 adds `verify_runs.members` by ALTER; a run from before reads as none.
     #[test]
     fn v18_adds_run_members_and_old_rows_read_as_none() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        // air-6dj4: V2 too, because a real v13 database has one. These fixtures applied V1
-        // and the migration under test alone, which was fine only while every later
-        // migration touched a V1 table; v21 alters `captures`, which V2 creates. The
-        // shortcut was building a database no ledger has ever been in.
-        conn.execute_batch(V2).unwrap();
+        let conn = at_version(17);
         conn.execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
              finished_at) VALUES ('r1','w','aaa','verify',2,'record','t','t')",
             [],
         )
         .unwrap();
-        for v in [V13, V14, V15, V16, V17] {
-            conn.execute_batch(v).unwrap();
-        }
-        conn.pragma_update(None, "user_version", 17).unwrap();
 
         migrate(&conn).unwrap();
 
@@ -507,19 +468,13 @@ mod tests {
     /// air-80x.2: v17 adds `landings.members` by ALTER; a row from before reads as no members.
     #[test]
     fn v17_adds_members_and_old_rows_read_as_none() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
+        let conn = at_version(16);
         conn.execute(
             "INSERT INTO landings (id, worker, sha, result, started_at, finished_at) \
              VALUES ('L1','w','aaa','landed','t','t')",
             [],
         )
         .unwrap();
-        for v in [V13, V14, V15, V16] {
-            conn.execute_batch(v).unwrap();
-        }
-        conn.pragma_update(None, "user_version", 16).unwrap();
 
         migrate(&conn).unwrap();
 
@@ -535,20 +490,13 @@ mod tests {
     /// override, never as an error.
     #[test]
     fn v16_adds_despite_inflight_and_old_rows_read_as_no_override() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
+        let conn = at_version(15);
         conn.execute(
             "INSERT INTO landings (id, worker, sha, result, started_at, finished_at) \
              VALUES ('L1','w','aaa','landed','t','t')",
             [],
         )
         .unwrap();
-        conn.pragma_update(None, "user_version", 15).unwrap();
-        // v13 to v15 must exist for the migration to run over them; apply them as v15 would.
-        conn.execute_batch(V13).unwrap();
-        conn.execute_batch(V14).unwrap();
-        conn.execute_batch(V15).unwrap();
 
         migrate(&conn).unwrap();
 
@@ -566,17 +514,13 @@ mod tests {
     /// a tree lookup must not match it: NULL is "unknown", never "any".
     #[test]
     fn v14_adds_a_tree_column_that_old_rows_leave_null() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
-        conn.execute_batch(V13).unwrap();
+        let conn = at_version(13);
         conn.execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
              finished_at) VALUES ('r1','w','aaa','verify',0,'record','t','t')",
             [],
         )
         .unwrap();
-        conn.pragma_update(None, "user_version", 13).unwrap();
 
         migrate(&conn).unwrap();
 
@@ -594,5 +538,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 0);
+    }
+    /// air-z7rh, and this is the demonstration rather than an assertion: **v21 alters
+    /// `captures`, which V2 creates, and its test needs no fixture edit.**
+    ///
+    /// v21 is the migration that broke the old fixtures. Each of them applied V1 plus a
+    /// hand-picked subset, so `captures` did not exist and four tests went red the moment a
+    /// migration looked outside the V1 set (air-6dj4). The minimal repair was to add V2 to each
+    /// — which restores the luck rather than removing the dependence on it, because the next
+    /// migration to touch a table from V3 or V7 breaks them again.
+    ///
+    /// This test asks for version 20 and gets what a real ledger had at version 20. Nothing
+    /// here names V2, or any other version, and nothing would need to if v22 altered a table
+    /// created by V9.
+    #[test]
+    fn v21_alters_a_table_created_after_v1_and_the_fixture_says_nothing_about_it() {
+        let conn = at_version(20);
+        conn.execute(
+            "INSERT INTO captures (id, worker, text, captured_at) \
+             VALUES ('c1','w','the batch is red','t')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Three states stay apart (air-6dj4): a head, Air having looked and found none, and a
+        // row written before the column existed. This row is the third and asserts nothing.
+        let (sha, absent): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT head_sha, head_absent FROM captures WHERE id='c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sha, None);
+        assert_eq!(absent, None);
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, CURRENT_VERSION);
     }
 }
