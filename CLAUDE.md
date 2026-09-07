@@ -49,7 +49,19 @@ Index items are 1–3 lines; detail lives behind the link.
   notice since the last, and `air release-check` refuses the release until the count and the
   version agree. `make verify` refuses only a count going backwards. Nineteen releases and
   five row collisions in one day was the cost of checking at every verify. Never edit a row;
-  append. The reason it is enforced rather than written down is that
+  append. **Appending the row is not the whole round-end duty; two things go with it, both the
+  coordinator's and both earned on 2026-09-07** (air-wt1v, air-ilh4). **Sweep every landing of the
+  round against `install::SURFACE`** and append what is missing: a sweep of 66 landings found
+  twelve gaps, so the detection rate without one was **one in six**, and both hand-catches that
+  round were accidents of looking for something else. No check can do it — Air can see a
+  signature change and cannot see a condition's *meaning* change, which is exactly what an
+  adopter needs told. And **a round-end number names the binary that produced it**: one read from
+  `air status`, `air audit` or the ledger describes the **running** binary, one from `make verify`
+  describes the **tree**. Those were quoted interchangeably for twelve hours while the fleet ran a
+  build eleven hours behind main, which made a red undiagnosable and nearly produced a filed
+  defect from a sensor that was not there. A release row's comment is **not** a notice: `air
+  install` prints `SURFACE` and never `RELEASES`, so prose there reaches nobody while reading
+  exactly like coverage. The reason it is enforced rather than written down is that
   forgetting fails toward *permitting* — `air install`'s downgrade refusal quietly stops
   noticing, and a stale binary shows an adopting repo none of the notices telling it to upgrade
   (owner, 2026-08-29; air-w9d). Before that ruling Air had no release concept at all: `0.0.1`
