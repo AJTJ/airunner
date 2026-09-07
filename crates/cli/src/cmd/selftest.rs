@@ -780,6 +780,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "gate: a refusal names the command it refused, and the Stop message, which refused nothing, does not",
+        Mutation {
+            // Back to naming the gate whatever it matched, which is the sentence that told a
+            // worker its successful hand-over had failed.
+            file: "crates/hooks/src/gate.rs",
+            from: "        let subject = f.refused_command.as_deref().unwrap_or(\"handover\");",
+            to: "        let subject = \"handover\";",
+            also_red: &[],
+        },
+    ),
+    (
         "status: an unchanged condition set writes one event line an hour, not one a tick",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
@@ -2283,6 +2294,7 @@ fn all_probes() -> Vec<Probe> {
         probe_epic_count_carries_no_instruction(),
         probe_doctor_names_the_binary_against_the_checkout(),
         probe_overlap_names_only_holders_that_can_collide(),
+        probe_refusal_names_the_command_it_refused(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4689,6 +4701,104 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
     }
 }
 
+/// air-kcns: a refusal names the command it refused, so `bd close` is not reported as a failed
+/// hand-over.
+///
+/// The gate said `handover refused for w3 at <sha>` whatever it had matched. An adopter's
+/// worker met that on `bd close ad-c17zy` having just run its hand-over successfully, and the
+/// reading it invites — the hand-over failed, run it again — costs 350 to 700 seconds there and
+/// fixes nothing. The sentence was a **true statement about the gate and a false one about what
+/// the reader had just done**: it named the thing that succeeded and reported it as failing.
+///
+/// Both formatters are pinned, on air-jy99's evidence that one line had six renderings. They do
+/// NOT get the same treatment, and that is the finding rather than an omission: `stop_message`
+/// runs at Stop, where **no command was refused**, so naming one there would invent a subject.
+/// Its "handover would refuse" is correct and is asserted to stay.
+///
+/// Red: a real `handover_gate` refusal triggered by `bd close` names `bd close` and does not
+/// call itself a hand-over. Green: the advisory form says "would be refused" rather than
+/// "would refuse"; `air handover`, which has no command, keeps the old subject; the Stop
+/// message names no command; and what the gate MATCHES is unchanged for all three forms.
+fn probe_refusal_names_the_command_it_refused() -> Probe {
+    use crate::cmd::hook::{handover_command_label, is_handover_command};
+    use air_hooks::{HookOutcome, handover_verdict, stop_message};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("zz-1", "w3", &[], "t0")
+            .map_err(|e| e.to_string())?;
+
+        // The reported case, through the real gate: no green at HEAD, refused on a close.
+        let refused = handover_gate(&l, "w3", &dir, "bd close zz-1 --reason \"x\"", true)?;
+        let reason = match &refused.outcome {
+            HookOutcome::Block { reason } => reason.clone(),
+            _ => String::new(),
+        };
+        // Both namings are the red half: they are the assertions the mutation must take, and
+        // putting the advisory one in green would let one mutation claim two halves.
+        let red_block = reason.contains("bd close refused for w3 at")
+            // The false statement is gone, not merely joined by a true one.
+            && !reason.contains("handover refused");
+
+        // Advisory: same subject, and a mode that reads as a prediction about the command.
+        let advisory = handover_gate(&l, "w3", &dir, "bd close zz-1", false)?;
+        let ctx = match &advisory.outcome {
+            HookOutcome::Allow { context } => context.clone().unwrap_or_default(),
+            HookOutcome::Block { reason } => reason.clone(),
+        };
+
+        // No command to name: `air handover` IS the hand-over query, so the subject stands.
+        let f = crate::cmd::handover::facts(&l, "w3", &dir, Some("zz-1"), true)
+            .map_err(|e| e.to_string())?;
+        let v = handover_verdict(&f);
+
+        let red = red_block && ctx.contains("bd close would be refused for w3 at");
+
+        // Every clause below holds with the subject hardcoded again, so the mutation cannot
+        // take both halves: these are the cases that must NOT gain a command.
+        let green = v.message.starts_with("handover would refuse for w3 at")
+            // Stop has no command, so it must not invent one.
+            && !stop_message(&v, "w3", &f.head).contains("bd close")
+            && stop_message(&v, "w3", &f.head).contains("handover would refuse")
+            // What the gate MATCHES is unchanged, and each form labels itself.
+            && handover_command_label("bd close zz-1") == Some("bd close")
+            && handover_command_label("bd update zz-1 -s closed") == Some("bd update -s closed")
+            && handover_command_label("bd update zz-1 --status=awaiting_review")
+                == Some("bd update -s awaiting_review")
+            && handover_command_label("git commit -m x").is_none()
+            && is_handover_command("bd close zz-1")
+            && !is_handover_command("git merge main");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "gate: a refusal names the command it refused, and the Stop message, which refused nothing, does not",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
 /// observe a merge conflict.
 ///
@@ -6322,6 +6432,7 @@ fn probe_install_merge() -> Probe {
 fn base_facts() -> GateFacts {
     GateFacts {
         worker: "probe".into(),
+        refused_command: None,
         head: "0123456789abcdef".into(),
         green_at_head: true,
         tree_green: None,
