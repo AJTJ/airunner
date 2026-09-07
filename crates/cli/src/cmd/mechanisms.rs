@@ -211,6 +211,28 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "closed-not-landed",
+        class: "attention",
+        what: "A bead bd has closed whose commits are in no tree but its author's worktree. \
+               The inverse of the one above: closed and landed was reported, closed and NOT \
+               landed was not, and no other condition reaches it — `landable` needs a branch \
+               containing main so it goes quiet the moment main moves.",
+        added: "2026-09-07 (air-gazh)",
+        source: "crates/cli/src/cmd/status.rs (closed_not_landed)",
+        fires: Fires::Condition("closed-not-landed"),
+        // The removal condition is deliberately NOT "when it stops firing" (air-gazh names
+        // this): a quiet round is this mechanism working. This repo had zero on 2026-09-07
+        // only because its coordinator landed every branch within minutes of each close, and
+        // an adopter that batches had six at once the same day. Absence here measures the
+        // landing cadence, not the mechanism.
+        //
+        // So the condition names what would have to change about LANDING for the state to
+        // become unreachable, which is a fact anyone can check without waiting for a number.
+        removal: Removal::Judgement(
+            "landing no longer requires a branch to contain main at the moment someone looks — a recorded green can be landed after main moves without a re-merge — so a closed bead's commits cannot be stranded by main moving underneath them",
+        ),
+    },
+    Mechanism {
         id: "idle-without-claim",
         class: "attention",
         what: "An idle worker holding no claim while beads are ready.",
