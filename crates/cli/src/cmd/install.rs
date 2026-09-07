@@ -1081,46 +1081,6 @@ pub const SURFACE: &[SurfaceChange] = &[
                  on it would be a second copy of a decision `air handover` already makes.",
     },
     SurfaceChange {
-        id: "epic-count-drops-the-instruction",
-        since: "2026-09-07 (air-3vkg)",
-        headline: "The `ready:` line's epic count no longer says \"to decompose\": it reads \
-                   `N epic(s), not claimable`. That count is every epic in the ready set, \
-                   decomposed or not, so the old phrase told a coordinator to decompose epics \
-                   that were already at their frontier — one adopter audited all six of theirs \
-                   on the strength of it and none needed anything. The instruction now sits \
-                   only on the line that can tell, `epic ready to decompose: <id> (0 open \
-                   children, N closed)`, which is computed from the children and is the \
-                   number the phrase always meant. This SUPERSEDES the wording quoted in the \
-                   `ready-split-epics` notice above; that notice is left as written, since it \
-                   was true when it shipped.",
-        silent_break: true,
-        action: "Anything of yours that greps `air status` for `epic(s) to decompose` finds \
-                 nothing now and will not error. The count is unchanged in value and in \
-                 source; only the words moved. Read the per-epic line for the action, and \
-                 note it is absent on a cached status — the same line ends `(cached; bd not \
-                 called this tick)` there, because the children calls it needs were not made.",
-    },
-    SurfaceChange {
-        id: "handover-answers-landing-and-batch",
-        since: "2026-09-06 (air-33rn, air-hpp8)",
-        headline: "`air handover` now answers two questions a worker previously had to ask \
-                   somebody. It always prints a `landing:` line saying what `air land` would \
-                   say about this branch, read from the same selection the command runs; and \
-                   when a standing RED batch has this branch among its members it prints a \
-                   `batch:` line naming the batch sha, the lane, the time and where the lane's \
-                   output is. Both are lookups over values Air already computes, not second \
-                   copies of a decision. Workers are denied `air land` and were told about a \
-                   red batch only by the lane remembering to message each member, which in one \
-                   fleet reached everyone but one member twice in a night.",
-        silent_break: false,
-        action: "Nothing to run, and nothing existing changed: `--json` gained a `landing` key \
-                 always and a `batch` key only when there is a batch to name, alongside the \
-                 unchanged `pass`, `block`, `message` and `missing`. Read the `batch:` line \
-                 as one-directional — its ABSENCE is not a statement that your branch was not \
-                 in a batch, because Air knows membership only from what the run recorded, and \
-                 a run that recorded none is indistinguishable from no batch at all.",
-    },
-    SurfaceChange {
         id: "claim-records-the-resolved-id",
         since: "2026-09-06 (air-x1ha)",
         headline: "`air claim` records the id BD RESOLVED, not the string that was typed, so a \
@@ -1313,6 +1273,245 @@ pub const SURFACE: &[SurfaceChange] = &[
                  subject is in the body, and the body is what gets quoted onward, so \"the \
                  batch is red\" used to arrive somewhere else with no way to say which batch.",
     },
+    SurfaceChange {
+        id: "craft-notes-on-the-bead",
+        since: "2026-09-07 (air-u3l7)",
+        headline: "`roles.md`'s Coordinator section now names the route: put craft notes on the \
+                   bead with `bd comment <id> --file <notes>`, not in the message that names \
+                   the bead at a worker. The rule that naming a bead reserves nothing is \
+                   unchanged; what is added is what to do instead.",
+        silent_break: false,
+        action: "Re-run `air install --write` to refresh `.air/roles.md`. Worth reading if your \
+                 coordinator dispatches by message: the old line stated only the CONSEQUENCE \
+                 (your reservation will not hold), and between 2026-09-05 and 2026-09-07 it \
+                 was read, agreed with and worked around five times — two beads lost at one \
+                 repo, two dispatched twice at another, and once the Stop hook itself told an \
+                 idle worker to claim a bead already spoken for, from correct inputs. No new \
+                 state, nothing refuses, and the hook is unchanged: a ready bead is available \
+                 again once nothing is reserved outside the bead.",
+    },
+    SurfaceChange {
+        id: "digest-must-be-tracked",
+        since: "2026-09-06 (air-ahlf)",
+        headline: "The hand-over gate REFUSES a digest git does not track, under its own check \
+                   name. It used to read the directory, so a digest you wrote and never added \
+                   satisfied it — a file only your worktree has, offered as proof to somebody \
+                   who cannot see it. `digest_for_bead` now answers Missing, Untracked or \
+                   Tracked, and the two get different fixes because \"write one\" and \"add the \
+                   one you wrote\" are different repairs.",
+        silent_break: false,
+        action: "This is a NEW REFUSAL you can hit: commit the digest, not just write it. A \
+                 tracked digest beside an untracked stray still passes. If your flow writes \
+                 digests late, move the commit before the close.",
+    },
+    SurfaceChange {
+        id: "handover-attempts-count-refusals-only",
+        since: "2026-09-06 (air-zqmi)",
+        headline: "`handover-not-green` counted SUCCESSES. The gate stamped an attempt on \
+                   every hand-over command it saw, and that condition reads the counter — so a \
+                   worker whose closes all passed was reported to the whole fleet as having \
+                   failed. Only a hand-over that did NOT go through is an attempt now, and a \
+                   pass CLEARS the counter, because otherwise one early refusal keeps firing \
+                   after a clean close. `air handover`, the diagnostic, never stamps at all \
+                   (air-eiv): running the query used to raise the alarm it was meant to \
+                   diagnose.",
+        silent_break: true,
+        action: "If you discounted this condition, or told your workers to, STOP discounting \
+                 it — its firings mean what they say now. On an older binary it fires for \
+                 refusals that never happened, and there are TWO tells: a worker whose closes \
+                 all passed carrying `handovers N` on `air status`, and a worker that runs \
+                 `air handover` BY HAND, which stamped once per run before air-eiv — an \
+                 adopter found the second at 77 runs in one worktree. To tell a diagnostic \
+                 stamp from a genuinely refused close, join the claim's `last_handover_at` \
+                 against your events stream for a `bd close` at that time: a real attempt has \
+                 one beside it and a diagnostic stamp does not. Nothing to run; the counter \
+                 clears on the next passing hand-over of that bead.",
+    },
+    SurfaceChange {
+        id: "status-json-says-why-not-landable",
+        since: "2026-09-06 (air-72t7)",
+        headline: "`air status --json` carries `land_skipped` and `land_errors` beside \
+                   `landable`, all three from ONE selection so they cannot disagree. It used \
+                   to say which branches can land and never why the others cannot, and a real \
+                   failure inside selection — git or the ledger — reached no caller at all and \
+                   read as an empty queue.",
+        silent_break: false,
+        action: "Nothing to run and nothing existing changed; the human rendering is \
+                 untouched. A script that inferred \"not in `landable` means not landable\" \
+                 can now read the check, the detail and the fix, and should treat a non-empty \
+                 `land_errors` as \"could not tell\" rather than as an empty queue.",
+    },
+    SurfaceChange {
+        id: "handover-refusal-names-which-not-green",
+        since: "2026-09-06 (air-hgi9)",
+        headline: "The hand-over refusal spelled four distinct not-green states identically \
+                   and named what was missing in only one. Each now states the fact that \
+                   distinguishes it — no green recorded at all, a green that predates the \
+                   bead's newest commit, a green at a head that does not contain main, a green \
+                   recorded over — with the fixing line carried beside the reason rather than \
+                   re-derived. Two of the four have OPPOSITE correct responses, which is what \
+                   made one sentence for four states expensive.",
+        silent_break: false,
+        action: "Nothing to run. Anything of yours matching the old single sentence will not \
+                 match; the check names are unchanged and `air handover --json` carries each \
+                 reason and fix verbatim.",
+    },
+    SurfaceChange {
+        id: "land-bd-budget-by-id-count",
+        since: "2026-09-06 (air-fzv)",
+        headline: "`air land`'s bd budget is `10 s + 2 s per id` rather than a flat 10 s for \
+                   the whole set, and the refusal names the id count, the budget and the \
+                   override. Measured here: `bd show` with 14 ids took 21.27 s against 1.94 s \
+                   for one, so a landing carrying many beads timed out on a budget that was \
+                   never sized for it.",
+        silent_break: false,
+        action: "Nothing to run. `AIR_BD_TIMEOUT_MS` overrides the whole budget if your bd is \
+                 slower or faster than ours; the refusal names it when you hit it.",
+    },
+    SurfaceChange {
+        id: "batch-landing-attributes-every-bead",
+        since: "2026-09-05 (air-80x.2)",
+        headline: "`air land --worker <lane>` lands a batch branch as ONE landing and \
+                   attributes every bead the merged branches carry by `Bead:` trailer, with \
+                   the member heads recorded on the landing row. Without this a lane's batch \
+                   landed as one branch and the beads its members carried were attributed to \
+                   nothing.",
+        silent_break: false,
+        action: "Nothing to run, and nothing changes for a repo with no lane. If you run one, \
+                 put a `Bead:` trailer on every commit that does a bead's work — that trailer \
+                 is the whole attribution, and a commit without one is attributed to nothing.",
+    },
+    SurfaceChange {
+        id: "red-batch-is-reported-by-member",
+        since: "2026-09-05 (air-80x.4), unbounded 2026-09-06 (air-cyf)",
+        headline: "A red verify at a batch head is reported BY MEMBER: `air record` prints \
+                   `batch red at <sha> (<lane>): members …; nothing lands on it, the lane \
+                   splits by hand`, and `air status` repeats the newest standing one until a \
+                   later green carries every member. air-cyf then removed the 20-run window \
+                   that decided \"standing\": a batch that stayed red across 20 further runs \
+                   silently stopped being reported, and a dropped report looked exactly like a \
+                   fixed one.",
+        silent_break: false,
+        action: "Nothing to run, and nothing lands, closes or claims differently on a red. If \
+                 you run a lane, expect the line to persist rather than age out — that is the \
+                 fix, not noise, and it clears when a green carries every member.",
+    },
+    SurfaceChange {
+        id: "land-looks-at-main-before-reporting",
+        since: "2026-09-06 (air-htmn)",
+        headline: "A fast-forward that TIMED OUT after succeeding was reported and recorded as \
+                   \"main is untouched\". `git merge --ff-only` updates the ref atomically and \
+                   Air kills the child on expiry, which does not undo a ref update, so an \
+                   error there means \"I stopped waiting\" and never \"it did not happen\". Air \
+                   now asks `merge-base --is-ancestor` and reports what it finds. The landing \
+                   row is the half that mattered: the incident row carried an empty \
+                   `merge_commit` and no `landed` row at all, so the record of that landing was \
+                   ABSENT and the beads it carried were attributed to nothing.",
+        silent_break: true,
+        action: "Nothing to run. If your landings rows have a `refused / fast-forward` with an \
+                 empty `merge_commit` while main carries the merge, that is this bug and the \
+                 beads on it are unattributed — Air has no command that records a landing after \
+                 the fact, so re-attribute by hand if you need it. When the look itself fails, \
+                 NOTHING is recorded: the in-flight row already says a landing started and has \
+                 not reported, which is precisely true.",
+    },
+    SurfaceChange {
+        id: "idle-without-claim-respects-a-running-verify",
+        since: "2026-09-06 (air-t6ap)",
+        headline: "`idle-without-claim` no longer fires for a worker whose own verify is in \
+                   flight. It offered an adopter's verify lane 58 claimable beads 945 seconds \
+                   into a batch verify, with `air status` printing `verify in flight` three \
+                   lines above — and a lane that claims a bead mid-batch cannot cut the batch, \
+                   so the remedy was the failure it exists to prevent.",
+        silent_break: false,
+        action: "Nothing to run. The condition still fires for a genuinely idle worker with \
+                 claimable work, and somebody else's verify does not silence it. If you added \
+                 a rule telling your coordinator to ignore this condition for a lane, you can \
+                 drop it.",
+    },
+    SurfaceChange {
+        id: "selftest-json-is-only-the-array",
+        since: "2026-09-06 (air-e21v)",
+        headline: "`air selftest --json` emitted a stray line before the array, so it did not \
+                   parse — and `air selftest --prove`, which reads it, reported EVERY declared \
+                   mutation as broken. The evidence tool was dead by construction: 82 broken \
+                   before, 80 proven and 3 vacuous and 1 genuinely broken after. Cause was a \
+                   tee whose sinks were this process's stdout and stderr, right for `air record` \
+                   and wrong inside a probe whose parent emits JSON.",
+        silent_break: true,
+        action: "Re-run `air selftest --prove`: on an older binary its verdict was \
+                 uninformative rather than bad news, and anything of yours that skipped past a \
+                 leading non-JSON line can stop. The first byte is `[` again.",
+    },
+    SurfaceChange {
+        id: "peer-warning-dates-its-holders",
+        since: "2026-09-06 (air-et0o)",
+        headline: "The file-overlap warning dated nothing, so a live concurrent edit and a \
+                   fortnight-old journal entry read identically: `is also being edited by w3` \
+                   asserted a present tense the ledger cannot know. It now reads `is also \
+                   journaled by w3 (14 d ago), w2 (3 min ago)`, following `air holdings`, which \
+                   has dated its holders since air-v7o.",
+        silent_break: false,
+        action: "Nothing to run. On an older binary the warning fires the same way on a \
+                 sixteen-day-old row as on a live one, and the only way to tell was `air \
+                 holdings --file <path>` — which is the check the warning exists to save. \
+                 Upgrading is the repair; wrapping the warning locally is not.",
+    },
+    SurfaceChange {
+        id: "status-names-a-session-with-no-transcript",
+        since: "2026-09-06 (air-3jv5)",
+        headline: "A hook invocation from a demonstration or a fixture writes a session row \
+                   indistinguishable from a real session, and it fired channel conditions. Air \
+                   REPORTS rather than refuses: the row and its event line are still written, \
+                   `air status` names it NO TRANSCRIPT, and it is never announced as a worker \
+                   joining. Refusing was rejected deliberately — it needs Air to tell a real \
+                   session id from a fake one, and losing a live worker from `air status` the \
+                   day a harness omits the field is strictly worse than showing a synthetic \
+                   row.",
+        silent_break: false,
+        action: "Nothing to run. If `air status` names a session NO TRANSCRIPT, it is a row no \
+                 session is behind; the SQL to list them is in the line itself.",
+    },
+    SurfaceChange {
+        id: "epic-count-drops-the-instruction",
+        since: "2026-09-07 (air-3vkg)",
+        headline: "The `ready:` line's epic count no longer says \"to decompose\": it reads \
+                   `N epic(s), not claimable`. That count is every epic in the ready set, \
+                   decomposed or not, so the old phrase told a coordinator to decompose epics \
+                   that were already at their frontier — one adopter audited all six of theirs \
+                   on the strength of it and none needed anything. The instruction now sits \
+                   only on the line that can tell, `epic ready to decompose: <id> (0 open \
+                   children, N closed)`, which is computed from the children and is the \
+                   number the phrase always meant. This SUPERSEDES the wording quoted in the \
+                   `ready-split-epics` notice above; that notice is left as written, since it \
+                   was true when it shipped.",
+        silent_break: true,
+        action: "Anything of yours that greps `air status` for `epic(s) to decompose` finds \
+                 nothing now and will not error. The count is unchanged in value and in \
+                 source; only the words moved. Read the per-epic line for the action, and \
+                 note it is absent on a cached status — the same line ends `(cached; bd not \
+                 called this tick)` there, because the children calls it needs were not made.",
+    },
+    SurfaceChange {
+        id: "handover-answers-landing-and-batch",
+        since: "2026-09-06 (air-33rn, air-hpp8)",
+        headline: "`air handover` now answers two questions a worker previously had to ask \
+                   somebody. It always prints a `landing:` line saying what `air land` would \
+                   say about this branch, read from the same selection the command runs; and \
+                   when a standing RED batch has this branch among its members it prints a \
+                   `batch:` line naming the batch sha, the lane, the time and where the lane's \
+                   output is. Both are lookups over values Air already computes, not second \
+                   copies of a decision. Workers are denied `air land` and were told about a \
+                   red batch only by the lane remembering to message each member, which in one \
+                   fleet reached everyone but one member twice in a night.",
+        silent_break: false,
+        action: "Nothing to run, and nothing existing changed: `--json` gained a `landing` key \
+                 always and a `batch` key only when there is a batch to name, alongside the \
+                 unchanged `pass`, `block`, `message` and `missing`. Read the `batch:` line \
+                 as one-directional — its ABSENCE is not a statement that your branch was not \
+                 in a batch, because Air knows membership only from what the run recorded, and \
+                 a run that recorded none is indistinguishable from no batch at all.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -1500,6 +1699,15 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // branch was in a red batch, and what the landing gate would say about it (air-hpp8,
     // air-33rn).
     ("0.3.4", 28, 65),
+    // 2026-09-07. Seventeen notices, twelve of them found by a sweep rather than written when
+    // the change landed (air-wt1v): 66 landings over the day were read against SURFACE and one
+    // in six of the changes that needed a notice had one. **Two of the twelve were named in the
+    // 0.3.4 row's comment above and had no notice.** `air install` prints SURFACE and never
+    // RELEASES, so that comment reached no adopter while reading exactly like coverage — a
+    // prose sentence in the wrong table, which is worse than silence because it answers the
+    // question a checker would ask. Nothing here substitutes for a notice; the notices are the
+    // notices. The round-end sweep is now part of the coordinator's review.
+    ("0.3.5", 29, 82),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
@@ -2157,6 +2365,12 @@ mod tests {
                 && !ROLES_MD.contains("the main checkout is blocked natively"),
             "roles.md must not promise the harness's block once the flag is gone (air-8gj)"
         );
+        // air-u3l7: the reserves-nothing line states a consequence; between 2026-09-05 and
+        // 2026-09-07 it was read, agreed with and worked around five times, once by the Stop
+        // hook itself. What it was missing is the alternative, so the alternative is what is
+        // pinned — a consequence with no procedure beside it reads as "be careful".
+        assert!(ROLES_MD.contains("So put the craft notes on the bead, not in the message"));
+        assert!(ROLES_MD.contains("bd comment <id> --file <notes>"));
         // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
         assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
         assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
