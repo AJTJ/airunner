@@ -4744,9 +4744,7 @@ fn probe_ready_split_names_epics_apart() -> Probe {
     let red_fires = s.claimable.is_empty()
         && s.epics == ["zz-7vw", "zz-w00"]
         && s.owner.len() == 9
-        && line.contains(
-            "ready: 11 (0 claimable; 2 epic(s), not claimable; 9 owner-labelled",
-        )
+        && line.contains("ready: 11 (0 claimable; 2 epic(s), not claimable; 9 owner-labelled")
         && stop_nudge("worker", false, &claimable(&ready), false).is_none();
 
     ready.push(issue("zz-task", &[], "task"));
