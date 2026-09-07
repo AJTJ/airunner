@@ -1269,9 +1269,7 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     let (code, out, err) = air(&repo, &bd, &["status"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(
-        out.contains(
-            "ready: 4 (1 claimable; 2 epic(s) to decompose, not claimable; 1 owner-labelled"
-        ),
+        out.contains("ready: 4 (1 claimable; 2 epic(s), not claimable; 1 owner-labelled"),
         "{out}"
     );
     // The cache the Stop nudge reads holds only the task.
