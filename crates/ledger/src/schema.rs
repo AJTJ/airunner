@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 20;
+pub const CURRENT_VERSION: i64 = 21;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -306,6 +306,22 @@ ALTER TABLE sessions ADD COLUMN stopped_kind TEXT;
 ALTER TABLE sessions ADD COLUMN stopped_text TEXT;
 "#;
 
+/// v21 (2026-09-07, air-6dj4): where a capture was written, beside when.
+///
+/// A capture's timestamp is on the ROW and the fact is in the BODY, and the body is what gets
+/// quoted into a bead, a message or a log. So "the batch is red" arrives somewhere else with no
+/// way to say which batch. The writer forgets the sha; Air already knows it.
+///
+/// **Two columns, not one, because three states have to stay apart.** `head_sha` set is a head;
+/// `head_absent` set is Air having looked and found none, with the reason; both NULL is a row
+/// written before this column existed, about which Air observed nothing. Collapsing the last two
+/// would make an old row assert "there was no head", which is a claim nobody made — the failure
+/// rendering exactly like the success.
+const V21: &str = r#"
+ALTER TABLE captures ADD COLUMN head_sha TEXT;
+ALTER TABLE captures ADD COLUMN head_absent TEXT;
+"#;
+
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
 pub fn migrate(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -389,6 +405,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V20)?;
         conn.pragma_update(None, "user_version", 20)?;
     }
+    if version < 21 {
+        conn.execute_batch(V21)?;
+        conn.pragma_update(None, "user_version", 21)?;
+    }
     Ok(())
 }
 
@@ -458,6 +478,11 @@ mod tests {
     fn v18_adds_run_members_and_old_rows_read_as_none() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
+        // air-6dj4: V2 too, because a real v13 database has one. These fixtures applied V1
+        // and the migration under test alone, which was fine only while every later
+        // migration touched a V1 table; v21 alters `captures`, which V2 creates. The
+        // shortcut was building a database no ledger has ever been in.
+        conn.execute_batch(V2).unwrap();
         conn.execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
              finished_at) VALUES ('r1','w','aaa','verify',2,'record','t','t')",
@@ -484,6 +509,7 @@ mod tests {
     fn v17_adds_members_and_old_rows_read_as_none() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
         conn.execute(
             "INSERT INTO landings (id, worker, sha, result, started_at, finished_at) \
              VALUES ('L1','w','aaa','landed','t','t')",
@@ -511,6 +537,7 @@ mod tests {
     fn v16_adds_despite_inflight_and_old_rows_read_as_no_override() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
         conn.execute(
             "INSERT INTO landings (id, worker, sha, result, started_at, finished_at) \
              VALUES ('L1','w','aaa','landed','t','t')",
@@ -541,6 +568,7 @@ mod tests {
     fn v14_adds_a_tree_column_that_old_rows_leave_null() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
         conn.execute_batch(V13).unwrap();
         conn.execute(
             "INSERT INTO verify_runs (id, worker, sha, kind, exit_code, trigger, started_at, \
