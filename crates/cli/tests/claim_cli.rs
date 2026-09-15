@@ -701,7 +701,12 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
         .unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     std::fs::write(repo.join("bd.log"), "").unwrap();
-    let (code, out, _) = air(&wt, &bd, &["close", "zz-1", "--reason", "x"]);
+    let (code, out, _) = air_env(
+        &wt,
+        &bd,
+        &["close", "zz-1", "--reason", "x"],
+        &[("AIR_ROLE", "worker")],
+    );
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("coordinator's landing pass"), "{out}");
     assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
@@ -896,7 +901,7 @@ fn owner_label_is_the_gate_and_human_is_not() {
     let says = |dir: &Path, json: &str| std::fs::write(dir.join("bd.issue.json"), json).unwrap();
 
     says(&wt, r#"{"id":"zz-1","status":"open","labels":["owner"]}"#);
-    let (code, out, _) = air(&wt, &bd, &["claim", "zz-1"]);
+    let (code, out, _) = air_env(&wt, &bd, &["claim", "zz-1"], &[("AIR_ROLE", "worker")]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("is labelled `owner`"), "{out}");
     // air-uef: the refusal no longer sends the worker to an owner inbox that does not exist.
@@ -2846,8 +2851,8 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
         .unwrap();
     assert_eq!(who, "main");
 
-    // Not launched by Air: the checkout decides, and the advisory says whose tree it is.
-    let out = stop("bare", &[]);
+    // Launched as a worker: the advisory says whose tree it is.
+    let out = stop("w", &[("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")]);
     assert!(out.contains("handover would refuse for alpha at"), "{out}");
     let ev = stop_events();
     assert_eq!(
@@ -2856,6 +2861,11 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
         "{}",
         ev.last().unwrap()
     );
+
+    // Not launched by Air: the owner, whatever directory the shell is in, so no hand-over
+    // advice. The directory never decides a role (owner ruling, 2026-09-14).
+    let out = stop("bare", &[]);
+    assert!(!out.contains("handover"), "{out}");
 }
 
 /// air-ob0, narrowed by air-odv: a rewound merge that a worktree still carries is still named.
@@ -3213,7 +3223,7 @@ fn land_refuses_a_worker_and_an_unlandable_bead() {
     let bd = fake_bd(&main);
     close_with_proof(&main, &alpha, &bd, "zz-1");
 
-    let (code, out, _) = air(&alpha, &bd, &["land", "zz-1"]);
+    let (code, out, _) = air_env(&alpha, &bd, &["land", "zz-1"], &[("AIR_ROLE", "worker")]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("air handover"), "{out}");
 

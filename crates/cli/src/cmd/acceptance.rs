@@ -180,7 +180,7 @@ pub enum Verdict {
     /// satisfied-elsewhere cases and none of the true ones, and it would take nine alerts to
     /// six. It is volume rather than correctness, needs the bead id plumbed through `Evidence`
     /// and a git read per named path, and is worth building when the volume is the complaint
-    /// (`docs/notes/2026-09-06-landed-not-closed-classified.md` has the numbers).
+    /// (`docs/design.md` has the numbers).
     Unevidenced { how: String },
     /// Air has nothing to look up. Not a defect in the bead. `how` says why: plain prose, or a
     /// path-like token that is no file at the landed commit (air-dqa).
@@ -488,7 +488,7 @@ Something happened. See docs/rules/roles.md for the rule.
         let changed = vec!["docs/rules/roles.md".to_string()];
         let tree = vec![
             "docs/rules/roles.md".to_string(),
-            "docs/rules/writing.md".to_string(),
+            ".claude/skills/writing-docs/references/registers.md".to_string(),
         ];
         let ev = Evidence {
             green_at_landed: true,
@@ -496,9 +496,12 @@ Something happened. See docs/rules/roles.md for the rule.
             tree: &tree,
         };
         assert!(judge("docs/rules/roles.md names the rule.", &ev).discharged());
-        let v = judge("docs/rules/writing.md names the rule.", &ev);
+        let v = judge(
+            ".claude/skills/writing-docs/references/registers.md names the rule.",
+            &ev,
+        );
         assert!(
-            matches!(&v, Verdict::Unevidenced { how } if how.contains("docs/rules/writing.md")),
+            matches!(&v, Verdict::Unevidenced { how } if how.contains(".claude/skills/writing-docs/references/registers.md")),
             "{v:?}"
         );
     }

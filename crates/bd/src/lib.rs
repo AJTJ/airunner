@@ -19,7 +19,7 @@
 //! interpretation of what the edge means; it is a shape that can never resolve whatever it
 //! means, because an ancestor cannot finish until its descendants do. bd does not prevent it on
 //! every route and does not report it at all
-//! (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`).
+//! (`docs/research/beads.md`, "bd's dependency guard is two rules, not an ancestor walk").
 //!
 //! `bd` is slow (`ready --json` ≈ 1.1 s locally, tick 0315), so nothing here is called from a
 //! hook path — CLI and reconcile paths only.

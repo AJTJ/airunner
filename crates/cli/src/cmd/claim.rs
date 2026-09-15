@@ -243,7 +243,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             if issue.status == "in_progress" && issue.assignee.as_deref() == Some(actor.as_str()) {
                 already_mine = Some(issue.updated_at.clone());
             }
-            if worker != "main" && issue.labels.iter().any(|l| l == OWNER_LABEL) {
+            if super::caller_role() == "worker" && issue.labels.iter().any(|l| l == OWNER_LABEL) {
                 let msg = format!(
                     "refused: {bead} is labelled `{OWNER_LABEL}` (awaiting the owner); not a worker's to claim. Take other work; if it needs a decision, `air capture` the question and the coordinator files it."
                 );
@@ -561,8 +561,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
     // The coordinator may release a peer's claim (a gone worker's bead); workers only their own.
     let worker = match as_worker {
         Some(w) if w != me => {
-            if me != "main" {
-                eprintln!("air release: --worker is for the coordinator (main checkout)");
+            if super::caller_role() == "worker" {
+                eprintln!("air release: --worker is for the coordinator, not a worker");
                 return 1;
             }
             w.to_string()

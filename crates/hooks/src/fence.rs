@@ -3,8 +3,7 @@
 //!
 //! What it replaces: Claude Code's `--worktree` isolation, which the adopter's record shows
 //! stopped no observed write to the main checkout and cost 455 refusals in five days, 388
-//! (88%) with no git token in the command (`docs/notes/2026-09-06-the adopter-answers-worktree-
-//! and-verify.md`). The one gap that isolation did close and nothing else did is a hand-written
+//! (88%) with no git token in the command (an adopter's note of 2026-09-06). The one gap that isolation did close and nothing else did is a hand-written
 //! `../../main/<path>` in a file tool, which is exactly this check. A Bash `cd ../..` is out of
 //! scope on purpose: the harness never caught that either, and the repo's cwd-scoped
 //! command guard is where it belongs.

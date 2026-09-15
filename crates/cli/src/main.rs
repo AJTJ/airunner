@@ -1,6 +1,6 @@
 //! `air` — hub and referee for a few concurrent coding agents in git worktrees.
 //!
-//! First slice (docs/plans/0001-first-slice.md): `record`, `handover`, `holdings`, `hook`,
+//! First slice (docs/design.md): `record`, `handover`, `holdings`, `hook`,
 //! `doctor`, `selftest`. Everything prints `--json` on request and a denominator; refusals
 //! name the fixing command. `hook` is fail-open: any internal error → exit 0 + an event line.
 

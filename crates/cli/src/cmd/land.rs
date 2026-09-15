@@ -32,76 +32,19 @@ use air_ledger::verify::{Kind, new_id};
 use crate::cmd::{acceptance, emit, log_event, now, open};
 use crate::git;
 
-/// Who is asking, and which checkout they pointed at (air-29a).
-///
-/// `where_i_am` is derived from the process's working directory; `where_i_pointed` from
-/// `--repo`. They are separate because only the first is a fact about the caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Caller<'a> {
-    /// Worker name of the checkout the process is actually running in. `None` when that
-    /// cannot be determined, which refuses.
-    pub where_i_am: Option<&'a str>,
-    /// Worker name of the checkout `--repo` resolves to.
-    pub where_i_pointed: &'a str,
-}
-
-/// Who may run `air land`. Pure over the caller, so `air selftest` fires every refusal.
-///
-/// ## air-29a: the identity used to be an argument
-///
-/// This check has been at the top of `run` since air-3pz, and it was still bypassable, because
-/// it was fed `worker_name_for(repo)` — and `repo` is `--repo`, which the caller supplies. From
-/// a worktree, `air --repo <main-checkout> land --all` resolved the worker to `main`, `role_for`
-/// said coordinator, and the land proceeded. Reproduced from this worktree on 2026-08-29: the
-/// command got past this check and began evaluating branches, stopping only because the one
-/// candidate happened to fail a precondition.
-///
-/// It is how worker beta landed `worktree-beta` at d10ddab on 2026-08-22 while checking its own
-/// fix, which is the commit at the centre of the following week's investigation.
-///
-/// The `Bash(air land *)` deny pattern was never the backstop either: it matches command TEXT,
-/// so `cargo run -p air -- land`, `./target/debug/air land` and an absolute path all miss it. A
-/// parser that guards counts as absent until proven present (`anti-brittleness`), and neither
-/// of these two was present.
-///
-/// So the role now comes from **where the process is**, which is a fact the OS holds rather than
-/// one the caller writes. Spelling the command differently cannot change it; the only way to
-/// satisfy it is to actually be in the main checkout, which is the authority being claimed.
-/// Nothing here parses anything.
-pub fn may_land(c: &Caller<'_>) -> Result<(), String> {
-    let Some(here) = c.where_i_am else {
-        return Err(
-            "refused: `air land` cannot tell which checkout it is running in, and the role \
-             decides who may land (fix: run it from the main checkout)."
-                .to_string(),
-        );
-    };
-    if super::hook::role_for(here) == "coordinator" {
+/// Who may run `air land`: anyone but a worker. The role is the launcher's `AIR_ROLE`
+/// (`cmd::caller_role`), never the directory or `--repo`, so where the command runs and how it
+/// is spelled cannot change the answer (air-29a).
+pub fn may_land(role: &str) -> Result<(), String> {
+    if role != "worker" {
         return Ok(());
     }
-    // Name the bypass when that is what this is, rather than a generic refusal: a worker that
-    // pointed `--repo` at the main checkout is the exact shape of air-29a.
-    let pointed = if super::hook::role_for(c.where_i_pointed) == "coordinator" {
-        "\n  `--repo` pointed at the main checkout, but the role comes from where the process \
-         runs, not from an argument (air-29a). Spelling the command `cargo run -p air -- land` \
-         or `./target/debug/air land` does not change it either."
-            .to_string()
-    } else {
-        String::new()
-    };
-    Err(format!(
-        "refused: `air land` runs in the main checkout, and {here} is a worker. Close your own \
-         bead instead: `air handover` names anything missing, then `bd close <id> --reason \
-         \"<proof>\"` (owner ruling, 2026-08-22).{pointed}"
-    ))
-}
-
-/// The worker name of the checkout this process is running in, or `None` when there is no
-/// answer (not in a git repo, or the cwd is gone). `None` refuses: an unknown caller is not a
-/// coordinator.
-pub fn where_i_am() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    air_ledger::paths::worker_name_for(&cwd).ok()
+    Err(
+        "refused: `air land` is not a worker's. Close your own bead instead: `air handover` \
+         names anything missing, then `bd close <id> --reason \"<proof>\"` (owner ruling, \
+         2026-08-22). The role comes from AIR_ROLE, which the launcher sets."
+            .to_string(),
+    )
 }
 
 /// Why `air land` refuses while a verify is in flight (air-1bm), naming every run and the fix.
@@ -584,20 +527,12 @@ pub fn run(
             return 1;
         }
     };
-    // air-29a: the role comes from where this process is, never from `--repo`.
-    let here = where_i_am();
-    let caller = Caller {
-        where_i_am: here.as_deref(),
-        where_i_pointed: &worker,
-    };
+    let role = super::caller_role();
     let inputs = serde_json::json!({
-        "beads": beads, "workers": workers, "all": all, "caller": here, "repo_worker": worker
+        "beads": beads, "workers": workers, "all": all, "role": role, "repo_worker": worker
     });
-    if let Err(msg) = may_land(&caller) {
-        // Logged under the CALLER, so a bypass attempt is attributed to whoever made it
-        // rather than to `main`.
-        let actor = here.as_deref().unwrap_or("unknown");
-        log_event(&ledger, actor, "land", &inputs, "refuse", &msg, "role");
+    if let Err(msg) = may_land(role) {
+        log_event(&ledger, &worker, "land", &inputs, "refuse", &msg, "role");
         emit(
             json,
             &serde_json::json!({"ok": false, "reason": msg}),
@@ -605,6 +540,9 @@ pub fn run(
         );
         return 2;
     }
+    // Landing moves main in the main checkout, wherever the command was run from.
+    let main = super::worktree::main_checkout(repo);
+    let repo = main.as_path();
     if beads.is_empty() && workers.is_empty() && !all {
         eprintln!("air land: name a bead, `--worker <name>`, or `--all`");
         return 1;
@@ -1221,22 +1159,20 @@ mod tests {
         assert_eq!(b[1].oldest_minutes, 30);
     }
 
-    /// air-29a: the role is where the process is. Pointing `--repo` at the main checkout does
-    /// not make a worker the coordinator, and an unknown location is not one either.
+    /// air-29a: the role is the launcher's, so a worker is refused wherever it runs and
+    /// whatever `--repo` says, while the coordinator and the owner may land.
     #[test]
-    fn a_worker_may_not_land_however_it_points_repo() {
-        let at = |here: Option<&'static str>, pointed: &'static str| Caller {
-            where_i_am: here,
-            where_i_pointed: pointed,
-        };
-        assert!(may_land(&at(Some("main"), "main")).is_ok());
-        // Standing in main, --repo naming a worktree: still the coordinator.
-        assert!(may_land(&at(Some("main"), "alpha")).is_ok());
-        let e = may_land(&at(Some("alpha"), "alpha")).unwrap_err();
+    fn only_a_worker_is_refused_a_landing() {
+        assert!(may_land("coordinator").is_ok());
+        assert!(may_land("owner").is_ok());
+        let e = may_land("worker").unwrap_err();
         assert!(e.contains("air handover"), "{e}");
-        // The incident's own invocation, and the refusal says which bypass it is.
-        let e = may_land(&at(Some("alpha"), "main")).unwrap_err();
-        assert!(e.contains("air-29a") && e.contains("cargo run"), "{e}");
-        assert!(may_land(&at(None, "main")).is_err(), "fails closed");
+        assert_eq!(
+            crate::cmd::role_from(Some("typo")),
+            "worker",
+            "unknown fails closed"
+        );
+        assert_eq!(crate::cmd::role_from(None), "owner");
+        assert_eq!(crate::cmd::role_from(Some("coordinator")), "coordinator");
     }
 }

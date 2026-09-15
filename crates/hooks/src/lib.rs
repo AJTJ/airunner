@@ -1,7 +1,7 @@
 //! Claude Code hook contract and Air's pure decision logic.
 //!
 //! Sources: https://code.claude.com/docs/en/hooks (input JSON, exit-code semantics, JSON output
-//! fields), verified 2026-08-18 in docs/research/verification/ticks/2026-08-18-0245-claude-code-hook-edge-cases.md.
+//! fields), verified 2026-08-18 in docs/research/evidence.md
 //! Rules (plan 0001 §5): answer fast, fail open, never block on a prompt, never block a WIP
 //! commit, refuse only at hand-over — and only once advisory mode has run a round.
 

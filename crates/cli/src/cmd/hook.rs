@@ -147,8 +147,10 @@ fn inner_env(
     let (ledger, derived) = open(&cwd)?;
     // air-75u: who this session is comes from its launcher, not from where its shell sits.
     let worker = identity_from(role, actor, &derived);
+    // Permissions come from the launcher's AIR_ROLE, never from where the shell sits.
+    let role = super::role_from(role);
     let event = input.event();
-    let d = dispatch(&ledger, &worker, &cwd, &input)?;
+    let d = dispatch(&ledger, &worker, role, &cwd, &input)?;
     let mut inputs = d.inputs;
     if let serde_json::Value::Object(m) = &mut inputs {
         m.insert("session_id".into(), input.session_id.clone().into());
@@ -226,12 +228,13 @@ const WAKE_CONTEXT: &str = "air: create your recovery wake now if you have none 
 fn dispatch(
     ledger: &Ledger,
     worker: &str,
+    role: &str,
     cwd: &Path,
     input: &HookInput,
 ) -> Result<Dispatched, String> {
     Ok(match input.event() {
         HookEvent::SessionStart => {
-            let prev = set_session(ledger, input, worker, "working", None)?;
+            let prev = set_session(ledger, input, worker, role, "working", None)?;
             // Quiet: the event line records it; a human reads every line a hook prints.
             // The ONE exception is the wake (air-1n3). Only a session can create its own
             // scheduled task — there is no settings key and no launcher flag for it — so this
@@ -271,7 +274,7 @@ fn dispatch(
         // Friction Air did not cause: a denial by any rule, hook, or the human, or a tool
         // that ran and failed. Observation only; the command and the reason are the record.
         HookEvent::PermissionDenied | HookEvent::PostToolUseFailure => {
-            let _ = set_session(ledger, input, worker, "working", None);
+            let _ = set_session(ledger, input, worker, role, "working", None);
             let command = input
                 .bash_command()
                 .map(str::to_string)
@@ -290,9 +293,9 @@ fn dispatch(
             )
             .inputs(serde_json::json!({"command": command}))
         }
-        HookEvent::PreToolUse => pre_tool_use(ledger, worker, cwd, input)?,
+        HookEvent::PreToolUse => pre_tool_use(ledger, worker, role, cwd, input)?,
         HookEvent::PostToolUse => {
-            let prev = set_session(ledger, input, worker, "working", None)?;
+            let prev = set_session(ledger, input, worker, role, "working", None)?;
             // Every tool call is a sign of life for the leases this worktree holds.
             let _ = ledger.lease_beat(worker, &now());
             let mut d = Dispatched::new(
@@ -325,10 +328,10 @@ fn dispatch(
             }
             d
         }
-        HookEvent::Stop | HookEvent::SubagentStop if role_for(worker) == "coordinator" => {
+        HookEvent::Stop | HookEvent::SubagentStop if role != "worker" => {
             // The coordinator holds no lane and never hands over: no advisory (the adopter
             // adoption log §9: the coordinator received a worker's hand-over advisory).
-            let prev = set_session(ledger, input, worker, "idle", None)?;
+            let prev = set_session(ledger, input, worker, role, "idle", None)?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
                 "observed",
@@ -349,7 +352,7 @@ fn dispatch(
             "subagent stop: not the worker's stop; no state change, no nudge, no bd".to_string(),
         ),
         HookEvent::Stop => {
-            let prev = set_session(ledger, input, worker, "idle", None)?;
+            let prev = set_session(ledger, input, worker, role, "idle", None)?;
             // Advisory only in this slice; never block, and never when stop_hook_active.
             let f = handover::facts(ledger, worker, cwd, None, true)?;
             let v = handover_verdict(&f);
@@ -407,10 +410,8 @@ fn dispatch(
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
-            let would_speak = !has_work
-                && !stop_hook_active
-                && !cached.is_empty()
-                && role_for(worker) == "worker";
+            let would_speak =
+                !has_work && !stop_hook_active && !cached.is_empty() && role == "worker";
             let ready = if would_speak {
                 ready_cache::confirm(cwd).unwrap_or_default()
             } else {
@@ -598,16 +599,24 @@ fn transition(prev: &Option<String>, next: &str) -> String {
 fn pre_tool_use(
     ledger: &Ledger,
     worker: &str,
+    role: &str,
     cwd: &Path,
     input: &HookInput,
 ) -> Result<Dispatched, String> {
-    let prev = set_session(ledger, input, worker, "running", input.tool_name.as_deref())?;
+    let prev = set_session(
+        ledger,
+        input,
+        worker,
+        role,
+        "running",
+        input.tool_name.as_deref(),
+    )?;
     let moved = transition(&prev, "running");
     // The worktree fence (air-8gj): a worker's Edit/Write whose resolved path leaves its
     // worktree is denied. Never for the coordinator, whose checkout is main. This is the one
     // check that replaces the harness's `--worktree` isolation (see `air_hooks::fence`).
     if let Some(abs) = input.edited_path()
-        && role_for(worker) == "worker"
+        && role == "worker"
         && let Ok(root) = git::toplevel(cwd)
         && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root)
     {
@@ -702,7 +711,7 @@ fn pre_tool_use(
     if let Some((to, bytes)) = input.message_sent() {
         // The content goes to the `messages` table, never to the event line (air-srv). Fail
         // open: a failed insert is named on the line and the message still goes.
-        let reason = match record_message(ledger, worker, input) {
+        let reason = match record_message(ledger, worker, role, input) {
             Ok(()) => format!("{moved}; {bytes} bytes to {to}"),
             Err(e) => format!("{moved}; {bytes} bytes to {to}; not recorded: {e}"),
         };
@@ -734,7 +743,12 @@ fn pre_tool_use(
 ///
 /// Removal: when the harness persists agent-to-agent messages somewhere the ledger can read,
 /// or when the multi-agent question (plan 0008 §9) is answered against the fleet.
-pub fn record_message(ledger: &Ledger, worker: &str, input: &HookInput) -> Result<(), String> {
+pub fn record_message(
+    ledger: &Ledger,
+    worker: &str,
+    role: &str,
+    input: &HookInput,
+) -> Result<(), String> {
     let Some((to, bytes)) = input.message_sent() else {
         return Ok(());
     };
@@ -749,7 +763,7 @@ pub fn record_message(ledger: &Ledger, worker: &str, input: &HookInput) -> Resul
         .unwrap_or_else(|_| {
             (
                 worker.to_string(),
-                role_for(worker).to_string(),
+                role.to_string(),
                 project_for(Path::new(input.cwd.as_deref().unwrap_or("."))),
             )
         });
@@ -1067,6 +1081,7 @@ fn set_session(
     ledger: &Ledger,
     input: &HookInput,
     worker: &str,
+    role: &str,
     state: &str,
     detail: Option<&str>,
 ) -> Result<Option<String>, String> {
@@ -1100,7 +1115,7 @@ fn set_session(
              project=excluded.project, \
              model=COALESCE(NULLIF(excluded.model,''), sessions.model), \
              enforce=excluded.enforce",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role_for(worker), pid, project, model, enforce],
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role, pid, project, model, enforce],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
@@ -1326,7 +1341,7 @@ mod tests {
                 &serde_json::json!({"session_id": "s", "hook_event_name": "Stop", "cwd": wt.to_string_lossy(), "stop_hook_active": active}).to_string(),
             )
             .unwrap();
-            dispatch(ledger, "wt", &wt, &input).unwrap()
+            dispatch(ledger, "wt", "worker", &wt, &input).unwrap()
         };
         let stop = |ledger: &air_ledger::Ledger| stop_with(ledger, false);
         // No claim, no ready cache: nothing to hand over, silent.
@@ -1519,7 +1534,8 @@ mod tests {
         assert_eq!(rows[0].to, "main");
         assert_eq!(rows[0].bytes, 15);
         assert_eq!(rows[0].session_id, "s1");
-        assert_eq!(rows[0].from_role, super::role_for(&rows[0].from_worker));
+        // No AIR_ROLE in this test: a shell Air did not start is the owner.
+        assert_eq!(rows[0].from_role, "owner");
     }
 
     #[test]

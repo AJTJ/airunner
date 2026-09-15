@@ -20,19 +20,19 @@ Index items are 1–3 lines; detail lives behind the link.
   does not need. When a rule can be a measurement, measure; when in doubt, leave it out. Nothing
   is off the table, including the multi-agent pattern itself: if one capable session does the
   work better than a coordinator plus workers, the fleet goes. Gas Town is the opposite and the
-  warning. Evidence: `docs/research/guardrails-as-throttles.md` (owner, 2026-08-21).
+  warning. Evidence: `docs/research/evidence.md` (owner, 2026-08-21).
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
-  case (`docs/research/beads-and-gastown.md §2.5`). **Invoke the `check-resources` skill first**:
+  case (`docs/research/beads.md`, Gas Town). **Invoke the `check-resources` skill first**:
   the harness, the field, then Air, with the answer written where the work is recorded. On
   2026-08-24 a shallow pass missed eleven projects that had already built parts of Air, one of
   them the same architecture on the same task store (owner, 2026-08-24).
 - **Building the projects comes first; building Air is secondary.** Air exists so the owner's
   projects get built. When a round is running, Air records and does not change; findings go to
-  `docs/notes/air-backlog.md` and the round log, and are reviewed in one pass when there are no
+  captures and the round log, and are reviewed in one pass when there are no
   tasks left (owner, 2026-08-21).
 - **A human is always in the loop.** Core requirement, not a phase. Every agent session is a
-  terminal the owner can watch and type into (today: one coordinator + three workers); Air's
+  terminal the owner can watch and type into (three workers, a verification lane, and the coordinator); Air's
   launchers start interactive sessions, never headless ones, and nothing Air builds may take the
   owner out of the loop or hide what an agent is doing. Introspection into live state
   (`air status`, the event stream) is part of the same requirement.
@@ -113,44 +113,37 @@ Index items are 1–3 lines; detail lives behind the link.
 
 | Read when | Document |
 |---|---|
-| Wanting the "why", framing, and every owner decision (dated) | [`docs/decisions.md`](docs/decisions.md) |
-| Orienting in the research | [`docs/README.md`](docs/README.md) — index of all reports |
-| Wondering whether to switch to another harness or orchestrator, or whether a part of Air is now commodity | [`docs/research/harness-and-orchestrator-landscape.md`](docs/research/harness-and-orchestrator-landscape.md) |
-| The full inventory of everything Air ships: every command, table, hook, MCP tool, integration, env var and mechanism, with why each exists, what already does it, and a verdict (living doc, re-run the counts) | [`docs/plans/0007-surface-audit.md`](docs/plans/0007-surface-audit.md) |
-| What Claude Code itself already provides (live inventory, dated, with the limits that matter) | [`docs/research/claude-code-control-surfaces.md`](docs/research/claude-code-control-surfaces.md) §0 |
-| Deciding what shape Air is and why | [`docs/research/SYNTHESIS.md`](docs/research/SYNTHESIS.md) |
-| Building on the first slice (ledger facts, hooks, the one refusal, evidence weighting) | [`docs/plans/0001-first-slice.md`](docs/plans/0001-first-slice.md) |
-| The first-round surface as built (claims wrap bd, capture/triage, status/attention, `air mcp` channel, install, launchers) and how to operate it in an adopter's repo | [`docs/plans/0004-first-round-surface.md`](docs/plans/0004-first-round-surface.md) |
-| Integrating Air into a target repo (install, rules to change, self-maintenance) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
-| What comes next, in order | [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md) |
-| The whole change list from the 2026-08-24/25 audit and the adopter's round logs, ruled item by item, with a path for each | [`docs/plans/0008-consolidated-changes.md`](docs/plans/0008-consolidated-changes.md) |
-| What the adopter's round proposes, and the do-less verdict on each | [`docs/plans/0006-post-round-changes.md`](docs/plans/0006-post-round-changes.md) |
-| Which role an agent is and what it may do | [`docs/rules/roles.md`](docs/rules/roles.md) · research: [`docs/research/agent-roles-and-confinement.md`](docs/research/agent-roles-and-confinement.md) |
-| Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions`; research: [`docs/research/metis-decomposition-and-agile.md`](docs/research/metis-decomposition-and-agile.md) |
-| Which metrics Air records (the single list) | [`docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md`](docs/research/verification/ticks/2026-08-18-0430-measurement-spec.md) |
-| Running the work procedure: capture → triage → bead, decomposition, dispatch, hand-over, landing (the single procedure; what Air enforces vs judgement) | [`docs/plans/0002-what-to-work-on.md`](docs/plans/0002-what-to-work-on.md) |
-| Porting or writing a skill | a private skills inventory; ported skills live in `.claude/skills/` with a `## Provenance` footer each and an index in [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md) |
-| Writing prose, docs, commits, PRs, tests, reviews | Use the skills: `plain-language` (length budgets; shorter wins), `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` — see `.claude/skills/` |
-| About to state a number, a rate, or what the installed `air` does | skill `project-diligence` — re-derive rather than re-read, check the binary against the repo, confirm the probe was seen failing |
-| Rust conventions (errors, lints, MSRV — open decisions) | [`docs/plans/0003-rust-conventions.md`](docs/plans/0003-rust-conventions.md) |
-| Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) · [`docs/rules/writing.md`](docs/rules/writing.md) |
-| Touching billing/cost assumptions | [`docs/research/claude-code-billing.md`](docs/research/claude-code-billing.md) — primary sources only |
-| Working with `bd` (versions, leases trap) | [`docs/research/beads-and-gastown.md`](docs/research/beads-and-gastown.md) §0 |
-| Wondering whether `bd` should be replaced, or what Air would have to rewrite if it were | [`docs/research/bd-alternatives.md`](docs/research/bd-alternatives.md) |
+| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, and the TODO list in §10 (the one design doc; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
+| Wanting the "why", framing, and every owner decision (dated, append-only) | [`docs/decisions.md`](docs/decisions.md) |
+| Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
+| Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | skill `system-design`; prior art [`docs/research/merge-queues-prior-art.md`](docs/research/merge-queues-prior-art.md); the current design [`docs/plans/0009-fleet-system-design.md`](docs/plans/0009-fleet-system-design.md) |
+| Wondering whether to switch to another harness or orchestrator, or whether a part of Air is now commodity | [`docs/research/landscape.md`](docs/research/landscape.md) |
+| What Claude Code itself provides and can confine (live inventory, dated; hook events; edge cases) | [`docs/research/harness-facts.md`](docs/research/harness-facts.md) |
+| Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | [`docs/research/beads.md`](docs/research/beads.md) |
+| The findings Air's rules rest on: guardrails as throttles, decomposition evidence, verified numbers and claims not to repeat | [`docs/research/evidence.md`](docs/research/evidence.md) |
+| Integrating Air into a target repo (install, rules to change, upgrading) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
+| Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
+| Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) |
+| Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions` |
+| Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
+| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` |
+| About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
+| What a round left behind (session journals, round logs, per-bead digests; records, not reading) | [`docs/journal/`](docs/journal/), [`docs/digests/`](docs/digests/) |
 
-## Index — systems and subsystems (first slice 2026-08-18, plan 0001; first-round surface 2026-08-20, plan 0004)
+## Index — systems and subsystems
+
+One line each; `docs/design.md` §3 to §6 is the full description and is the one kept current.
 
 | System | One line |
 |---|---|
-| `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) + NDJSON events (`.air/events/`): `verify_runs`, `edit_journal`, `claims`, `sessions` (with `role`), `landings`, `captures` (schema v2). No time-based expiry. **Built.** |
-| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, edit journal; `air hook` dispatches SessionStart/PreToolUse/PostToolUse/PermissionRequest/Stop/SessionEnd, fails open, ~100 ms, **one event line per invocation** (transitions included). Advisory unless `AIR_ENFORCE=1`. **Built.** |
-| `crates/cli` (`air`) | Built: `record` (command/duration/bytes/dirty, suspicious flags), `handover` (4 checks incl. digest), `holdings`, `claim`/`release` (wrap `bd --claim`), `capture [--for owner]`/`inbox [--owner]`/`triage`, `lease take|release|status|break|beat`, `status [--attention]`, `mcp`, `init` (gate + everything), `install`, `worker [name] [--tmux --task]`/`coordinator` (+ `.claude/air.json` deny patterns), `close`, `land [--all]`, `hook`, `doctor`, `selftest` (probe count is whatever it prints; this line used to carry a copy
-of it and was stale by 14, air-jc0). Next (after round-one data): `next`, `peer`, `merge-advice`, `gc`, PreCompact re-inject. |
-| `air mcp` | One stdio MCP server: the coordinator's **channel** (pushes attention conditions from a ledger poll; no sockets, no timers) plus tools (`air_*`) and resources (`air://status`, …) that invoke the CLI. Synchronous, bounded, panic-isolated. **Built.** |
-| Launchers `air worker <name>` / `air coordinator` | Interactive `claude` with native worktree isolation, roles prose appended, deny list that holds in every permission mode, env instead of drifting files; coordinator gets the channel. **Built.** |
-| Hand-over gate | The one refusal: `awaiting_review`/close needs recorded green at HEAD + main merged. Never blocks a prompt or a WIP commit. |
-| `crates/bd` (`air-bd`) | `WorkLedger` trait + `bd --json` shell-out (bd 1.2.2 surface); CAS/leases live in the ledger; never called from a hook. **Built (minimal).** |
-| Coordinator (human-facing session) | Steers, triages the capture inbox, builds per-worker queues in beads fields, rulings, arbitration, `land`. Informed by the Air channel, not woken by cron. SendMessage stays the agent-to-agent channel. |
+| `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) plus NDJSON events (`.air/events/`). Rows have no time-based expiry. |
+| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, the worktree fence, the edit journal; `air hook` dispatches every harness event, fails open, and writes one event line per invocation. The gate refuses only with `AIR_ENFORCE=1`. |
+| `crates/bd` (`air-bd`) | The `WorkLedger` trait over `bd --json`; never called from a hook path. |
+| `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
+| `air mcp` | One stdio MCP server: the coordinator's channel (attention conditions pushed from a ledger poll) plus tools and resources that invoke the CLI with `--json`. |
+| Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (or the main checkout for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
+| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a tracked digest. Never blocks a prompt or a WIP commit. |
+| Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, never woken by cron. `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## Essentials
 
@@ -180,7 +173,7 @@ for everyone, and an absent key means variant A. Air reads neither variant; it r
 thing under both (a close needs a green at a commit containing `main`, at HEAD or at a verified
 descendant, air-80x.1).
 
-**Variant A, no verify lane** (`verify_lane` absent):
+**Variant A, no verification lane** (`verify_lane` absent):
 
     air claim <id> [--files a,b]
     … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
@@ -193,7 +186,7 @@ descendant, air-80x.1).
     bd close <id> --reason "<proof>"      # or --reason-file <path>; see below
     … next bead
 
-**Variant B, a verify lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
+**Variant B, a verification lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
 The worker does **not** run verify: the batch only forms if workers stop verifying individually,
 which is what the adopter's 2026-08-29 round learned by parking a lane whose batch never came.
 

@@ -904,7 +904,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // real hook run sees the state change; nothing else in the suite drives that event.
             file: "crates/cli/src/cmd/hook.rs",
             from: "        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
-            to: "        HookEvent::PermissionRequest => {\n            let prev = set_session(ledger, input, worker, \"stuck\", None)?;\n            Dispatched::new(HookOutcome::Allow { context: None }, \"stuck\", transition(&prev, \"stuck\"))\n        }\n        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
+            to: "        HookEvent::PermissionRequest => {\n            let prev = set_session(ledger, input, worker, role, \"stuck\", None)?;\n            Dispatched::new(HookOutcome::Allow { context: None }, \"stuck\", transition(&prev, \"stuck\"))\n        }\n        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
             also_red: &[],
         },
     ),
@@ -1377,16 +1377,13 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "land: the role is where the process is, so --repo at the main checkout does not make a worker the coordinator",
+        "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
         Mutation {
-            // Exactly the pre-fix behaviour: decide on what `--repo` resolved to instead of on
-            // where the process runs. This is the defect air-29a found, so the probe is
-            // evidence only if it falls to it. `land: worker, dirty main, …` legitimately
-            // stays GREEN — its two cases have `where_i_am` and `where_i_pointed` agreeing, so
-            // this mutation does not reach them.
+            // Let every role land. The worker half of the probe falls; the coordinator and
+            // owner halves stay green, which shows the anchor reaches the role gate alone.
             file: "crates/cli/src/cmd/land.rs",
-            from: "if super::hook::role_for(here) == \"coordinator\" {",
-            to: "if super::hook::role_for(c.where_i_pointed) == \"coordinator\" {",
+            from: "    if role != \"worker\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
+            to: "    if role != \"nobody\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
             also_red: &[],
         },
     ),
@@ -1549,7 +1546,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
+        "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator is never fenced, wherever it runs",
         Mutation {
             // Fence the coordinator instead of the worker: one comparison, it compiles, and
             // the fence, the path arithmetic and the message are all untouched. The worker
@@ -1558,8 +1555,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // GREEN half survives, which is what shows the anchor reaches the role gate alone
             // rather than taking out the check.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "    if let Some(abs) = input.edited_path()\n        && role_for(worker) == \"worker\"",
-            to: "    if let Some(abs) = input.edited_path()\n        && role_for(worker) == \"coordinator\"",
+            from: "    if let Some(abs) = input.edited_path()\n        && role == \"worker\"",
+            to: "    if let Some(abs) = input.edited_path()\n        && role == \"coordinator\"",
             also_red: &[],
         },
     ),
@@ -2284,7 +2281,7 @@ fn all_probes() -> Vec<Probe> {
         probe_close_with_proof_sequence(),
         probe_verify_in_flight(),
         probe_landing_state(),
-        probe_land_role_is_where_you_are(),
+        probe_land_role_is_the_launchers(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
@@ -3467,7 +3464,7 @@ fn probe_landed_but_open() -> Probe {
     let changed = vec!["docs/rules/roles.md".to_string()];
     let tree = vec![
         "docs/rules/roles.md".to_string(),
-        "docs/rules/writing.md".to_string(),
+        ".claude/skills/writing-docs/references/registers.md".to_string(),
         "docs/absent.md".to_string(),
     ];
     let ev = Evidence {
@@ -3478,7 +3475,7 @@ fn probe_landed_but_open() -> Probe {
     // A clause the merge CONTRADICTS: the bead names a file it did not touch.
     let refutable = judge_clauses(
         "zz-2",
-        vec!["docs/rules/writing.md names the rule.".into()],
+        vec![".claude/skills/writing-docs/references/registers.md names the rule.".into()],
         &ev,
     );
     // A clause Air simply cannot read. Not a defect, and not the wrong-close signal.
@@ -3525,9 +3522,11 @@ fn probe_landed_but_open() -> Probe {
         let open = l.landed_open().map_err(|e| e.to_string())?;
         // Reported, with the clause, and the closable bead is NOT in the held-open set.
         let reported = open.len() == 1
-            && open
-                .first()
-                .is_some_and(|o| o.bead == "zz-2" && o.why.contains("docs/rules/writing.md"));
+            && open.first().is_some_and(|o| {
+                o.bead == "zz-2"
+                    && o.why
+                        .contains(".claude/skills/writing-docs/references/registers.md")
+            });
         // air-dlw: the claim's lifetime must NOT decide this. Under close-with-proof the
         // worker closes at once and the reconcile releases the claim on the next tick, so a
         // report keyed on the claim could never fire. Claim it, release it as the reconcile
@@ -3678,7 +3677,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     let changed = vec!["docs/rules/roles.md".to_string()];
     let tree = vec![
         "docs/rules/roles.md".to_string(),
-        "docs/rules/writing.md".to_string(),
+        ".claude/skills/writing-docs/references/registers.md".to_string(),
         "docs/absent.md".to_string(),
     ];
     let ev = Evidence {
@@ -4179,7 +4178,7 @@ fn probe_triage_bead_exists() -> Probe {
 fn probe_batch_close() -> Probe {
     use crate::cmd::close::may_close;
 
-    let red = may_close(Some("beta")).is_err();
+    let red = may_close("worker").is_err();
     let green = (|| -> Result<bool, String> {
         let ids: Vec<String> = (1..=10).map(|i| format!("zz-{i}")).collect();
         let argv = air_bd::close_argv(&ids, "landed", "main");
@@ -4193,7 +4192,7 @@ fn probe_batch_close() -> Probe {
         let released = l
             .release_claims_on(&ids, "landed", "t1")
             .map_err(|e| e.to_string())?;
-        Ok(may_close(Some("main")).is_ok() && one_process && released.len() == ids.len())
+        Ok(may_close("coordinator").is_ok() && one_process && released.len() == ids.len())
     })()
     .unwrap_or(false);
     Probe {
@@ -4253,14 +4252,14 @@ fn probe_land_refusals() -> Probe {
     ];
     let readable = |m: String| m.contains('`') && m.starts_with("refused: ");
     // Every refusal fires, and every one names a command to run.
-    let red = may_land(&at("alpha", "alpha")).is_err()
+    let red = may_land("worker").is_err()
         && sites
             .iter()
             .all(|s| check(s, &ok()).err().is_some_and(readable))
         && refusals
             .iter()
             .all(|f| check(&here(), f).err().is_some_and(readable));
-    let green = may_land(&at("main", "main")).is_ok()
+    let green = may_land("coordinator").is_ok()
         && check(&here(), &ok()) == Ok(true)
         && check(
             &here(),
@@ -4958,56 +4957,29 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
     }
 }
 
-/// A caller standing in `here` with `--repo` resolving to `pointed`.
-fn at<'a>(here: &'a str, pointed: &'a str) -> crate::cmd::land::Caller<'a> {
-    crate::cmd::land::Caller {
-        where_i_am: Some(here),
-        where_i_pointed: pointed,
-    }
-}
+/// air-29a, then 2026-09-14: who may land or close comes from the launcher's `AIR_ROLE`.
+///
+/// The incident: a worker ran `air --repo <main> land --all` from its worktree on 2026-08-22 and
+/// landed, because the check read `--repo`. The fix read the directory the process ran in, which
+/// the owner ruled out on 2026-09-14: nothing decides permissions by directory, since any role
+/// may work in a worktree. The role is now the launcher's word, which neither `--repo` nor the
+/// directory nor the command's spelling can change.
+///
+/// Red: a worker is refused both commands, and an unknown `AIR_ROLE` counts as a worker. Green:
+/// the coordinator and the owner (no `AIR_ROLE`, a shell Air did not start) may run both.
+fn probe_land_role_is_the_launchers() -> Probe {
+    use crate::cmd::close::may_close;
+    use crate::cmd::land::may_land;
+    use crate::cmd::role_from;
 
-/// air-29a: `air land`'s role comes from where the process is, not from `--repo`.
-///
-/// The incident: worker beta ran `cargo run -q -p air -- --repo <main> land --all` from its
-/// worktree on 2026-08-22 to check its own fix, and it LANDED — merging `worktree-beta` into
-/// main at d10ddab. Two guards were supposed to stop it and neither did. `Bash(air land *)`
-/// matches command TEXT, so `cargo run`, `./target/debug/air`, and an absolute path all miss
-/// it. And `may_land` was fed `worker_name_for(repo)`, where `repo` is `--repo` — an argument
-/// the caller supplies, so pointing it at the main checkout made the caller `main`.
-///
-/// A parser that guards counts as absent until proven present (`anti-brittleness`). Neither of
-/// these was present. This probe is what proves the replacement fires.
-///
-/// Red: a worker is refused standing in its own worktree, refused while pointing `--repo` at
-/// the main checkout, and refused when Air cannot tell where it is. The `--repo` case names the
-/// bypass. Green: the coordinator standing in the main checkout passes.
-///
-/// Note what the probe does NOT vary: how the command was spelled. That is the point — argv
-/// never reaches this decision, so there is no spelling to enumerate.
-fn probe_land_role_is_where_you_are() -> Probe {
-    use crate::cmd::land::{Caller, may_land};
-
-    let nowhere = Caller {
-        where_i_am: None,
-        where_i_pointed: "main",
-    };
-    let bypass = may_land(&at("alpha", "main"));
-    let red = may_land(&at("alpha", "alpha")).is_err()
-        // The incident's own invocation: in a worktree, --repo at the main checkout.
-        && bypass.as_ref().err().is_some_and(|m| m.contains("air-29a"))
-        && bypass
-            .as_ref()
-            .err()
-            .is_some_and(|m| m.contains("cargo run -p air -- land"))
-        // Fails closed: an unknown location is not a coordinator.
-        && may_land(&nowhere).is_err();
-    // The coordinator's ordinary run, and only from the main checkout.
-    let green = may_land(&at("main", "main")).is_ok()
-        // Standing in main while --repo names a worktree is still the coordinator: the role
-        // is where you are, in both directions.
-        && may_land(&at("main", "alpha")).is_ok();
+    let red = may_land("worker").is_err()
+        && may_close("worker").is_err()
+        && may_land(role_from(Some("lane-typo"))).is_err();
+    let green = may_land(role_from(Some("coordinator"))).is_ok()
+        && may_land(role_from(None)).is_ok()
+        && may_close(role_from(None)).is_ok();
     Probe {
-        name: "land: the role is where the process is, so --repo at the main checkout does not make a worker the coordinator",
+        name: "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
         red_fires: red,
         green_passes: green,
     }
@@ -6100,7 +6072,7 @@ fn probe_a_message_is_recorded_with_its_content() -> Probe {
     .ok();
     let first = input
         .as_ref()
-        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+        .is_some_and(|i| record_message(&ledger, "alpha", "worker", i).is_ok());
     let after_one = ledger.messages().unwrap_or_default();
     let red_fires = session_row
         && first
@@ -6110,7 +6082,7 @@ fn probe_a_message_is_recorded_with_its_content() -> Probe {
             && m.session_id == "s-msg");
     let second = input
         .as_ref()
-        .is_some_and(|i| record_message(&ledger, "alpha", i).is_ok());
+        .is_some_and(|i| record_message(&ledger, "alpha", "worker", i).is_ok());
     let after_two = ledger.messages().unwrap_or_default();
     let green_passes = second
         && after_two.len() == 2
@@ -7925,9 +7897,11 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
             if let (Some(t), Some(obj)) = (tool, input.as_object_mut()) {
                 obj.insert("tool_name".into(), serde_json::Value::String(t.to_string()));
             }
-            // Pinned identity (air-dws): a worker's worktree, no inherited role.
+            // Pinned identity (air-dws): launched as a worker. The role is the launcher's,
+            // never the worktree's (owner, 2026-09-14).
             let mut child = air_command(&exe, &wt)
                 .arg("hook")
+                .env("AIR_ROLE", "worker")
                 .env("AIR_BD_BIN", &script)
                 // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
                 // a shell stub inside it. At load 186 that budget becomes the thing under
@@ -9066,8 +9040,8 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
         std::fs::create_dir_all(wt.join("src")).map_err(|e| e.to_string())?;
 
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        // (exit code, stderr) of one PreToolUse Edit from `cwd` at `path`.
-        let edit = |cwd: &Path, path: &Path| -> Result<(i32, String), String> {
+        // (exit code, stderr) of one PreToolUse Edit from `cwd` at `path`, as `role`.
+        let edit = |cwd: &Path, path: &Path, role: &str| -> Result<(i32, String), String> {
             use std::io::Write;
             let input = serde_json::json!({
                 "hook_event_name": "PreToolUse",
@@ -9078,6 +9052,7 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
             });
             let mut child = air_command(&exe, cwd)
                 .arg("hook")
+                .env("AIR_ROLE", role)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -9096,15 +9071,17 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
         };
 
         let outside = dir.join("src").join("a.rs");
-        let (out_code, out_err) = edit(&wt, &outside)?;
-        let (in_code, _) = edit(&wt, &wt.join("src").join("a.rs"))?;
+        let (out_code, out_err) = edit(&wt, &outside, "worker")?;
+        let (in_code, _) = edit(&wt, &wt.join("src").join("a.rs"), "worker")?;
         // The gap the harness's isolation did close: a hand-written climb out of the worktree.
         let (climb_code, _) = edit(
             &wt,
             &wt.join("..").join("..").join("..").join("src").join("a.rs"),
+            "worker",
         )?;
-        // The coordinator, in the main checkout, editing the same file the worker was refused.
-        let (main_code, _) = edit(&dir, &outside)?;
+        // The coordinator editing the same file the worker was refused, from inside the worker's
+        // worktree: the role decides, not the directory.
+        let (main_code, _) = edit(&wt, &outside, "coordinator")?;
         let _ = std::fs::remove_dir_all(&dir);
 
         let named = out_err.contains(&outside.display().to_string())
@@ -9117,7 +9094,7 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
     .unwrap_or_else(blocked);
 
     Probe {
-        name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator in main is never fenced",
+        name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator is never fenced, wherever it runs",
         red_fires: res.0,
         green_passes: res.1,
     }
@@ -9127,7 +9104,7 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
 ///
 /// The owner asked whether making the planning rule programmatic is "what metis does
 /// basically". It is not: Metis enforces forward-only phases on its own documents and does not
-/// enforce that anyone plans in it (`docs/research/metis-deep-dive.md` §4-5). The harness has
+/// enforce that anyone plans in it (`docs/research/evidence.md`). The harness has
 /// no per-ROLE MCP configuration either — a `.mcp.json` in the repo reaches every session,
 /// workers included — so the attach is Air's, per role, per launch.
 ///
@@ -9638,7 +9615,7 @@ fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
 /// renders it as "not ready yet", exactly like ordinary queueing.
 ///
 /// **bd does not prevent this**, measured 2026-09-06 against 1.2.2, the pinned version
-/// (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`). Its guard is two rules and
+/// (`docs/research/beads.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules and
 /// neither is an ancestor walk: an existing `parent-child` row on the same pair, which always
 /// catches the DIRECT parent, and a dotted-id prefix test, which catches deeper ancestors only
 /// when the id encodes the chain. `bd create --graph` assigns flat ids and links by
@@ -10259,10 +10236,6 @@ fn probe_docs_name_real_flags_and_kinds() -> Probe {
         (
             "docs/rules/worktree-protocol.md",
             include_str!("../../../../docs/rules/worktree-protocol.md"),
-        ),
-        (
-            "docs/rules/writing.md",
-            include_str!("../../../../docs/rules/writing.md"),
         ),
     ];
     let live: Vec<String> = docs

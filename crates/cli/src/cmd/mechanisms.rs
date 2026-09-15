@@ -139,7 +139,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "refusal",
         what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
         added: "2026-08-18 (plan 0001)",
-        source: "docs/plans/0001-first-slice.md:143",
+        source: "docs/design.md §6.2 (plan 0001 §5 at the time)",
         // `hook.handover` and `hook.stop` are the first slice's names for the same advisory
         // gate (2026-08-18), kept as entry points so days recorded then still attribute
         // (air-8br).

@@ -66,10 +66,10 @@ repo-versus-binary correction in the round log.
 
 ## Provenance
 
-Owner, 2026-08-29, plan [`0008`](../../../docs/plans/0008-consolidated-changes.md) item 25, the
+Owner, 2026-08-29, plan [`0008`](../../../docs/decisions.md) item 25, the
 one item asked for ahead of the rest. Incidents: air-21c and air-ha8 (2026-08-22);
-[`0007-surface-audit.md`](../../../docs/plans/0007-surface-audit.md) §11; the six-error list in
-`docs/notes/rounds/2026-08-22-air/2026-08-22-round-log.md`. The binary-versus-repo rule and the
+[`0007-surface-audit.md`](../../../docs/design.md) §11; the six-error list in
+`docs/journal/round-2026-08-22.md`. The binary-versus-repo rule and the
 seen-failing standard are the adopter's, adopted over ours by owner ruling (`docs/decisions.md`,
 "the post-audit rulings"); the adopter found the fence instance by running `strings $(which air)`
 on our behalf.

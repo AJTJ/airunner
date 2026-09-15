@@ -108,7 +108,7 @@ A `Makefile` with no `verify` target is reported and still not edited.
 Everything else Air leaves to you on purpose: how the verify is scoped, how code is reviewed,
 which commands are too dangerous for an agent, whether landing is `air land` or your own script.
 The first adopter keeps several thousand lines of that around Air, and none of it is Air's to
-own. `docs/notes/2026-09-06-what-a-repo-provides.md` is the audit, item by item.
+own. `docs/design.md` §4 lists what Air ships, and §6b what is left to the repo.
 
 ## Your project and Air
 
@@ -127,7 +127,7 @@ Early, and honest about it. In use on two repositories, this one included. The s
 between releases and `air install` tells an already-installed repository what changed.
 
 - Decisions, dated: [`docs/decisions.md`](docs/decisions.md)
-- What is next: [`docs/plans/0005-roadmap.md`](docs/plans/0005-roadmap.md)
+- What is next: [`docs/plans/0009-fleet-system-design.md`](docs/plans/0009-fleet-system-design.md)
 - What agents are told: [`docs/rules/roles.md`](docs/rules/roles.md)
 - The evidence behind the design: [`docs/research/`](docs/research/)
 

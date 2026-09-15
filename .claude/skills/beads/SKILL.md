@@ -16,7 +16,7 @@ In Air, `bd` is the coordination layer for atomic tasks. Air reads bd only via `
 and writes only through `bd`; `air claim` / `air release` wrap `bd update --claim` (with CAS
 and `--actor`) and mirror the claim in Air's ledger. Where an `air` command exists for a step,
 use it; where it does not yet, use `bd` directly as described here.
-(`docs/plans/0001-first-slice.md §2` row 3, `§7`.)
+(`docs/design.md` row 3, `§7`.)
 
 ## Version trap: bd 1.2.1 is an accidental release
 
@@ -33,7 +33,7 @@ Consequences for agents:
 - Do not upgrade or downgrade `bd` on your own. `bd` is pinned; changing it is an owner
   decision.
 - Full findings, sources, and the CLI surface of 1.2.1:
-  `docs/research/beads-and-gastown.md §0` (item 2), `§1.7`, `§1.8`.
+  `docs/research/beads.md` (item 2), `§1.7`, `§1.8`.
 
 ## First step
 
@@ -155,7 +155,7 @@ epic-plus-dependency-graph workflow.
 
 Built-in: `open`, `in_progress`, `blocked`, `deferred`, `closed`, `pinned`, `hooked`. Repos
 may configure custom statuses; the one Air relies on is `awaiting_review` (the hand-over
-state; `docs/plans/0001-first-slice.md §4`).
+state; `docs/design.md`).
 
 - There is no `done` or `completed` status. Finish work with `bd close <id>`, never
   `bd update --status closed` or `--status done`.
@@ -264,7 +264,7 @@ measured on a live fleet.
   missing.
 - Do not auto-close or mutate beads unless the work is actually complete.
 - Every hand-over (`awaiting_review` or close) needs recorded green at HEAD and main merged;
-  Air's one refusal (`docs/plans/0001-first-slice.md §4`).
+  Air's one refusal (`docs/design.md`).
 
 ## Provenance
 
@@ -277,7 +277,7 @@ measured on a live fleet.
   `another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
   The adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (the adopter `f2ca891`, not copied
   into this repo) for the Known traps section; version-trap facts from
-  `docs/research/beads-and-gastown.md §0, §1.7, §1.8`. Read for context, not copied:
+  `docs/research/beads.md`. Read for context, not copied:
   `beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
   `beads/docs/integrations/claude-code.md`.
 - Ported 2026-08-18.
