@@ -56,28 +56,18 @@ pub fn resolve_reason(reason: Option<&str>, file: Option<&Path>) -> Result<Strin
 }
 
 /// Who may run `air close`. Pure, so `air selftest` can prove the refusal fires.
-/// air-29a: the same guard as `land::may_land`, with the same input, so it had the same hole.
-/// `worker` here is now the caller's actual location (`land::where_i_am`), never
-/// `worker_name_for(--repo)`. Fixed alongside air-29a rather than filed after it: it is one
-/// line of the identical defect, and leaving it would mean the finding was fixed in one of the
-/// two places a reader would look.
-pub fn may_close(worker: Option<&str>) -> Result<(), String> {
-    let Some(worker) = worker else {
-        return Err(
-            "refused: `air close` cannot tell which checkout it is running in, and the role \
-             decides who may close a landing pass (fix: run it from the main checkout)."
-                .to_string(),
-        );
-    };
-    if super::hook::role_for(worker) == "coordinator" {
+/// Who may run `air close`: anyone but a worker, by the launcher's `AIR_ROLE`, the same rule as
+/// `land::may_land` (air-29a).
+pub fn may_close(role: &str) -> Result<(), String> {
+    if role != "worker" {
         return Ok(());
     }
-    Err(format!(
-        "refused: `air close` is the coordinator's landing pass, and {worker} is a worker. \
-         Close your own bead with proof instead: `air handover` names anything missing, then \
-         `bd close <id> --reason \"<proof>\"` (owner ruling, 2026-08-22). The role comes from \
-         where this process runs, so `--repo` does not change it (air-29a)."
-    ))
+    Err(
+        "refused: `air close` is the coordinator's landing pass, not a worker's. Close your own \
+         bead with proof instead: `air handover` names anything missing, then \
+         `bd close <id> --reason \"<proof>\"` (owner ruling, 2026-08-22)."
+            .to_string(),
+    )
 }
 
 pub fn run(
@@ -114,13 +104,13 @@ pub fn run(
             return 1;
         }
     };
-    // air-29a: the role is where this process is, not what `--repo` says.
-    let here = super::land::where_i_am();
-    let inputs = serde_json::json!({"beads": beads, "reason": reason, "caller": here, "repo_worker": worker});
-    if let Err(msg) = may_close(here.as_deref()) {
+    let role = super::caller_role();
+    let inputs =
+        serde_json::json!({"beads": beads, "reason": reason, "role": role, "repo_worker": worker});
+    if let Err(msg) = may_close(role) {
         log_event(
             &ledger,
-            here.as_deref().unwrap_or("unknown"),
+            &worker,
             "close",
             &inputs,
             "refuse",

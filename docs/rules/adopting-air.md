@@ -75,7 +75,7 @@ and removed the same day; do not reintroduce it.
 - Deny the verb, not the tool (`Bash(eas build *)`, not `Bash(eas *)`), and match command
   tokens, never substrings: a prose guard denied an edit because a note contained the word.
 - Do not set `assignee` on an open bead: in bd 1.2.x it blocks every other worker's claim.
-- One label for "awaiting the owner": `human`. `air claim` refuses it to workers. Drop `owner`.
+- One label for "awaiting the owner": `owner` (ruled 2026-08-22; `human` was the earlier name, migration in §5b). `air claim` refuses it to workers.
 - Workers request beads (including friction beads) with `air capture`; they never `bd create`.
   The round's captures deduplicated 11 → 5 beads.
 - Cut beads so no shared doc is touched by two at once; that was the only real overlap shape.
@@ -210,7 +210,7 @@ Three consequences for a repo adopting Air:
    it; `BASH_MAX_TIMEOUT_MS` raises it (the adopter sets 900000, 15 minutes). A verify killed at
    the cap is not a red, it is nothing: the run leaves no green, the worker cannot close, and
    the reason does not appear in Air's record because Air never saw the process end.
-   The adopter's verify lane hit exactly this on 2026-09-06 — a batch verify of 1622 s against a
+   The adopter's verification lane hit exactly this on 2026-09-06 — a batch verify of 1622 s against a
    900 s cap. Take the repo's longest recent verify from `air record`'s durations, double it,
    and set the cap there; if that is beyond what the harness will allow, the lane runs
    `air record verify` detached and reads the result back rather than waiting on it. This is
@@ -799,7 +799,7 @@ want back. Nothing here needs an uninstall path.
 
 `air coordinator` in the main terminal. `air worker <name>` per worktree terminal (re-enters an
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
-`air record verify -- <cmd>` → `air handover` → `bd update -s awaiting_review`. Coordinator:
+`air record verify -- <cmd>` (or wait for the lane's green) → `bd close <id> --reason-file <proof>`, which the gate refuses without a recorded green at a commit containing `main`. Coordinator:
 reads `air status`, acts on channel events, triages every `air inbox` capture into a bead
 (labelled `owner` when the decision is the owner's), and lands by whatever path this repo lands by — its own `make land`, or
 `air land <bead>` / `air land --all` where there is none (air-3pz, air-97z). Upgrading a repo

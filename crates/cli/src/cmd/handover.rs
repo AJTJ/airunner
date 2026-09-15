@@ -308,7 +308,7 @@ pub fn declared_bead(text: &str) -> Option<String> {
 /// The old rule (a `*<worker>*.md` newer than the claim) survives only for files written
 /// before [`FRONTMATTER_SINCE`]. It let a digest for a DIFFERENT bead satisfy the gate, and
 /// let `touch` on any old one do the same; it guards, so it failed toward permitting, and
-/// nothing proved it had fired (air-agq, and `docs/research/prose-parsing-survey.md` §3).
+/// nothing proved it had fired (air-agq, and `.claude/skills/anti-brittleness/references/prose-parsing-survey.md`).
 /// What the directory holds for these beads (air-ahl): nothing, a file git does not track, or
 /// a tracked one. Three states because the fixes are three different sentences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

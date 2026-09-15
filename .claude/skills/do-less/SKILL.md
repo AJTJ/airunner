@@ -146,8 +146,8 @@ holds the one refusal.
 
 Owner rule 2026-08-21 (`CLAUDE.md` Rules, "Do less"); Gas Town cautionary note
 (`docs/decisions.md` 2026-08-18); corpus principle "no LLM middle-manager"
-(`docs/research/SYNTHESIS.md` §0.6); research commissioned the same day
-(`docs/research/guardrails-as-throttles.md`, when written). The raw-record check under
+(`docs/research/evidence.md`); research commissioned the same day
+(`docs/research/evidence.md`, when written). The raw-record check under
 "Reviewing what exists" is air-21c (owner, 2026-08-22), from two cases in one round; removed
 when `air audit` derives nothing and every number it prints is a direct count of recorded
 events, at which point there is nothing to check against.

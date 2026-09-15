@@ -52,6 +52,24 @@ pub fn open(repo: &Path) -> Result<(Ledger, String), String> {
     Ok((ledger, worker))
 }
 
+/// The role this process runs as, from `AIR_ROLE`, which only the launchers set.
+///
+/// Permissions never come from the directory a command runs in: any role can work in a
+/// worktree, and `--repo` is an argument the caller writes. No `AIR_ROLE` means a shell Air did
+/// not start, which is the owner, who may do anything. A value Air does not know is a worker.
+pub fn caller_role() -> &'static str {
+    role_from(std::env::var("AIR_ROLE").ok().as_deref())
+}
+
+/// `caller_role` over a given value, so tests do not depend on the environment they run in.
+pub fn role_from(value: Option<&str>) -> &'static str {
+    match value {
+        None | Some("") => "owner",
+        Some("coordinator") => "coordinator",
+        _ => "worker",
+    }
+}
+
 /// Print a value as JSON or as its text form.
 pub fn emit<T: serde::Serialize>(json: bool, value: &T, text: impl FnOnce() -> String) {
     if json {

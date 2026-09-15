@@ -437,7 +437,7 @@ pub struct AncestorDeadlock {
 /// not one of them a P1.
 ///
 /// bd 1.2.2 does NOT prevent this in general, measured 2026-09-06
-/// (`docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md`). Its guard is two rules, neither
+/// (`docs/research/beads.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules, neither
 /// an ancestor walk: an existing `parent-child` row on the same pair, which always catches the
 /// direct parent; and a dotted-id prefix test, which catches deeper ancestors only when the id
 /// encodes the chain. `bd create --graph` assigns flat ids and links by `parent_key`, so a wave
@@ -1758,6 +1758,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                 ..Default::default()
             });
             if v.session.is_none() {
+                v.role = role.clone();
                 v.session = Some(sess);
             }
         }

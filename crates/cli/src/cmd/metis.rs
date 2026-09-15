@@ -9,7 +9,7 @@
 //!
 //! **No, that is not what Metis does.** Metis enforces forward-only phases on its own
 //! documents; it does not enforce that anyone plans in it
-//! (`docs/research/metis-deep-dive.md` §4-5). So the programmatic half has to be Air's, and it
+//! (`docs/research/evidence.md`). So the programmatic half has to be Air's, and it
 //! is exactly two things: attach it to the coordinator's session, and count what is filed
 //! without it.
 //!
@@ -17,7 +17,7 @@
 //! already exist (colliery-io/metis, Apache-2.0): `plugins/metis/.mcp.json` declares
 //! `{"command": "metis", "args": ["mcp"]}` and `plugins/metis/` is a plugin directory with its
 //! own `.claude-plugin/`. The harness carries `--mcp-config` and `--plugin-dir`
-//! (`docs/research/claude-code-control-surfaces.md` §0, first-hand inventory 2026-08-24, v2.
+//! (`docs/research/harness-facts.md`
 //! 1.241), but no per-ROLE configuration: a `.mcp.json` in the repo reaches every session,
 //! including the workers, and nothing in the field attaches a server to one role. That gap is
 //! what this fills, and nothing more is built.

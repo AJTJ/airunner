@@ -1,4 +1,4 @@
-//! Schema for the ledger. Tables map 1:1 to docs/plans/0001-first-slice.md §2 (columns from
+//! Schema for the ledger. Tables map 1:1 to docs/design.md (columns from
 //! the measurement spec, tick 0430). Forward-only migrations keyed by `user_version`.
 
 use rusqlite::Connection;

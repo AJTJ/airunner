@@ -19,7 +19,7 @@ toolchain with `rustfmt` on `PATH`.
 
 **Provenance.** Copied verbatim from
 `~/projects/another-project/.claude/settings.json` (another-project),
-2026-08-18; identified in a private skills inventory as the most directly relevant
+2026-08-18; identified in `.claude/skills/PROVENANCE.md` as the most directly relevant
 hook config found across the source repos.
 
 ## Deliberately not ported (yet)

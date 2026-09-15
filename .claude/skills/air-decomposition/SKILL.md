@@ -11,7 +11,7 @@ Breaking a feature into epics and an epic into claimable beads, then cutting per
 from the result. The reasoning is Metis's (`decomposition` skill, Flight Levels as Kanban) plus
 the agile sources it draws on; the vocabulary, the checks, and the `bd` commands are Air's.
 Where the text says "epic" or "bead", Metis says "initiative" or "task". Research and sources:
-`docs/research/metis-decomposition-and-agile.md`.
+`docs/research/evidence.md`.
 
 ## Vocabulary map (Metis → Air)
 
@@ -256,7 +256,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 ## Additional resources
 
 - `references/decomposition-patterns.md`: Metis's pattern catalog (verbatim, vocabulary note on top).
-- `docs/research/metis-decomposition-and-agile.md`: sources for every rule above, the agile
+- `docs/research/evidence.md`: sources for every rule above, the agile
   mapping, the adopter's evidence, and the dialectic on ceremony.
 - `phase-transitions` for when an epic or bead may move; `scoping-workstreams` for the
   read → explore → design → plan → file → graph → self-check loop; `beads` for `bd` quoting and traps.
@@ -270,7 +270,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 - Ported 2026-08-18; extended 2026-08-20.
 - Adaptations (v1.0.0): Metis vocabulary (Vision/Initiative/Task; initiative phases
   discovery→design→ready→decompose→active→completed) remapped to Air's (feature/epic/bead; epic
-  path with the triage commitment point; bead step machine from `docs/research/SYNTHESIS.md §4.2`),
+  path with the triage commitment point; bead step machine from `docs/research/evidence.md`),
   with a vocabulary map marking what is Metis's and what is Air's; "Air addition" paragraphs for
   the triage commitment point, `bd dep` edges, acceptance lines, and a "Doing it in bd" section;
   the reference file copied verbatim with a four-line note prepended.
@@ -280,7 +280,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
   Metis's feature-creep rule), Air's sizing unit with the adopter's floor and `--estimate`,
   per-worker queue cutting per `docs/decisions.md` 2026-08-20, and the adopter's evidence lines
   (file:line). Metis reasoning kept and labelled. Full sources and access dates:
-  `docs/research/metis-decomposition-and-agile.md §13`.
+  `docs/research/evidence.md`.
 - Citations of the form `task-specification-research.md:<lines>` are into this repo's copy at
   `private/research/adopter-notes/notes/task-specification-research.md`, not into
   The adopter's tree: the adopter's copy pinned here at `f2ca891` (`private/research/adopter-notes/PROVENANCE.md`). The adopter is consolidating `docs/notes/` and the original will be
