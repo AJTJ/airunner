@@ -13,7 +13,7 @@ Result on 2026-08-29 over this repo's ledger (74 greens, 8 recorded days):
     65 pairs, 8 docs-only, 55 with code changed, 2 with no diff.
 At a 22 s mean green verify that is about 3 minutes saved across the whole history, against a
 change that makes the one refusal fail toward PERMITTING on a per-repo path list. See
-docs/digests/2026-08-29-gate-air-0j4.md.
+docs/digests/2026-08-29-gate-air-0j4.md at c80db73 (digests deleted 2026-09-25).
 
 IGNORE_* below is deliberately generous: this measures the CEILING of what a carry-forward
 could ever save, so a narrow list would understate the case against building it too.

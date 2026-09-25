@@ -72,17 +72,14 @@ bd list --status=in_progress --json
 bd show <id> --json
 ```
 
-3. Claim atomically (Air: `air claim <id>`; wraps the same call with CAS and actor):
+3. Claim with `air claim <id>` (raw `bd update --claim` is denied to workers; roles.md).
 
-```bash
-bd update <id> --claim
-```
-
-4. File discovered follow-up work as you go, always with a description and an acceptance line:
+4. Filing is the coordinator's (a worker captures; roles.md). File always with a description
+   and an acceptance line:
 
 ```bash
 echo "Why this exists and what needs to be done" \
-  | bd create "Short title" --description=- --type=task --priority=2 \
+  | bd create "Short title" --validate --description=- --type=task --priority=2 \
       --acceptance "Observable condition that shows it is done" \
       --deps discovered-from:<parent-id>
 ```
@@ -93,10 +90,6 @@ echo "Why this exists and what needs to be done" \
 echo "make verify exit 0 at <sha>; acceptance met: <file:line or output>" \
   | bd close <id> --reason=-
 ```
-
-Parallelize independent work: after step 1, work out which ready beads touch different files
-with no shared state, and claim those in parallel. Do not process beads one at a time when they
-can run concurrently.
 
 ## Worktree pinning
 
@@ -148,21 +141,17 @@ its description, which `bd ready` cannot see or claim.
 - Epics hold the big picture; children hold executable work.
 - Prefer three small beads over one medium bead; small beads parallelize across agents.
 
-See the `decomposition` skill for how to cut an epic, and `scoping-workstreams` for the
-epic-plus-dependency-graph workflow.
+See the `decomposition` skill for how to cut an epic.
 
 ## Statuses
 
 Built-in: `open`, `in_progress`, `blocked`, `deferred`, `closed`, `pinned`, `hooked`. Repos
-may configure custom statuses; the one Air relies on is `awaiting_review` (the hand-over
-state; `docs/design.md`).
+may configure custom statuses; Air relies on none.
 
 - There is no `done` or `completed` status. Finish work with `bd close <id>`, never
   `bd update --status closed` or `--status done`.
 - There is no `--resolution` flag on `bd update`. Close reasons go through `bd close --reason`.
-- `awaiting_review` is not closed. Bead state is shared across worktrees instantly; code is
-  not. Closing an unmerged branch tells the other agents something exists when it does not.
-- Release a claim you cannot progress (`bd update <id> --status open`). A stuck claimed bead is
+- Release a claim you cannot progress (`air release <id> --reason <why>`). A stuck claimed bead is
   worse than an unclaimed one: `bd ready` withholds it from everyone.
 - Use `bd set-state` for orthogonal state (for example `review=pending`) instead of overloading
   the main status.
@@ -244,12 +233,12 @@ measured on a live fleet.
   for broken-now. (`CLAUDE.md:875-876`)
 - **Label `owner` at filing, not when someone hits the wall.** If the acceptance requires a new
   dependency, a deploy, a hosted write, a native rebuild, a device, or a ruling only the owner
-  can make, label it `owner` (plus `human`) before moving on. An unlabelled `owner` bead at the
+  can make, label it `owner` before moving on. An unlabelled `owner` bead at the
   top of the queue costs a whole session. `runtime` means it needs a port, a device, or Docker.
   (`CLAUDE.md:880-905`)
-- **`bd human <id>`** flags something for the owner's decision. Use it when the design and the
-  code disagree or acceptance is unclear, then take other work. Never decide alone.
-  (`CLAUDE.md:910-911`)
+- **Flag an owner decision, do not make it.** When the design and the code disagree or
+  acceptance is unclear, say so (`air capture`, roles.md), then take other work. Never decide
+  alone. (`CLAUDE.md:910-911`)
 - **Verify a bead's citations before you work it.** Open the `file:line` it names and confirm
   the described code is still there. If the citation is stale, close the bead with that finding
   instead of doing the work. Checking takes a minute; re-fixing something that already works
@@ -257,8 +246,8 @@ measured on a live fleet.
 - **If it is done, close it; finding that out is the work.** A bead whose acceptance is already
   met and stays open gets claimed again and re-derived. Close in the same breath as the finding,
   with the evidence in `--reason`. Only the acceptance decides, never whose branch landed it.
-  If acceptance is unclear, `bd human`, do not close on a guess. (`CLAUDE.md:918-934`)
-- **A decision bead closes when its work moves on.** A `human`/`owner` bead whose acceptance
+  If acceptance is unclear, capture it; do not close on a guess. (`CLAUDE.md:918-934`)
+- **A decision bead closes when its work moves on.** An `owner` bead whose acceptance
   spans ruling and implementation can never close if read literally. The test is what the bead
   still represents: a recorded decision, or work that lives in a successor, is nothing; close it
   naming the successor. File the successor before you close, and only when work actually carries
@@ -272,8 +261,6 @@ measured on a live fleet.
 - If hooks are installed, `bd prime` may already be injected. Run it manually when context is
   missing.
 - Do not auto-close or mutate beads unless the work is actually complete.
-- Every hand-over (`awaiting_review` or close) needs recorded green at HEAD and main merged;
-  Air's one refusal (`docs/design.md`).
 
 ## Provenance
 

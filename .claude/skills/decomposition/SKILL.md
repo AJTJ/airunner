@@ -297,8 +297,7 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   https://www.jpattonassociates.com/wp-content/uploads/2015/03/story_mapping.pdf); "the
   Developers who will be doing the work are responsible for the sizing" (Scrum Guide 2020,
   https://scrumguides.org/scrum-guide.html). Metis paths are at metis `6745810`.
-- `phase-transitions` for when an epic or bead may move; `scoping-workstreams` for the
-  read → explore → design → plan → file → graph → self-check loop; `beads` for `bd` quoting and traps.
+- `phase-transitions` for when an epic or bead may move; `beads` for `bd` quoting and traps.
 
 ## Provenance
 
