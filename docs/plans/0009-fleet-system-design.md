@@ -293,8 +293,16 @@ their checkout; they run air 0.2.19). Each rule falls into one of four places.
   not write. A check whose negative has two meanings is not a gate. These are rules for Air's
   own code (the `anti-brittleness` skill), not role text.
 
+**Into Air, from the adopter's lease guard** (2026-09-25): which command needs which lease.
+`air lease` held the store and not the rule, so the adopter's ~1,500-line guard (a PreToolUse
+hook, a rule engine, a lease script) decided it and, before 2026-08-29, read a second store.
+Its core is now `"leases"` in `.claude/air.json` (deny-rule patterns), a refusal in Air's
+PreToolUse hook for a worker without the lease, and `air lease needs "<cmd>"` for its
+`--explain`. What stays theirs: the patterns, and the guard's other rules (publishing, pattern
+kills, ambiguous simulator ids), most of which are deny-list material.
+
 **Stays the repo's**: worktree setup (keys, env files, per-worktree databases), the `runtime`
-lease's resources, build concurrency limits, the test-state reset before each cut (D4), the
+lease's resources (now declared as patterns), build concurrency limits, the test-state reset before each cut (D4), the
 precheck command itself, and regenerated caches taken wholesale on conflict.
 
 **Superseded by this design**: "stash, never commit, when `air land` refuses a dirty tree" (the

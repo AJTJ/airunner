@@ -1330,6 +1330,94 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// Plan 0009 §11, end to end: `"leases"` in `.claude/air.json` makes Air's PreToolUse hook
+/// refuse a declared command from a worker that does not hold the lease — the core of an
+/// adopter's own ~1,500-line guard, which read a second lock store. No config, the owner, an
+/// unmatched command and a held lease are all allowed; unenforced, the refusal is advice.
+#[test]
+fn a_declared_command_needs_its_lease() {
+    use std::io::Write;
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    // (exit code, stdout + stderr) for one PreToolUse(Bash) from alpha's worktree.
+    let hook = |cmd: &str, role: Option<&str>, enforce: bool| -> (i32, String) {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_air"));
+        c.arg("--repo")
+            .arg(&alpha)
+            .arg("hook")
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &main)
+            .env("BEADS_ACTOR", "alpha")
+            .env("AIR_ENFORCE", if enforce { "1" } else { "0" })
+            .env_remove("AIR_ROLE")
+            .current_dir(&alpha)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(r) = role {
+            c.env("AIR_ROLE", r);
+        }
+        let mut child = c.spawn().unwrap();
+        let body = serde_json::json!({
+            "session_id": "s-lease", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": cmd}, "cwd": alpha.to_string_lossy(),
+        });
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(body.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    // No `leases` key: nothing needs a lease.
+    assert_eq!(hook("make api", Some("worker"), true).0, 0);
+
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "leases": {"runtime": ["make api*", "adb *"]}}"#,
+    )
+    .unwrap();
+    let (code, out) = hook("cd app && make api", Some("worker"), true);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("runtime") && out.contains("air lease take runtime"),
+        "{out}"
+    );
+    let (code, out) = hook("adb shell", Some("worker"), false);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("air lease take runtime"), "advisory: {out}");
+    assert_eq!(
+        hook("make api", None, true).0,
+        0,
+        "the owner is never asked"
+    );
+    assert_eq!(hook("make test", Some("worker"), true).0, 0);
+    let (_, needs, _) = air(&alpha, &bd, &["lease", "needs", "make api"]);
+    assert!(needs.contains("needs runtime"), "{needs}");
+
+    // A live holder: this test process stands in for the session's `claude`.
+    let pid = std::process::id().to_string();
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["lease", "take", "runtime", "--reason", "api"],
+        &[("AIR_LEASE_PID", pid.as_str())],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out) = hook("make api", Some("worker"), true);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("air:"), "held is silent: {out}");
+}
+
 /// Plan 0009 §11, end to end: a worker with no claim stopping while a task is ready is nudged
 /// to claim it; the same worker named as `verify_lane` in `.claude/air.json` is not, because
 /// the lane claims no bead. An adopter recorded the Stop hook offering its lane ready beads.

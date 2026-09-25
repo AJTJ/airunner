@@ -143,7 +143,7 @@ Any session may run these.
 | air release | Returns a bead in progress to open. It never reopens a closed bead. The coordinator can release a claim held by a worker that has gone. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
-| air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. |
+| air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, verifications running, and whether the install is out of date. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
@@ -218,7 +218,7 @@ Every hook call, including the silent ones, writes one event line.
 | .air/installed.json | The version and notices this repository has been installed with. |
 | .air/ready.json | A cached list of ready beads, used by the stop nudge. |
 | .air/tasks | A worker's first task, kept off the command line. |
-| .claude/air.json | The repository's config: extra deny patterns for each role, the verification lane's name, how greens are matched, where digests and journals live, and whether Metis is attached. |
+| .claude/air.json | The repository's config: extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, how greens are matched, where digests and journals live, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per worker. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
@@ -383,12 +383,14 @@ sequenceDiagram
     K-->>H: denied, names the path
   else command that closes a bead
     K->>L: run the gate
+  else command the repo declares as needing a lease
+    K->>L: is it held by this session
   else worker stops with no claim and beads are ready
     K->>L: confirm the ready beads
     K-->>H: name them, once
   end
   K->>L: one event line
-  K-->>H: allow, or refuse only for the gate or the fence
+  K-->>H: allow, or refuse only for the gate, the fence, or a lease
 ```
 
 The target is about a tenth of a second per call, so anything slow lives in the CLI instead. If
@@ -452,6 +454,7 @@ percentile. The SQLite lock waited at most 131 milliseconds with six writers.
 | Main moves only forward, onto a commit whose tree has a green. | air land. | A commit on main with no verification run. |
 | One worker holds a claim at a time. | The ledger check, then beads' atomic claim. | Two open claims for one bead. |
 | A worker's edits stay inside its worktree. | The fence in the hook. | A denied edit in the event stream. |
+| A worker runs a command the repo declares as needing a lease only while it holds that lease. | The lease gate in the hook, refusing for workers and advising the coordinator. | A lease-refuse or lease-would-refuse event. |
 | Permissions come from AIR_ROLE and never from the directory or the repository path. | Every role check reads the role from the environment. | A self-test probe going red. |
 | Workers cannot push, file beads, land, close, start sessions, or ask the owner a question directly. | Claude Code's deny list, backed by Air's role checks. | A permission denied event. |
 | Every command and hook call leaves one event line. | Each command's logging and the hook's fail-open path. | A hook event with no follow-up. |

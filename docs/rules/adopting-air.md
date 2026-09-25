@@ -205,6 +205,17 @@ Three consequences for a repo adopting Air:
    exact tree is green at <sha> by <worker>, but this repo keys green by commit)` when it
    does not.
 
+   `"leases"` is **opt-in**: which commands need which lease, in the same `Bash(...)` pattern
+   syntax as `worker_deny` (the wrapper is optional), e.g.
+   `"leases": {"runtime": ["make api*", "adb *", "docker compose up*"]}`. Matched as the
+   harness matches a deny rule: per `&&`/`;`/`|` segment, anchored at the command, leading
+   assignments and `timeout`/`nice`/`nohup` stripped; quoted text and heredoc bodies are data.
+   Air's PreToolUse hook then refuses a matching command from a worker that does not hold the
+   lease (under `AIR_ENFORCE=1`, which worker launches set), advises the coordinator, and never
+   asks the owner. `air lease needs "<command>"` says what a command needs and whether you hold
+   it. A repo with its own lease guard moves its patterns here and retires the guard's matching
+   half; running both only duplicates the refusal (plan 0009 §11).
+
 5. **Set the harness's Bash timeout above the repo's longest verify, or run verifies
    detached.** Claude Code's Bash tool defaults to a 10-minute cap and kills the command at
    it; `BASH_MAX_TIMEOUT_MS` raises it (the adopter sets 900000, 15 minutes). A verify killed at
