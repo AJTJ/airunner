@@ -196,11 +196,11 @@ is about to wipe; a lane that merges main forward and integrates on a throwaway 
 it. Which worker is the lane is `verify_lane` in `.claude/air.json`; the Stop hook offers
 it no ready beads (plan 0009 §11). **[fact]**
 
-**The lane's loop.** Read `air status` (`batch-ready:`, or `--json` `batch_ready`); merge
-`main` and every batch-ready branch at the sha listed, never a sha from a message; run the
-repo's test-state reset if it names one; `air record verify -- <verify command>`; report to the
-coordinator and each member. A branch that conflicts, with main or another member, is dropped
-and named to its worker, never resolved by the lane. A red lands nothing.
+**The lane's loop.** `air batch cut` in your worktree merges `main` and every batch-ready branch
+at the sha `air status` lists, never a sha from a message, and drops and names one that conflicts
+with main or an earlier-ready member (`--dry-run` merges nothing). Then the repo's test-state
+reset if any; `air record verify -- <verify command>`; report to the coordinator and each member.
+A dropped branch is resolved by its worker, never by the lane. A red lands nothing.
 
 **What Air records.** A batch is a commit on the lane's branch that contains `main` and the
 member branches at the shas it merged. `air record verify -- <cmd>` at that commit records the
