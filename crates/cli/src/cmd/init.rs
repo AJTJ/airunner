@@ -610,7 +610,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     if !json {
         println!("{}", render(&plan));
         println!(
-            "next:\n  air selftest\n  air record verify -- <your verify command>   # the first proof\n  air coordinator                                # main checkout, channel attached\n  air worker <name> --tmux --task \"<a complete task>\""
+            "next:\n  air selftest\n  air record verify -- <your verify command>   # the first proof\n  air coordinator                                # own worktree and tmux session, channel attached\n  air worker <name> --tmux --task \"<a complete task>\""
         );
     } else {
         emit(true, &plan, String::new);
