@@ -15,7 +15,6 @@ the skill that uses them (`.claude/skills/*/references/`).
 | Record | Where |
 |---|---|
 | One file per session, appended as it goes; the three round logs | [`journal/`](journal/README.md) |
-| One digest per closed bead: what it did and its proof | [`digests/`](digests/) |
 
 Adopter material (names, paths, copied files, the corpus behind the failure catalogue) lives
 in `private/`, which is gitignored (air-bpj).
