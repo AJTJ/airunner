@@ -46,6 +46,9 @@ pub const MCP_TOOL: &str = "mcp-tool";
 /// Censored at the cap: Claude Code kills the hook, and a killed hook records nothing. See
 /// `air audit`'s unpaired-hook count for what that censoring hides.
 pub const HOOK: &str = "hook";
+/// The process listing behind `air status`'s `readers:` lines and `air land`'s main-checkout
+/// warning (`ps` plus `lsof -d cwd`, 4 s each).
+pub const TREE_READERS: &str = "tree-readers";
 
 /// Every budget name that can appear on an event line. `air audit` reports any name it reads
 /// that is not covered by its catalogue, the way it already reports an unregistered mechanism:
@@ -61,6 +64,7 @@ pub const NAMES: &[&str] = &[
     HOOK,
     MCP_TOOL,
     SQLITE_LOCK,
+    TREE_READERS,
 ];
 
 /// What one budget cost over one event's share of the process.

@@ -154,8 +154,8 @@ means Air already does it and the design keeps it; "this design" means §5 adds 
 | E3 settings replaced | existing | `env-on-the-process`, merged `--settings` |
 | E4 blocking prompt | existing | `AskUserQuestion` denied; stdin `/dev/null` on detached start |
 | E5 too many sessions | this design | five sessions, one verify at a time, stated in §7 |
-| E6 orphaned watchers | accepted | not seen in Air's fleet; the adopter's watchers are theirs |
-| E7 busy read as idle | this design | `air status` says "no run recorded" for a worker with no run, never "idle" |
+| E6 orphaned watchers | shown | `air status` prints `readers: <tree>: N (<exe> <age>, ...)` for every process that is not a session with its cwd in a fleet tree, so an eighteen-hour watcher is on the screen; killing it stays the owner's or the repo's (built 2026-09-25, owner, `cmd/readers.rs`) |
+| E7 busy read as idle | shown | the same listing: `idle-without-claim` is silent for a worker whose tree has a non-session process, as it already was for a recorded verify (air-t6ap); `air status` says "no run recorded", never "idle" (built 2026-09-25, owner) |
 | E8 cannot stop own process | accepted, harness | recorded; the classifier is the harness's |
 | E9 sessions indistinguishable | existing | `<project>-<name>` |
 | E10 rewriter changes a measurement | accepted, owner's tooling | recorded |
@@ -177,12 +177,13 @@ means Air already does it and the design keeps it; "this design" means §5 adds 
 | H3 sweeps only accidents catch | existing rule | CLAUDE.md round-end duty |
 | H4 record cannot say why | this design | D8 plus `red-run-output-kept` |
 
-Known gaps: E2 (respawn), E6/E8 (process hygiene
-inside a worktree), and the in-flight refusal's blind spot: `air land` sees only verifies
-recorded through `air record`, so a landing still moves files under an unrecorded program in the
-main checkout. With no session there this shrinks to programs run by hand; an adopter checks for
-them by process cwd before every landing (§11), which is repo tooling Air does not take on. Each
-is measured or ruled in §10 rather than left to be found.
+Known gaps: E2 (respawn) and E8 (a session cannot stop its own
+process). The in-flight refusal still sees only verifies recorded through `air record`, and it
+is unchanged; what it cannot see, `air land` now names before moving main: every process that is
+not a session with its cwd in the main checkout, by pid, as a warning and not a refusal. That is
+the adopter's process-cwd check from before every landing (§11), taken into Air on the owner's
+instruction of 2026-09-25 (`cmd/readers.rs`, mechanism `land-main-readers`). Each gap is
+measured or ruled in §10 rather than left to be found.
 
 ## 5. Mechanism table
 
@@ -316,7 +317,7 @@ fixed by air-avj, `handover-not-green` by air-zqmi, the nudge in §5, the in-fli
 **The adopter's restart note of 2026-09-07** (copy in the 2026-09-14 corpus) was reviewed the
 same day and deleted from their repo: its round state is eighteen days stale, and each of its
 five protocol changes is already here — wait-for-closes (air-9ij, §10), a process-level
-tree-readers check (§4 gap), the coordinator through the pipeline (§1), dry-merge before the
+tree-readers check (§4, built 2026-09-25), the coordinator through the pipeline (§1), dry-merge before the
 cut (§5, step 3), and the three-list announcement (C5). Its filing rule is §8's.
 
 **Not taken**: dispatch advice to the coordinator (judgement, and roles.md already says long
