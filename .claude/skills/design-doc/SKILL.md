@@ -10,7 +10,7 @@ metadata:
 A design doc describes a system as it is. It is the one document a new reader opens to learn
 what the parts are, how they talk, what they promise, and where the edges are. Everything
 else in `docs/` is a ruling (decisions), a rule shipped to adopters (rules), or a record of one
-session (journal, digests); proposals are lines in this doc's TODO section and technology
+session (journal); proposals are lines in this doc's TODO section and technology
 choices are rows in its technology-decisions section. None of those is a substitute for it.
 
 The shape is the ordinary industry one (a Google-style design doc, trimmed of the parts that

@@ -32,7 +32,7 @@ Index items are 1–3 lines; detail lives behind the link.
   captures and the round log, and are reviewed in one pass when there are no
   tasks left (owner, 2026-08-21).
 - **A human is always in the loop.** Core requirement, not a phase. Every agent session is a
-  terminal the owner can watch and type into (three workers, a verification lane, and the coordinator); Air's
+  terminal the owner can watch and type into (the workers and the coordinator); Air's
   launchers start interactive sessions, never headless ones, and nothing Air builds may take the
   owner out of the loop or hide what an agent is doing. Introspection into live state
   (`air status`, the event stream) is part of the same requirement.
@@ -92,10 +92,6 @@ Index items are 1–3 lines; detail lives behind the link.
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
-  **Being reachable is part of it**: the coordinator's context is the channel the owner and
-  every worker reach, so long reads, dry runs and analyses go to a background agent with a file
-  deliverable while the filing and the deciding stay with the coordinator (roles.md, Coordinator
-  section; owner, 2026-09-06, air-zth).
 - **A claim that crosses between projects is checked by the receiver before it is acted on.**
   Not hedged harder by the sender: a derived statement and an observed one have identical
   grammar, and the derivation leaves no trace in the sentence. Open the file, run the `--help`,
@@ -126,9 +122,9 @@ Index items are 1–3 lines; detail lives behind the link.
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
 | Decomposing a feature, sizing beads, epic and bead states | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
-| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` |
+| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads` |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
-| What a round left behind (session journals, round logs, per-bead digests; records, not reading) | [`docs/journal/`](docs/journal/), [`docs/digests/`](docs/digests/) |
+| What a round left behind (session journals and round logs; records, not reading) | [`docs/journal/`](docs/journal/) |
 
 ## Index — systems and subsystems
 
@@ -142,23 +138,12 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
 | `air mcp` | One stdio MCP server: the coordinator's channel (attention conditions pushed from a ledger poll) plus tools and resources that invoke the CLI with `--json`. |
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (or the main checkout for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
-| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a tracked digest. Never blocks a prompt or a WIP commit. |
-| Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, never woken by cron. `SendMessage` is the agent-to-agent channel and every message is recorded. |
+| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a tracked digest where `digest_dir` is set (this repo sets none). Never blocks a prompt or a WIP commit. |
+| Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## Essentials
 
-- **A session may act only on its own project. Talking to another one is fine.** Another
-  project's worktrees, tmux sessions and workers are never ours to kill, restart, re-model or
-  tidy; reading them and messaging them is encouraged, and the cross-project channel is how
-  three wrong claims were caught on 2026-08-22. `AIR_PROJECT` on both launchers records which
-  fleet a session belongs to, and `air --repo` outside this checkout is refused. The PreToolUse
-  denial of a `tmux` command naming another project's session (air-0lk, narrowed by air-3oq)
-  fired zero times ever and was deleted on 2026-08-29 (air-9u6), so on the tmux half this line
-  IS the rule rather than a description of a check. Other fleets run on this machine
-  (`the adopter's checkout`).
 - Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
-- Green means `make verify` (fmt, clippy, tests, `air selftest` on this tree's build); record it
-  with `air record verify -- make verify` (owner, 2026-08-22).
 
 ## This repo's work flow
 
@@ -166,13 +151,6 @@ The fleet protocol — both closing sequences, the lane's loop, landing, proof �
 lives in [`docs/rules/roles.md`](docs/rules/roles.md), shipped as `.air/roles.md` (owner,
 2026-09-25). What is this repo's own:
 
-- **Verify** is `make verify`, recorded as `air record verify -- make verify`. There is no
-  precheck and no test-state reset.
-- **The lane**, when one runs, is `verify_lane` in `.claude/air.json`; absent, no lane runs.
-- **Digests** go in `docs/digests/YYYY-MM-DD-<worker>-<bead>.md`, open with front matter
-  `---` / `bead: <id>` / `---`, and are committed (the gate reads the declared bead, air-agq,
-  and refuses an untracked file, air-ahl).
-- **Journals** go in `docs/journal/<session>.md` (`journal_dir`): a bug you hit, a wrong turn,
-  a claim you later found wrong. Not the digest, not a capture; nothing reads them (air-3xww).
-- **Proof counts** are quoted from the run you just did, never from a doc: a sentence here once
-  carried `27 probes` against a real 34 (air-jc0).
+- **Verify** is `make verify` (fmt, clippy, tests, `air selftest` on this tree's build),
+  recorded as `air record verify -- make verify` (owner, 2026-08-22). There is no precheck and
+  no test-state reset. This repo sets no `verify_lane` and no `digest_dir`.

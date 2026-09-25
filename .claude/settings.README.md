@@ -22,11 +22,15 @@ toolchain with `rustfmt` on `PATH`.
 2026-08-18; identified in `.claude/skills/PROVENANCE.md` as the most directly relevant
 hook config found across the source repos.
 
-## Deliberately not ported (yet)
+### Every other hook · `air hook`
 
-- **`SessionStart` / `PreCompact` → `bd prime`** (also in another-project' settings, and
-  `the adopter's .claude/settings.json` uses `bd prime --hook-json`). Air has no beads store in this
-  repo yet, so `bd prime` would fail or prime the wrong context. Re-add when `.beads/` exists.
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`,
+`SessionStart`, `SessionEnd`, `Stop` and `SubagentStop` each run `air hook`, which dispatches
+the event, fails open, and writes one event line per invocation (`CLAUDE.md`, systems index;
+`docs/design.md`). This repo is its own adopter, so these are what `air install` writes.
+
+## Deliberately not ported
+
+- **`SessionStart` / `PreCompact` → `bd prime`** (in another-project' settings, and an adopter's
+  uses `bd prime --hook-json`). Not wired; add it on a named pain.
 - **Any `permissions.allow` list.** None needed for the current work; add per named pain.
-- **Air's own hooks (`air hook …`).** Those belong to plan 0001 and will be wired here once the
-  binary exists; this file is not the place to prototype them.
