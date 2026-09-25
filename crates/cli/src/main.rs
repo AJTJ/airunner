@@ -316,7 +316,9 @@ enum Cmd {
         #[arg(last = true)]
         extra: Vec<String>,
     },
-    /// Start the interactive coordinator session in the main checkout with the Air channel attached.
+    /// Start the interactive coordinator session in its own worktree, `.claude/worktrees/coordinator`,
+    /// in the tmux session `<project>-coordinator`, with the Air channel attached. Run again, it
+    /// attaches to the session already running.
     Coordinator {
         /// Model to launch on (air-air); inherited when omitted.
         #[arg(long)]
