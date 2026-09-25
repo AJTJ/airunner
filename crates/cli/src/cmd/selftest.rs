@@ -175,6 +175,17 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jc2p.3. The anchor looks for the main checkout under a name no tree has, so the
+    // warning never finds a session there; the owner and worker cases stay silent as before.
+    (
+        "status: a launched session running in the main checkout is named once, with its pid; the owner's shell and a worker in its worktree are not",
+        Mutation {
+            file: "crates/cli/src/cmd/readers.rs",
+            from: "        .filter(|t| t.worker == \"main\")\n        .flat_map(|t| t.readers.iter().map(|x| x.pid))",
+            to: "        .filter(|t| t.worker == \"nomain\")\n        .flat_map(|t| t.readers.iter().map(|x| x.pid))",
+            also_red: &[],
+        },
+    ),
     // air-jc2p.1. The anchor puts the coordinator back under the claimed-bead rule, which is
     // exactly what kept its branch out of every batch; the nothing-ahead arm is untouched.
     (
@@ -2436,6 +2447,7 @@ fn all_probes() -> Vec<Probe> {
         probe_land_role_is_the_launchers(),
         probe_names_carry_role_and_project(),
         probe_coordinator_branch_is_batch_ready_without_a_bead(),
+        probe_status_warns_of_a_session_in_the_main_checkout(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
@@ -6705,6 +6717,57 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         name: "status: batch-ready is two facts (not landable on its own, a claimed bead named); a branch behind main stays listed, a landable one is absent with its reason",
         red_fires,
         green_passes,
+    }
+}
+
+/// air-jc2p.3: with every role in its own worktree (air-jc2p.1), a launched session whose
+/// process runs in the main checkout is the thing to see, because the main checkout is where a
+/// coordinator's prose commit invalidated four workers' landability at an adopter (2026-09-06).
+/// A measurement, not a refusal.
+///
+/// Red: a coordinator session whose `claude` process has its cwd in the main checkout gets one
+/// line naming it and its pid. Green: the owner's own shell there is exempt, a worker in its
+/// worktree is silent, and an unknown lookup says nothing here (the `readers:` line says it).
+fn probe_status_warns_of_a_session_in_the_main_checkout() -> Probe {
+    use crate::cmd::readers::{Reader, Tree, TreeReaders, main_checkout_sessions};
+
+    let reader = |pid: i64| Reader {
+        pid,
+        elapsed_secs: Some(60),
+        command: "claude".into(),
+        session: true,
+    };
+    let r = TreeReaders {
+        examined: 2,
+        trees: vec![
+            Tree {
+                worker: "main".into(),
+                path: "/r".into(),
+                readers: vec![reader(10)],
+            },
+            Tree {
+                worker: "worker-1".into(),
+                path: "/r/.claude/worktrees/worker-1".into(),
+                readers: vec![reader(20)],
+            },
+        ],
+        unknown: None,
+    };
+    let s = |w: &str, role: &str, pid: i64| (w.to_string(), role.to_string(), pid);
+    let red = main_checkout_sessions(&r, &[s("coordinator", "coordinator", 10)]);
+    let quiet = main_checkout_sessions(&r, &[s("main", "owner", 10), s("worker-1", "worker", 20)]);
+    let unknown = main_checkout_sessions(
+        &TreeReaders::unknown("off"),
+        &[s("coordinator", "coordinator", 10)],
+    );
+    Probe {
+        name: "status: a launched session running in the main checkout is named once, with its pid; the owner's shell and a worker in its worktree are not",
+        red_fires: red.len() == 1
+            && red.first().is_some_and(|l| {
+                l.contains("coordinator session coordinator (pid 10)")
+                    && l.contains("main checkout")
+            }),
+        green_passes: quiet.is_empty() && unknown.is_empty(),
     }
 }
 

@@ -209,6 +209,9 @@ pub struct Snapshot {
     /// `verifies_in_flight` cannot see: a run nobody recorded. `unknown` says why when the
     /// process listing did not answer.
     pub tree_readers: super::readers::TreeReaders,
+    /// One warning per launched session whose process runs in the main checkout, where no role
+    /// works since air-jc2p.1 (`readers::main_checkout_sessions`). Empty is the normal state.
+    pub main_checkout_sessions: Vec<String>,
     /// Branches `air land --all` would take right now (air-03w). Filled from the same
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
@@ -2217,7 +2220,15 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         &trees,
         &session_pids,
     );
+    // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
+    let live: Vec<(String, String, i64)> = all_sessions
+        .iter()
+        .filter(|(_, _, x)| x.pid_alive != Some(false))
+        .filter_map(|(w, role, x)| x.pid.map(|p| (w.clone(), role.clone(), p)))
+        .collect();
+    let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
     Ok(Snapshot {
+        main_checkout_sessions,
         at,
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
@@ -2611,6 +2622,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // says how many processes were looked at, so none is not "not looked". An unknown lookup
     // always prints, with why.
     for l in super::readers::status_lines(&s.tree_readers) {
+        out.push_str(&format!("{l}\n"));
+    }
+    for l in &s.main_checkout_sessions {
         out.push_str(&format!("{l}\n"));
     }
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
