@@ -367,7 +367,7 @@ sequenceDiagram
   A->>G: build a commit from the branch's tree, move main forward to it
   A->>B: which beads do the commits name
   A->>L: write the landing
-  A-->>C: landed, with the beads; nothing closed
+  A-->>C: landed, with the beads, nothing closed
 ```
 
 Main never moves to a commit whose tree was not verified. The landing commit has exactly the
