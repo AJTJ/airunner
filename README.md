@@ -4,138 +4,71 @@
 
 Multi-agent accountability and verification system. Lighter than air.
 
-Several AI coding agents work one repository at the same time, each in its own git worktree.
-Air is one Rust binary that holds the facts they would otherwise carry in chat: who is editing
-which file, which commit actually passed verification, who holds the shared port. It works
-beside [beads](https://github.com/steveyegge/beads) for issues and Claude Code for the agents,
-and replaces neither.
+## Philosophy
 
-## What it records
+Do less. Most agentic systems try to do too much. The model knows how to do the work and keeps getting better at it, so Air does not plan
+the work or tell agents how to do it.
 
-Every fact below is written when it happens, not reconstructed afterwards from a transcript.
+## What Air is
 
-- **Verification runs**, keyed to the commit they ran at, with the command, the duration, and
-  whether the tree was dirty. A green belongs to a commit, not to a person's memory of one.
-- **Who is in which file**, from the editor's own tool calls, across every worktree at once.
-- **Claims and leases**: which agent holds which task, and which holds the simulator, the port,
-  the browser.
-- **Every decision Air made**, with its reason and its denominator, as append-only JSON. What
-  Air did not check is distinguishable from what it checked and allowed.
-- **What its own machinery costs**: how long each timing budget waited and whether it ran out,
-  how much each `bd` call cost, how many messages agents sent each other.
+- **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
+  and lands it on `main`.
+  - Your project decides what passes, for example `make verify`.
+  - The lane runs it once per batch, and Air records which commit passed.
+  - A bead closes only on a passing run.
+- **Sessions.** Air starts the coordinator, the workers and the lane, each in its own git
+  worktree and tmux session.
+- **Shared resources.** Leases for anything one agent can use at a time, such as a port or a
+  simulator.
 
-## What it refuses
+## How you use it
 
-One thing. **An agent cannot close a task without a recorded pass at a commit that contains
-`main`.** Not a claim of one, not a description of the approach: a recorded run at that exact
-commit. The refusal names the command that fixes it.
+You talk to the coordinator. It writes the beads, workers do them, and you check the result.
+Every session is a full harness running in a worktree, in tmux that you can interact with.
 
-Everything else Air says is a fact or an answer. It does not review code, choose work, or tell
-an agent how to do its job.
+## Upcoming
 
-## A human is always in the loop
+- Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
+- Messaging between agents, managed by Air.
 
-Every agent Air launches is an interactive terminal you can open, watch, and type into. Air's
-launchers never start headless sessions, and nothing Air does may hide what an agent is doing.
-`air status` is one screen of live state: sessions, claims, what is green, who overlaps whom.
+## Adopt it
 
-## Install
-
-You need `git`, a Rust toolchain, [beads](https://github.com/steveyegge/beads), and Claude Code.
+Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.2.2).
 
 ```sh
-cargo install --path crates/cli   # from a checkout of this repository
+cargo install --path crates/cli     # from a checkout of this repository
 cd /path/to/your/repo
-air init --prefix <your-beads-prefix> --write   # dry run without --write
-air doctor                                      # should exit 0
+air init --write
 ```
 
-`air init` writes the Claude Code hooks, the MCP server entry, the role prose, and a
-`.claude/air.json` you own. It prints everything it would do before it does any of it.
+Put your real check in `make verify`, commit, and run `air coordinator`. If agents share a port or
+a device, list the commands that use it under `leases` in `.claude/air.json`.
 
-Adopting Air into a repository that already has its own process:
-[`docs/rules/adopting-air.md`](docs/rules/adopting-air.md).
+## Inspired by
 
-## Day to day
+- [Gas Town](https://github.com/gastownhall/gastown): the batch-then-bisect merge queue, and
+  checking a heartbeat against the real process.
+- [beads](https://github.com/gastownhall/beads): the task store Air works beside.
+- [Symphony](https://github.com/openai/symphony): isolated runs per piece of work.
+- [bors-ng](https://github.com/bors-ng/bors-ng), [homu](https://github.com/rust-lang/homu) and
+  [Zuul](https://opendev.org/zuul/zuul): merge queues that keep `main` on a tested tree.
+- [Overstory](https://github.com/jayminwest/overstory): multi-agent orchestration with a merge
+  step.
+- [awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators): the
+  list Air was checked against.
+- [Metis](https://github.com/colliery-io/metis): how to break work into epics and beads.
 
-Start the sessions:
+## Docs
 
-```sh
-air coordinator                          # the main checkout, with Air's channel attached
-air worker w1 --task "<a complete task>" # its own worktree, its own terminal
-```
-
-A worker takes a task, does it, and closes it with proof:
-
-```sh
-air claim <id>
-# ... the work, and a digest committed with it
-git merge main
-air record verify -- <your verification command>
-bd close <id> --reason "<the proof>"
-```
-
-The `air record verify` line is what the one refusal reads. Run it last, after the merge, so
-the green belongs to the commit that is actually being handed on.
-
-The coordinator watches `air status`, triages what workers capture (`air capture "<one line>"`)
-into tasks, and lands branches. Air's channel raises a condition when something needs a person:
-an idle agent holding a task, a hand-over without a green, a branch ready to land, a lease held
-by a session that died.
-
-## What your repo provides
-
-Air records and refuses; four things have to come from the repo. `air init --write` scaffolds
-all four **empty but ready** in a fresh repo, and never touches one that is already there:
-`air init` on its own lists what it would create.
-
-- **A verify command.** Anything that exits non-zero on red. Air's one refusal reads a green
-  recorded at a commit, so a repo with no such command has nothing to record. The scaffolded
-  `Makefile` has a `verify` target that **fails until you edit it**: a placeholder that passed
-  would let the first `air record verify` record a green for a check nobody wrote.
-- **One paragraph on how a finished task is handed on.** `.air/roles.md` deliberately does not
-  say: some repos hand over for review, some close with proof. That choice is the repo's, and
-  the scaffolded `CLAUDE.md` starts you on close-with-proof.
-- **A `Bead: <id>` trailer on the commits that do a task's work.** Attribution reads the
-  trailer and nothing else; a commit without one is attributed to nothing. The rule is a line
-  in the same stub.
-- **A `.worktreeinclude`**, if a build needs files git ignores (keys, `.env`). Air fills each
-  worker's worktree from it. Scaffolded as a comment header with nothing listed.
-
-A repo that already has a `Makefile`, a `CLAUDE.md` or a `.worktreeinclude` keeps it untouched.
-A `Makefile` with no `verify` target is reported and still not edited.
-
-Everything else Air leaves to you on purpose: how the verify is scoped, how code is reviewed,
-which commands are too dangerous for an agent, whether landing is `air land` or your own script.
-The first adopter keeps several thousand lines of that around Air, and none of it is Air's to
-own. `docs/design.md` §4 lists what Air ships, and §6b what is left to the repo.
-
-## Your project and Air
-
-Your project decides what verification means, what to build, how code is reviewed, and how
-changes reach `main`. Air records the results and answers who is waiting on whom.
-
-The line is deliberate. Air removes friction (relayed facts, drift, collisions) and does not
-direct the work, because a capable model does not need directing. Every rule it ships names the
-recorded failure it prevents **and** the condition under which it is removed, and `air audit`
-prints both against the ledger so a rule that has stopped earning its place shows up as a fact
-rather than as somebody's hunch.
+- [Design](docs/design.md)
+- [Roles](docs/rules/roles.md)
+- [Adopting Air](docs/rules/adopting-air.md)
 
 ## Status
 
-Early, and honest about it. In use on two repositories, this one included. The surface moves
-between releases and `air install` tells an already-installed repository what changed.
+In use on two repositories. Commands still change between releases, and `air install` tells an
+installed repository what changed.
 
-- Decisions, dated: [`docs/decisions.md`](docs/decisions.md)
-- What is next: [`docs/plans/0009-fleet-system-design.md`](docs/plans/0009-fleet-system-design.md)
-- What agents are told: [`docs/rules/roles.md`](docs/rules/roles.md)
-- The evidence behind the design: [`docs/research/`](docs/research/)
-
-## Layout
-
-`crates/ledger` (SQLite plus the event log), `crates/hooks` (Claude Code hook logic, pure and
-fast), `crates/bd` (the beads boundary), `crates/cli` (the `air` binary).
-
-## Licence
+## License
 
 Apache-2.0. See [LICENSE](LICENSE).

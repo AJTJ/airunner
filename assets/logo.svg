@@ -42,7 +42,6 @@
   </g>
   <g>
     <circle class="dot" cx="118" cy="63" r="2.2" style="animation-delay:-1s"/>
-    <circle class="dot" cx="352" cy="118" r="2.6" style="animation-delay:-2.2s"/>
     <circle class="dot" cx="522" cy="86" r="2" style="animation-delay:-0.4s"/>
   </g>
   <text class="word" x="320" y="118" text-anchor="middle" filter="url(#glow)"><tspan font-size="84" font-weight="300" letter-spacing="6">AIR</tspan><tspan font-size="30" font-weight="200" letter-spacing="3" dx="4">unner</tspan></text>
