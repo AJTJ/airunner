@@ -70,6 +70,20 @@ pub fn may_close(role: &str) -> Result<(), String> {
     )
 }
 
+/// What `air close` says when bd did not close. A timeout names the id count, the budget and
+/// the override (air-8lj8): the budget scales with the id count now, so "timed out after 60 s"
+/// alone would not say whether 60 s was the right size for this many ids.
+pub fn refusal(e: &BdError, ids: usize, overridden: bool) -> String {
+    match e {
+        BdError::Timeout(d) => format!(
+            "bd timed out closing {}; bd's state is unknown and no claim was released: run \
+             `bd list --status closed --json` and re-run `air close` with whatever is still open",
+            super::claim::budget_words(ids, *d, overridden)
+        ),
+        other => format!("bd refused the close; nothing released: {other}"),
+    }
+}
+
 pub fn run(
     repo: &Path,
     beads: &[String],
@@ -129,16 +143,7 @@ pub fn run(
     // One process for every id. A partial failure is bd's to report: it names the id it
     // choked on and nothing is written to the ledger, so a re-run is safe.
     if let Err(e) = bd.close_all(beads, reason, &actor) {
-        let msg = match e {
-            BdError::Timeout(d) => format!(
-                "bd timed out after {} s closing {} bead(s); bd's state is unknown and no claim \
-                 was released: run `bd list --status closed --json` and re-run `air close` with \
-                 whatever is still open",
-                d.as_secs_f64(),
-                beads.len()
-            ),
-            other => format!("bd refused the close; nothing released: {other}"),
-        };
+        let msg = refusal(&e, beads.len(), super::claim::bd_overridden());
         log_event(
             &ledger,
             &worker,
