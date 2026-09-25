@@ -4,7 +4,7 @@ Status: **draft, 2026-09-14; revised 2026-09-25** against an adopter's fleet pro
 Written with the `system-design` skill as its first application. Built so far: role read from
 `AIR_ROLE` (decisions, 2026-09-14, `cmd::role_from`); on 2026-09-25 the batch-ready change and
 the nudge fix in §5, and the roles text carrying the protocol (step 5, except the parts that
-wait for the launcher). Section 10 lists what the
+wait for the launcher); and `air batch cut` (step 3). Section 10 lists what the
 owner rules on; sections 1 to 9 are the recommendation and its evidence.
 
 **Where the protocol lives** (owner, 2026-09-25): the merge-queue protocol — each role's
@@ -194,10 +194,10 @@ measured or ruled in §10 rather than left to be found.
 | `air coordinator` starts in a worktree, with a tmux session | changed | round log §22; adopter 2026-09-07 §3 | fact | `--print`; selftest that the cwd is not the main checkout | never, while more than one session exists | yes: notice |
 | Coordinator deny list: loses `air land`, keeps `bd create`, `air triage`, launching | changed | as above | refusal (deny rules hold in every mode, harness docs 2026-09-05) | selftest over the constant | with the launcher | yes: notice |
 | Roles text: "role is the env", lane section rewritten as the verification lane | changed | roles.md "Role is the checkout" would call the coordinator a worker | prose | none | with the launcher | yes: notice |
-| Pairwise `git merge-tree` before a cut | added | adopter 2026-09-07 §3 | fact (prints the conflicting pair and path) | selftest with two branches touching one line | when `git merge` itself reports the pair | yes: notice |
+| Pairwise `git merge-tree` before a cut | added | adopter 2026-09-07 §3; their lane also judged eleven batches by piped merge output, whose exit status was `tail`'s | fact (`air batch cut`, `batch_cut.rs`: names the member, the other side and the paths; oldest ready first by the committer time of the listed head; each merge judged by `git ls-files -u` and conflict markers) | selftest `batch cut: a pairwise conflict drops the later-ready member…`, seen red with the `order` call removed; `batch_cut_drops_by_the_order_rule_and_merges_the_rest` (built 2026-09-25) | when `git merge` itself reports the pair | yes: notice `batch-cut` |
 | `batch-waiting` count and age in `air status` | added | measurement first (do-less q3): how long branches wait for the lane | measurement | selftest | when a round shows median wait under one verify duration | yes: notice |
 | Red-batch policy: drop the member the failing step names, else bisect | added | adopter 2026-09-06: 9 landed-refuted, 12 refused in one day | fact + the lane's judgement | selftest for the pure ordering | when reds per batch fall below one in ten for a round | yes: notice |
-| Ledger rows for "dropped from batch: conflict with X at sha" and "retried once at sha" | added | said in prose, recorded nowhere (research §9, queue state) | fact | selftest | never; they are what makes a second red a second red | yes: notice |
+| Ledger rows for "dropped from batch: conflict with X at sha" and "retried once at sha" | added | said in prose, recorded nowhere (research §9, queue state) | fact. The drop is built as an event line (`batch-cut` / `dropped`, 2026-09-25), not a table, because nothing reads it back yet; the table comes with the first program that must tell a second red from a first. "Retried once" is not built | the e2e test counts the lines | never; they are what makes a second red a second red | yes: notice `batch-cut` |
 | `failing_step` recorded on every red | fixed | 142 reds with no step in the adopter's ledger | fact | selftest: a red run has a step | never | yes: notice |
 | Batch-ready no longer requires the head to contain main; the lane merges main forward at the cut | changed | an adopter (§11): under "head contains main", every landing takes every waiting branch out of the queue until its worker re-merges, and their workers were told to merge "for your own close and for staleness, not for the cut" | fact (`batch_ready_rule`, `status.rs`) | selftest probe and `status_lists_batch_ready_branches_as_a_fact` (built 2026-09-25); the lane dropping a member that conflicts with main is step 3's `merge-tree` | never, while the lane merges main itself | yes: notice `batch-ready-behind-main` |
 | `air record precheck`; batch-ready wants a green precheck at the head where `"precheck": true` | added | an adopter, 2026-09-05..07: a worker cut before its check finished, "checked" relayed for a check still running, a worker nudged as idle 400 s into an unrecorded precheck, and a log trailer naming a head two commits back | fact (`Kind::Precheck`; `batch_ready_rule` field `precheck_green_at_head`) | selftest probes for the rule and for "a precheck green is never a verify green", both seen red; `a_declared_precheck_gates_batch_ready_and_is_not_a_verify` (built 2026-09-25) | the key: when a round under it has no batch red that a member's precheck would have caught, the precheck only delays the cut | yes: notice `precheck-is-a-run` |
@@ -235,7 +235,7 @@ mechanism).
 | member order | oldest batch-ready first | the lane may pull a P0 forward |
 | conflict detection | `git merge-tree --write-tree` pairwise | none |
 | conflict resolution | never the lane | the member's worker, in its worktree |
-| the cut | `git merge` of listed shas on a throwaway branch | none |
+| the cut | `air batch cut`: `git merge` of main and the listed shas on the lane's branch (built 2026-09-25) | none |
 | verify | `air record verify -- make verify` | none |
 | green → land | `air land` (fast-forward; tree identical to the verified one) | none |
 | red → next cut | drop the member the failing step names, if the step names a path a member changed; else halve | the lane reads the log when the step names nothing |
@@ -248,7 +248,7 @@ mechanism).
 |---|---|---|---|
 | 1. Record `failing_step` on every red; add `batch-waiting` to `air status` | yes | selftest | none |
 | 2. `AIR_ROLE=lane` launcher; `air land` bound to it; coordinator loses `air land` | yes, with the coordinator still in the main checkout | selftest over the deny constants and the cwd check | roles.md "Landing stays the coordinator's" |
-| 3. Pairwise `merge-tree` in the lane's cut (`air batch cut`, or documented git) | yes | selftest with a conflicting pair | adopter-style "dry-merge first" prose |
+| 3. Pairwise `merge-tree` in the lane's cut: **built 2026-09-25** as `air batch cut` | yes | selftest with a conflicting pair; an end-to-end test with four members | adopter-style "dry-merge first" prose; roles.md's lane loop names the command instead of the merges |
 | 4. Coordinator in a worktree with a tmux session; role is the env; main checkout has no session | yes | `--print`; selftest | roles.md "Role is the checkout"; notice `coordinator-may-commit` superseded |
 | 5. Roles text rewritten: the whole protocol per role (worker, lane, coordinator), including the §11 facts; the repo's commands come from `.claude/air.json` keys, not from its CLAUDE.md | yes | none (prose) | the verification-lane section; this repo's CLAUDE.md "This repo's work flow"; an adopter's protocol file, which it deletes itself once upgraded |
 | 6. One round on Air itself; then the adopter | | the ledger: batches, reds, waits, strandings (zero) | |

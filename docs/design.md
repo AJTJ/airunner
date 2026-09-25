@@ -145,9 +145,10 @@ Any session may run these.
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), and whether the install is out of date. |
+| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
-| air selftest | Runs a red and a green probe for every check. There are 153 probes today. |
+| air selftest | Runs a red and a green probe for every check. There are 157 probes today. |
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
 
 Workers may not run these. Air refuses them when AIR_ROLE is worker, wherever they are run.
@@ -334,6 +335,10 @@ close without running verification themselves. A commit made after the batch was
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
 names a bead its worker holds; it does not have to contain main, because the lane merges main
 in when it cuts the batch.
+
+The lane cuts with air batch cut, then records its verification at the new head. Which of two
+conflicting branches is dropped is decided by the order rule, oldest ready first, and never by
+the order anyone typed. The dropped branch's worker resolves the conflict in its own worktree.
 
 ### 6.3 Landing a branch
 
@@ -554,8 +559,6 @@ Fleet shape, added 2026-09-14:
       not. (Plan 0009, sections 1 and 9.)
 - [ ] The verification lane lands, and landing is refused to every other role. (Plan 0009,
       section 5.)
-- [ ] Before cutting a batch, check each pair of branches for conflicts with git merge-tree,
-      and record a dropped branch as a fact. That way typing order never decides a conflict.
 - [ ] Record the failing step on every red run. An adopter's ledger has 142 reds with none.
 - [ ] Measure how long branches wait to be batched, and show it in status.
 - [x] The verification lane key in the config is read by no code. Either read it or remove it.

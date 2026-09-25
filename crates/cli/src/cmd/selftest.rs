@@ -212,6 +212,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             ],
         },
     ),
+    // Plan 0009 step 3: without the order rule, whichever member was typed first survives a
+    // pairwise conflict. Anchored on the one call, not the whole drop rule.
+    (
+        "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
+        Mutation {
+            file: "crates/cli/src/cmd/batch_cut.rs",
+            from: "    order(&mut cands);\n",
+            to: "    let _ = &mut cands;\n",
+            also_red: &[],
+        },
+    ),
     // air-88av. The anchor widens the lookup from "unmerged" to "everything but a deletion" —
     // lowercase in `--diff-filter` EXCLUDES, so `d` matches every modified path. Verified in a
     // fixture rather than reasoned about, after my first comment here claimed the opposite.
@@ -2333,6 +2344,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_ready_is_a_fact_with_three_parts(),
         probe_batch_ready_wants_a_precheck_where_declared(),
         probe_a_precheck_green_is_never_a_verify_green(),
+        probe_batch_cut_drops_by_the_order_rule(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -6712,6 +6724,73 @@ fn probe_a_precheck_green_is_never_a_verify_green() -> Probe {
     .unwrap_or_else(blocked);
     Probe {
         name: "ledger: a green precheck is found as a precheck and never as a verify green, by commit, by tree, or as a batch candidate",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// Plan 0009 step 3: which member a pairwise conflict drops is decided by the order rule, never
+/// by the order the shas were typed. An adopter's lane skipped its dry-merge once on 2026-09-07
+/// and typing order decided which member "conflicted" (`batch_cut.rs` module doc).
+///
+/// Red: members handed over NEWEST first, beta and gamma conflicting with each other and delta
+/// with main. The older-ready gamma is kept and beta dropped naming gamma and the path; delta is
+/// dropped naming main. Green: the clean member is kept, a pair drops exactly one of its two
+/// members, and the same set in the other input order gives the same answer.
+///
+/// The mutation that made it red, seen: `pre_check` without its `order` call, which keeps beta
+/// (typed first) and drops gamma.
+fn probe_batch_cut_drops_by_the_order_rule() -> Probe {
+    use crate::cmd::batch_cut::{Candidate, pre_check};
+    let c = |w: &str, at: i64| Candidate {
+        worker: w.into(),
+        head: format!("{w}-sha"),
+        beads: vec![format!("zz-{w}")],
+        ready_at: at,
+    };
+    // Newest first, so typing order and the rule disagree.
+    let typed = vec![
+        c("delta", 40),
+        c("beta", 30),
+        c("alpha", 20),
+        c("gamma", 10),
+    ];
+    let conflict = |ours: &str, theirs: &str| -> Result<Vec<String>, String> {
+        let pair = [ours, theirs];
+        Ok(
+            if pair.contains(&"beta-sha") && pair.contains(&"gamma-sha") {
+                vec!["shared.txt".into()]
+            } else if pair == ["main-sha", "delta-sha"] {
+                vec!["m.txt".into()]
+            } else {
+                vec![]
+            },
+        )
+    };
+    let Ok((kept, dropped)) = pre_check(typed.clone(), "main-sha", conflict) else {
+        return Probe {
+            name: "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
+            red_fires: false,
+            green_passes: false,
+        };
+    };
+    let names = |v: &[Candidate]| v.iter().map(|m| m.worker.clone()).collect::<Vec<_>>();
+    let red_fires = dropped.iter().any(|d| {
+        d.worker == "beta"
+            && d.against == "gamma"
+            && d.against_sha == "gamma-sha"
+            && d.paths == ["shared.txt"]
+    }) && dropped
+        .iter()
+        .any(|d| d.worker == "delta" && d.against == "main" && d.paths == ["m.txt"]);
+    let mut reversed = typed;
+    reversed.reverse();
+    let again = pre_check(reversed, "main-sha", conflict);
+    let green_passes = names(&kept) == ["gamma", "alpha"]
+        && dropped.len() == 2
+        && again.is_ok_and(|(k, d)| k == kept && d == dropped);
+    Probe {
+        name: "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
         red_fires,
         green_passes,
     }

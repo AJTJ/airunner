@@ -2343,6 +2343,190 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     }
 }
 
+/// Plan 0009 step 3, end to end: `air batch cut` in the lane's worktree. Four batch-ready
+/// members: alpha clean; beta and gamma both rewrite `shared.txt`, gamma ready first by its
+/// commit time though beta sorts first by name; delta rewrites `m.txt`, which main rewrote after
+/// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's
+/// head holding main plus exactly alpha's and gamma's commits, and each drop is an event line.
+/// The main checkout is refused.
+#[test]
+fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    // Air's own merges need an identity; worktrees share the main checkout's config.
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    for f in ["shared.txt", "m.txt"] {
+        std::fs::write(main.join(f), "base\n").unwrap();
+    }
+    git(&main, &["add", "shared.txt", "m.txt"]);
+    git(&main, &["commit", "-q", "-m", "base files"]);
+    let mut wts = vec![("alpha", alpha.clone())];
+    for name in ["beta", "gamma", "delta", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+        if name != "lane" {
+            wts.push((name, wt.canonicalize().unwrap()));
+        }
+    }
+    let lane = root.join("lane").canonicalize().unwrap();
+    // (worker, bead, file, content, committer date): the date is the order rule's input.
+    let work = [
+        (
+            "alpha",
+            "zz-1",
+            "alpha.txt",
+            "alpha\n",
+            "2026-09-03T00:00:00Z",
+        ),
+        (
+            "beta",
+            "zz-2",
+            "shared.txt",
+            "beta\n",
+            "2026-09-02T00:00:00Z",
+        ),
+        (
+            "gamma",
+            "zz-3",
+            "shared.txt",
+            "gamma\n",
+            "2026-09-01T00:00:00Z",
+        ),
+        ("delta", "zz-4", "m.txt", "delta\n", "2026-09-04T00:00:00Z"),
+    ];
+    let mut heads = std::collections::BTreeMap::new();
+    for ((name, wt), (w, bead, file, body, date)) in wts.iter().zip(work) {
+        assert_eq!(*name, w);
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0, "{name}");
+        std::fs::write(wt.join(file), body).unwrap();
+        git(wt, &["add", file]);
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(wt)
+            .args(["commit", "-q", "-m", &bead_trailer(bead)])
+            .env("GIT_AUTHOR_NAME", "air")
+            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+            .env("GIT_COMMITTER_NAME", "air")
+            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+            .env("GIT_COMMITTER_DATE", date)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{name}: {out:?}");
+        heads.insert(w, git(wt, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(main.join("m.txt"), "main moved\n").unwrap();
+    git(&main, &["commit", "-q", "-am", "main rewrites m.txt"]);
+    let main_tip = git(&main, &["rev-parse", "HEAD"]);
+
+    // The main checkout is refused, naming where to run it.
+    let (code, out, err) = air(&main, &bd, &["batch", "cut"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("refused in the main checkout"), "{out}");
+
+    let lane_before = git(&lane, &["rev-parse", "HEAD"]);
+    let check_drops = |v: &serde_json::Value| {
+        let d = v["dropped"].as_array().unwrap();
+        assert_eq!(d.len(), 2, "{v}");
+        assert!(
+            d.iter().any(|d| d["worker"] == "beta"
+                && d["against"] == "gamma"
+                && d["against_sha"] == heads["gamma"].as_str()
+                && d["paths"] == serde_json::json!(["shared.txt"])),
+            "{v}"
+        );
+        assert!(
+            d.iter().any(|d| d["worker"] == "delta"
+                && d["against"] == "main"
+                && d["paths"] == serde_json::json!(["m.txt"])),
+            "{v}"
+        );
+        let kept: Vec<&str> = v["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["worker"].as_str().unwrap())
+            .collect();
+        assert_eq!(kept, ["gamma", "alpha"], "oldest ready first: {v}");
+    };
+
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    check_drops(&serde_json::from_str(&out).unwrap());
+    assert_eq!(
+        git(&lane, &["rev-parse", "HEAD"]),
+        lane_before,
+        "dry run moved"
+    );
+
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    check_drops(&v);
+    let head = git(&lane, &["rev-parse", "HEAD"]);
+    assert_eq!(v["head"], head.as_str(), "{v}");
+    assert!(
+        v["next"]
+            .as_str()
+            .unwrap()
+            .starts_with("air record verify -- ")
+    );
+    assert!(git(&lane, &["ls-files", "-u"]).is_empty());
+    // Exactly main plus alpha's and gamma's commits.
+    let is_anc = |sha: &str| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&lane)
+            .args(["merge-base", "--is-ancestor", sha, "HEAD"])
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(is_anc(&main_tip) && is_anc(&heads["alpha"]) && is_anc(&heads["gamma"]));
+    assert!(!is_anc(&heads["beta"]) && !is_anc(&heads["delta"]));
+    let listed = |range: &str| -> std::collections::BTreeSet<String> {
+        git(&lane, &["rev-list", "--no-merges", range])
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    let mut want = listed(&format!("main..{}", heads["alpha"]));
+    want.extend(listed(&format!("main..{}", heads["gamma"])));
+    assert_eq!(listed("main..HEAD"), want);
+
+    // Each drop is an event line naming the member and the other side.
+    let events: String = std::fs::read_dir(main.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    let drops: Vec<&str> = events
+        .lines()
+        .filter(|l| {
+            l.contains("\"command\":\"batch-cut\"") && l.contains("\"decision\":\"dropped\"")
+        })
+        .collect();
+    // Two from the dry run's pre-check, two from the cut.
+    assert_eq!(drops.len(), 4, "{events}");
+    assert!(
+        drops
+            .iter()
+            .any(|l| l.contains("beta") && l.contains("conflicts with gamma"))
+    );
+}
+
 fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");
