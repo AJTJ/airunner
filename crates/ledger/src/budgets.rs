@@ -24,15 +24,17 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// One `bd` process, at the default 10 s budget (`crates/bd/src/lib.rs`).
+/// One `bd` process, at the default 60 s budget plus 5 s per id on a multi-id call
+/// (`crates/bd/src/lib.rs` `budget_for`).
 pub const BD: &str = "bd";
-/// The short `bd show` after a `--claim` timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 5 s).
+/// The short `bd show` after a `--claim` timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 30 s).
 pub const BD_PROBE: &str = "bd-probe";
-/// `bd ready` behind the Stop nudge (`AIR_NUDGE_BD_TIMEOUT_MS`, default 3 s).
+/// `bd ready` behind the Stop nudge (`AIR_NUDGE_BD_TIMEOUT_MS`, default 3 s, under the 5 s hook
+/// cap).
 pub const BD_NUDGE: &str = "bd-nudge";
 /// A `bd` process inside `air status`, at the budget derived from bd's measured median.
 pub const BD_STATUS: &str = "bd-status";
-/// A `bd` process inside `air land`'s acceptance read, at 10 s + 2 s per id.
+/// A `bd` process inside `air land`'s acceptance read, at the client's 60 s + 5 s per id.
 pub const BD_ACCEPTANCE: &str = "bd-acceptance";
 /// One `git` process from `crate::git` — 1.5 s, and on every hook path.
 pub const GIT: &str = "git";
