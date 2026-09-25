@@ -144,10 +144,10 @@ Any session may run these.
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
-| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), and whether the install is out of date. |
+| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), and whether the install is out of date. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
-| air selftest | Runs a red and a green probe for every check. There are 152 probes today. |
+| air selftest | Runs a red and a green probe for every check. There are 153 probes today. |
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
 
 Workers may not run these. Air refuses them when AIR_ROLE is worker, wherever they are run.
@@ -156,7 +156,7 @@ Workers may not run these. Air refuses them when AIR_ROLE is worker, wherever th
 |---|---|
 | air inbox | Lists open captures, oldest first. |
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
-| air land | Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. |
+| air land | Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. |
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
 | air worker | Starts a worker session, or prints the command it would run. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air coordinator | Starts the coordinator session. |
@@ -188,7 +188,7 @@ set of thresholds, with no git involved.
 | idle with claim | A worker holds a bead and has been idle past the threshold. |
 | silent with claim | A worker holds a bead and its session has written nothing for a while. |
 | gone with claim | A worker holds a bead and its process has gone. |
-| idle without claim | A worker is idle with nothing claimed while beads are ready, and no check of its own (verify or precheck) is running. |
+| idle without claim | A worker is idle with nothing claimed while beads are ready, no check of its own (verify or precheck) is running, and no process other than its session is running in its worktree. |
 | handover not green | Someone tried to close a bead without the green the gate wants. |
 | landed not closed | A bead's commits are on main but the bead is still open. |
 | landable | A branch is green and contains main. |

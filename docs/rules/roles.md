@@ -281,7 +281,10 @@ child and its closed count, beads without an initiative, leases, inbox depth),
 `air holdings`, the channel (idle or silent with a claim, idle without a claim, hand-over
 not green, landable branch, lease held by a dead session, session joined or left). **[fact]** A
 condition pushes only when the SET changes, not while it ages; the facts themselves are always
-in `air status` on demand (air-s7c, 2026-08-22). What each mechanism costs and the condition
+in `air status` on demand (air-s7c, 2026-08-22).
+`air status` also names what is reading each tree: every process that is not a session with
+its working directory there (`readers: w2: 1 (cargo 3m)`), so "no run recorded" is not "idle",
+and `air land` names any in the main checkout before moving main. **[fact]** What each mechanism costs and the condition
 under which it goes: `air audit`.
 
 **Keep the same journal a worker does, and you are the reason it exists.** The round log is

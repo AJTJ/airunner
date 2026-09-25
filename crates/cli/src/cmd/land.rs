@@ -92,6 +92,37 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
     Some(s)
 }
 
+/// Every process reading any tree of this repo, for `air land`'s main-checkout warning. All
+/// trees, not only main, so a worktree nested under the main checkout is not counted as main.
+pub fn main_readers(repo: &Path, ledger: &air_ledger::Ledger) -> super::readers::TreeReaders {
+    let raw = super::readers::lookup();
+    let trees: Vec<(String, std::path::PathBuf)> = match crate::git::worktrees(repo) {
+        Ok(w) => w
+            .into_iter()
+            .map(|(p, _)| {
+                let name = air_ledger::paths::worker_name_for(&p).unwrap_or_else(|_| {
+                    p.file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                });
+                (name, p)
+            })
+            .collect(),
+        Err(e) => {
+            return super::readers::TreeReaders::unknown(format!("git worktree list: {e}"));
+        }
+    };
+    let session_pids = ledger
+        .conn()
+        .prepare("SELECT pid FROM sessions WHERE pid IS NOT NULL")
+        .and_then(|mut st| {
+            st.query_map([], |r| r.get::<_, i64>(0))?
+                .collect::<Result<std::collections::BTreeSet<i64>, _>>()
+        })
+        .unwrap_or_default();
+    super::readers::gather(raw, &trees, &session_pids)
+}
+
 /// One in-flight run as the refusal and the landings row name it: who, how long, what, where,
 /// and the pid to stop.
 pub fn in_flight_run_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
@@ -697,6 +728,34 @@ pub fn run(
         if !json {
             eprintln!("{note}");
         }
+    }
+    // Not a refusal, and after the in-flight one so that stays exactly as it was: the processes
+    // `air record` never saw that have their cwd in the main checkout (`cmd::readers`). An
+    // adopter's landing was about to move main under a lane 1m41s into an unrecorded run
+    // (2026-09-07), and the in-flight refusal cannot see one. Silent when there is none; the
+    // event line carries how many processes were examined either way.
+    let readers = main_readers(repo, &ledger);
+    let main_path = super::readers::resolved(repo);
+    if let Some(w) = super::readers::main_warning(&readers, &main_path) {
+        // Its own event line, so `air audit` counts it (`mechanisms.rs` `land-main-readers`).
+        log_event(
+            &ledger,
+            &worker,
+            "land",
+            &inputs,
+            "main-readers",
+            &w,
+            &format!("{} process(es) examined", readers.examined),
+        );
+        lines.push(w.clone());
+        if !json {
+            eprintln!("{w}");
+        }
+    } else {
+        lines.push(format!(
+            "main checkout: no unrecorded process reading it ({} process(es) examined)",
+            readers.examined
+        ));
     }
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, &despite, json) {

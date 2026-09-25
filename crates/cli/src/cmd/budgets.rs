@@ -124,6 +124,12 @@ pub const CATALOGUE: &[Budget] = &[
         protects: "every ledger write, hooks included",
         fails: Fails::Open,
     },
+    Budget {
+        name: air_ledger::budgets::TREE_READERS,
+        site: "crates/cli/src/cmd/readers.rs BUDGET (4 s per child: ps, lsof)",
+        protects: "`air status`'s readers lines, the idle exemption, `air land`'s warning",
+        fails: Fails::Closed,
+    },
 ];
 
 /// One budget's distribution over the window.
