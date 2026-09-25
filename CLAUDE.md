@@ -86,7 +86,8 @@ Index items are 1–3 lines; detail lives behind the link.
   whole round, including on the sweep's own verify, which is why the declaration exists.
 - **Tests are optimized for speed, always.** They run constantly; per-test cost is a first-class
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
-- **Talking to the owner.** Plain language, short. Lead with the thing the owner has to know or
+- **Talking to the owner.** Short, in complete ordinary sentences; the voice is the
+  `plain-language` skill. Lead with the thing the owner has to know or
   do; stop there. Default is five lines or fewer. No tables, no headers, no bold-label lists,
   no bead ids unless the owner has to act on one. Do not report each agent finishing each task;
   report when a round ends, when something is blocked, or when asked. Detail is available on
@@ -122,7 +123,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
 | Decomposing a feature, sizing beads, epic and bead states | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
-| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads` |
+| Writing prose, docs, commits, PRs, tests, reviews | skill `plain-language` owns voice; also `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads` |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
 | What a round left behind (session journals and round logs; records, not reading) | [`docs/journal/`](docs/journal/) |
 

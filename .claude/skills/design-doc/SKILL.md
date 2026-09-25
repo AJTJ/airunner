@@ -14,28 +14,24 @@ session (journal); proposals are lines in this doc's TODO section and technology
 choices are rows in its technology-decisions section. None of those is a substitute for it.
 
 The shape is the ordinary industry one (a Google-style design doc, trimmed of the parts that
-only make sense for a proposal). What this skill adds is three rules that keep it honest.
+only make sense for a proposal). This skill adds three rules.
 
 ## Three rules
 
 1. **Truth, dated.** The doc describes the code at a named commit and a named binary version,
-   in its header. Every statement about behaviour points at where it is true: a source file, a
-   command whose output shows it, or a table in the ledger. When the reader could reasonably
-   ask "is that still so?", the pointer answers. Numbers come from a command run while writing,
+   in its header. Every statement about behaviour can be traced to where it is true: a source
+   file, a command whose output shows it, or a table in the ledger. Put the pointer at the end
+   of the paragraph or in a table column, not in the middle of a sentence. Numbers come from a command run while writing,
    never from another document (`project-diligence`).
 2. **A diagram wherever a structure or a flow is described.** Components get a component
    diagram, a request path gets a sequence diagram, a lifecycle gets a state diagram, the
    data model gets an entity diagram. Prose then explains what the diagram cannot show:
    ownership, guarantees, and why. `references/diagrams.md` says which Mermaid form fits
    which subject and how to keep one readable.
-3. **Write normally.** Aim for four to six thousand words. Cut by moving history to
-   `docs/decisions.md`, evidence to the references of the skill that uses it, and proposals
-   to one or two lines each in the TODO section (there are no plan or research files, owner
-   2026-09-25), never
-   by compressing sentences into fragments or aphorisms. Plain technical prose, the way you
-   would explain the system to a colleague who is going to maintain it. No house style, no
-   clever phrasing; the owner asked for this explicitly on 2026-09-14 after a first draft
-   read as stilted.
+3. **Write normally.** The voice is the `plain-language` skill. Aim for four to six thousand
+   words. Cut by moving history to `docs/decisions.md`, evidence to the references of the
+   skill that uses it, and proposals to one or two lines each in the TODO section, never by
+   compressing sentences.
 
 ## The shape
 
