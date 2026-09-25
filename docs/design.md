@@ -14,9 +14,9 @@ docs/research became the technology decisions in section 11.
 
 ## 1. Context and goals
 
-A fleet is five sessions: three workers, a verification lane, and the coordinator. The workers
-and the lane each live in their own worktree on their own branch. The coordinator still runs
-in the main checkout today. All five share one task store, called beads, and one main branch.
+A fleet is five sessions: three workers, a verification lane, and the coordinator. Each lives in
+its own worktree on its own branch, and nobody works in the main checkout. All five share one
+task store, called beads, and one main branch.
 
 Without a shared record, agents relay facts from memory. One says its branch is green, another
 says nobody is in a file. Those relays drift, and most of the incidents in the decisions log
