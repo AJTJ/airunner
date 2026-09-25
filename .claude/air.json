@@ -5,6 +5,5 @@
   ],
   "verify_key": "tree",
   "metis": true,
-  "adopters": true,
-  "journal_dir": "docs/journal"
+  "adopters": true
 }
