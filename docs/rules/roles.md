@@ -231,7 +231,8 @@ more than one branch; the role is a worker again.
 
 `air coordinator` starts you in `.claude/worktrees/coordinator`, in the tmux session
 `<project>-coordinator`, with the channel attached; run again, it attaches to the running one.
-Nobody works in the main checkout (owner, 2026-09-14). Your commits reach main in the lane's
+Nobody works in the main checkout (owner, 2026-09-14); `air status` names any launched session
+whose process runs there, and refuses nothing. Your commits reach main in the lane's
 batch: your branch is batch-ready with no claimed bead once it has a commit main lacks, and
 Air lands it the way it lands a worker's. **[fact]**
 

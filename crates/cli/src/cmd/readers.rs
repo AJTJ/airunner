@@ -348,6 +348,39 @@ pub fn status_lines(r: &TreeReaders) -> Vec<String> {
         .collect()
 }
 
+/// `air status`'s warning, one line per launched session whose process runs in the main
+/// checkout (air-jc2p.3). Every role has its own worktree since air-jc2p.1, so nothing should
+/// run there; the failures behind that rule are a coordinator's prose commit in the main
+/// checkout that invalidated four workers' landability at an adopter, and a verify there that
+/// dirtied it and moved main under a worker's green (both 2026-09-06).
+///
+/// `sessions` is (worker, role, pid) for each live session row; the pid is the `claude` process,
+/// whose cwd is where it was launched and does not follow its shell. The owner's own shell (no
+/// `AIR_ROLE`, role `owner`) is exempt. Silent when the lookup did not run: the `readers:` line
+/// already says `unknown`.
+///
+/// A measurement, not a refusal (do-less: count first). Removed when a round's status output
+/// shows no such line with the launchers as they are, or turned into a launcher refusal if the
+/// line keeps appearing.
+pub fn main_checkout_sessions(r: &TreeReaders, sessions: &[(String, String, i64)]) -> Vec<String> {
+    let in_main: BTreeSet<i64> = r
+        .trees
+        .iter()
+        .filter(|t| t.worker == "main")
+        .flat_map(|t| t.readers.iter().map(|x| x.pid))
+        .collect();
+    sessions
+        .iter()
+        .filter(|(_, role, pid)| role != "owner" && in_main.contains(pid))
+        .map(|(worker, role, pid)| {
+            format!(
+                "warning: {role} session {worker} (pid {pid}) runs in the main checkout; every \
+                 launched role has its own worktree (`air coordinator`, `air lane`, `air worker`)"
+            )
+        })
+        .collect()
+}
+
 /// `air land`'s warning about the main checkout, or None when nothing but sessions is there.
 /// A warning, never a refusal: the landing moves files under these processes, and whether
 /// that matters is the coordinator's call.

@@ -168,7 +168,7 @@ Any session may run these.
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
-| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), and whether the install is out of date. |
+| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
 | air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
@@ -563,7 +563,7 @@ The verify target checks formatting, runs clippy and the tests, runs the adopter
 the self-test against the binary it just built. Record a run with air record. A release adds one
 row to the release list and sets the same version in the Cargo manifest. Then the release target
 refuses a dirty tree or any branch but main, runs the release check and the verify target, and
-tags. Rows are only ever added. The last release row is 0.3.5, and four notices are waiting for
+tags. Rows are only ever added. The last release row is 0.3.5, and fifteen notices are waiting for
 the next one.
 
 In a repository, Air writes three tracked files: the Claude Code settings, the channel server
@@ -589,6 +589,8 @@ built is described in sections 4 and 6.
 - [x] The coordinator works in its own worktree on its own branch, and nobody works in the main
       checkout. Its prose and its fixes reach main through the lane like a worker's branch: its
       branch is batch-ready with no claimed bead once it has a commit main lacks. (air-jc2p.1)
+      Air status warns, without refusing, when a launched session's process runs in the main
+      checkout. (air-jc2p.3)
 - [ ] The worktree module's header still says Claude Code's worktree isolation is used, and it
       is not.
 - [x] The verification lane lands, and landing is refused to every other role, the coordinator

@@ -1715,6 +1715,17 @@ pub const SURFACE: &[SurfaceChange] = &[
                  worktree, not in the main checkout. Anything that looked up the coordinator's \
                  session or events as `main` reads `coordinator` from now on.",
     },
+    SurfaceChange {
+        id: "main-checkout-sessions",
+        since: "2026-09-25 (air-jc2p.3)",
+        headline: "`air status` prints `warning: <role> session <name> (pid N) runs in the main \
+                   checkout` for each launched session whose `claude` process has its working \
+                   directory there (`--json` `main_checkout_sessions`). The owner's own shell \
+                   (no AIR_ROLE) is exempt, and nothing is refused.",
+        silent_break: false,
+        action: "Relaunch such a session through `air coordinator`, `air lane` or `air worker`, \
+                 each of which runs in its own worktree.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
