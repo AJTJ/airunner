@@ -330,15 +330,15 @@ fn dispatch(
         }
         HookEvent::Stop | HookEvent::SubagentStop if role != "worker" => {
             // The coordinator holds no lane and never hands over: no advisory (the adopter
-            // adoption log §9: the coordinator received a worker's hand-over advisory).
+            // adoption log §9: the coordinator received a worker's hand-over advisory). The
+            // lane neither: its branch carries every member's trailers, so the advisory would
+            // be about beads that are not its own, and it is offered no ready bead (an
+            // adopter's fleet protocol, 2026-09-25; by role since air-jc2p.2).
             let prev = set_session(ledger, input, worker, role, "idle", None)?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
                 "observed",
-                format!(
-                    "{}; coordinator: no hand-over check",
-                    transition(&prev, "idle")
-                ),
+                format!("{}; {role}: no hand-over check", transition(&prev, "idle")),
             )
         }
         // A subagent stopping is not the worker stopping: the main agent is mid-turn and
@@ -410,20 +410,14 @@ fn dispatch(
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
-            // The lane claims no bead, so it is offered none (an adopter's fleet protocol, 2026-09-25).
-            let nudge_role = if super::handover::verify_lane(cwd).as_deref() == Some(worker) {
-                "lane"
-            } else {
-                role
-            };
             let would_speak =
-                !has_work && !stop_hook_active && !cached.is_empty() && nudge_role == "worker";
+                !has_work && !stop_hook_active && !cached.is_empty() && role == "worker";
             let ready = if would_speak {
                 ready_cache::confirm(cwd).unwrap_or_default()
             } else {
                 Vec::new()
             };
-            let nudge = stop_nudge(nudge_role, has_work, &ready, stop_hook_active);
+            let nudge = stop_nudge(role, has_work, &ready, stop_hook_active);
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
                 .last_emission(&input.session_id, "nudge")
@@ -619,10 +613,11 @@ fn pre_tool_use(
     )?;
     let moved = transition(&prev, "running");
     // The worktree fence (air-8gj): a worker's Edit/Write whose resolved path leaves its
-    // worktree is denied. Never for the coordinator, whose checkout is main. This is the one
-    // check that replaces the harness's `--worktree` isolation (see `air_hooks::fence`).
+    // worktree is denied, and the lane's (air-jc2p.2: a worker with `air land` added). Never
+    // for the coordinator, which may edit what only the main checkout holds (`private/`). This
+    // is the one check that replaces the harness's `--worktree` isolation (`air_hooks::fence`).
     if let Some(abs) = input.edited_path()
-        && role == "worker"
+        && super::is_worker_like(role)
         && let Ok(root) = git::toplevel(cwd)
         && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root)
     {
@@ -1034,8 +1029,6 @@ pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
     None
 }
 
-/// Role is a property of the checkout (research: agent-roles-and-confinement §1): the main
-/// checkout is the coordinator, every worktree is a worker.
 /// Which session this hook is running in (air-75u).
 ///
 /// The hook derived it from the input's `cwd` alone, and that is the SHELL's directory: a
@@ -1049,19 +1042,28 @@ pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
 /// worker), every hook inherits it, and it cannot wander. The checkout-derived name is the
 /// fallback for a session Air did not launch. Env is passed in, not read here, so the tests
 /// do not depend on the environment they run in (air-7ah).
+///
+/// The coordinator is `coordinator`, the name of its worktree since air-jc2p.1, so its session
+/// row and its worktree are one row in `air status`. It was `main` while it ran in the main
+/// checkout.
 pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> String {
     match (role, actor) {
-        (Some("coordinator"), _) => "main".to_string(),
-        (Some("worker"), Some(a)) if !a.is_empty() => a.to_string(),
+        (Some("coordinator"), _) => "coordinator".to_string(),
+        (Some("worker" | "lane"), Some(a)) if !a.is_empty() => a.to_string(),
         _ => derived.to_string(),
     }
 }
 
+/// The role a checkout's NAME reads as, for display and for which branches a scan considers:
+/// `coordinator` (and the main checkout, `main`, where it used to run), `lane`, and a worker for
+/// every other name, legacy `w<N>` included (an adopter keeps w1..w4; owner, 2026-09-25,
+/// air-jc2p.4). **Never a permission**: what a session may do comes from `AIR_ROLE` alone
+/// ([`super::role_from`]), so a worktree someone names `lane` lands nothing.
 pub fn role_for(worker: &str) -> &'static str {
-    if worker == "main" {
-        "coordinator"
-    } else {
-        "worker"
+    match worker {
+        "main" | "coordinator" => "coordinator",
+        "lane" => "lane",
+        _ => "worker",
     }
 }
 
@@ -1360,7 +1362,7 @@ mod tests {
             (got[6].0.as_str(), got[6].1.as_str()),
             ("hook.Stop", "observed")
         );
-        assert_eq!(got[6].2, "working -> idle; coordinator: no hand-over check");
+        assert_eq!(got[6].2, "working -> idle; owner: no hand-over check");
         assert_eq!(
             (got[7].1.as_str(), got[7].2.as_str()),
             ("ended", "idle -> gone")
@@ -1371,8 +1373,14 @@ mod tests {
     /// air-75u: the launcher's word beats the shell's directory, and only the launcher's.
     #[test]
     fn identity_is_the_launchers_and_the_checkout_only_as_a_fallback() {
-        assert_eq!(identity_from(Some("coordinator"), None, "w1"), "main");
-        assert_eq!(identity_from(Some("coordinator"), Some("x"), "w1"), "main");
+        assert_eq!(
+            identity_from(Some("coordinator"), None, "w1"),
+            "coordinator"
+        );
+        assert_eq!(
+            identity_from(Some("coordinator"), Some("x"), "main"),
+            "coordinator"
+        );
         assert_eq!(identity_from(Some("worker"), Some("w2"), "w1"), "w2");
         // A worker launch without an actor, or an actor without a role (every test helper sets
         // BEADS_ACTOR=tester), is what the checkout says.

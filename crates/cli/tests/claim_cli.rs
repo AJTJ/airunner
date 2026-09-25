@@ -1418,9 +1418,11 @@ fn a_declared_command_needs_its_lease() {
     assert!(!out.contains("air:"), "held is silent: {out}");
 }
 
-/// An adopter's fleet protocol (2026-09-25), end to end: a worker with no claim stopping while a task is ready is nudged
-/// to claim it; the same worker named as `verify_lane` in `.claude/air.json` is not, because
-/// the lane claims no bead. An adopter recorded the Stop hook offering its lane ready beads.
+/// An adopter's fleet protocol (2026-09-25), end to end: a worker with no claim stopping while a
+/// task is ready is nudged to claim it; the same session launched as the lane (`AIR_ROLE=lane`)
+/// is not, because the lane claims no bead. An adopter recorded the Stop hook offering its lane
+/// ready beads. Since air-jc2p.2 the role says so; `verify_lane` in `.claude/air.json` no
+/// longer moves the nudge either way.
 #[test]
 fn stop_nudge_skips_the_verification_lane() {
     use std::io::Write;
@@ -1434,14 +1436,14 @@ fn stop_nudge_skips_the_verification_lane() {
     )
     .unwrap();
     assert_eq!(air(&main, &bd, &["status"]).0, 0);
-    let stop = |session: &str| -> String {
+    let stop = |session: &str, role: &str| -> String {
         let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&main)
             .arg("hook")
             .env("AIR_BD_BIN", &bd)
             .env("FAKE_BD_DIR", &main)
-            .env("AIR_ROLE", "worker")
+            .env("AIR_ROLE", role)
             .env("BEADS_ACTOR", "alpha")
             .current_dir(&alpha)
             .stdin(std::process::Stdio::piped())
@@ -1466,16 +1468,18 @@ fn stop_nudge_skips_the_verification_lane() {
             String::from_utf8_lossy(&out.stderr)
         )
     };
-    let worker = stop("s-worker");
+    let worker = stop("s-worker", "worker");
     assert!(worker.contains("air claim zz-t"), "{worker}");
-
+    let lane = stop("s-lane", "lane");
+    assert!(!lane.contains("air claim"), "{lane}");
+    // The config key no longer decides it: a worker named as the lane there is still nudged.
     std::fs::write(
         main.join(".claude/air.json"),
         r#"{"verify_command": "true", "verify_lane": "alpha"}"#,
     )
     .unwrap();
-    let lane = stop("s-lane");
-    assert!(!lane.contains("air claim"), "{lane}");
+    let named = stop("s-named", "worker");
+    assert!(named.contains("air claim zz-t"), "{named}");
 }
 
 /// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as
@@ -3166,7 +3170,7 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
 
 /// air-75u: the adopter end to end. The coordinator's shell sits in alpha's worktree
 /// when its turn ends, so the Stop hook's `cwd` is alpha's. With the launcher's `AIR_ROLE`
-/// the session is still main: no hand-over check, and the session row is main's. Without it
+/// the session is still the coordinator: no hand-over check, and the session row is its. Without it
 /// (a session Air did not launch) the checkout decides, and the advisory at least says whose
 /// tree it is about.
 #[test]
@@ -3229,12 +3233,12 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     };
 
     // Launched as the coordinator: no hand-over check, whatever the shell's directory, and
-    // the session row is main's.
+    // the session row is the coordinator's (air-jc2p.1; it was `main` in the main checkout).
     let out = stop("coord", &[("AIR_ROLE", "coordinator")]);
     assert!(!out.contains("handover"), "{out}");
     let ev = stop_events();
     let last = ev.last().unwrap();
-    assert_eq!(last["worker"], "main", "{last}");
+    assert_eq!(last["worker"], "coordinator", "{last}");
     assert!(
         last["reason"]
             .as_str()
@@ -3250,7 +3254,7 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(who, "main");
+    assert_eq!(who, "coordinator");
 
     // Launched as a worker: the advisory says whose tree it is.
     let out = stop("w", &[("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")]);

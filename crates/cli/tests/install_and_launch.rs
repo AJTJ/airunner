@@ -216,19 +216,42 @@ fn launchers_print_the_exact_command() {
     assert!(out.trim().ends_with("--model opus"), "{out}");
     assert!(repo.join(".air/roles.md").exists());
 
-    let (code, _, err) = air(&repo, None, &["worker", "main", "--print"]);
-    assert_eq!(code, 1);
-    assert!(err.contains("not `main`"));
+    // air-jc2p.4: names that read as another role are not a worker's.
+    for reserved in ["main", "coordinator", "lane"] {
+        let (code, _, err) = air(&repo, None, &["worker", reserved, "--print"]);
+        assert_eq!(code, 1, "{reserved}");
+        assert!(err.contains("main, coordinator, lane"), "{err}");
+    }
+
+    // air-jc2p.2: the lane is a worker launch with its own role and `air land` allowed.
+    let (code, out, err) = air(&repo, None, &["lane", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("AIR_ROLE=lane BEADS_ACTOR=lane AIR_ENFORCE=1 AIR_PROJECT=zz claude "),
+        "{out}"
+    );
+    assert!(
+        !out.contains("'Bash(air land *)'") && out.contains("'Bash(air close *)'"),
+        "{out}"
+    );
 
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
-    assert!(
-        out.starts_with(
-            "AIR_ROLE=coordinator AIR_PROJECT=zz claude --dangerously-load-development-channels server:air "
-        ),
-        "{out}"
-    );
+    // air-jc2p.1: its own worktree, in the tmux session `<project>-coordinator`, channel attached.
+    let wt = repo.join(".claude/worktrees/coordinator");
+    for want in [
+        "tmux new-session ".to_string(),
+        " -s zz-coordinator ".to_string(),
+        " -e AIR_ROLE=coordinator -e AIR_PROJECT=zz ".to_string(),
+        format!(" -c {} ", wt.display()),
+        " -- claude --dangerously-load-development-channels server:air ".to_string(),
+        " --name zz-coordinator ".to_string(),
+    ] {
+        assert!(out.contains(&want), "{want}: {out}");
+    }
     assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
+    // `--print` runs nothing: no worktree made.
+    assert!(!wt.exists());
 
     // air-9dg: a pass-through --settings merges into Air's; the line carries one, with both.
     let (code, out, err) = air(
@@ -741,7 +764,7 @@ fn status_names_the_workers_tmux_session() {
     assert!(s.contains("tmux zz-main"), "{s}");
 }
 
-/// air-5lg: `air worker` with no name takes the next free `w<N>` rather than refusing, so a
+/// air-5lg: `air worker` with no name takes the next free `worker-<N>` (air-jc2p.4) rather than refusing, so a
 /// coordinator that has no semantically useful name to give does not invent one from the bead
 /// (a worker outlives its bead; owner ruling 2026-08-22).
 #[test]
@@ -761,10 +784,15 @@ fn worker_with_no_name_picks_the_next_free_lane() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(stderr.contains("no name given; using w1"), "{stderr}");
-    assert!(stdout.contains("new-session -d -s zz-w1 -e "), "{stdout}");
+    assert!(stderr.contains("no name given; using worker-1"), "{stderr}");
     assert!(
-        stdout.contains("/.claude/worktrees/w1 "),
+        stdout.contains("new-session -d -s zz-worker-1 -e "),
+        "{stdout}"
+    );
+    // air-jc2p.4: the harness's session name is the tmux session's.
+    assert!(stdout.contains(" --name zz-worker-1 "), "{stdout}");
+    assert!(
+        stdout.contains("/.claude/worktrees/worker-1 "),
         "the lane's worktree is claude's cwd: {stdout}"
     );
 }

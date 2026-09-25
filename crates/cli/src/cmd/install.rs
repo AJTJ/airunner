@@ -1720,6 +1720,65 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "names-carry-role",
+        since: "2026-09-25 (owner, air-jc2p.4)",
+        headline: "Names carry the role and the project. `air worker` with no name makes \
+                   `worker-<N>` (was `w<N>`); `main`, `coordinator` and `lane` are refused as \
+                   worker names. Every launch passes `claude --name <project>-<name>`, the same \
+                   string as its tmux session, so `ListAgents` and `SendMessage` use it. \
+                   `<project>` is `\"project\"` in `.claude/air.json` when set, else the beads \
+                   prefix as before. A launch whose tmux session already exists is attached to \
+                   when it was started in the same worktree, and refused, naming the other \
+                   directory, when it was not.",
+        silent_break: false,
+        action: "Existing `w<N>` worktrees keep working as workers; nothing to rename. A repo \
+                 whose project name collides with another fleet on the same machine sets \
+                 `\"project\"` in `.claude/air.json`. Anything that sends to a worker's session \
+                 by its old harness-made name uses `<project>-<name>` after a relaunch.",
+    },
+    SurfaceChange {
+        id: "lane-lands",
+        since: "2026-09-25 (owner ruling 2026-09-14, air-jc2p.2)",
+        headline: "New `air lane [<name>]` starts the verification lane (worktree `lane` by \
+                   default): a worker session with AIR_ROLE=lane and the worker deny list minus \
+                   `air land`. `air land` is now refused to AIR_ROLE=coordinator as well as to \
+                   workers; the lane and the owner's own shell may land. `air close` is refused \
+                   to the lane as to a worker. Workers are denied `air lane`. The Stop hook skips \
+                   the nudge for AIR_ROLE=lane and no longer reads `verify_lane` to do it.",
+        silent_break: true,
+        action: "Start the lane with `air lane` (`air lane w4` keeps an existing worktree). A \
+                 lane still running as `air worker <name>` is refused `air land` and is offered \
+                 ready beads again until relaunched. A coordinator that landed must hand that to \
+                 the lane; the owner's shell (no AIR_ROLE) can still land by hand.",
+    },
+    SurfaceChange {
+        id: "coordinator-worktree",
+        since: "2026-09-25 (owner rulings 2026-09-14 and 2026-09-25, air-jc2p.1)",
+        headline: "`air coordinator` now creates or reuses `.claude/worktrees/coordinator` \
+                   (branch `worktree-coordinator`) and always starts in the tmux session \
+                   `<project>-coordinator`, attaching when it is already running. The \
+                   coordinator's session is recorded as `coordinator`, not `main`. Its branch is \
+                   batch-ready with no claimed bead once it has a commit main lacks, so its \
+                   commits reach main in the lane's batch.",
+        silent_break: true,
+        action: "Start the coordinator with `air coordinator` and attach with `tmux attach -t \
+                 <project>-coordinator`; it needs tmux. `.mcp.json` must be tracked so the \
+                 channel server is present in the worktree. Commit coordinator prose in its \
+                 worktree, not in the main checkout. Anything that looked up the coordinator's \
+                 session or events as `main` reads `coordinator` from now on.",
+    },
+    SurfaceChange {
+        id: "main-checkout-sessions",
+        since: "2026-09-25 (air-jc2p.3)",
+        headline: "`air status` prints `warning: <role> session <name> (pid N) runs in the main \
+                   checkout` for each launched session whose `claude` process has its working \
+                   directory there (`--json` `main_checkout_sessions`). The owner's own shell \
+                   (no AIR_ROLE) is exempt, and nothing is refused.",
+        silent_break: false,
+        action: "Relaunch such a session through `air coordinator`, `air lane` or `air worker`, \
+                 each of which runs in its own worktree.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2511,7 +2570,8 @@ mod tests {
         // air-97z kept landing commands out of roles.md so a repo's own lander stayed the
         // repo's. Reversed 2026-09-25 (owner): the fleet protocol is Air's, so roles.md names
         // how a lane's batch lands. `--all` is still absent: under a lane the unit is the batch.
-        assert!(ROLES_MD.contains("Landing is the coordinator's, not a worker's."));
+        // air-jc2p.2 (owner, 2026-09-14): the lane lands, and the coordinator no longer does.
+        assert!(ROLES_MD.contains("Landing is the lane's, not a worker's or the coordinator's"));
         assert!(ROLES_MD.contains("`air land --worker <lane>`"));
         assert!(!ROLES_MD.contains("`air land --all`"));
         // air-03w (owner, 2026-08-29): signalling on close is part of the worker role, and

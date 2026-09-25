@@ -270,7 +270,8 @@ enum Cmd {
     /// <project>-<name> instead, prints `tmux attach -t <project>-<name>`, and exits 0.
     /// AIR_CLAUDE_BIN overrides the claude binary; AIR_TMUX_SOCKET selects a tmux socket.
     Worker {
-        /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
+        /// Worktree name. Omitted, Air picks the next free `worker-<N>` (air-5lg, air-jc2p.4).
+        /// `main`, `coordinator` and `lane` are refused: they name other roles.
         name: Option<String>,
         /// Remove the lane's worktree instead of launching. Refused, naming what holds it,
         /// while it has uncommitted work, a harness lock, or a tmux session; the branch stays.
@@ -284,6 +285,28 @@ enum Cmd {
         task: Option<String>,
         /// Model to launch on, e.g. `claude-opus-5`. Omitted, the session inherits whatever the
         /// harness gives it, and the ledger records what it actually got (air-air).
+        #[arg(long)]
+        model: Option<String>,
+        /// Print the command instead of running it.
+        #[arg(long)]
+        print: bool,
+        /// Extra arguments passed to `claude` (after `--`).
+        #[arg(last = true)]
+        extra: Vec<String>,
+    },
+    /// Start the verification lane: a worker session in `.claude/worktrees/<name>` (default
+    /// `lane`) with AIR_ROLE=lane and the worker deny list minus `air land`. The lane lands
+    /// batches; `air land` is refused to every other launched role (air-jc2p.2).
+    Lane {
+        /// Worktree name; `lane` when omitted.
+        name: Option<String>,
+        /// Run in a tmux pane the owner can attach to.
+        #[arg(long)]
+        tmux: bool,
+        /// Initial task, as its first prompt (implies --tmux).
+        #[arg(long)]
+        task: Option<String>,
+        /// Model to launch on; inherited when omitted.
         #[arg(long)]
         model: Option<String>,
         /// Print the command instead of running it.
@@ -509,6 +532,21 @@ fn main() -> ExitCode {
             extra,
             ..
         } => cmd::launch::worker(
+            &repo,
+            name.as_deref(),
+            &with_model(model.as_deref(), &extra),
+            tmux,
+            task.as_deref(),
+            print,
+        ),
+        Cmd::Lane {
+            name,
+            tmux,
+            task,
+            model,
+            print,
+            extra,
+        } => cmd::launch::lane(
             &repo,
             name.as_deref(),
             &with_model(model.as_deref(), &extra),
