@@ -69,7 +69,7 @@ enum Cmd {
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
     Record {
-        /// verify | docs-check | fitness
+        /// verify | docs-check | fitness | precheck
         kind: String,
         /// The command to run (after `--`).
         #[arg(last = true, required = true)]

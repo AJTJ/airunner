@@ -13,6 +13,9 @@ pub enum Kind {
     Verify,
     DocsCheck,
     Fitness,
+    /// A worker's cheap check under a verification lane (plan 0009 B2). Its own kind so that a
+    /// precheck green is never read as a verify green: every green query takes the kind.
+    Precheck,
 }
 
 impl Kind {
@@ -21,6 +24,7 @@ impl Kind {
             Kind::Verify => "verify",
             Kind::DocsCheck => "docs-check",
             Kind::Fitness => "fitness",
+            Kind::Precheck => "precheck",
         }
     }
 
@@ -29,6 +33,7 @@ impl Kind {
             "verify" => Some(Kind::Verify),
             "docs-check" => Some(Kind::DocsCheck),
             "fitness" => Some(Kind::Fitness),
+            "precheck" => Some(Kind::Precheck),
             _ => None,
         }
     }
@@ -724,6 +729,7 @@ mod tests {
     #[case("verify", Some(Kind::Verify))]
     #[case("docs-check", Some(Kind::DocsCheck))]
     #[case("fitness", Some(Kind::Fitness))]
+    #[case("precheck", Some(Kind::Precheck))]
     #[case("nope", None)]
     fn kind_round_trips(#[case] s: &str, #[case] k: Option<Kind>) {
         assert_eq!(Kind::parse(s), k);

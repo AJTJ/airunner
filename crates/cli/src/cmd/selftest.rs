@@ -175,6 +175,30 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // Plan 0009 B2: the one arm that reads the precheck, inverted rather than deleted, so the
+    // undeclared path (the green half) is untouched and only the declared refusal falls.
+    (
+        "status: where the repo declares a precheck, batch-ready wants a green one at the head (`no-precheck` names the command); undeclared, the rule is unchanged",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "if f.precheck_required && !f.precheck_green_at_head {",
+            to: "if f.precheck_required && f.precheck_green_at_head {",
+            also_red: &[],
+        },
+    ),
+    // The collapse the kind exists to prevent: a precheck row written under the verify kind.
+    // The idle probe falls with it, seen: its in-flight line then reads "verify in flight".
+    (
+        "ledger: a green precheck is found as a precheck and never as a verify green, by commit, by tree, or as a batch candidate",
+        Mutation {
+            file: "crates/ledger/src/verify.rs",
+            from: "Kind::Precheck => \"precheck\",",
+            to: "Kind::Precheck => \"verify\",",
+            also_red: &[
+                "attention: idle-without-claim is silent for a worker whose own verify is in flight",
+            ],
+        },
+    ),
     // air-88av. The anchor widens the lookup from "unmerged" to "everything but a deletion" —
     // lowercase in `--diff-filter` EXCLUDES, so `d` matches every modified path. Verified in a
     // fixture rather than reasoned about, after my first comment here claimed the opposite.
@@ -2216,6 +2240,8 @@ fn all_probes() -> Vec<Probe> {
         probe_holdings_tags_name_their_tense(),
         probe_install_reports_a_stale_bd_prime_hook(),
         probe_batch_ready_is_a_fact_with_three_parts(),
+        probe_batch_ready_wants_a_precheck_where_declared(),
+        probe_a_precheck_green_is_never_a_verify_green(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -4346,11 +4372,16 @@ fn probe_idle_without_claim_counts_claimable_only() -> Probe {
 /// Red: an in-flight verify for this worker silences the condition. Green: the same worker with
 /// no verify running is still reported, and a verify belonging to somebody else does not
 /// silence it — so the fix cannot be a blanket suppression.
+///
+/// Plan 0009 B2 widened red to a `precheck` in flight: an adopter's coordinator nudged a worker
+/// as idle 400 s into a precheck Air could not see. It silences the condition and the status
+/// line's "idle, no claim" alike, and the in-flight line names the kind. The mutation that made
+/// that half red, seen: the status line's `idle_no_claim` without `!verify_running(..)`.
 fn probe_idle_without_claim_silent_while_verifying() -> Probe {
-    use crate::cmd::status::{Snapshot, Thresholds, attention};
+    use crate::cmd::status::{Snapshot, Thresholds, attention, render_for_probe};
 
     // Whoever the in-flight row names; None for no row at all.
-    let at = |running: Option<&str>| Snapshot {
+    let at_kind = |running: Option<&str>, kind: air_ledger::verify::Kind| Snapshot {
         at: "2026-09-06T12:30:00Z".into(),
         workers: vec![crate::cmd::status::WorkerView {
             worker: "w4".into(),
@@ -4372,7 +4403,7 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
                     id: "01J".into(),
                     worker: w.into(),
                     sha: "cafe1234".into(),
-                    kind: air_ledger::verify::Kind::Verify,
+                    kind,
                     command: "make verify".into(),
                     pid: Some(4242),
                     started_at: "2026-09-06T12:14:15Z".into(),
@@ -4381,6 +4412,7 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
             .unwrap_or_default(),
         ..Default::default()
     };
+    let at = |running: Option<&str>| at_kind(running, air_ledger::verify::Kind::Verify);
     let fires = |s: &Snapshot| {
         attention(s, "2026-09-06T12:30:00Z", Thresholds::default())
             .iter()
@@ -4388,7 +4420,12 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
     };
 
     // The reported state, to the second: idle 30 min, 58 claimable, own verify 945 s in.
-    let red = !fires(&at(Some("w4")));
+    let prechecking = at_kind(Some("w4"), air_ledger::verify::Kind::Precheck);
+    let shown = render_for_probe(&prechecking);
+    let red = !fires(&at(Some("w4")))
+        && !fires(&prechecking)
+        && shown.contains("precheck in flight: w4")
+        && !shown.contains("idle, no claim");
     let green =
         // Without the run, this is an ordinary idle worker and the condition is the point.
         fires(&at(None))
@@ -6350,6 +6387,8 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         green_at_head: false,
         carried: vec!["zz-1".into(), "zz-9".into()],
         held: vec!["zz-1".into()],
+        precheck_required: false,
+        precheck_green_at_head: false,
     };
     let ready = batch_ready_rule(&base);
     let line = render_for_probe(&Snapshot {
@@ -6387,6 +6426,109 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         && !render_for_probe(&Snapshot::default()).contains("batch-ready");
     Probe {
         name: "status: batch-ready is two facts (not landable on its own, a claimed bead named); a branch behind main stays listed, a landable one is absent with its reason",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// Plan 0009 B2: where `.claude/air.json` declares `"precheck": true`, a branch is batch-ready
+/// only with a green `precheck` run at its head. An adopter gated its lane on a precheck log
+/// file and "checked at <sha>" messages, 2026-09-05..07, and cut a worker before its check
+/// finished; a ledger row at the head is the fact that log stood for.
+///
+/// Red: declared and no green precheck at the head, the branch is absent with `no-precheck`
+/// and a fixing line naming `air record precheck --`. Green: declared with a green precheck, it
+/// is listed; undeclared, the rule is exactly what it was, precheck or none.
+///
+/// The mutation that made it red, seen: the arm reading `f.precheck_green_at_head` instead of
+/// `!f.precheck_green_at_head`, which lists the unchecked head and refuses the checked one.
+fn probe_batch_ready_wants_a_precheck_where_declared() -> Probe {
+    use crate::cmd::status::{BatchFacts, batch_ready_rule};
+
+    let base = BatchFacts {
+        worker: "alpha".into(),
+        head: "abcdef1234567890".into(),
+        contains_main: true,
+        green_at_head: false,
+        carried: vec!["zz-1".into()],
+        held: vec!["zz-1".into()],
+        precheck_required: true,
+        precheck_green_at_head: false,
+    };
+    let red_fires = batch_ready_rule(&base).is_err_and(|n| {
+        n.check == "no-precheck"
+            && n.detail.contains("alpha at abcdef12")
+            && n.detail.contains("air record precheck --")
+    });
+    let checked = batch_ready_rule(&BatchFacts {
+        precheck_green_at_head: true,
+        ..base.clone()
+    });
+    let undeclared = batch_ready_rule(&BatchFacts {
+        precheck_required: false,
+        ..base.clone()
+    });
+    let green_passes =
+        checked.is_ok_and(|b| b.beads == ["zz-1"]) && undeclared.is_ok_and(|b| b.beads == ["zz-1"]);
+    Probe {
+        name: "status: where the repo declares a precheck, batch-ready wants a green one at the head (`no-precheck` names the command); undeclared, the rule is unchanged",
+        red_fires,
+        green_passes,
+    }
+}
+
+/// Plan 0009 B2, the other half: a `precheck` is a worker's cheap check, and the close gate,
+/// the landable list and `air land` all ask for a `verify` green. They ask through
+/// `green::at` and the ledger's kind-keyed queries, so this is one question: does a green
+/// precheck at a sha answer "is this sha verify-green"? It must not; the reverse holds too.
+///
+/// Red: a green precheck recorded at a sha is found as a precheck green there. Green: the same
+/// sha has no verify green, by commit or by tree, and no verify candidate for a batch.
+///
+/// The mutation that made it red, seen: `Kind::Precheck => "precheck"` in `Kind::as_str`
+/// written as `Kind::Precheck => "verify"`, so the row is stored as a verify.
+fn probe_a_precheck_green_is_never_a_verify_green() -> Probe {
+    let (red_fires, green_passes) = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "alpha".into(),
+            sha: "c0ffee00".into(),
+            kind: Kind::Precheck,
+            exit_code: 0,
+            trigger: "record".into(),
+            failing_step: None,
+            started_at: "2026-09-25T00:00:00Z".into(),
+            finished_at: "2026-09-25T00:00:01Z".into(),
+            log_path: None,
+            command: Some("make precheck".into()),
+            duration_ms: Some(5_000),
+            output_bytes: Some(10),
+            dirty: false,
+            tree: Some("7ree".into()),
+            members: vec![],
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        let red = l
+            .green_at("c0ffee00", Some("7ree"), Kind::Precheck)
+            .map_err(|e| e.to_string())?
+            .is_some();
+        let green = l
+            .green_at("c0ffee00", Some("7ree"), Kind::Verify)
+            .map_err(|e| e.to_string())?
+            .is_none()
+            && l.latest_greens(Kind::Verify, 10)
+                .map_err(|e| e.to_string())?
+                .is_empty()
+            && l.runs_at("c0ffee00", Kind::Verify)
+                .map_err(|e| e.to_string())?
+                == (0, 0);
+        Ok((red, green))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: "ledger: a green precheck is found as a precheck and never as a verify green, by commit, by tree, or as a batch candidate",
         red_fires,
         green_passes,
     }

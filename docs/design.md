@@ -137,14 +137,14 @@ Any session may run these.
 
 | Command | What it does |
 |---|---|
-| air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. |
+| air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. |
 | air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. |
 | air claim | The only way to claim a bead. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
 | air release | Returns a bead in progress to open. It never reopens a closed bead. The coordinator can release a claim held by a worker that has gone. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. |
-| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, verifications running, and whether the install is out of date. |
+| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), and whether the install is out of date. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
 | air selftest | Runs a red and a green probe for every check. There are 152 probes today. |
@@ -188,7 +188,7 @@ set of thresholds, with no git involved.
 | idle with claim | A worker holds a bead and has been idle past the threshold. |
 | silent with claim | A worker holds a bead and its session has written nothing for a while. |
 | gone with claim | A worker holds a bead and its process has gone. |
-| idle without claim | A worker is idle with nothing claimed while beads are ready. |
+| idle without claim | A worker is idle with nothing claimed while beads are ready, and no check of its own (verify or precheck) is running. |
 | handover not green | Someone tried to close a bead without the green the gate wants. |
 | landed not closed | A bead's commits are on main but the bead is still open. |
 | landable | A branch is green and contains main. |
@@ -218,7 +218,7 @@ Every hook call, including the silent ones, writes one event line.
 | .air/installed.json | The version and notices this repository has been installed with. |
 | .air/ready.json | A cached list of ready beads, used by the stop nudge. |
 | .air/tasks | A worker's first task, kept off the command line. |
-| .claude/air.json | The repository's config: extra deny patterns for each role, the verification lane's name, how greens are matched, where digests and journals live, and whether Metis is attached. |
+| .claude/air.json | The repository's config: extra deny patterns for each role, the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, where digests and journals live, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per worker. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
@@ -619,7 +619,7 @@ Docs:
 | worktree | A separate checkout of the repository on its own branch, one per worker. |
 | main checkout | The repository's own directory, on main, where the ledger lives. |
 | green | A successful recorded verification run at a commit, a tree, or a batch. |
-| batch ready | A branch that contains main, names a bead its worker holds, and has no green yet. |
+| batch ready | A branch that names a bead its worker holds and is not landable on its own; where the repo declares `precheck`, it also has a green precheck at its head. |
 | landing | Moving main forward onto a verified tree. |
 | digest | A worker's committed note for a bead, naming the bead. |
 | capture | One item in the coordinator's inbox. |
