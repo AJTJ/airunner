@@ -235,13 +235,21 @@ fn launchers_print_the_exact_command() {
 
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
-    assert!(
-        out.starts_with(
-            "AIR_ROLE=coordinator AIR_PROJECT=zz claude --dangerously-load-development-channels server:air "
-        ),
-        "{out}"
-    );
+    // air-jc2p.1: its own worktree, in the tmux session `<project>-coordinator`, channel attached.
+    let wt = repo.join(".claude/worktrees/coordinator");
+    for want in [
+        "tmux new-session ".to_string(),
+        " -s zz-coordinator ".to_string(),
+        " -e AIR_ROLE=coordinator -e AIR_PROJECT=zz ".to_string(),
+        format!(" -c {} ", wt.display()),
+        " -- claude --dangerously-load-development-channels server:air ".to_string(),
+        " --name zz-coordinator ".to_string(),
+    ] {
+        assert!(out.contains(&want), "{want}: {out}");
+    }
     assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
+    // `--print` runs nothing: no worktree made.
+    assert!(!wt.exists());
 
     // air-9dg: a pass-through --settings merges into Air's; the line carries one, with both.
     let (code, out, err) = air(

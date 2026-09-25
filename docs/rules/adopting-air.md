@@ -21,7 +21,7 @@ and habits. If yours does not, this is the whole procedure.
     air init --write                              # applies it
     $EDITOR Makefile                              # put your real check in the `verify` target
     air record verify -- make verify              # the first proof
-    air coordinator                               # main checkout, the channel attached
+    air coordinator                               # worktree + tmux <project>-coordinator, channel
     air worker --tmux --task "<a complete task>"   # worktree worker-1, tmux <project>-worker-1
     air lane --tmux                               # the verification lane; only it lands
 
@@ -819,7 +819,7 @@ want back. Nothing here needs an uninstall path.
 
 ## 6. Day one, in order
 
-`air coordinator` in the main terminal. `air worker <name>` per worktree terminal (re-enters an
+`air coordinator` (its own worktree and tmux session; nobody works in the main checkout), then `air lane --tmux`. `air worker <name>` per worktree terminal (re-enters an
 existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
 `air record verify -- <cmd>` (or wait for the lane's green) → `bd close <id> --reason-file <proof>`, which the gate refuses without a recorded green at a commit containing `main`. Coordinator:
 reads `air status`, acts on channel events, triages every `air inbox` capture into a bead

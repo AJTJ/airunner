@@ -1029,8 +1029,6 @@ pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
     None
 }
 
-/// Role is a property of the checkout (research: agent-roles-and-confinement §1): the main
-/// checkout is the coordinator, every worktree is a worker.
 /// Which session this hook is running in (air-75u).
 ///
 /// The hook derived it from the input's `cwd` alone, and that is the SHELL's directory: a
@@ -1044,9 +1042,13 @@ pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
 /// worker), every hook inherits it, and it cannot wander. The checkout-derived name is the
 /// fallback for a session Air did not launch. Env is passed in, not read here, so the tests
 /// do not depend on the environment they run in (air-7ah).
+///
+/// The coordinator is `coordinator`, the name of its worktree since air-jc2p.1, so its session
+/// row and its worktree are one row in `air status`. It was `main` while it ran in the main
+/// checkout.
 pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> String {
     match (role, actor) {
-        (Some("coordinator"), _) => "main".to_string(),
+        (Some("coordinator"), _) => "coordinator".to_string(),
         (Some("worker" | "lane"), Some(a)) if !a.is_empty() => a.to_string(),
         _ => derived.to_string(),
     }
@@ -1371,8 +1373,14 @@ mod tests {
     /// air-75u: the launcher's word beats the shell's directory, and only the launcher's.
     #[test]
     fn identity_is_the_launchers_and_the_checkout_only_as_a_fallback() {
-        assert_eq!(identity_from(Some("coordinator"), None, "w1"), "main");
-        assert_eq!(identity_from(Some("coordinator"), Some("x"), "w1"), "main");
+        assert_eq!(
+            identity_from(Some("coordinator"), None, "w1"),
+            "coordinator"
+        );
+        assert_eq!(
+            identity_from(Some("coordinator"), Some("x"), "main"),
+            "coordinator"
+        );
         assert_eq!(identity_from(Some("worker"), Some("w2"), "w1"), "w2");
         // A worker launch without an actor, or an actor without a role (every test helper sets
         // BEADS_ACTOR=tester), is what the checkout says.

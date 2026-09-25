@@ -7,8 +7,12 @@
 //! appended to the system prompt, a deny list that holds in every permission mode, and env
 //! that used to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
 //! Lane (`air lane`, air-jc2p.2): a worker launch with `AIR_ROLE=lane` and `air land` allowed.
-//! Coordinator: `claude` in the main checkout with the Air channel attached so attention
-//! conditions are delivered into the session, plus Metis when the repo declares it (air-g5o).
+//! Coordinator: `claude` in its own worktree, `.claude/worktrees/coordinator`, always in the
+//! tmux session `<project>-coordinator` (air-jc2p.1), with the Air channel attached so
+//! attention conditions are delivered into the session, plus Metis when the repo declares it
+//! (air-g5o). The channel server is `.mcp.json`'s, which is tracked and so present in the
+//! worktree, and the ledger it polls resolves through the git common dir to the main checkout's
+//! `.air/` from any worktree (`air_ledger::paths::air_dir_for`).
 //!
 //! A `--task` never rides in argv. It is written to `<main>/.air/tasks/<name>.md` and the
 //! prompt claude receives is a fixed sentence naming that path (air-er0: the adopter's seven
@@ -883,7 +887,19 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
         }
     };
     let env = coordinator_env(&super::tmux::project_prefix(repo));
-    exec_claude(repo, &env, &argv, print)
+    // Its own worktree, like every other role (owner, 2026-09-14 and 2026-09-25; air-jc2p.1).
+    // The failures: a coordinator's commit in the main checkout invalidated four workers'
+    // landability at an adopter on 2026-09-06, and a verify run there dirtied it and moved main
+    // under a worker's green here the same day. Its commits now reach main in the lane's batch.
+    // Always in tmux, so the owner attaches to it the way they attach to every worker; a second
+    // `air coordinator` attaches to the running one rather than starting another.
+    let name = "coordinator";
+    if !print && ensure_worktree(repo, name, "air coordinator").is_err() {
+        return 1;
+    }
+    let wt = super::worktree::dir_for(&super::worktree::main_checkout(repo), name);
+    let detached = launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
+    spawn_tmux(repo, &wt, name, &env, &argv, detached, print)
 }
 
 #[cfg(test)]
