@@ -447,6 +447,21 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "land-main-readers",
+        class: "warning",
+        what: "`air land` names, before moving main, every process that is not a Claude Code \
+               session with its cwd in the main checkout. A warning; nothing is refused.",
+        added: "2026-09-25 (owner; an adopter's `make tree-readers`, 2026-09-07)",
+        source: "crates/cli/src/cmd/readers.rs, main_warning",
+        fires: Fires::Decisions(&[("land", "main-readers")]),
+        // The subject is a landing with an unrecorded run in main. With no session in the
+        // main checkout (plan 0009) that is a program somebody ran by hand, so a zero here is
+        // only evidence over a round in which landings happened (the `land` rows say so).
+        removal: Removal::ZeroFirings(
+            "a full round of landings with zero firings, or every run in the main checkout recorded through `air record`, so the in-flight refusal already sees it",
+        ),
+    },
+    Mechanism {
         id: "land-in-flight-override",
         class: "report",
         what: "`air land --despite-inflight` landed over a verify in flight; the runs destroyed \

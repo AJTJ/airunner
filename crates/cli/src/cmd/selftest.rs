@@ -730,6 +730,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "attention: idle-without-claim is silent for a worker whose tree has a process that is not its session, and the land warning names it",
+        Mutation {
+            // Restores the predicate as it stood on 2026-09-07 at an adopter: only runs Air
+            // recorded count as progress, so an unrecorded precheck reads as doing nothing.
+            file: "crates/cli/src/cmd/status.rs",
+            from: "                            && !tree_busy(s, &w.worker)\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    (
         "handover: a member of a standing red batch is told so, and a non-member is never told it was not",
         Mutation {
             // Drops the membership test, so every worker gets the batch line whether or not
@@ -2287,6 +2298,7 @@ fn all_probes() -> Vec<Probe> {
         probe_air_runs_no_conflicting_merge(),
         probe_idle_without_claim_counts_claimable_only(),
         probe_idle_without_claim_silent_while_verifying(),
+        probe_idle_without_claim_silent_while_its_tree_is_read(),
         probe_handover_names_a_red_batch_you_are_in(),
         probe_epic_count_carries_no_instruction(),
         probe_doctor_names_the_binary_against_the_checkout(),
@@ -4396,6 +4408,97 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
         && fires(&at(Some("other")));
     Probe {
         name: "attention: idle-without-claim is silent for a worker whose own verify is in flight",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// Tree readers (owner, 2026-09-25): `idle-without-claim` is silent for a worker whose tree has
+/// a process that is not its session, and `air land`'s warning names a reader of main.
+///
+/// An adopter's worker under a lane ran an unrecorded precheck; with no claim and no recorded
+/// run it read as idle and the coordinator prompted a busy worker (2026-09-07). Their fix was
+/// a process listing by cwd, run before calling anyone idle.
+///
+/// Red: a `cargo` reached through the worker's shell, cwd in its tree, silences the condition.
+/// Green: the condition still fires with no reader, with only the session's own processes in
+/// the tree (claude, its `air mcp`), with the reader in another worker's tree, and when the
+/// lookup could not answer, so the exemption cannot be a blanket one; and the land warning
+/// names the pid of a reader of main and says nothing when only a session is there.
+fn probe_idle_without_claim_silent_while_its_tree_is_read() -> Probe {
+    use crate::cmd::readers::{Proc, Raw, TreeReaders, group, main_warning};
+    use crate::cmd::status::{Snapshot, Thresholds, attention};
+
+    let proc_ = |pid: i64, ppid: i64, command: &str| Proc {
+        pid,
+        ppid,
+        elapsed_secs: Some(200),
+        command: command.into(),
+    };
+    let trees = vec![
+        ("main".to_string(), "/r".to_string()),
+        ("w1".to_string(), "/r/.claude/worktrees/w1".to_string()),
+        ("w10".to_string(), "/r/.claude/worktrees/w10".to_string()),
+    ];
+    // claude (11) in w1 with its MCP server (12) and a Bash-tool shell (13); `extra` adds
+    // processes with their cwds.
+    let readers = |extra: &[(Proc, &str)]| {
+        let mut raw = Raw {
+            procs: vec![
+                proc_(10, 1, "-zsh"),
+                proc_(11, 10, "claude"),
+                proc_(12, 11, "air"),
+                proc_(13, 11, "zsh"),
+            ],
+            cwds: vec![
+                (11, "/r/.claude/worktrees/w1".into()),
+                (12, "/r/.claude/worktrees/w1".into()),
+            ],
+        };
+        for (p, cwd) in extra {
+            raw.cwds.push((p.pid, (*cwd).to_string()));
+            raw.procs.push(p.clone());
+        }
+        group(&raw, &trees, &std::collections::BTreeSet::new(), 99_999)
+    };
+    let snap = |r: TreeReaders| Snapshot {
+        at: "2026-09-07T12:30:00Z".into(),
+        workers: vec![crate::cmd::status::WorkerView {
+            worker: "w1".into(),
+            role: "worker".into(),
+            session: Some(crate::cmd::status::Session {
+                session_id: "s".into(),
+                state: "idle".into(),
+                changed_at: "2026-09-07T12:00:00Z".into(),
+                pid_alive: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ready_depth: Some(5),
+        claimable_depth: Some(5),
+        tree_readers: r,
+        ..Default::default()
+    };
+    let fires = |r: TreeReaders| {
+        attention(&snap(r), "2026-09-07T12:30:00Z", Thresholds::default())
+            .iter()
+            .any(|a| a.kind == "idle-without-claim")
+    };
+    let precheck = [(proc_(14, 13, "cargo"), "/r/.claude/worktrees/w1/crates")];
+
+    let red = !fires(readers(&precheck));
+    let green = fires(readers(&[]))
+        && fires(readers(&[(
+            proc_(14, 13, "cargo"),
+            "/r/.claude/worktrees/w10",
+        )]))
+        && fires(TreeReaders::unknown("lsof could not start"))
+        && main_warning(&readers(&[(proc_(20, 1, "node"), "/r/src")]), "/r")
+            .is_some_and(|w| w.contains("pid 20 node"))
+        && main_warning(&readers(&[(proc_(21, 11, "caffeinate"), "/r")]), "/r").is_none();
+    Probe {
+        name: "attention: idle-without-claim is silent for a worker whose tree has a process that is not its session, and the land warning names it",
         red_fires: red,
         green_passes: green,
     }
