@@ -42,7 +42,7 @@ pub const GIT: &str = "git";
 pub const GIT_WORKTREE: &str = "git-worktree";
 /// A wait for the SQLite write lock, against the busy timeout.
 pub const SQLITE_LOCK: &str = "sqlite-lock";
-/// One `air` subprocess behind an MCP tool call — 20 s.
+/// One `air` subprocess behind an MCP tool call — 20 s for a read, more for a bd write.
 pub const MCP_TOOL: &str = "mcp-tool";
 /// One `air hook` invocation, against the cap `air install` writes into `settings.json`.
 /// Censored at the cap: Claude Code kills the hook, and a killed hook records nothing. See
