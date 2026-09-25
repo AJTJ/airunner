@@ -103,7 +103,7 @@ pub const CATALOGUE: &[Budget] = &[
     Budget {
         name: air_ledger::budgets::GIT_WORKTREE,
         site: "crates/cli/src/cmd/worktree.rs GIT_BUDGET (120 s)",
-        protects: "`worktree add`, the include listing, and worktree removal",
+        protects: "`worktree add`, the include listing, worktree removal, and `air batch cut`'s merges",
         fails: Fails::Closed,
     },
     Budget {
