@@ -174,7 +174,10 @@ state; `docs/design.md`).
   agents out of the same code.
 - `discovered-from` for follow-up work found mid-task; `parent-child` for epic decomposition.
 - `bd dep cycles` must return empty; run it when the graph changes materially.
-- `bd dep tree <id> --json` to see what an epic unblocks.
+- `bd dep tree <id>` walks UP, to a bead's parent, never down: on an epic it shows only the
+  epic. An epic's children come from `bd list --parent <epic>`. Re-checked on bd 1.2.2,
+  2026-09-25. An adopter's coordinator told the owner five of six epics had no children; they
+  had 68 (their process notes, 2026-09-11).
 
 ## What belongs in beads
 
@@ -189,6 +192,12 @@ diff. Durable knowledge goes in `docs/` or a bead's own description and comments
 also forbids Claude memory; `CLAUDE.md` Rules).
 
 ## Known traps (bd 1.2.1)
+
+- **`bd close` on an already-closed bead prints success, exits 0, and stores nothing**: the
+  first close's reason stands. Re-checked on bd 1.2.2, 2026-09-25 (`✓ Closed … second`, stored
+  reason `first`). When another session may have closed it first, put your evidence in
+  `bd comment`. An adopter lost six close reasons this way on 2026-08-15, and built a false
+  account of the tracker on the apparent success.
 
 Ported from the adopter's field notes (its `CLAUDE.md:785-949` at `f2ca891`, "Beads Issue
 Tracker" rules; each item cites the line range it came from). That file is **not** copied into

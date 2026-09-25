@@ -245,6 +245,19 @@ pub fn digest_dir(repo: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// `verify_lane` from `.claude/air.json`: which worker is the verification lane.
+///
+/// Read by one thing, the Stop hook's nudge, which offers ready beads to every worker but this
+/// one: a lane claims none, and an adopter recorded the Stop hook offering its lane ready beads
+/// as advice that was wrong under a lane (plan 0009 §11). The gate and `air handover` still do
+/// not branch on it. Removed when the lane has its own launcher and role (plan 0009 step 2).
+pub fn verify_lane(repo: &Path) -> Option<String> {
+    air_json(repo)?
+        .get("verify_lane")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// `journal_dir` from `.claude/air.json`: where each session appends what it hit (air-3xww).
 ///
 /// Configured rather than hard-coded, the same way `digest_dir` is, because where a repo keeps

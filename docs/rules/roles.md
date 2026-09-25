@@ -1,9 +1,10 @@
 # Roles: coordinator and worker
 
 > Read at session start. Markers: **[Air enforces]** a refusal, deny rule, or native block;
-> **[fact]** something Air records or answers; everything else is yours to judge. Domain rules
-> AND the repo's own work flow — how a finished bead is handed on — live in the repo's
-> CLAUDE.md, not here; Air states what it records and what it refuses. Background:
+> **[fact]** something Air records or answers; everything else is yours to judge. This file is
+> the fleet's whole protocol: how work moves from a claim to main, for every role. The repo's
+> CLAUDE.md holds only what is its own — its domain rules, its verify and precheck commands,
+> its worktree setup, its shared resources (owner, 2026-09-25). Background:
 > [`../research/agent-roles-and-confinement.md`](../research/agent-roles-and-confinement.md).
 
 ## Which role am I
@@ -44,8 +45,47 @@ your first piece of work, not at session start; the two sentences above are the 
 difference.
 
 Claiming a bead is a commitment to work it to completion now: `air claim <id> [--files a,b]`,
-then the work. **How a finished bead is handed on is the repo's own flow, in its CLAUDE.md,
-not Air's to prescribe** — some repos hand over for review, some close with proof.
+then the work. **You close your own bead, with proof** (owner, 2026-08-22): no review step,
+no `awaiting_review`. Which of the two sequences below is in force is `verify_lane` in
+`.claude/air.json`: a key naming a worker means a verification lane runs, no key means none.
+
+**Without a lane:**
+
+    air claim <id> [--files a,b]
+    … the work; the digest, committed (below)
+    git merge main
+    air record verify -- <the repo's verify command>   # last, so the green contains main
+    bd close <id> --reason-file <proof>
+
+**With a lane** you run no verify of your own: the batch only forms if workers stop verifying
+individually (an adopter parked a lane whose batch never came, 2026-08-29).
+
+    air claim <id> [--files a,b]
+    … the work, every commit with a `Bead: <id>` trailer; the digest, committed
+    … the repo's precheck, if it names one
+    … your branch is now batch-ready in `air status`; keep working, the lane takes it
+    bd close <id> --reason-file <proof>   # on the lane's green; `air handover` says when
+
+Under a lane, three facts about your branch. **You need not merge main to stay batch-ready**:
+the lane merges main forward at the cut, so merge it for your own staleness or to resolve a
+conflict the lane named, not after every landing. **Once a sha has left your worktree, commit
+forward and never amend**: the lane cut at that sha, and an amend forks beside it, so the lane
+can only drop you. **A commit you make after the cut waits for the next batch**, and the close
+gate refuses the bead while that commit is not in a green, naming it. **[fact]**
+
+**Proof is a command and its output, a `file:line`, or a passing test** — not a description of
+the approach. Use `--reason-file` once it is more than a line or two: the harness refuses a
+long `--reason "…"` by the shape of the command line, and the tempting fix is to shorten the
+proof (`bd close --reason-file`, `air close --reason-file`, `air capture --file`). If part of
+a bead needs the owner, close what you did and ask for a successor bead naming what they must
+do; an open remainder gets re-claimed and re-derived by the next worker.
+
+**A conflict is yours to resolve, in your worktree**: the lane drops a conflicting member and
+names it, and a branch that does not merge cleanly is not finished. Two conflicts that merge
+as text and are still wrong: both sides adding the same item (keeping both parses), and both
+sides adding to a count or a list (the text merges, the claims contradict). Check a merge by
+`git ls-files -u` being empty and no conflict markers, never by piped output (an adopter,
+2026-09). **[fact]**
 
 **Signal the coordinator when you close a bead** (owner, 2026-08-29). One `SendMessage`: the
 bead, the proof, and whether your branch is now landable. Nothing polls for this on your behalf
@@ -150,20 +190,27 @@ it batches it holds no bead; between batches it may hold one **if its worktree s
 cut** (air-80x.6, narrowed by air-4noi). A lane that resets hard to main on every cut — the
 simplest way to make a batch contain main and nothing else — would hold that bead in a tree it
 is about to wipe; a lane that merges main forward and integrates on a throwaway branch keeps
-it. Which of the two a repo runs is its own flow, and Air reads neither. Facts and refusals
-only, nothing about cadence or who the lane is: that is the repo's flow, in its CLAUDE.md.
+it. Which worker is the lane is `verify_lane` in `.claude/air.json`; the Stop hook offers
+it no ready beads (plan 0009 §11). **[fact]**
+
+**The lane's loop.** Read `air status` (`batch-ready:`, or `--json` `batch_ready`); merge
+`main` and every batch-ready branch at the sha listed, never a sha from a message; run the
+repo's test-state reset if it names one; `air record verify -- <verify command>`; report to the
+coordinator and each member. A branch that conflicts, with main or another member, is dropped
+and named to its worker, never resolved by the lane. A red lands nothing.
 
 **What Air records.** A batch is a commit on the lane's branch that contains `main` and the
 member branches at the shas it merged. `air record verify -- <cmd>` at that commit records the
 green or red, and the landing row names the member heads the batch contained (air-80x.2).
 `air status` lists the branches that are batch-ready as a fact, `batch-ready: <worker> at
-<sha> (<beads>)`: head contains `main`, no green at that head, a `Bead:` trailer naming a bead
-the worker holds; `--json` gives the first fact each other branch lacks (air-80x.3). A red
-batch is reported by member, in `air record`'s output and in `air status`, until a newer batch
-supersedes it; nothing lands, closes or claims differently on a red (air-80x.4). **A member
-can look it up rather than wait to be told**: `air handover`, run in your own worktree, names
-the batch, the lane and where the lane's output is when the standing red batch has your branch
-in it (air-hpp8). Silence there is not a statement that you were not in one — Air knows the
+<sha> (<beads>)`: not landable on its own (a green at a head that contains `main`), and a
+`Bead:` trailer naming a bead the worker holds; `--json` gives the first fact each other
+branch lacks (air-80x.3). Being behind `main` does not take a branch out: the lane merges it
+forward at the cut (owner, 2026-09-25). A red batch is reported by member, in `air record`'s
+output and in `air status`, until a newer batch supersedes it; nothing lands, closes or claims
+differently on a red (air-80x.4). **A member can look it up rather than wait to be told**:
+`air handover`, run in your own worktree, names the batch, the lane and where the lane's output
+is when the standing red batch has your branch in it (air-hpp8). Silence there is not a statement that you were not in one — Air knows the
 membership only from what the run recorded. **[fact]**
 
 **What Air refuses, and what it accepts.** The close gate accepts a green at a verified commit
@@ -172,10 +219,6 @@ lane's green with no verify run of its own (air-80x.1). A bead with a commit aft
 refused, naming that commit. Landing stays the coordinator's: `air land --worker <lane>` lands
 the batch and attributes every bead its range names by trailer (air-80x.2). The in-flight
 refusal treats the lane's verify like any other (air-4cr). **[Air enforces]**
-
-**Two ordering facts.** A batch is cut at specific shas, so a worker's commit after the cut is
-not in it and waits for the next. A lane merges branches it did not write, so a branch that
-conflicts is dropped from the batch and named, never resolved by the lane. **[fact]**
 
 Removed when verify is cheap enough (scoped, or under a minute) that a round shows no batch of
 more than one branch; the role is a worker again.
@@ -206,9 +249,10 @@ a hazard without naming the alternative reads as "be careful", and careful is wh
 already was. **Removed when** a round passes with no bead named at a worker outside its own
 bead; if a sixth instance happens instead, prose has failed twice and the answer is recording
 the offer with an expiry.
-Ask the owner only for a genuine edge case (a blocker only they can clear, an ambiguous
-acceptance, a resource conflict), by filing a bead labelled `owner` with your recommendation in
-its description. Those beads are the owner's queue (air-uef); `air claim` refuses them to
+Ask the owner only for a genuine edge case (a blocker only they can clear, a product or design
+decision only they can make, a resource conflict), by filing a bead labelled `owner` with your
+recommendation in its description. An unclear acceptance is not one: it is a writing defect,
+and you re-derive or rewrite it (owner, ruled at an adopter and here 2026-09-25). Those beads are the owner's queue (air-uef); `air claim` refuses them to
 workers, and `air status` counts them on its `ready:` line.
 
 **Your context is the channel the owner and every worker reach, so keep it free.** Long reads,
@@ -274,9 +318,10 @@ every catch in the 2026-09-05 round. Incident: the 2026-08-22 05:26-05:45 stands
 where the quiet channel rested on the coordinator remembering to look. Removed when a condition
 catches a real wedge before the heartbeat does, twice. **[fact]**
 
-**Landing is the coordinator's, not a worker's.** *How* a branch reaches main is the repo's own
-flow and lives in its CLAUDE.md, exactly as hand-over does: some repos have their own lander,
-some use Air's. Air names no landing command here (air-97z).
+**Landing is the coordinator's, not a worker's.** Under a lane, land the lane's green batch
+with `air land --worker <lane>`, which attributes every bead its range names by trailer, as soon
+as the lane reports it; without a lane, `air land --worker <name>` for each landable branch.
+`air status` names what is ready.
 
 What Air states either way: a branch is landable when it carries a **recorded green at a head
 that contains `main`**; the beads a landing carries are the ones its commits name in a
@@ -334,8 +379,11 @@ Acceptance Criteria`; bug `## Steps to Reproduce` + `## Acceptance Criteria`; ep
 Criteria` (`## Acceptance Criteria` accepted); chore none (bd `internal/types/types.go`
 `RequiredSections`, main, read 2026-08-22; air-8zz). **[fact]** Workers request beads this way,
 including friction beads; they never create them.
-Every capture is triaged into a bead or dropped with a reason; nothing a worker writes reaches
-the owner unfiltered (air-uef, owner 2026-09-05: two queues reached the owner, and the prose one
+Every capture is triaged into a bead or dropped with a reason. **Before filing, ask what it
+changes tomorrow**: if somebody edits a file because of it, it is a bead; if a reader would only
+understand something better, it belongs in a note or the round log (an adopter's coordinator
+filed 56 process beads and 3 product ones in one night, 2026-09-07). Nothing a worker writes
+reaches the owner unfiltered (air-uef, owner 2026-09-05: two queues reached the owner, and the prose one
 carried no id, no acceptance and no recommendation). A bead the owner must decide is
 labelled `owner` with the coordinator's recommendation in its description; `air claim` refuses
 it to workers (the gate is `owner`, not `human`: `human` is presence, `owner` is authority;

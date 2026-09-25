@@ -1,8 +1,18 @@
 # 0009 — Fleet system design: a verification lane that lands, and nobody in the main checkout
 
-Status: **draft, 2026-09-14**, written with the `system-design` skill as its first application.
-Nothing here is built. Section 10 lists what the owner rules on; sections 1 to 9 are the
-recommendation and its evidence.
+Status: **draft, 2026-09-14; revised 2026-09-25** against an adopter's fleet protocol (§11).
+Written with the `system-design` skill as its first application. Built so far: role read from
+`AIR_ROLE` (decisions, 2026-09-14, `cmd::role_from`); on 2026-09-25 the batch-ready change and
+the nudge fix in §5, and the roles text carrying the protocol (step 5, except the parts that
+wait for the launcher). Section 10 lists what the
+owner rules on; sections 1 to 9 are the recommendation and its evidence.
+
+**Where the protocol lives** (owner, 2026-09-25): the merge-queue protocol — each role's
+sequence, the batch-ready rule, the close window, conflict handling, what a lane does per cut —
+is Air's, and ships in `.air/roles.md` and in Air's commands. An adopting repo keeps only what
+is truly its own: its verify and precheck commands, its worktree setup, its resources and
+leases, its test-state reset. `roles.md`'s "how a finished bead is handed on is the repo's own
+flow" (air-8zu, air-97z) is reversed by this.
 
 Answers:
 - An adopter's round of 2026-09-05 to 2026-09-07 (their restart note of 2026-09-07): a batch
@@ -89,7 +99,7 @@ sequenceDiagram
 | lane cuts | lane | batch-ready set | its own loop: after each landing or red, and on a poll interval while idle | nothing lands; `air status` shows the set growing (a `batch-waiting` count is the measurement, §5) |
 | lane lands | lane | its own green at the integration commit | `air record verify` exit 0 | a green with no landing is `landable` (existing condition) |
 | worker closes | worker | landed message, or `air handover` naming the green | message | `landed-not-closed` fires (existing condition) |
-| worker merges main | worker | main moved | before every verify-free finish; and when the lane says main moved | the next `batch-ready` check refuses a head that does not contain main, naming it |
+| worker merges main | worker | main moved | for its own staleness and to resolve a conflict the lane named; never to re-enter the queue (§11) | nothing: the lane merges main forward onto each member at its listed sha, so a branch stays batch-ready while main moves; a member that conflicts with main is dropped and named like a pairwise conflict |
 | coordinator lands its prose | coordinator | its own branch | same as a worker | same as a worker |
 
 ## 3. Invariants
@@ -118,13 +128,13 @@ means Air already does it and the design keeps it; "this design" means §5 adds 
 | A5 assignee as claim | existing | roles.md; `air claim` never sets it |
 | A6 peer acts in your worktree | existing | path fence (air-8gj) |
 | B1 relayed sha | prevented | the lane reads batch-ready from `air status`, never from a message; a worker's message carries the sha as a courtesy |
-| B2 readiness is a shape | accepted, measured | workers do not verify under the lane; a red batch names the member; if a round shows reds that a worker's scoped check would have caught, add a `precheck` run kind |
+| B2 readiness is a shape | ruling, §10 | workers do not verify under the lane; a red batch names the member. An adopter already runs a scoped precheck per worker and its lane refuses a member without one, read from a log file the adopter's script parses and offered by message (§11). A recorded `precheck` run kind would make that a ledger fact the batch-ready rule can read, and remove the relayed sha (B1) at the same time |
 | B3 stale trailer as verdict | existing | verdicts are ledger rows keyed by sha |
 | B4 snapshot as clearance | existing (Air main) | `close-asks-the-recorded-main` |
 | B5 number from the wrong binary | existing | `project-diligence`; this doc names its binary |
 | B6 derived read as observed | existing | `do-less` raw-record check |
 | C1 message-only handoff | existing | journal, digests, bead comments |
-| C2 remedies with no audience | this design | roles text rewritten per role; `handover-not-green` lane-aware (Air main, air-avj) |
+| C2 remedies with no audience | this design | roles text rewritten per role; Stop hook text lane-neutral (Air main, air-avj). `handover-not-green` counts only refused closes since air-zqmi (2026-09-06, after the adopter's 0.2.19), so a member closing on the lane's green no longer raises it. **Not yet**: the Stop nudge offers ready beads to the lane, which is `AIR_ROLE=worker` today (`gate.rs` `stop_nudge`); §5 |
 | C3 silence as instruction | existing | roles.md worker loop |
 | C4 named, not claimed | existing | roles.md; notes on the bead |
 | C5 worker cannot tell it has something to do | this design | the lane's landed message carries three lists; `air handover` names the batch (air-hpp8) |
@@ -168,7 +178,11 @@ means Air already does it and the design keeps it; "this design" means §5 adds 
 | H4 record cannot say why | this design | D8 plus `red-run-output-kept` |
 
 Known gaps: B2 (a worker's scoped check is invisible), E2 (respawn), E6/E8 (process hygiene
-inside a worktree). Each is measured or ruled in §10 rather than left to be found.
+inside a worktree), and the in-flight refusal's blind spot: `air land` sees only verifies
+recorded through `air record`, so a landing still moves files under an unrecorded program in the
+main checkout. With no session there this shrinks to programs run by hand; an adopter checks for
+them by process cwd before every landing (§11), which is repo tooling Air does not take on. Each
+is measured or ruled in §10 rather than left to be found.
 
 ## 5. Mechanism table
 
@@ -184,6 +198,8 @@ inside a worktree). Each is measured or ruled in §10 rather than left to be fou
 | Red-batch policy: drop the member the failing step names, else bisect | added | adopter 2026-09-06: 9 landed-refuted, 12 refused in one day | fact + the lane's judgement | selftest for the pure ordering | when reds per batch fall below one in ten for a round | yes: notice |
 | Ledger rows for "dropped from batch: conflict with X at sha" and "retried once at sha" | added | said in prose, recorded nowhere (research §9, queue state) | fact | selftest | never; they are what makes a second red a second red | yes: notice |
 | `failing_step` recorded on every red | fixed | 142 reds with no step in the adopter's ledger | fact | selftest: a red run has a step | never | yes: notice |
+| Batch-ready no longer requires the head to contain main; the lane merges main forward at the cut | changed | an adopter (§11): under "head contains main", every landing takes every waiting branch out of the queue until its worker re-merges, and their workers were told to merge "for your own close and for staleness, not for the cut" | fact (`batch_ready_rule`, `status.rs`) | selftest probe and `status_lists_batch_ready_branches_as_a_fact` (built 2026-09-25); the lane dropping a member that conflicts with main is step 3's `merge-tree` | never, while the lane merges main itself | yes: notice `batch-ready-behind-main` |
+| Stop nudge skips the lane | fixed | an adopter (§11): the Stop hook offers the lane ready beads; the lane claims none | fact (the Stop hook reads `verify_lane` from `.claude/air.json`; built 2026-09-25) | `stop_nudge_skips_the_verification_lane`, seen red with the lane check removed | when the lane has its own launcher and role (step 2) | yes: notice |
 | "Wait for every close before landing" (adopter protocol) | not adopted | air-9ij fixed the cause | | | | |
 | `worker-keepalive.sh` respawn loop | not adopted here | five deaths 2026-08-30 | | | §10 | |
 
@@ -232,7 +248,7 @@ mechanism).
 | 2. `AIR_ROLE=lane` launcher; `air land` bound to it; coordinator loses `air land` | yes, with the coordinator still in the main checkout | selftest over the deny constants and the cwd check | roles.md "Landing stays the coordinator's" |
 | 3. Pairwise `merge-tree` in the lane's cut (`air batch cut`, or documented git) | yes | selftest with a conflicting pair | adopter-style "dry-merge first" prose |
 | 4. Coordinator in a worktree with a tmux session; role is the env; main checkout has no session | yes | `--print`; selftest | roles.md "Role is the checkout"; notice `coordinator-may-commit` superseded |
-| 5. Roles text rewritten: verification lane section, coordinator section | yes | none (prose) | the verification-lane section |
+| 5. Roles text rewritten: the whole protocol per role (worker, lane, coordinator), including the §11 facts; the repo's commands come from `.claude/air.json` keys, not from its CLAUDE.md | yes | none (prose) | the verification-lane section; this repo's CLAUDE.md "This repo's work flow"; an adopter's protocol file, which it deletes itself once upgraded |
 | 6. One round on Air itself; then the adopter | | the ledger: batches, reds, waits, strandings (zero) | |
 
 Each step is a bead; steps 1 to 3 do not depend on 4. All of it is one release row at round end.
@@ -244,11 +260,59 @@ Each step is a bead; steps 1 to 3 do not depend on 4. All of it is one release r
 | Does the lane land, or does it verify and the coordinator lands? | the lane lands | landing is the coordinator's largest main-checkout write; §15 shows landing order is the throughput, and the lane already knows the order |
 | Is the coordinator in a worktree? | yes, with a tmux session | §22 and the adopter's restart note; ruled 2026-09-14 |
 | Does the coordinator keep `air close`? | yes, counted | recovery tool; the adopter's stranding was recovered with it |
-| Drop the adopter's "wait for every close before landing"? | yes, after a probe shows a close succeeds on a bead whose commits are already on main | air-9ij's fix is the reason; confirm it covers this case with a test, not a reading |
+| Drop the adopter's "wait for every close before landing"? | **settled 2026-09-25: yes** | the probe exists and is green: `a_bead_already_in_main_closes_on_its_landing` (`crates/cli/tests/claim_cli.rs`, air-9ij limb 1), the adopter's stranding case exactly; their close-window rule and its checks were removed the same day |
 | Does Air own session respawn (the adopter's keepalive)? | not in this design; separate check-resources pass | the harness gives no exit signal; the adopter's loop works; deciding it here widens the change |
 | Red-batch policy: drop-by-step, or always bisect? | drop-by-step, bisect when the step names nothing | at n≤3 a bisect costs at most two extra verifies; drop-by-step usually costs one |
 | Name: "verification lane", session `lane`? | yes, ruled 2026-09-14: the fleet is always described as three workers, a verification lane, and the coordinator | `air status` already says "lane" |
+| Record a worker's precheck as a run kind, and have the batch-ready rule read it where the repo declares one? | yes, recorded first; the rule reads it only if a round shows reds a precheck would have caught | an adopter already gates its lane on a precheck, from a log file and a message (§11); a ledger row replaces both. The log is also wrong in a way a row cannot be: a hand-over that died before its precheck left the PREVIOUS run's green trailer in place, naming a head two commits behind (their restart note §5b, 2026-09-07) |
+| Is an unclear acceptance a reason to ask the owner? | no: a writing defect the coordinator rewrites; `owner` is for a decision or an action only the owner has | the owner ruled this at an adopter; roles.md still lists "an ambiguous acceptance" |
 | Is the lane a program with a session watching it, or a session running a program? | a program the session calls: `air batch cut` (readiness, `merge-tree` pre-check, the cut, the record) and `air batch next` (the split after a red); the session reads logs, makes the flake call, and talks to workers | research §9: everything but reading the log bors did without a model; a session that runs the loop by hand skipped its dry-merge once at the adopter and let typing order decide a conflict |
+
+## 11. Reconciled against an adopter's fleet protocol (2026-09-25)
+
+An adopter wrote its multi-agent rules into one file "meant to feed Air's protocol later",
+holding only what Air's roles text did not already say. Copy:
+`private/adopter-corpus/<adopter>/2026-09-25/fleet-protocol.md` (the file was uncommitted in
+their checkout; they run air 0.2.19). Each rule falls into one of four places.
+
+**Into Air's protocol** (roles text at step 5, or a mechanism in §5):
+- A worker merges main for its own staleness and to resolve a named conflict, not to stay in
+  the queue; the lane merges main forward at the cut. Adopted as the batch-ready change (§5).
+- Once a sha is offered, commit forward and never amend: an amend forks beside what the lane
+  holds, and the lane can only drop it. A fact about the cut; Air's close gate already refuses a
+  bead with a trailer commit after the cut, naming it.
+- Conflict resolution is the member's worker's, in its worktree, and a branch that does not
+  merge cleanly is not finished. Two conflict facts go with it: both sides adding the same item
+  parses and is wrong, and both sides adding to a count or list merges as text while the claims
+  contradict. Check a merge by `git ls-files -u` and conflict markers, never by piped output.
+- The lane holds no bead while a batch is cut (already §3). The adopter is stricter — none
+  between batches either — and that stays the lane's call.
+- The coordinator does not commit to main. Structural here: it has no session in the main
+  checkout (§1).
+- A timeout is not a verdict on a write: read the state, re-issue only what the tool said it did
+  not write. A check whose negative has two meanings is not a gate. These are rules for Air's
+  own code (the `anti-brittleness` skill), not role text.
+
+**Stays the repo's**: worktree setup (keys, env files, per-worktree databases), the `runtime`
+lease's resources, build concurrency limits, the test-state reset before each cut (D4), the
+precheck command itself, and regenerated caches taken wholesale on conflict.
+
+**Superseded by this design**: "stash, never commit, when `air land` refuses a dirty tree" (the
+refusal went with air-odv, and no session is in the main checkout); the close window "close
+every bead before main moves again" (air-9ij; §10 asks for the probe first); the lane taking
+shas from "checked at <sha>" messages (B1: it reads `air status`; the precheck ruling in §10
+replaces the message with a row); the list of Air advice that is wrong under a lane (three
+fixed by air-avj, `handover-not-green` by air-zqmi, the nudge in §5, the in-flight gap in §4).
+
+**The adopter's restart note of 2026-09-07** (copy in the 2026-09-14 corpus) was reviewed the
+same day and deleted from their repo: its round state is eighteen days stale, and each of its
+five protocol changes is already here — wait-for-closes (air-9ij, §10), a process-level
+tree-readers check (§4 gap), the coordinator through the pipeline (§1), dry-merge before the
+cut (§5, step 3), and the three-list announcement (C5). Its filing rule is §8's.
+
+**Not taken**: dispatch advice to the coordinator (judgement, and roles.md already says long
+reads go to background agents); "never remove a worktree because its branch merged" (Air makes
+and reuses the worktree; no recorded failure here).
 
 ## Sources
 
@@ -259,5 +323,9 @@ Each step is a bead; steps 1 to 3 do not depend on 4. All of it is one release r
 - Adopter corpus, `private/adopter-corpus/<adopter>/2026-09-14/` (README there; restart
   note §2, §3, §5, §7; ledger queries in this doc's header).
 - `docs/research/merge-queues-prior-art.md` (2026-09-14).
+- An adopter's fleet protocol, copied 2026-09-25 to `private/adopter-corpus/` (§11).
+- `crates/cli/src/cmd/status.rs` (`batch_ready_rule`, the `handover-not-green` red filter),
+  `crates/hooks/src/gate.rs` (`stop_nudge`, air-avj), `crates/cli/src/cmd/mod.rs` (`role_from`),
+  read 2026-09-25 at `27567b2`.
 - `claude --help`, 2.1.272, 2026-09-14: `--tmux` still requires `--worktree`; Air's detached
   start stays.

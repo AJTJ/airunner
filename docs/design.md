@@ -205,7 +205,7 @@ Installing Air registers the hook on ten Claude Code events, each with a five se
 | Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker launcher turns on. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification | The session's state is updated and an event line is written. |
-| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. Other roles get nothing. |
+| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The verification lane named in the config is not nudged, since it claims no bead. Other roles get nothing. |
 
 Every hook call, including the silent ones, writes one event line.
 
@@ -331,7 +331,9 @@ A green means a successful recorded run at the exact commit, or, if the reposito
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a
 batch commit that contains both the worker's commit and main also counts. That lets workers
 close without running verification themselves. A commit made after the batch was cut is refused,
-and the refusal names it.
+and the refusal names it. A branch is ready for a batch when it is not landable on its own and
+names a bead its worker holds; it does not have to contain main, because the lane merges main
+in when it cuts the batch.
 
 ### 6.3 Landing a branch
 
@@ -553,12 +555,32 @@ Fleet shape, added 2026-09-14:
       and record a dropped branch as a fact. That way typing order never decides a conflict.
 - [ ] Record the failing step on every red run. An adopter's ledger has 142 reds with none.
 - [ ] Measure how long branches wait to be batched, and show it in status.
-- [ ] The verification lane key in the config is read by no code. Either read it or remove it.
+- [x] The verification lane key in the config is read by no code. Either read it or remove it.
+      The stop nudge reads it, to leave the lane alone (2026-09-25).
 - [ ] Prove with a test that a bead can close after its commits land on main. Then drop the
       adopter's rule to wait for every close before landing. (Plan 0009, section 10.)
 - [ ] Rewrite the roles text for the five-session fleet, along with the launcher change. It
-      ships to adopters, so it needs a notice.
+      ships to adopters, so it needs a notice. Partly done 2026-09-25: the roles text now
+      carries the whole protocol (closing, the lane's loop, landing), with notices; the
+      coordinator-in-a-worktree and lane-lands parts wait for the launcher.
 - [ ] Keep the adopting guide current and condense it lightly.
+- [ ] The fleet starts from the coordinator. The owner starts only the coordinator and asks it to
+      set up the fleet, which by default starts three workers and a verification lane, each in
+      its own worktree and tmux session. The same launches stay available as air commands the
+      owner can run by hand. (Owner, 2026-09-14.)
+- [ ] A launch command for the verification lane, alongside the worker and coordinator
+      launchers. It sets the lane's role, so the lane can land and nothing else can.
+- [ ] Update the README's quick start once the coordinator sets up the default fleet on request.
+- [ ] On a fresh repository, air init proposes Metis as on and then warns that Metis is not
+      installed. Default it to off unless Metis is found. (Seen running the quick start,
+      2026-09-14.)
+- [ ] On a fresh repository, air doctor reports two expired dated rules and says to delete their
+      fallbacks. Delete them, since both expired on 2026-08-23. (Same run.)
+
+- [ ] A verify whose tracked tree or HEAD changed between start and exit records a green for a
+      tree that never existed; `air record` checks the tree only at the start. Flag it the way
+      a dirty start is flagged, as a measurement, not a refusal. An adopter's worker edited a
+      tracked file during its own precheck an hour after citing the rule (2026-09-07).
 
 Surface audit, added 2026-09-14:
 

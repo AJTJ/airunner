@@ -1330,6 +1330,66 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// Plan 0009 §11, end to end: a worker with no claim stopping while a task is ready is nudged
+/// to claim it; the same worker named as `verify_lane` in `.claude/air.json` is not, because
+/// the lane claims no bead. An adopter recorded the Stop hook offering its lane ready beads.
+#[test]
+fn stop_nudge_skips_the_verification_lane() {
+    use std::io::Write;
+    let (_tmp, main, alpha) = land_repo("true");
+    // Nothing carried: a worker between beads, which is when the nudge speaks.
+    git(&alpha, &["reset", "-q", "--hard", "main"]);
+    let bd = fake_bd(&main);
+    std::fs::write(
+        main.join("bd.ready.json"),
+        r#"[{"id":"zz-t","status":"open","issue_type":"task"}]"#,
+    )
+    .unwrap();
+    assert_eq!(air(&main, &bd, &["status"]).0, 0);
+    let stop = |session: &str| -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&main)
+            .arg("hook")
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &main)
+            .env("AIR_ROLE", "worker")
+            .env("BEADS_ACTOR", "alpha")
+            .current_dir(&alpha)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let body = serde_json::json!({
+            "session_id": session, "hook_event_name": "Stop",
+            "cwd": alpha.to_string_lossy(), "stop_hook_active": false,
+        });
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(body.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let worker = stop("s-worker");
+    assert!(worker.contains("air claim zz-t"), "{worker}");
+
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "verify_lane": "alpha"}"#,
+    )
+    .unwrap();
+    let lane = stop("s-lane");
+    assert!(!lane.contains("air claim"), "{lane}");
+}
+
 /// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as
 /// unjournaled dirt with the report's time; once removed it is no holding. A tool edit the
 /// PostToolUse hook journaled reads as an edit with its age, dirty or clean.
@@ -1413,7 +1473,7 @@ fn install_reports_a_stale_bd_prime_hook() {
 }
 
 /// air-80x.3, end to end: alpha claims fd-1, commits with the trailer, merges main: batch-ready.
-/// A green at its head: gone, reason `green-at-head`. main moves: gone, reason `behind-main`.
+/// A green at its head: gone, reason `green-at-head`. main moves past it: batch-ready again.
 #[test]
 fn status_lists_batch_ready_branches_as_a_fact() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -1457,24 +1517,14 @@ fn status_lists_batch_ready_branches_as_a_fact() {
         "{out}"
     );
 
-    // main moves: behind, and the reason says so. Another commit so the green is off the head.
+    // main moves: the green branch is no longer landable, and it is batch-ready again without
+    // re-merging, because the lane merges main forward at the cut (plan 0009 §11).
     std::fs::write(main.join("README"), "b\n").unwrap();
     git(&main, &["commit", "-q", "-am", "docs: readme"]);
-    git(
-        &alpha,
-        &["commit", "-q", "--allow-empty", "-m", "more work"],
-    );
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
     let s = read(&out);
-    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{out}");
-    assert!(
-        s["not_batch_ready"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n["worker"] == "alpha" && n["check"] == "behind-main"),
-        "{out}"
-    );
+    assert_eq!(s["batch_ready"][0]["worker"], "alpha", "{out}");
+    assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
 }
 
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
