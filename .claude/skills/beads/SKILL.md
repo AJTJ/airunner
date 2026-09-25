@@ -256,7 +256,6 @@ measured on a live fleet.
 ## Rules
 
 - Do not create markdown TODO files as the source of truth when beads is available.
-- Do not use `bd edit`; it opens an interactive editor. Use `bd update` flags instead.
 - Prefer `--json` when parsing `bd` output programmatically.
 - If hooks are installed, `bd prime` may already be injected. Run it manually when context is
   missing.
