@@ -87,8 +87,8 @@ pub fn facts(
         };
         super::batch::describe(ledger, repo, &targets)
     };
-    let digest_dir = digest_dir(repo);
-    let digest = digest_dir.as_deref().and_then(|d| {
+    let digest_at = digest_location(repo);
+    let digest = digest_at.as_ref().and_then(|d| {
         // Newer than this worker's oldest open claim, or than the branch point from main,
         // whichever is earlier: a re-claim after a bd timeout must not postdate a digest
         // that was written between the first claim and the re-claim (air-y8m).
@@ -108,14 +108,16 @@ pub fn facts(
         // handing on". No bead at all means nothing to declare, and the check is skipped
         // rather than failed.
         let beads = digest_beads(bead, &held_beads, &carried_beads)?;
-        let dir = repo.join(d);
+        // Tracked only for `digest_dir`: the shared `.air/digests/` is gitignored, and its
+        // being one directory every worktree writes to is what air-ahl's tracking bought.
+        let tracked = d.tracked.then(|| tracked_in(repo, &d.path));
         Some(digest_for_bead(
-            &dir,
+            &d.path,
             worker,
             &beads,
             since.as_deref(),
             frontmatter_cutoff(),
-            &tracked_in(repo, &dir),
+            tracked.as_ref(),
         ))
     });
     // air-ahl: `Untracked` is a refusal like `Missing`, with its own sentence.
@@ -146,7 +148,7 @@ pub fn facts(
         runs_at_head,
         digest_present,
         digest_untracked,
-        digest_dir,
+        digest_dir: digest_at.map(|d| d.shown),
         advisory,
     })
 }
@@ -237,12 +239,51 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
-/// `digest_dir` from `.claude/air.json`; None disables the check.
-pub fn digest_dir(repo: &Path) -> Option<String> {
-    air_json(repo)?
-        .get("digest_dir")?
-        .as_str()
-        .map(str::to_string)
+/// Where the close gate looks for a digest, and whether git has to track it there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DigestAt {
+    /// The directory to read.
+    pub path: std::path::PathBuf,
+    /// How a refusal names it: the configured relative dir, or the shared absolute one.
+    pub shown: String,
+    /// True for `digest_dir` (air-ahl's tracked check); false for the shared `.air/digests/`.
+    pub tracked: bool,
+}
+
+/// The digest check's location, or None when the repo asks for no digest (air-1qnp).
+///
+/// Opt-in, both ways: `digest_dir` (a directory in the worktree, the file tracked by git, as
+/// since air-ahl) wins; else `"digests": true` puts it at `<main>/.air/digests/`, one directory
+/// every worktree writes to, so a digest cannot be stranded in one worktree and needs no
+/// commit. Neither key: no digest is required. Owner, 2026-09-25: Air's generated records go
+/// in the gitignored `.air/`, not in the adopter's tree.
+pub fn digest_location(repo: &Path) -> Option<DigestAt> {
+    let air_dir = air_ledger::paths::air_dir_for(repo).ok()?;
+    digest_location_from(&air_json(repo)?, repo, &air_dir)
+}
+
+/// Pure over the parsed config, for probes.
+pub fn digest_location_from(
+    cfg: &serde_json::Value,
+    repo: &Path,
+    air_dir: &Path,
+) -> Option<DigestAt> {
+    if let Some(d) = cfg.get("digest_dir").and_then(|v| v.as_str()) {
+        return Some(DigestAt {
+            path: repo.join(d),
+            shown: d.to_string(),
+            tracked: true,
+        });
+    }
+    if cfg.get("digests").and_then(serde_json::Value::as_bool) == Some(true) {
+        let path = air_dir.join("digests");
+        return Some(DigestAt {
+            shown: path.display().to_string(),
+            path,
+            tracked: false,
+        });
+    }
+    None
 }
 
 /// `verify_lane` from `.claude/air.json`: which worker is the verification lane.
@@ -260,12 +301,12 @@ pub fn verify_lane(repo: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `journal_dir` from `.claude/air.json`: where each session appends what it hit (air-3xww).
+/// `journal_dir` from `.claude/air.json`: an override for a repo that wants its session
+/// journals tracked in its own tree (air-3xww). Absent, they go to `<main>/.air/journal/`
+/// (`init::DEFAULT_JOURNAL_DIR`, air-1qnp), which the worktree fence lets every worktree write.
 ///
-/// Configured rather than hard-coded, the same way `digest_dir` is, because where a repo keeps
-/// its prose is the repo's. **Nothing in Air reads the files themselves**: no gate, no
-/// condition, no count. This function exists so `air init` knows what to scaffold and so the
-/// value has one home.
+/// **Nothing in Air reads the files themselves**: no gate, no condition, no count. `air
+/// status` reads the key only to let a branch of tracked journal entries land (air-kexg).
 pub fn journal_dir(repo: &Path) -> Option<String> {
     air_json(repo)?
         .get("journal_dir")?
@@ -338,7 +379,8 @@ pub enum Digest {
 }
 
 /// `tracked` is the set of file NAMES git tracks in the digest directory, supplied by the
-/// caller. Passed in rather than looked up here so this stays pure over the filesystem: a
+/// caller; `None` for the shared `.air/digests/`, where a declaring file existing is enough
+/// and answers `Tracked` (air-1qnp). Passed in rather than looked up here so this stays pure over the filesystem: a
 /// probe can drive every state without a git repo, and the one `git ls-files` happens once at
 /// the call site instead of once per candidate file.
 pub fn digest_for_bead(
@@ -347,7 +389,7 @@ pub fn digest_for_bead(
     beads: &[String],
     since: Option<&str>,
     cutoff: jiff::Timestamp,
-    tracked: &std::collections::BTreeSet<String>,
+    tracked: Option<&std::collections::BTreeSet<String>>,
 ) -> Digest {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Digest::Missing;
@@ -385,7 +427,7 @@ pub fn digest_for_bead(
         if !declares(&e) {
             continue;
         }
-        if tracked.contains(&e.file_name().to_string_lossy().to_string()) {
+        if tracked.is_none_or(|t| t.contains(&e.file_name().to_string_lossy().to_string())) {
             return Digest::Tracked;
         }
         // Keep looking: another file may declare the same bead and be tracked. Only report

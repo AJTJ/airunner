@@ -1735,7 +1735,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // directory is read and git is never asked. The Missing case and the refusal text
             // are untouched, so the mutation reaches the tracked rule alone.
             file: "crates/cli/src/cmd/handover.rs",
-            from: "        if tracked.contains(&e.file_name().to_string_lossy().to_string()) {",
+            from: "        if tracked.is_none_or(|t| t.contains(&e.file_name().to_string_lossy().to_string())) {",
             to: "        if true {",
             also_red: &[],
         },
@@ -2973,13 +2973,13 @@ fn probe_digest_names_its_bead() -> Probe {
         // name or mtime say.
         let tracked = all_tracked(&["2026-08-23-beta-air-other.md"]);
         let wrong_bead =
-            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
+            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Missing;
         // Red: a file carrying the worker's name and no declaration, written after the
         // cutoff, is not a substitute — this is the `touch` case and the substring case.
         write("2026-08-23-beta-notes.md", "# just some notes\n")?;
         let tracked = all_tracked(&["2026-08-23-beta-air-other.md", "2026-08-23-beta-notes.md"]);
         let undeclared_after_cutoff =
-            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Missing;
+            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Missing;
         let red =
             wrong_bead && undeclared_after_cutoff && declared_bead("# no front matter").is_none();
 
@@ -2994,7 +2994,7 @@ fn probe_digest_names_its_bead() -> Probe {
             "2026-08-23-beta-air-agq.md",
         ]);
         let declared_ok =
-            digest_for_bead(dir, "beta", &ours, None, cut, &tracked) == Digest::Tracked;
+            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Tracked;
 
         // Green: history still passes. A digest written before the cutoff with no front
         // matter is matched the old way, so the change does not invalidate what exists.
@@ -3008,7 +3008,7 @@ fn probe_digest_names_its_bead() -> Probe {
             &ours,
             None,
             far_future,
-            &all_tracked(&["2026-08-22-beta-air-old.md"]),
+            Some(&all_tracked(&["2026-08-22-beta-air-old.md"])),
         ) == Digest::Tracked;
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&old);
@@ -11252,7 +11252,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
                 &beads,
                 None,
                 cut,
-                &tracked_in(&dir, &digests),
+                Some(&tracked_in(&dir, &digests)),
             )
         };
 

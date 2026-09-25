@@ -1112,6 +1112,89 @@ fn digest_gate_is_configured_per_repo() {
     );
 }
 
+/// air-1qnp: `"digests": true` is the opt-in that puts the digest at the MAIN checkout's
+/// `.air/digests/`, so a worker in its own worktree writes to the one place every worktree
+/// reads, and git tracking is not asked (the directory is gitignored). Missing is refused
+/// naming that absolute path; a digest for another bead is refused; the right one passes with
+/// no commit.
+#[test]
+fn opt_in_digests_live_in_the_main_checkouts_air_dir() {
+    let dir = scratch_repo();
+    let main = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(main.join(".claude")).unwrap();
+    std::fs::write(main.join(".claude/air.json"), r#"{"digests": true}"#).unwrap();
+    let wt = main.join("w1");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-w1",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let wt = wt.canonicalize().unwrap();
+    let bd = fake_bd(&wt);
+    assert_eq!(air(&wt, &bd, &["claim", "zz-7"]).0, 0);
+    let digest_refusal = |o: &str| -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(o).unwrap();
+        v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["check"] == "digest-present" || m["check"] == "digest-untracked")
+            .map(|m| m.to_string())
+    };
+    let shared = main.join(".air/digests");
+
+    // Missing: refused, and the refusal names the shared path, not a worktree-relative one.
+    let (_, o, _) = air(&wt, &bd, &["--json", "handover"]);
+    let r = digest_refusal(&o).unwrap_or_default();
+    assert!(r.contains(shared.to_str().unwrap()), "{r}");
+
+    // A digest for another bead does not count.
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("w1-other.md"), "---\nbead: zz-8\n---\n").unwrap();
+    let (_, o, _) = air(&wt, &bd, &["--json", "handover"]);
+    assert!(digest_refusal(&o).is_some(), "{o}");
+
+    // The one declaring this bead passes, untracked and uncommitted.
+    std::fs::write(shared.join("w1-zz-7.md"), "---\nbead: zz-7\n---\nproof\n").unwrap();
+    let (_, o, _) = air(&wt, &bd, &["--json", "handover"]);
+    assert_eq!(digest_refusal(&o), None, "{o}");
+
+    // A digest in the worktree's own `.air/` is not the shared one.
+    std::fs::remove_file(shared.join("w1-zz-7.md")).unwrap();
+    std::fs::create_dir_all(wt.join(".air/digests")).unwrap();
+    std::fs::write(wt.join(".air/digests/w1-zz-7.md"), "---\nbead: zz-7\n---\n").unwrap();
+    let (_, o, _) = air(&wt, &bd, &["--json", "handover"]);
+    assert!(digest_refusal(&o).is_some(), "{o}");
+}
+
+/// Neither `digest_dir` nor `"digests": true`: no digest is asked for (air-1qnp keeps the
+/// check opt-in), even with a claim held and nothing written.
+#[test]
+fn no_digest_key_asks_for_no_digest() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"digests": false}"#).unwrap();
+    let bd = fake_bd(&repo);
+    assert_eq!(air(&repo, &bd, &["claim", "zz-3"]).0, 0);
+    let (_, o, _) = air(&repo, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        !v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"].as_str().unwrap_or("").starts_with("digest")),
+        "{o}"
+    );
+}
+
 /// air-xbl (the adopter, 2026-08-30/31). Two symptoms, one root, both end to end.
 ///
 /// A worktree holding NO claim, in a repo with `digest_dir` configured, used to be refused on

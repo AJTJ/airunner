@@ -54,7 +54,7 @@ no `awaiting_review`. Which of the two sequences below is in force is `verify_la
 **Without a lane:**
 
     air claim <id> [--files a,b]
-    … the work; the digest, committed (below)
+    … the work; the digest, where the repo asks for one (below)
     git merge main
     air record verify -- <the repo's verify command>   # last, so the green contains main
     bd close <id> --reason-file <proof>
@@ -63,7 +63,7 @@ no `awaiting_review`. Which of the two sequences below is in force is `verify_la
 individually (an adopter parked a lane whose batch never came, 2026-08-29).
 
     air claim <id> [--files a,b]
-    … the work, every commit with a `Bead: <id>` trailer; the digest, committed
+    … the work, every commit with a `Bead: <id>` trailer; the digest, if asked for
     air record precheck -- <the repo's precheck>   # if it names one
     … your branch is now batch-ready in `air status`; keep working, the lane takes it
     bd close <id> --reason-file <proof>   # on the lane's green; `air handover` says when
@@ -105,10 +105,13 @@ Two constraints, because Air checks them and they are about ordering rather than
   `verify_key: tree` in `.claude/air.json`, a green at another commit with the identical tree
   counts too, which is what makes a fast-forward onto a landing green with no re-verify.
   **[fact]**
-- **A digest, where the repo configures `digest_dir`, has to name its bead** in front matter
+- **A digest, where the repo asks for one, has to name its bead** in front matter
   (`---` / `bead: <id>` / `---`) and be written with the work rather than after the fact. Air
   reads the declared field, not the filename: a digest for another bead used to satisfy the
-  gate (air-agq). **It also has to be tracked by git** (air-ahl): a file only your worktree has
+  gate (air-agq). Where `.claude/air.json` says `"digests": true` it goes in the main
+  checkout's `.air/digests/`, written from your worktree with no commit: one gitignored
+  directory every worktree reads (air-1qnp). Where it names a `digest_dir` instead, the digest
+  goes there. **It also has to be tracked by git** (air-ahl): a file only your worktree has
   is a note to self, and the gate exists for the reader who was not there. An adopter's worker
   used an untracked digest to satisfy the gate and reported it against its own interest.
   **If your lane has already cut a batch at your head, commit the digest WITHOUT a `Bead:`
@@ -143,8 +146,9 @@ nothing to do; a wake that reports is noise 288 times a day. Removed when the ha
 own wait for every session it stops, for a whole round (air-1n3). **[fact]**
 
 **Keep your own journal, and put in it the things nothing else will carry.** One file per
-session under the repo's `journal_dir` (`.claude/air.json`; `docs/journal` where `air init`
-scaffolded it), appended as you go, a timestamp and a line. What belongs: a bug you hit and how
+session in the main checkout's `.air/journal/`, gitignored and written from any worktree, or
+under the repo's `journal_dir` where `.claude/air.json` names one (air-1qnp), appended as you
+go, a timestamp and a line. What belongs: a bug you hit and how
 it presented, a wrong turn and what corrected it, a claim you later found was wrong, a thing you
 checked that turned out fine.
 
@@ -180,7 +184,8 @@ coordinator files it as a bead labelled `owner`, the queue shows in `air status`
 question and its answer leave a row (owner, 2026-08-30; air-bm3). An Edit or Write whose
 resolved path leaves your worktree is denied by Air's PreToolUse hook (air-8gj); the harness's
 own worktree isolation is off, since in the adopter's record it stopped no observed write to
-main and cost 455 refusals in five days, 88% with no git token. **[Air enforces]** The one
+main and cost 455 refusals in five days, 88% with no git token. The main checkout's
+`.air/journal/` and `.air/digests/` are the exception, being shared. **[Air enforces]** The one
 refusal: the `bd` write that
 ends your work on a bead — `bd close`, or `bd update -s closed` / `-s awaiting_review`,
 whichever your repo uses — is denied without a recorded green at HEAD that contains `main`.
@@ -299,7 +304,7 @@ under which it goes: `air audit`.
 assembled from your memory of messages, and a coordinator that hits a limit, compacts or ends
 loses it — one did on 2026-09-06. Write what the next coordinator would want and the beads will
 not carry: a claim of yours that turned out wrong, a ruling and what changed it, a thing you
-nearly filed and why you did not. Same file shape, same `journal_dir`, and nothing reads it.
+nearly filed and why you did not. Same file shape, same directory, and nothing reads it.
 **[fact]**
 
 **You need the same recurring wake a worker does, for the same reason and more urgently.**

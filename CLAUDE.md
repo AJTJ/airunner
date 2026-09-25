@@ -124,7 +124,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
 | Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads` |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
-| What a round left behind (session journals and round logs; records, not reading) | [`docs/journal/`](docs/journal/) |
+| What a round left behind (session journals and round logs; records, not reading) | `.air/journal/` in the main checkout (gitignored) |
 
 ## Index — systems and subsystems
 
@@ -138,7 +138,7 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
 | `air mcp` | One stdio MCP server: the coordinator's channel (attention conditions pushed from a ledger poll) plus tools and resources that invoke the CLI with `--json`. |
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (or the main checkout for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
-| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a tracked digest where `digest_dir` is set (this repo sets none). Never blocks a prompt or a WIP commit. |
+| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). Never blocks a prompt or a WIP commit. |
 | Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## Essentials
