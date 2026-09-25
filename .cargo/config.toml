@@ -2,3 +2,11 @@
 [alias]
 verify = "nextest run --workspace"
 lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+
+[env]
+# `air status` and `air land` list every process by cwd (`cmd/readers.rs`): one `lsof`, about
+# a second. The suite spawns `air status` ~60 times in parallel, so every process that cargo
+# starts here (tests, `cargo run -- selftest`) skips it and says so: `readers: unknown
+# (switched off ...)`. The pure parts are unit- and selftest-tested; the installed binary is
+# unaffected. Removed when the lookup costs what a `git` call does.
+AIR_TREE_READERS = "off"

@@ -204,6 +204,11 @@ pub struct Snapshot {
     /// with whether the `air land` process that wrote it is still alive. "Is the land done"
     /// is answered from here, never from a process listing.
     pub landings_in_flight: Vec<LandingInFlight>,
+    /// Every process whose working directory is inside a fleet tree, by tree, each marked as
+    /// part of a Claude Code session or not (`cmd::readers`, owner 2026-09-25). What
+    /// `verifies_in_flight` cannot see: a run nobody recorded. `unknown` says why when the
+    /// process listing did not answer.
+    pub tree_readers: super::readers::TreeReaders,
     /// Branches `air land --all` would take right now (air-03w). Filled from the same
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
@@ -1257,6 +1262,16 @@ pub fn verify_running(s: &Snapshot, worker: &str) -> bool {
     s.verifies_in_flight.iter().any(|f| f.worker == worker)
 }
 
+/// Is something that is not a session running in this worker's tree? (`cmd::readers`.)
+///
+/// The same shape as [`verify_running`], for the runs `air record` never saw: an adopter's
+/// worker under a lane ran an unrecorded precheck, "mid-precheck" and "doing nothing" read as
+/// the same row, and the coordinator prompted a busy worker (2026-09-07). An unknown lookup
+/// answers false, so the condition fires as it did before this existed.
+pub fn tree_busy(s: &Snapshot, worker: &str) -> bool {
+    s.tree_readers.busy(worker)
+}
+
 /// Seconds between two RFC 3339 timestamps; None when either does not parse.
 pub fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
@@ -1340,6 +1355,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             && w.role == "worker"
                             && sess.pid_alive != Some(false)
                             && !verify_running(s, &w.worker)
+                            && !tree_busy(s, &w.worker)
                             && s.claimable_depth.is_some_and(|n| n > 0)
                             && age >= t.idle_noclaim_min =>
                     {
@@ -1643,8 +1659,12 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
 
 pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let t0 = std::time::Instant::now();
+    // Started first and joined last: `lsof` costs most of a second (`cmd::readers`), and
+    // nothing below needs it until the snapshot is assembled.
+    let readers_job = std::thread::spawn(super::readers::lookup);
     let (ledger, _me) = open(repo)?;
     let at = now();
+    let mut trees: Vec<(String, std::path::PathBuf)> = Vec::new();
     let mut errors = Vec::new();
     let mut views: BTreeMap<String, WorkerView> = BTreeMap::new();
 
@@ -1657,6 +1677,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default()
                 });
+                trees.push((name.clone(), path.clone()));
                 let head = git::head(&path).ok();
                 // air-7wf: the same predicate the gate and `air land` read, so this line
                 // cannot say "not green" about a commit the gate would pass.
@@ -2109,6 +2130,15 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // and never why the others cannot, and made an error `select` deliberately raises reach no
     // caller at all.
     let selection = select(repo);
+    let session_pids: std::collections::BTreeSet<i64> =
+        all_sessions.iter().filter_map(|(_, _, x)| x.pid).collect();
+    let tree_readers = super::readers::gather(
+        readers_job
+            .join()
+            .unwrap_or_else(|_| Err("the process lookup panicked".into())),
+        &trees,
+        &session_pids,
+    );
     Ok(Snapshot {
         at,
         workers: views.into_values().collect(),
@@ -2134,6 +2164,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // next status clears it, so no expiry window has to be chosen or tuned.
         verifies_in_flight: verifies_in_flight(&ledger),
         landings_in_flight: landings_in_flight(&ledger),
+        tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
         // air-i6fd, third site: the parameter is named `main_head` and was fed the running
@@ -2490,6 +2521,12 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
     for f in &s.verifies_in_flight {
         out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
+    }
+    // Silent when no tree has anything but sessions in it; `--json` `tree_readers.examined`
+    // says how many processes were looked at, so none is not "not looked". An unknown lookup
+    // always prints, with why.
+    for l in super::readers::status_lines(&s.tree_readers) {
+        out.push_str(&format!("{l}\n"));
     }
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
     if let Some(b) = &s.red_batch {
