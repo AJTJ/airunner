@@ -596,6 +596,14 @@ fn transition(prev: &Option<String>, next: &str) -> String {
     format!("{} -> {next}", prev.as_deref().unwrap_or("none"))
 }
 
+/// The main checkout's directories every worktree writes to (air-1qnp): session journals and
+/// the opt-in digests. The fence lets a worker's edit land there.
+fn shared_dirs(cwd: &Path) -> Vec<PathBuf> {
+    air_ledger::paths::air_dir_for(cwd)
+        .map(|a| vec![a.join("journal"), a.join("digests")])
+        .unwrap_or_default()
+}
+
 fn pre_tool_use(
     ledger: &Ledger,
     worker: &str,
@@ -619,7 +627,7 @@ fn pre_tool_use(
     if let Some(abs) = input.edited_path()
         && super::is_worker_like(role)
         && let Ok(root) = git::toplevel(cwd)
-        && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root)
+        && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root, &shared_dirs(cwd))
     {
         return Ok(Dispatched::new(
             HookOutcome::Block { reason },

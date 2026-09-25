@@ -244,7 +244,9 @@ Every hook call, including the silent ones, writes one event line.
 | .air/installed.json | The version and notices this repository has been installed with. |
 | .air/ready.json | A cached list of ready beads, used by the stop nudge. |
 | .air/tasks | A worker's first task, kept off the command line. |
-| .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, where digests and journals live, and whether Metis is attached. |
+| .air/journal | One session journal per file, written from any worktree (the fence allows it). Default location unless `journal_dir` names one in the tree. Nothing reads it. |
+| .air/digests | The digests the close gate reads when `.claude/air.json` says `"digests": true`: a file declaring `bead: <id>`, checked for existence, written from any worktree. |
+| .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, whether a close needs a digest (`"digests": true` for `.air/digests/`, or a tracked `digest_dir`; neither means none), an optional tracked `journal_dir`, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per session: each worker, the lane, and the coordinator. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
@@ -343,7 +345,7 @@ sequenceDiagram
   participant G as gate
   participant L as ledger and git
   W->>H: shell command that closes a bead
-  H->>L: green at this commit? contains main? claimed? digest committed?
+  H->>L: green at this commit? contains main? claimed? digest (where asked)?
   L-->>H: facts
   H->>G: decide
   alt everything present
@@ -534,7 +536,7 @@ fact, advice, or a refusal that names the command to fix it.
 
 Air enforces a short list. The deny list decides who may run what, and the role checks back it
 up. Claims are atomic and their history is recorded. A shared resource has one live holder.
-Closing a bead needs a green, main merged, a claim, and a committed digest. A verification run
+Closing a bead needs a green, main merged, a claim, and a digest where the repo asks for one. A verification run
 is recorded honestly, with its duration, output, dirty tree, and any change to its command. Air
 records who edited what. It pushes each attention condition once, and again only when it
 changes. The owner's decisions are beads with the owner label. Main only moves onto a verified
@@ -746,7 +748,7 @@ the decisions log.
 | green | A successful recorded verification run at a commit, a tree, or a batch. |
 | batch ready | A branch that names a bead its worker holds and is not landable on its own; where the repo declares `precheck`, it also has a green precheck at its head. |
 | landing | Moving main forward onto a verified tree. |
-| digest | A worker's committed note for a bead, naming the bead. |
+| digest | A worker's note for a bead, naming the bead: in `.air/digests/`, or committed under `digest_dir`. |
 | capture | One item in the coordinator's inbox. |
 | lease | Exclusive use of a named shared resource. |
 | condition | One of the nine attention conditions. |
