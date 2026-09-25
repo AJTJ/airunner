@@ -34,7 +34,9 @@ use serde_json::{Value, json};
 use crate::cmd::status::{self, Attention, Thresholds};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
-/// **Fail direction: CLOSED.** A tool call that runs past this returns an error to the
+/// The budget of a tool whose command runs no `bd` write: `air status` and the other reads.
+///
+/// **Fail direction: CLOSED.** A tool call that runs past its budget returns an error to the
 /// coordinator's session naming the command, so the coordinator is told rather than answered
 /// wrongly. It is the ceiling `status_bd_budget` is capped under: a status budget that could
 /// approach this would trade a slow answer for no answer at all (air-19u).
@@ -42,7 +44,16 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Not derived: it is a ceiling chosen against the MCP client's patience, not a distribution.
 /// Moved by `air audit`'s `mcp-tool` row — the number to watch is its p99 against
 /// `bd-status`'s, since `air status` is what the channel spends this on.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
+const READ_TIMEOUT: Duration = Duration::from_secs(20);
+/// Claude Code's own limit on one MCP tool call when `MCP_TOOL_TIMEOUT` is unset: "default:
+/// 300000, or 5 minutes ... When a tool call exceeds this timeout, Claude Code aborts it and
+/// reports the failure to the model" (https://code.claude.com/docs/en/env-vars.md, accessed
+/// 2026-09-25). No budget here may reach it: past it the harness answers, not Air, and the
+/// subprocess is left for this server to reap with nobody waiting on the answer.
+const HARNESS_TOOL_DEFAULT: Duration = Duration::from_secs(300);
+/// Kept under the harness limit so Air's own timeout, which names the command, is the one the
+/// model reads.
+const HARNESS_MARGIN: Duration = Duration::from_secs(10);
 /// A line longer than this is an error, not a buffer we keep growing.
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -427,7 +438,17 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
         }
         _ => return Err(format!("unknown tool: {name}")),
     }
-    let (code, stdout, stderr) = run_self(ctx, &argv)?;
+    let ids = if name == "air_close" {
+        list_arg(args, "bead").len()
+    } else {
+        1
+    };
+    let budget = tool_budget(
+        name,
+        super::claim::bd_for(&ctx.repo).budget(ids),
+        harness_limit(),
+    );
+    let (code, stdout, stderr) = run_self(ctx, &argv, budget)?;
     let text = if stdout.trim().is_empty() {
         stderr.trim().to_string()
     } else {
@@ -446,47 +467,122 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
         _ => return Err(format!("unknown resource: {uri}")),
     };
     let argv: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
-    let (code, stdout, stderr) = run_self(ctx, &argv)?;
+    let (code, stdout, stderr) = run_self(
+        ctx,
+        &argv,
+        READ_TIMEOUT.min(harness_ceiling(harness_limit())),
+    )?;
     if code != 0 {
         return Err(format!("air exited {code}: {}", stderr.trim()));
     }
     Ok(stdout)
 }
 
-/// Run this binary with `--repo <repo>`; time-bounded, always reaped.
-fn run_self(ctx: &Ctx, argv: &[String]) -> Result<(i32, String, String), String> {
-    let t0 = std::time::Instant::now();
-    let child = Command::new(&ctx.exe)
-        .arg("--repo")
+/// How many `bd` processes a tool's command can run one after another, retries included
+/// (air-se4n), counting only calls at the bd client's full budget. Zero is a tool whose command
+/// runs no such call and keeps [`READ_TIMEOUT`]: `air status` caps its own bd calls under
+/// that (`status_bd_budget`), and the inbox, holdings and capture run none.
+///
+/// - `air claim`: `bd show` and its one retry, `bd update --claim` and its one retry, then two
+///   `bd show` probes asking whether a timed-out claim landed (`claim.rs` `retry_once`,
+///   `claim_landed`).
+/// - `air release`: `bd show`, then the reopen.
+/// - `air close`: one `bd close` for every id (`close_all`).
+/// - `air triage`: one `bd show` for the bead it points at, under the probe budget, which is
+///   never larger than the client's.
+/// - `air handover`: the `bd ready` that refreshes the Stop hook's ready list after the verdict.
+///
+/// Removal: when these commands stop shelling out to bd, or when the MCP tools stop running
+/// the CLI as a subprocess.
+fn bd_calls(tool: &str) -> u32 {
+    match tool {
+        "air_claim" => 6,
+        "air_release" => 2,
+        "air_close" | "air_triage" | "air_handover" => 1,
+        _ => 0,
+    }
+}
+
+/// Claude Code's limit on one MCP tool call: `MCP_TOOL_TIMEOUT` when the harness passed it to
+/// this server, its documented default otherwise.
+fn harness_limit() -> Duration {
+    std::env::var("MCP_TOOL_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(HARNESS_TOOL_DEFAULT, Duration::from_millis)
+}
+
+fn harness_ceiling(limit: Duration) -> Duration {
+    limit.saturating_sub(HARNESS_MARGIN)
+}
+
+/// The budget of one tool call (air-se4n). It was a flat 20 s for every tool, so `air close`
+/// through the channel was killed at 20 s whatever its own bd budget (60 s + 5 s per id), and
+/// the owner's ruling on 2026-09-25 was that default budgets be very generous.
+///
+/// `one_call` is the command's own budget for one bd process at this id count, from the same
+/// client the command builds (`claim::bd_for(..).budget(ids)`, so `AIR_BD_TIMEOUT_MS` moves
+/// both). The tool gets one more of those than the command can spend, so that when bd is slow
+/// the COMMAND's timeout fires and its refusal, which names the id count and the budget, is
+/// what the coordinator reads. Capped under Claude Code's own limit, never above it.
+pub fn tool_budget(tool: &str, one_call: Duration, harness: Duration) -> Duration {
+    let ceiling = harness_ceiling(harness);
+    match bd_calls(tool) {
+        0 => READ_TIMEOUT.min(ceiling),
+        n => one_call
+            .saturating_mul(n.saturating_add(1))
+            .max(READ_TIMEOUT)
+            .min(ceiling),
+    }
+}
+
+/// Run this binary with `--repo <repo>` under `budget`; always reaped. The child leads its own
+/// process group, so a timeout kills the `bd` it started along with it (air-se4n).
+fn run_self(ctx: &Ctx, argv: &[String], budget: Duration) -> Result<(i32, String, String), String> {
+    let mut cmd = Command::new(&ctx.exe);
+    cmd.arg("--repo")
         .arg(&ctx.repo)
         .args(argv)
-        .current_dir(&ctx.repo)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn {}: {e}", ctx.exe.display()))?;
-    let drained = crate::git::wait_drained(child, TOOL_TIMEOUT).map_err(|e| e.to_string());
-    air_ledger::budgets::record(
-        air_ledger::budgets::MCP_TOOL,
-        t0.elapsed(),
-        TOOL_TIMEOUT,
-        matches!(&drained, Ok(None)),
-    );
-    let (status, stdout, stderr) = match drained? {
-        Some(x) => x,
-        None => {
-            return Err(format!(
-                "air {} timed out after {TOOL_TIMEOUT:?}",
-                argv.join(" ")
-            ));
-        }
-    };
+        .current_dir(&ctx.repo);
+    let (status, stdout, stderr) = run_group(cmd, budget).map_err(|e| match e {
+        GroupRun::Spawn(e) => format!("spawn {}: {e}", ctx.exe.display()),
+        GroupRun::Timeout => format!("air {} timed out after {budget:?}", argv.join(" ")),
+    })?;
     Ok((
         status.code().unwrap_or(-1),
         String::from_utf8_lossy(&stdout).to_string(),
         String::from_utf8_lossy(&stderr).to_string(),
     ))
+}
+
+pub(crate) enum GroupRun {
+    Spawn(std::io::Error),
+    Timeout,
+}
+
+/// Spawn `cmd` as the leader of a new process group with piped output, wait up to `budget`, and
+/// on a timeout kill the whole group. Recorded against the `mcp-tool` budget.
+pub(crate) fn run_group(
+    mut cmd: Command,
+    budget: Duration,
+) -> Result<crate::git::Drained, GroupRun> {
+    use std::os::unix::process::CommandExt;
+    let t0 = std::time::Instant::now();
+    let child = cmd
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(GroupRun::Spawn)?;
+    let drained = crate::git::wait_drained_group(child, budget);
+    air_ledger::budgets::record(
+        air_ledger::budgets::MCP_TOOL,
+        t0.elapsed(),
+        budget,
+        matches!(&drained, Ok(None)),
+    );
+    drained.map_err(GroupRun::Spawn)?.ok_or(GroupRun::Timeout)
 }
 
 // ---------- channel push ----------

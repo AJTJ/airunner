@@ -87,8 +87,42 @@ pub(crate) type Drained = (std::process::ExitStatus, Vec<u8>, Vec<u8>);
 /// writes more than the pipe buffer (64 KB) cannot deadlock against us and be mistaken for
 /// a hang. Kills and reaps on timeout. Returns (status, stdout, stderr).
 pub(crate) fn wait_drained(
+    child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<Drained>> {
+    wait_drained_with(child, timeout, |c| {
+        let _ = c.kill();
+    })
+}
+
+/// [`wait_drained`] for a child spawned as the leader of its own process group
+/// (`CommandExt::process_group(0)`): a timeout kills the whole GROUP, not only the child
+/// (air-se4n). `air mcp` runs each tool as an `air` subprocess, which runs `bd`. Killing only
+/// the `air` left `bd` running and still writing, and still holding the stdout pipe, so the
+/// drain thread's join waited on the orphan rather than returning at the budget.
+///
+/// `kill -KILL -- -<pgid>` rather than `killpg(2)` because the workspace forbids `unsafe` and
+/// has no libc binding; it is a timeout path, so one more process costs nothing that matters.
+pub(crate) fn wait_drained_group(
+    child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<Drained>> {
+    wait_drained_with(child, timeout, |c| {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", c.id())])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        // The leader as well, in case the group signal could not be sent.
+        let _ = c.kill();
+    })
+}
+
+fn wait_drained_with(
     mut child: std::process::Child,
     timeout: std::time::Duration,
+    kill: impl FnOnce(&mut std::process::Child),
 ) -> std::io::Result<Option<Drained>> {
     use std::io::Read;
     let mut out_pipe = child.stdout.take();
@@ -110,7 +144,7 @@ pub(crate) fn wait_drained(
     let status = match child.wait_timeout(timeout)? {
         Some(s) => s,
         None => {
-            let _ = child.kill();
+            kill(&mut child);
             let _ = child.wait();
             // Pipes close when the child dies; the drain threads finish.
             let _ = out_t.join();
