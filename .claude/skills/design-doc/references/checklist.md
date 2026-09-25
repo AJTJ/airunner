@@ -22,7 +22,8 @@ Coverage
 - The failure model says, for each dependency, what happens when it is absent.
 
 Prose
-- It reads like ordinary technical writing: complete sentences, no fragments, no aphorisms.
+- It follows the `plain-language` skill: complete sentences, no fragments, no aphorisms, no
+  bold verdicts, and pointers at the end of a paragraph rather than inside sentences.
 - One name per thing, used everywhere.
 - History, argument, and evidence have been moved out, with links, rather than compressed.
 
