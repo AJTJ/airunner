@@ -650,7 +650,13 @@ pub fn run(
     // `--despite-inflight` is the recorded way past. The whole reasoning is on
     // `in_flight_refusal`; what happens here is only which of the two paths was taken.
     let at = now();
-    let flights = super::status::verifies_in_flight(&ledger);
+    // A precheck is not destroyed by main moving: it answers for the worker's head, and
+    // batch-ready does not ask that head to contain main (plan 0009 §11). Refusing on one would
+    // hold landings for every worker's cheap check under a lane, and protect nothing.
+    let flights: Vec<_> = super::status::verifies_in_flight(&ledger)
+        .into_iter()
+        .filter(|f| f.kind != Kind::Precheck)
+        .collect();
     let despite: Vec<String> = flights.iter().map(|f| in_flight_run_line(f, &at)).collect();
     if let Some(msg) = in_flight_refusal(&flights, &at) {
         if !despite_inflight {

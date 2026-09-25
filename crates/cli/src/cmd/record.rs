@@ -6,6 +6,10 @@
 //! fast or printed nothing, and `command-changed` when this worker's previous run of the same
 //! kind used a different command line. Backgrounded commands (`&`) are refused: Air spawns
 //! the check itself and must see it finish.
+//!
+//! Every kind goes through this one path. `precheck` is a worker's cheap check under a
+//! verification lane (plan 0009 B2): recorded like a verify, and read only by the batch-ready
+//! rule where the repo declares `"precheck": true`, never by a green query for `verify`.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -18,7 +22,7 @@ use crate::git;
 
 pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     let Some(kind) = Kind::parse(kind) else {
-        eprintln!("air record: kind must be one of verify | docs-check | fitness");
+        eprintln!("air record: kind must be one of verify | docs-check | fitness | precheck");
         return 1;
     };
     let (ledger, worker) = match open(repo) {
@@ -203,8 +207,12 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         eprintln!("air record: {}{flaky_note}", flags.join(", "));
     }
     // air-80x.4: a red at a batch head is reported by member, so the lane can split by hand.
-    // Nothing else changes on a red: no landing, no close, no claim.
-    if run.verdict() == air_ledger::verify::Verdict::Red && !run.members.is_empty() {
+    // Nothing else changes on a red: no landing, no close, no claim. A batch is a verify; a
+    // worker's precheck over a branch that merged a peer's is not one.
+    if kind == Kind::Verify
+        && run.verdict() == air_ledger::verify::Verdict::Red
+        && !run.members.is_empty()
+    {
         let red = super::batch::red_batches_of(std::slice::from_ref(&run));
         if let Some(b) = red.first() {
             eprintln!("air record: {}", super::batch::red_batch_line(b));
