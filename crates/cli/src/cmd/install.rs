@@ -1625,6 +1625,19 @@ pub const SURFACE: &[SurfaceChange] = &[
                  move its patterns into `leases` and retire the guard, keeping one store and one \
                  checker. Run both only while comparing them with `air lease needs`.",
     },
+    SurfaceChange {
+        id: "precheck-is-a-run",
+        since: "2026-09-25 (plan 0009 B2)",
+        headline: "`air record precheck -- <cmd>` records a worker's precheck like a verify, and \
+                   it is never read as a verify green. A running one is shown as `precheck in \
+                   flight` and keeps the worker from reading as idle; it does not hold a landing. \
+                   With `\"precheck\": true` in `.claude/air.json`, a branch is batch-ready only \
+                   with a green precheck at its head (`no-precheck` otherwise).",
+        silent_break: false,
+        action: "Under a lane, run the repo's precheck through `air record precheck --`. To have \
+                 the lane cut only prechecked heads, set `\"precheck\": true` and retire any log \
+                 file or \"checked at <sha>\" message the lane reads for it.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

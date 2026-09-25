@@ -216,6 +216,17 @@ Three consequences for a repo adopting Air:
    it. A repo with its own lease guard moves its patterns here and retires the guard's matching
    half; running both only duplicates the refusal (plan 0009 §11).
 
+   A fifth field, `"precheck": true`, is **opt-in and off by default** (plan 0009 B2). Under a
+   verification lane workers run a cheap precheck instead of the full verify; with the key, a
+   branch is batch-ready only with a green `air record precheck -- <your precheck command>` at
+   its head, matched by the same key as a verify green. `air status --json` names a branch
+   without one as `no-precheck`. A precheck green never counts as a verify green: the close
+   gate, the landable list and `air land` ignore it. **[an adopter]** built the same gate from
+   a log file its lane script parsed and "checked at <sha>" messages; a worker was cut before
+   its check finished, and a hand-over that died before its precheck left the previous run's
+   green trailer naming a head two commits back. Record the precheck with or without the key:
+   a running one keeps `air status` from calling the worker idle.
+
 5. **Set the harness's Bash timeout above the repo's longest verify, or run verifies
    detached.** Claude Code's Bash tool defaults to a 10-minute cap and kills the command at
    it; `BASH_MAX_TIMEOUT_MS` raises it (the adopter sets 900000, 15 minutes). A verify killed at
@@ -428,7 +439,7 @@ their tree.
 | `scripts/lease.sh` / `make lease-*` | `air lease take|release|status|break [<resource>]`; resources: `runtime` (ports, device, Docker), `:8080`, `simulator`, `chrome`, … | Same semantics (worktree identity, pid liveness, stale heartbeat), plus dead-holder attention pushed to the coordinator. Keep the make targets as aliases for one round |
 | Heartbeat cron that wakes the coordinator | Delete it. `air coordinator` attaches the channel; conditions arrive when they hold | `air status --attention` is the same list on demand |
 | `make fleet` (live agents, overlap) | Alias to `air status` / `air holdings` | One source; no drift between scripts |
-| `make verify` run bare | `air record verify -- make verify` (also `fitness`, `docs-check`) | The gate needs the fact; Air flags suspicious (under 2 s, silent), changed-command, dirty-tree, and refuses backgrounded runs |
+| `make verify` run bare | `air record verify -- make verify` (also `fitness`, `docs-check`, `precheck`) | The gate needs the fact; Air flags suspicious (under 2 s, silent), changed-command, dirty-tree, and refuses backgrounded runs |
 | Generated-files exclusion list duplicated in `land.sh` and `fleet.sh` **[an adopter]** | One file sourced by both | Drift |
 | "Verify is complete" assumed **[an adopter]** (jest silently skipped; a deleted generated `router.d.ts` silenced tsc) | Add a fitness check: verify invokes every test runner the repo has; land regenerates generated inputs before verify | Air records the exit honestly; completeness is the repo's |
 
