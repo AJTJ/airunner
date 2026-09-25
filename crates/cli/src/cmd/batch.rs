@@ -323,7 +323,9 @@ pub fn members_of(
     let mut branches: Vec<(String, String)> = Vec::new();
     for (path, _) in git::worktrees(repo).unwrap_or_default() {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if worker == own || super::hook::role_for(&worker) != "worker" {
+        // Every branch but the lane's own and the main checkout: the coordinator's branch is
+        // a batch member like a worker's (air-jc2p.1).
+        if worker == own || worker == "main" {
             continue;
         }
         if let Ok(wt_head) = git::head(&path) {

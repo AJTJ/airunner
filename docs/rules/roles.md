@@ -8,10 +8,13 @@
 
 ## Which role am I
 
-Your role is `AIR_ROLE`, set by the launcher: `worker` or `coordinator`. It is never the
+Your role is `AIR_ROLE`, set by the launcher: `worker`, `lane` or `coordinator`. It is never the
 directory you are in, since any role may work in a worktree. A shell Air did not start has no
 `AIR_ROLE` and is the owner. Air records the role on every session and event. **[fact]**
 `AIR_ROLE`, `BEADS_ACTOR` and `AIR_PROJECT` are set by the launcher, never by files.
+Names carry the role and the project: worktrees `worker-<N>`, `lane` and `coordinator`, and
+the tmux session and the session name `ListAgents` shows are `<project>-<name>`. A name grants
+nothing; a legacy `w<N>` reads as a worker. **[fact]**
 
 **Act only on your own project; talk to any of them.** Other fleets run on this machine.
 Another project's worktrees, tmux sessions and workers are never yours to kill, restart,
@@ -187,13 +190,12 @@ round passes with zero `handover-not-green` events. **[Air enforces]**
 
 ### Verification lane (a worker whose work is verifying other branches)
 
-A lane is a worker session like any other: same launcher, same deny list, same claims. While
-it batches it holds no bead; between batches it may hold one **if its worktree survives the
-cut** (air-80x.6, narrowed by air-4noi). A lane that resets hard to main on every cut — the
-simplest way to make a batch contain main and nothing else — would hold that bead in a tree it
-is about to wipe; a lane that merges main forward and integrates on a throwaway branch keeps
-it. Which worker is the lane is `verify_lane` in `.claude/air.json`; the Stop hook offers
-it no ready beads. **[fact]**
+A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`): the
+worker deny list minus `air land`, the same claims. While it batches it holds no bead; between
+batches it may hold one **if its worktree survives the cut** (air-80x.6, narrowed by air-4noi):
+a lane that resets hard to main on every cut would hold it in a tree it is about to wipe.
+`verify_lane` in `.claude/air.json` declares that a lane runs; the Stop hook offers
+`AIR_ROLE=lane` no ready beads. **[fact]**
 
 **The lane's loop.** `air batch cut` in your worktree merges `main` and every batch-ready branch
 at the sha `air status` lists, never a sha from a message, and drops and names one that conflicts
@@ -206,26 +208,33 @@ member branches at the shas it merged. `air record verify -- <cmd>` at that comm
 green or red, and the landing row names the member heads the batch contained (air-80x.2).
 `air status` lists the branches that are batch-ready as a fact, `batch-ready: <worker> at
 <sha> (<beads>)`: not landable on its own (a green at a head that contains `main`), a `Bead:`
-trailer naming a bead the worker holds, and a green `air record precheck` at that head where
-`.claude/air.json` sets `"precheck": true`; `--json` gives the first fact each other branch
-lacks (air-80x.3). Being behind `main` does not take a branch out: the lane merges it forward
-at the cut (owner, 2026-09-25). A red batch is reported by member, in `air record`'s output
-and in `air status`, until a newer batch supersedes it; nothing lands, closes or claims
-differently on a red (air-80x.4). **A member can look it up**: `air handover` in your own
-worktree names the batch, the lane and the lane's output when the standing red batch has your
-branch in it (air-hpp8); silence there is not proof you were not in one. **[fact]**
+trailer naming a bead the worker holds (not for the coordinator's branch), and a green
+`air record precheck` at that head where `.claude/air.json` sets `"precheck": true`; `--json`
+gives the first fact each other branch lacks (air-80x.3). Being behind `main` does not take a branch out. A red batch is reported by
+member, in `air record`'s output and in `air status`, until a newer batch supersedes it; nothing
+lands, closes or claims differently on a red (air-80x.4). **A member can look it up**: `air
+handover` in your worktree names the batch, the lane and its output when the standing red batch
+has your branch in it (air-hpp8); silence there is not proof you were not in one. **[fact]**
 
 **What Air refuses, and what it accepts.** The close gate accepts a green at a verified commit
 that contains `main` and every commit carrying the bead's trailer: a worker closes on the
 lane's green with no verify run of its own (air-80x.1). A bead with a commit after the cut is
-refused, naming that commit. Landing stays the coordinator's: `air land --worker <lane>` lands
-the batch and attributes every bead its range names by trailer (air-80x.2). The in-flight
-refusal treats the lane's verify like any other (air-4cr). **[Air enforces]**
+refused, naming that commit. Landing is the lane's: `air land --worker <lane>` lands the batch
+and attributes every bead its range names by trailer (air-80x.2), and is refused to workers and
+the coordinator (air-jc2p.2). The in-flight refusal treats the lane's verify like any other
+(air-4cr). **[Air enforces]**
 
 Removed when verify is cheap enough (scoped, or under a minute) that a round shows no batch of
 more than one branch; the role is a worker again.
 
-## Coordinator (the main checkout, holding no lane)
+## Coordinator (its own worktree, holding no lane)
+
+`air coordinator` starts you in `.claude/worktrees/coordinator`, in the tmux session
+`<project>-coordinator`, with the channel attached; run again, it attaches to the running one.
+Nobody works in the main checkout (owner, 2026-09-14); `air status` names any launched session
+whose process runs there, and refuses nothing. Your commits reach main in the lane's
+batch: your branch is batch-ready with no claimed bead once it has a commit main lacks, and
+Air lands it the way it lands a worker's. **[fact]**
 
 Two modes (owner, 2026-08-21). **Active:** every online worker has work: keep the ready list
 full of claimable tasks, set priority, add `blocks` edges for shared files. **Decomposing an
@@ -323,10 +332,11 @@ every catch in the 2026-09-05 round. Incident: the 2026-08-22 05:26-05:45 stands
 where the quiet channel rested on the coordinator remembering to look. Removed when a condition
 catches a real wedge before the heartbeat does, twice. **[fact]**
 
-**Landing is the coordinator's, not a worker's.** Under a lane, land the lane's green batch
-with `air land --worker <lane>`, which attributes every bead its range names by trailer, as soon
-as the lane reports it; without a lane, `air land --worker <name>` for each landable branch.
-`air status` names what is ready.
+**Landing is the lane's, not a worker's or the coordinator's** (owner, 2026-09-14): the lane
+lands its green batch with `air land --worker <lane>`, which attributes every bead its range
+names by trailer, and `air land` is refused to every other launched role; the owner's own shell
+may still land. With no lane running, start one: `air lane --tmux`. `air status` names what is
+ready. **[Air enforces]**
 
 What Air states either way: a branch is landable when it carries a **recorded green at a head
 that contains `main`**; the beads a landing carries are the ones its commits name in a
@@ -353,9 +363,11 @@ write to main takes that away from every other branch at once, and each of those
 merge and a re-verify to get it back. Two consequences, and they are facts about the refusal,
 not advice about tempo. **Landing order:** landing several branches in a row costs the second
 one its landability the moment the first lands; a batch lands once and costs it once.
-**The coordinator's own commits move main exactly as a landing does** — an adopter's
+**The coordinator's own commits move main exactly as a landing does** when made in the main
+checkout — an adopter's
 coordinator invalidated four workers' landability with one prose commit on 2026-09-06, with no
-landing involved — so they cost whatever a landing costs, in the same units.
+landing involved — which is why the coordinator commits in its own worktree and its commits
+ride the lane's batch (air-jc2p.1).
 What has STOPPED being true: main moving no longer retracts a CLOSE. A green is checked against
 the main it was recorded over, not against the main of the moment somebody asks, and a bead
 whose commits are already in main closes on the landing that put them there. The workaround an
@@ -396,10 +408,10 @@ owner, 2026-08-22). Launch workers
 yourself with `air worker <name> --tmux --task "<complete task>"` (an attachable pane the owner
 can open).
 
-Not available to the coordinator, by deny rule: `git push`. **The boundary is the remote, not
-main.** The coordinator may commit and merge on main — its own prose is its own to save, and
-whatever path this repo lands by, Air pushes nothing: a landing it performs reaches main and
-stops there. Landing a *worker's* branch is still that path, not a hand merge.
+Not available to the coordinator, by deny rule: `git push`; by role, `air land`. **The boundary is the remote, not
+main.** The coordinator commits in its own worktree — its own prose is its own to save — and
+Air pushes nothing: a landing reaches main and stops there. Its branch reaches main in a lane
+batch, never by a hand merge.
 **[Air enforces: `git push`]**
 
 ## When refused

@@ -209,6 +209,9 @@ pub struct Snapshot {
     /// `verifies_in_flight` cannot see: a run nobody recorded. `unknown` says why when the
     /// process listing did not answer.
     pub tree_readers: super::readers::TreeReaders,
+    /// One warning per launched session whose process runs in the main checkout, where no role
+    /// works since air-jc2p.1 (`readers::main_checkout_sessions`). Empty is the normal state.
+    pub main_checkout_sessions: Vec<String>,
     /// Branches `air land --all` would take right now (air-03w). Filled from the same
     /// `select` the command runs, so the condition and the command cannot disagree. No bd
     /// call: `select` reads git and the ledger only.
@@ -493,7 +496,7 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `no-claimed-bead` | `no-precheck`
+    /// `green-at-head` | `no-claimed-bead` | `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
 }
@@ -516,6 +519,12 @@ pub struct BatchFacts {
     pub precheck_required: bool,
     /// A `precheck` run is green at `head` under the repo's green key. Read only when required.
     pub precheck_green_at_head: bool,
+    /// The coordinator's worktree (air-jc2p.1): its commits are prose and filing, not bead
+    /// work, so it needs no claimed bead, and nothing lands it on its own.
+    pub coordinator: bool,
+    /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
+    /// be batch-ready with nothing in it.
+    pub ahead: bool,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -538,7 +547,18 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         check,
         detail,
     };
-    if f.contains_main && f.green_at_head {
+    // The coordinator's branch (air-jc2p.1, owner 2026-09-14: its changes reach main through
+    // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
+    // nothing lands it alone, so there is no landable-alone exit; what it must have is a commit
+    // main lacks. Removed with the lane, when the coordinator would land its own branch again.
+    if f.coordinator {
+        if !f.ahead {
+            return Err(not(
+                "nothing-ahead",
+                format!("{} at {short}: no commit that main lacks", f.worker),
+            ));
+        }
+    } else if f.contains_main && f.green_at_head {
         return Err(not(
             "green-at-head",
             format!(
@@ -553,7 +573,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         .filter(|b| f.held.contains(b))
         .cloned()
         .collect();
-    if beads.is_empty() {
+    if beads.is_empty() && !f.coordinator {
         return Err(not(
             "no-claimed-bead",
             format!(
@@ -639,9 +659,13 @@ pub fn batch_ready_for(
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if super::hook::role_for(&worker) != "worker" {
-            continue;
-        }
+        // The main checkout is main; the lane's branch is the batch, not a member. The
+        // coordinator's worktree is a member (air-jc2p.1).
+        let coordinator = match super::hook::role_for(&worker) {
+            "worker" => false,
+            "coordinator" if worker != "main" => true,
+            _ => continue,
+        };
         let head = match git::head(&path) {
             Ok(h) => h,
             Err(e) => {
@@ -665,9 +689,19 @@ pub fn batch_ready_for(
                     false
                 }
             };
+        let ahead = coordinator
+            && git::run(
+                repo,
+                &["rev-list", "--count", &format!("{main_tip}..{head}")],
+            )
+            .ok()
+            .and_then(|n| n.trim().parse::<u64>().ok())
+            .is_some_and(|n| n > 0);
         let facts = BatchFacts {
             precheck_required,
             precheck_green_at_head,
+            coordinator,
+            ahead,
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
             green_at_head,
             carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
@@ -856,8 +890,11 @@ pub fn select(repo: &Path) -> Selection {
     };
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if super::hook::role_for(&worker) != "worker" {
-            continue; // the coordinator's own checkout is not a candidate, and never was
+        // The coordinator's checkout (`main`, or its own worktree) is not a candidate, and
+        // never was: its commits reach main in a lane's batch. The lane's branch IS one, since
+        // `air land --worker <lane>` lands the batch through here (air-jc2p.4).
+        if super::hook::role_for(&worker) == "coordinator" {
+            continue;
         }
         let head = match git::head(&path) {
             Ok(h) => h,
@@ -2150,7 +2187,15 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         &trees,
         &session_pids,
     );
+    // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
+    let live: Vec<(String, String, i64)> = all_sessions
+        .iter()
+        .filter(|(_, _, x)| x.pid_alive != Some(false))
+        .filter_map(|(w, role, x)| x.pid.map(|p| (w.clone(), role.clone(), p)))
+        .collect();
+    let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
     Ok(Snapshot {
+        main_checkout_sessions,
         at,
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
@@ -2442,7 +2487,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 // air-9dg: a worker whose hooks do not see AIR_ENFORCE=1 has the one refusal
                 // switched off, and until this line nothing said so. Only `Some(false)` on a
                 // worker speaks: a pre-v15 row is unknown and the coordinator never enforces.
-                let unenforced = if w.role == "worker" && x.enforce == Some(false) {
+                let unenforced = if super::is_worker_like(&w.role) && x.enforce == Some(false) {
                     " UNENFORCED (hooks do not see AIR_ENFORCE=1; relaunch via air worker)"
                 } else {
                     ""
@@ -2544,6 +2589,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // says how many processes were looked at, so none is not "not looked". An unknown lookup
     // always prints, with why.
     for l in super::readers::status_lines(&s.tree_readers) {
+        out.push_str(&format!("{l}\n"));
+    }
+    for l in &s.main_checkout_sessions {
         out.push_str(&format!("{l}\n"));
     }
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.

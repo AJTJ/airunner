@@ -32,19 +32,34 @@ use air_ledger::verify::{Kind, new_id};
 use crate::cmd::{acceptance, emit, log_event, now, open};
 use crate::git;
 
-/// Who may run `air land`: anyone but a worker. The role is the launcher's `AIR_ROLE`
-/// (`cmd::caller_role`), never the directory or `--repo`, so where the command runs and how it
-/// is spelled cannot change the answer (air-29a).
+/// Who may run `air land`: the verification lane, and the owner (a shell with no `AIR_ROLE`).
+/// The role is the launcher's `AIR_ROLE` (`cmd::caller_role`), never the directory or
+/// `--repo`, so where the command runs and how it is spelled cannot change the answer
+/// (air-29a).
+///
+/// The coordinator lost it on the owner's ruling of 2026-09-14 (air-jc2p.2): main moves only by
+/// the lane's landing. The failures behind it (docs/design.md §10): a coordinator's commit on
+/// main invalidated four workers' landability at an adopter on 2026-09-06, and landing order
+/// was the round's throughput limit while the coordinator landed by hand. Removed when the
+/// lane goes (roles.md, its removal condition); landing then returns to whoever lands a
+/// worker's branch.
 pub fn may_land(role: &str) -> Result<(), String> {
-    if role != "worker" {
-        return Ok(());
+    match role {
+        "lane" | "owner" => Ok(()),
+        "coordinator" => Err(
+            "refused: `air land` is the verification lane's, not the coordinator's (owner, \
+             2026-09-14): main moves only by the lane's landing. Tell the lane its batch is \
+             ready, or start one with `air lane --tmux`. The role comes from AIR_ROLE, which the \
+             launcher sets."
+                .to_string(),
+        ),
+        _ => Err(
+            "refused: `air land` is not a worker's. Close your own bead instead: `air handover` \
+             names anything missing, then `bd close <id> --reason \"<proof>\"` (owner ruling, \
+             2026-08-22). The role comes from AIR_ROLE, which the launcher sets."
+                .to_string(),
+        ),
     }
-    Err(
-        "refused: `air land` is not a worker's. Close your own bead instead: `air handover` \
-         names anything missing, then `bd close <id> --reason \"<proof>\"` (owner ruling, \
-         2026-08-22). The role comes from AIR_ROLE, which the launcher sets."
-            .to_string(),
-    )
 }
 
 /// Why `air land` refuses while a verify is in flight (air-1bm), naming every run and the fix.
@@ -1224,14 +1239,17 @@ mod tests {
         assert_eq!(b[1].oldest_minutes, 30);
     }
 
-    /// air-29a: the role is the launcher's, so a worker is refused wherever it runs and
-    /// whatever `--repo` says, while the coordinator and the owner may land.
+    /// air-29a, air-jc2p.2: the role is the launcher's, so a worker is refused wherever it runs
+    /// and whatever `--repo` says; the lane and the owner may land, the coordinator may not.
     #[test]
-    fn only_a_worker_is_refused_a_landing() {
-        assert!(may_land("coordinator").is_ok());
+    fn only_the_lane_and_the_owner_land() {
+        assert!(may_land("lane").is_ok());
         assert!(may_land("owner").is_ok());
+        let e = may_land("coordinator").unwrap_err();
+        assert!(e.contains("air lane"), "{e}");
         let e = may_land("worker").unwrap_err();
         assert!(e.contains("air handover"), "{e}");
+        assert_eq!(crate::cmd::role_from(Some("lane")), "lane");
         assert_eq!(
             crate::cmd::role_from(Some("typo")),
             "worker",

@@ -68,8 +68,16 @@ pub fn role_from(value: Option<&str>) -> &'static str {
     match value {
         None | Some("") => "owner",
         Some("coordinator") => "coordinator",
+        Some("lane") => "lane",
         _ => "worker",
     }
+}
+
+/// The lane is a worker with one permission added (`air land`) and no bead offered to it
+/// (air-jc2p.2). Every check that stops a worker stops the lane too unless it is one of those
+/// two, so they read this rather than `role == "worker"`.
+pub fn is_worker_like(role: &str) -> bool {
+    matches!(role, "worker" | "lane")
 }
 
 /// Print a value as JSON or as its text form.

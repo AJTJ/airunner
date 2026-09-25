@@ -175,6 +175,51 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jc2p.3. The anchor looks for the main checkout under a name no tree has, so the
+    // warning never finds a session there; the owner and worker cases stay silent as before.
+    (
+        "status: a launched session running in the main checkout is named once, with its pid; the owner's shell and a worker in its worktree are not",
+        Mutation {
+            file: "crates/cli/src/cmd/readers.rs",
+            from: "        .filter(|t| t.worker == \"main\")\n        .flat_map(|t| t.readers.iter().map(|x| x.pid))",
+            to: "        .filter(|t| t.worker == \"nomain\")\n        .flat_map(|t| t.readers.iter().map(|x| x.pid))",
+            also_red: &[],
+        },
+    ),
+    // air-jc2p.1. The anchor puts the coordinator back under the claimed-bead rule, which is
+    // exactly what kept its branch out of every batch; the nothing-ahead arm is untouched.
+    (
+        "status: the coordinator's branch is batch-ready with no claimed bead once it has a commit main lacks; a worker's still needs one",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "if beads.is_empty() && !f.coordinator {",
+            to: "if beads.is_empty() {",
+            also_red: &[],
+        },
+    ),
+    // air-jc2p.2. The anchor gives the coordinator back `air land`, which is the one change the
+    // ruling made; the worker refusal and the lane's permission are other arms and stand.
+    (
+        "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        \"lane\" | \"owner\" => Ok(()),",
+            to: "        \"lane\" | \"owner\" | \"coordinator\" => Ok(()),",
+            also_red: &[],
+        },
+    ),
+    // air-jc2p.4. The anchor takes any session of our name as ours, which is the one mistake
+    // the check exists to prevent: the owner attached to another fleet's pane. The absent and
+    // own-session halves are untouched, so only the refusal falls.
+    (
+        "names: worktree, tmux and Claude session names carry role and project; another checkout's session of our name is refused by name; no name grants a permission",
+        Mutation {
+            file: "crates/cli/src/cmd/tmux.rs",
+            from: "Some((_, path)) if same(path, ours) => Ok(Existing::Ours),",
+            to: "Some((_, path)) if same(path, ours) || !path.is_empty() => Ok(Existing::Ours),",
+            also_red: &[],
+        },
+    ),
     // The lease-needed gate. The anchor makes ANY holder count as this session's, which is
     // the one comparison the gate exists to make: the second store the adopter's guard read
     // answered exactly this question wrongly. Red falls (w2's lease lets w1 run `make api`);
@@ -1091,8 +1136,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // identity falls through to the checkout the shell is in. One guard, it compiles,
             // and the worker arm and the fallback are untouched.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "        (Some(\"coordinator\"), _) => \"main\".to_string(),",
-            to: "        (Some(\"coordinator\"), _) if false => \"main\".to_string(),",
+            from: "        (Some(\"coordinator\"), _) => \"coordinator\".to_string(),",
+            to: "        (Some(\"coordinator\"), _) if false => \"coordinator\".to_string(),",
             also_red: &[],
         },
     ),
@@ -1458,17 +1503,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
-        Mutation {
-            // Let every role land. The worker half of the probe falls; the coordinator and
-            // owner halves stay green, which shows the anchor reaches the role gate alone.
-            file: "crates/cli/src/cmd/land.rs",
-            from: "    if role != \"worker\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
-            to: "    if role != \"nobody\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
-            also_red: &[],
-        },
-    ),
-    (
         "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
         Mutation {
             // Put the condition back on bd's raw count. Exactly the pre-fix behaviour, one
@@ -1636,7 +1670,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // GREEN half survives, which is what shows the anchor reaches the role gate alone
             // rather than taking out the check.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "    if let Some(abs) = input.edited_path()\n        && role == \"worker\"",
+            from: "    if let Some(abs) = input.edited_path()\n        && super::is_worker_like(role)",
             to: "    if let Some(abs) = input.edited_path()\n        && role == \"coordinator\"",
             also_red: &[],
         },
@@ -2435,6 +2469,9 @@ fn all_probes() -> Vec<Probe> {
         probe_verify_in_flight(),
         probe_landing_state(),
         probe_land_role_is_the_launchers(),
+        probe_names_carry_role_and_project(),
+        probe_coordinator_branch_is_batch_ready_without_a_bead(),
+        probe_status_warns_of_a_session_in_the_main_checkout(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
@@ -4413,7 +4450,7 @@ fn probe_land_refusals() -> Probe {
         && refusals
             .iter()
             .all(|f| check(&here(), f).err().is_some_and(readable));
-    let green = may_land("coordinator").is_ok()
+    let green = may_land("lane").is_ok()
         && check(&here(), &ok()) == Ok(true)
         && check(
             &here(),
@@ -5221,8 +5258,13 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
 /// may work in a worktree. The role is now the launcher's word, which neither `--repo` nor the
 /// directory nor the command's spelling can change.
 ///
-/// Red: a worker is refused both commands, and an unknown `AIR_ROLE` counts as a worker. Green:
-/// the coordinator and the owner (no `AIR_ROLE`, a shell Air did not start) may run both.
+/// Then air-jc2p.2 (owner, 2026-09-14): landing is the verification lane's, and refused to the
+/// coordinator too, so main moves only by the lane's landing.
+///
+/// Red: a worker is refused both commands, an unknown `AIR_ROLE` counts as a worker, the lane is
+/// refused `air close` as a worker is, and the coordinator is refused `air land`. Green: the lane
+/// and the owner (no `AIR_ROLE`, a shell Air did not start) may land; the coordinator and the
+/// owner may still close.
 fn probe_land_role_is_the_launchers() -> Probe {
     use crate::cmd::close::may_close;
     use crate::cmd::land::may_land;
@@ -5230,12 +5272,63 @@ fn probe_land_role_is_the_launchers() -> Probe {
 
     let red = may_land("worker").is_err()
         && may_close("worker").is_err()
-        && may_land(role_from(Some("lane-typo"))).is_err();
-    let green = may_land(role_from(Some("coordinator"))).is_ok()
+        && may_close(role_from(Some("lane"))).is_err()
+        && may_land(role_from(Some("lane-typo"))).is_err()
+        && may_land(role_from(Some("coordinator"))).is_err();
+    let green = may_land(role_from(Some("lane"))).is_ok()
         && may_land(role_from(None)).is_ok()
+        && may_close(role_from(Some("coordinator"))).is_ok()
         && may_close(role_from(None)).is_ok();
     Probe {
-        name: "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
+        name: "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-jc2p.4 (owner, 2026-09-25): worktree, tmux and Claude session names carry the role and
+/// the project, and a name collides across fleets on one machine only by refusal. Before it,
+/// `tmux ls` showed `air-w1` and `ListAgents` showed a harness-made name (an adopter's
+/// random word and number), neither saying what the session was for, and a two-letter bd prefix was the
+/// only thing keeping two fleets' session names apart.
+///
+/// Red: a tmux session of our name started in another checkout is refused, naming that
+/// checkout; and a worktree NAMED `lane` launched as a worker is still refused `air land`, since
+/// no permission comes from a name. Green: our own session is reused, an absent one started;
+/// the auto name is `worker-1`; the Claude name is the tmux name; legacy `w1` reads as a worker.
+fn probe_names_carry_role_and_project() -> Probe {
+    use crate::cmd::hook::role_for;
+    use crate::cmd::land::may_land;
+    use crate::cmd::launch::display_name;
+    use crate::cmd::tmux::{Existing, existing, free_worker_name, session_name};
+
+    let live = vec![(
+        "air-lane".to_string(),
+        "/fleet-a/.claude/worktrees/lane".to_string(),
+    )];
+    let eq = |a: &str, b: &str| a == b;
+    let refused = existing("air-lane", "/fleet-b/.claude/worktrees/lane", &live, eq);
+    let red = refused
+        .as_ref()
+        .is_err_and(|e| e.contains("/fleet-a/.claude/worktrees/lane"))
+        && role_for("lane") == "lane"
+        && may_land(crate::cmd::role_from(Some("worker"))).is_err();
+    let green = existing("air-lane", "/fleet-a/.claude/worktrees/lane", &live, eq)
+        == Ok(Existing::Ours)
+        && existing(
+            "air-coordinator",
+            "/fleet-a/.claude/worktrees/coordinator",
+            &live,
+            eq,
+        ) == Ok(Existing::None)
+        && free_worker_name(&[], &[], "air") == "worker-1"
+        && display_name("air", "worker-1") == session_name("air", "worker-1")
+        && display_name("air", "coordinator") == "air-coordinator"
+        && role_for("w1") == "worker"
+        && role_for("worker-2") == "worker"
+        && role_for("coordinator") == "coordinator";
+    Probe {
+        name: "names: worktree, tmux and Claude session names carry role and project; another checkout's session of our name is refused by name; no name grants a permission",
         red_fires: red,
         green_passes: green,
     }
@@ -6608,6 +6701,7 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         held: vec!["zz-1".into()],
         precheck_required: false,
         precheck_green_at_head: false,
+        ..Default::default()
     };
     let ready = batch_ready_rule(&base);
     let line = render_for_probe(&Snapshot {
@@ -6650,6 +6744,96 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
     }
 }
 
+/// air-jc2p.3: with every role in its own worktree (air-jc2p.1), a launched session whose
+/// process runs in the main checkout is the thing to see, because the main checkout is where a
+/// coordinator's prose commit invalidated four workers' landability at an adopter (2026-09-06).
+/// A measurement, not a refusal.
+///
+/// Red: a coordinator session whose `claude` process has its cwd in the main checkout gets one
+/// line naming it and its pid. Green: the owner's own shell there is exempt, a worker in its
+/// worktree is silent, and an unknown lookup says nothing here (the `readers:` line says it).
+fn probe_status_warns_of_a_session_in_the_main_checkout() -> Probe {
+    use crate::cmd::readers::{Reader, Tree, TreeReaders, main_checkout_sessions};
+
+    let reader = |pid: i64| Reader {
+        pid,
+        elapsed_secs: Some(60),
+        command: "claude".into(),
+        session: true,
+    };
+    let r = TreeReaders {
+        examined: 2,
+        trees: vec![
+            Tree {
+                worker: "main".into(),
+                path: "/r".into(),
+                readers: vec![reader(10)],
+            },
+            Tree {
+                worker: "worker-1".into(),
+                path: "/r/.claude/worktrees/worker-1".into(),
+                readers: vec![reader(20)],
+            },
+        ],
+        unknown: None,
+    };
+    let s = |w: &str, role: &str, pid: i64| (w.to_string(), role.to_string(), pid);
+    let red = main_checkout_sessions(&r, &[s("coordinator", "coordinator", 10)]);
+    let quiet = main_checkout_sessions(&r, &[s("main", "owner", 10), s("worker-1", "worker", 20)]);
+    let unknown = main_checkout_sessions(
+        &TreeReaders::unknown("off"),
+        &[s("coordinator", "coordinator", 10)],
+    );
+    Probe {
+        name: "status: a launched session running in the main checkout is named once, with its pid; the owner's shell and a worker in its worktree are not",
+        red_fires: red.len() == 1
+            && red.first().is_some_and(|l| {
+                l.contains("coordinator session coordinator (pid 10)")
+                    && l.contains("main checkout")
+            }),
+        green_passes: quiet.is_empty() && unknown.is_empty(),
+    }
+}
+
+/// air-jc2p.1 (owner, 2026-09-14): the coordinator works in its own worktree and its changes
+/// reach main through the lane like a worker's. Its commits are prose and filing and name no
+/// bead, so under the worker rule its branch would never be batch-ready and the lane could never
+/// take it: the coordinator would be back to committing on main, which is the failure (an
+/// adopter's coordinator invalidated four workers' landability with one prose commit on
+/// 2026-09-06).
+///
+/// Red: the coordinator's branch with a commit main lacks is batch-ready with no claimed bead.
+/// Green: with nothing ahead it is absent as `nothing-ahead`; and a worker's branch naming no
+/// claimed bead is still absent as `no-claimed-bead`, so nothing else about the rule changed.
+fn probe_coordinator_branch_is_batch_ready_without_a_bead() -> Probe {
+    use crate::cmd::status::{BatchFacts, batch_ready_rule};
+
+    let coord = BatchFacts {
+        worker: "coordinator".into(),
+        head: "c0ffee1234567890".into(),
+        coordinator: true,
+        ahead: true,
+        ..Default::default()
+    };
+    let red_fires =
+        batch_ready_rule(&coord).is_ok_and(|b| b.worker == "coordinator" && b.beads.is_empty());
+    let idle = batch_ready_rule(&BatchFacts {
+        ahead: false,
+        ..coord.clone()
+    });
+    let worker = batch_ready_rule(&BatchFacts {
+        worker: "worker-1".into(),
+        coordinator: false,
+        ..coord.clone()
+    });
+    Probe {
+        name: "status: the coordinator's branch is batch-ready with no claimed bead once it has a commit main lacks; a worker's still needs one",
+        red_fires,
+        green_passes: idle.is_err_and(|n| n.check == "nothing-ahead")
+            && worker.is_err_and(|n| n.check == "no-claimed-bead"),
+    }
+}
+
 /// Precheck (2026-09-25): where `.claude/air.json` declares `"precheck": true`, a branch is batch-ready
 /// only with a green `precheck` run at its head. An adopter gated its lane on a precheck log
 /// file and "checked at <sha>" messages, 2026-09-05..07, and cut a worker before its check
@@ -6673,6 +6857,7 @@ fn probe_batch_ready_wants_a_precheck_where_declared() -> Probe {
         held: vec!["zz-1".into()],
         precheck_required: true,
         precheck_green_at_head: false,
+        ..Default::default()
     };
     let red_fires = batch_ready_rule(&base).is_err_and(|n| {
         n.check == "no-precheck"
@@ -6968,7 +7153,7 @@ fn probe_handover_ok_names_the_main_it_checked() -> Probe {
 fn probe_session_identity_is_the_launchers() -> Probe {
     use crate::cmd::hook::identity_from;
 
-    let red = identity_from(Some("coordinator"), None, "w1") == "main"
+    let red = identity_from(Some("coordinator"), None, "w1") == "coordinator"
         && identity_from(Some("worker"), Some("w2"), "w1") == "w2";
     let mut f = base_facts();
     f.main_is_ancestor = false;
