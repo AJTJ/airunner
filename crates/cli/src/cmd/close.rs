@@ -56,10 +56,11 @@ pub fn resolve_reason(reason: Option<&str>, file: Option<&Path>) -> Result<Strin
 }
 
 /// Who may run `air close`. Pure, so `air selftest` can prove the refusal fires.
-/// Who may run `air close`: anyone but a worker, by the launcher's `AIR_ROLE`, the same rule as
-/// `land::may_land` (air-29a).
+/// Who may run `air close`: anyone but a worker or the lane, by the launcher's `AIR_ROLE`
+/// (air-29a). The lane is refused as a worker is (air-jc2p.2): it was given `air land` and
+/// nothing else, and its deny list still carries `air close`.
 pub fn may_close(role: &str) -> Result<(), String> {
-    if role != "worker" {
+    if !super::is_worker_like(role) {
         return Ok(());
     }
     Err(
