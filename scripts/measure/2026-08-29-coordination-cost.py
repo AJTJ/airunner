@@ -21,7 +21,7 @@ several — the same absence-read-as-observation this bead is about. Received me
 counted by scanning the raw text for the delimiter, which cannot go quietly wrong. Byte counts
 are of the JSON-escaped text, so they run a few percent high; they are a scale, not an audit.
 
-Run:  python3 docs/research/verification/2026-08-29-coordination-cost.py [project-slug-prefix]
+Run:  python3 scripts/measure/2026-08-29-coordination-cost.py [project-slug-prefix]
 """
 
 import glob

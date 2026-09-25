@@ -8,7 +8,7 @@
 //! the check itself and must see it finish.
 //!
 //! Every kind goes through this one path. `precheck` is a worker's cheap check under a
-//! verification lane (plan 0009 B2): recorded like a verify, and read only by the batch-ready
+//! verification lane (2026-09-25): recorded like a verify, and read only by the batch-ready
 //! rule where the repo declares `"precheck": true`, never by a green query for `verify`.
 
 use std::io::{Read, Write};

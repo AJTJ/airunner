@@ -442,7 +442,7 @@ pub struct AncestorDeadlock {
 /// not one of them a P1.
 ///
 /// bd 1.2.2 does NOT prevent this in general, measured 2026-09-06
-/// (`docs/research/beads.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules, neither
+/// (`.claude/skills/beads/references/bd-facts.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules, neither
 /// an ancestor walk: an existing `parent-child` row on the same pair, which always catches the
 /// direct parent; and a dotted-id prefix test, which catches deeper ancestors only when the id
 /// encodes the chain. `bd create --graph` assigns flat ids and links by `parent_key`, so a wave
@@ -523,7 +523,7 @@ pub struct BatchFacts {
 /// the reason a branch is absent is the first fact it lacks. Nothing here is a judgement: each
 /// fact is a git or ledger lookup the lane could make itself.
 ///
-/// It does NOT require the head to contain main (plan 0009 §11, owner 2026-09-25). The lane
+/// It does NOT require the head to contain main (owner 2026-09-25, from an adopter's fleet protocol). The lane
 /// merges main forward at the cut, and a member that conflicts with main is dropped and named
 /// like any conflict. Requiring it took every waiting branch out of the queue at every landing
 /// until its worker re-merged; an adopter's workers were told to merge "for your own close and
@@ -573,7 +573,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             ),
         ));
     }
-    // Plan 0009 B2: where the repo declares a precheck, the lane cuts a head only on a
+    // Precheck (2026-09-25): where the repo declares a precheck, the lane cuts a head only on a
     // recorded green one AT that head. An adopter built exactly this from a log file its lane
     // script parsed, 2026-09-05..07: a worker was cut before its check finished, the
     // coordinator relayed "checked" for a check still running, and a hand-over that died before
@@ -600,7 +600,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
 }
 
 /// `precheck` from `.claude/air.json`: `true` gates batch-ready on a green `precheck` run at
-/// the branch head (plan 0009 B2). Absent or anything but `true` leaves the rule unchanged.
+/// the branch head (precheck, 2026-09-25). Absent or anything but `true` leaves the rule unchanged.
 pub fn precheck_declared(repo: &Path) -> bool {
     super::handover::air_json(repo)
         .and_then(|j| j.get("precheck")?.as_bool())
@@ -2531,7 +2531,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         // A bead waiting on review is not work in progress: the worker is still idle and
         // should be nudged, which is what `idle-without-claim` also decides (air-3eu).
         // A run in flight is progress, whatever its kind: an adopter's coordinator nudged a
-        // worker as idle 400 s into a precheck Air could not see (plan 0009 B2).
+        // worker as idle 400 s into a precheck Air could not see (precheck, 2026-09-25).
         let idle_no_claim = w.role == "worker"
             && w.claims.is_empty()
             && w.session.as_ref().is_some_and(|x| x.state == "idle")

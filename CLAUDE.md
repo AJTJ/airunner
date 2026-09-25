@@ -20,10 +20,10 @@ Index items are 1–3 lines; detail lives behind the link.
   does not need. When a rule can be a measurement, measure; when in doubt, leave it out. Nothing
   is off the table, including the multi-agent pattern itself: if one capable session does the
   work better than a coordinator plus workers, the fleet goes. Gas Town is the opposite and the
-  warning. Evidence: `docs/research/evidence.md` (owner, 2026-08-21).
+  warning. Evidence: `.claude/skills/do-less/references/evidence.md` (owner, 2026-08-21).
 - **Only build what makes sense.** Nothing is built without a named pain from the record it
   removes, and it ships with a red/green probe that proves it fires. Gas Town is the cautionary
-  case (`docs/research/beads.md`, Gas Town). **Invoke the `check-resources` skill first**:
+  case (`docs/design.md` §11, the Gas Town row). **Invoke the `check-resources` skill first**:
   the harness, the field, then Air, with the answer written where the work is recorded. On
   2026-08-24 a shallow pass missed eleven projects that had already built parts of Air, one of
   them the same architecture on the same task store (owner, 2026-08-24).
@@ -107,23 +107,23 @@ Index items are 1–3 lines; detail lives behind the link.
   **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
   number about this repo, before claiming a mechanism fires or is shipped, and before saying what
   the installed `air` does (owner, 2026-08-29, air-476).
-- **This file** is rules + indexes + essentials only. Plans, framing, and decisions go in `docs/`.
+- **This file** is rules + indexes + essentials only. What is still to build goes in `docs/design.md`
+  §10, technology choices in its §11, framing and rulings in `docs/decisions.md` (owner, 2026-09-25).
 
 ## Index — documents
 
 | Read when | Document |
 |---|---|
-| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, and the TODO list in §10 (the one design doc; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
+| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans or research directory; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
 | Wanting the "why", framing, and every owner decision (dated, append-only) | [`docs/decisions.md`](docs/decisions.md) |
 | Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
-| Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | skill `system-design`; prior art [`docs/research/merge-queues-prior-art.md`](docs/research/merge-queues-prior-art.md); the current design [`docs/plans/0009-fleet-system-design.md`](docs/plans/0009-fleet-system-design.md) |
-| Wondering whether to switch to another harness or orchestrator, or whether a part of Air is now commodity | [`docs/research/landscape.md`](docs/research/landscape.md) |
-| What Claude Code itself provides and can confine (live inventory, dated; hook events; edge cases) | [`docs/research/harness-facts.md`](docs/research/harness-facts.md) |
-| Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | [`docs/research/beads.md`](docs/research/beads.md) |
-| The findings Air's rules rest on: guardrails as throttles, decomposition evidence, verified numbers and claims not to repeat | [`docs/research/evidence.md`](docs/research/evidence.md) |
+| Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | skill `system-design`; the target shape and its open rulings are `docs/design.md` §10, the merge-queue prior art `.claude/skills/system-design/references/verification-lane.md` |
+| Why Rust, SQLite, bd, Claude Code, worktrees, tmux, the MCP channel and the merge-queue lane; whether a part of Air is now commodity | `docs/design.md` §11 (technology decisions, sourced); the field roster is `.claude/skills/check-resources/references/field.md` |
+| What Claude Code itself provides and can confine (live inventory, dated; hook events; edge cases) | `.claude/skills/check-resources/references/harness-facts.md` |
+| Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | skill `beads`; `.claude/skills/beads/references/bd-facts.md` |
+| The findings Air's rules rest on: guardrails as throttles, corpus principles, verified numbers and claims not to repeat | `.claude/skills/do-less/references/evidence.md` |
 | Integrating Air into a target repo (install, rules to change, upgrading) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
-| Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
 | Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` |

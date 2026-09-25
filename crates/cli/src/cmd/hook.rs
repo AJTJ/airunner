@@ -410,7 +410,7 @@ fn dispatch(
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
-            // The lane claims no bead, so it is offered none (plan 0009 §11).
+            // The lane claims no bead, so it is offered none (an adopter's fleet protocol, 2026-09-25).
             let nudge_role = if super::handover::verify_lane(cwd).as_deref() == Some(worker) {
                 "lane"
             } else {

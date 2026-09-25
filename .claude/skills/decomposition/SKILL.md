@@ -10,8 +10,8 @@ metadata:
 Breaking a feature into epics and an epic into claimable beads, then cutting per-worker queues
 from the result. The reasoning is Metis's (`decomposition` skill, Flight Levels as Kanban) plus
 the agile sources it draws on; the vocabulary, the checks, and the `bd` commands are Air's.
-Where the text says "epic" or "bead", Metis says "initiative" or "task". Research and sources:
-`docs/research/evidence.md`.
+Where the text says "epic" or "bead", Metis says "initiative" or "task". Sources are listed
+under "Additional resources".
 
 ## Vocabulary map (Metis → Air)
 
@@ -23,7 +23,7 @@ Where the text says "epic" or "bead", Metis says "initiative" or "task". Researc
 | Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`decisions.md` 2026-08-18 item 3). |
 | Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. See `phase-transitions`. |
 | "decompose phase is a visible buffer" | same | Ledger metric: time from `--design` to first child claim. |
-| `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | the adopter: "the missing instrument is a size estimate at filing time" (`overnight-fleet-retrospective.md:726`). |
+| `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | "the missing instrument is a size estimate at filing time" (an adopter's retrospective of its overnight fleet run of 2026-08-15). |
 
 ## When to decompose (Metis)
 
@@ -49,15 +49,14 @@ Filing-time signals:
 
 - Acceptance needs "and" → split (`beads` skill).
 - Checklist in the description → an epic that was not cut (`bd ready` cannot see or claim items;
-  The adopter `task-specification-research.md:571-581`; the phrase "epics wearing task clothes"
-  is that file's own, at `:25`).
+  an adopter's task-specification research, read 2026-08-20, whose phrase for them is "epics wearing task clothes").
 - Touches two lanes → split by lane, or record the edge and accept serial landing.
 - Worker would have to pick an approach → spike first, or decide it in the description.
 - Many unanswerable questions while writing the acceptance → too uncertain; spike or capture.
   Many rules → too big. One rule with many examples → a hidden second rule
-  (`task-specification-research.md:265`).
+  (the same research).
 - **Floor as well as ceiling**: not below one reviewable diff; "a bead too small to review as one
-  change costs a full merge cycle for a trivial diff" (`task-specification-research.md:757-759`).
+  change costs a full merge cycle for a trivial diff" (the same research).
 - Prefer three small beads to one medium; they parallelise. No numeric ceiling on children or
   lines is set until the ledger's estimate-vs-actual metric (measurement spec §2.7) produces one.
 - Set `--estimate <minutes>`; it is a guess the ledger correlates with actuals, never a gate.
@@ -117,7 +116,7 @@ not the list. Pick the split that lets you throw a child away, then the one with
 Horizontal cuts (schema / API / UI) only when each layer is a different lane and the edges are
 recorded; otherwise two workers meet in one file. The cut by **disjoint file sets** is the most
 effective mechanism the adopter measured (86% of files touched by one branch; 7 files ever
-conflicted across 63 merges, `overnight-fleet-retrospective.md:326-331`).
+conflicted across 63 merges; an adopter's retrospective of its overnight fleet run of 2026-08-15).
 
 ### 4. Write each child (INVEST + the four triage requirements)
 
@@ -127,13 +126,13 @@ Before filing, every answer is yes:
 - **Valuable**: moves "Done when" closer or retires a named risk.
 - **Small**: one session, one diff (table above).
 - **Testable**: acceptance is one command or test name runnable inside the worktree by the
-  agent (12 of 49 the adopter's beads had "acceptance no agent can reach",
-  `task-specification-research.md:526-545`). Where it cannot be, say so in the clause and label
+  agent (12 of an adopter's 49 beads had "acceptance no agent can reach",
+  an adopter's task-specification research, read 2026-08-20). Where it cannot be, say so in the clause and label
   the bead `owner` — see the two questions below, which refine this bullet rather than repeat
   it: a person is a legitimate settler, an unlabelled one is the defect.
 - **Lane named** on the bead, and **checked against the acceptance, not the description**: two
-  The adopter children had prose that respected a boundary and acceptances that both required the
-  same edit (`bead-dedup-audit-2026-08-17.md:48-60`). "Only the acceptance decides when a bead
+  of an adopter's children had prose that respected a boundary and acceptances that both required
+  the same edit (an adopter's bead dedup audit of 2026-08-17). "Only the acceptance decides when a bead
   closes."
 - **Citations** (`file:line`) open and match now.
 - Description and acceptance agree; a contradiction goes to the coordinator (`air capture`), who files it as a bead labelled `owner` when the decision is the owner's; never a guess.
@@ -192,8 +191,8 @@ for a night; 42 beads were offered to workers and none was a P1. The tracker ren
 "not ready yet", indistinguishable from ordinary queueing.
 
 **bd will usually stop you, and the case it misses is the one you are most likely to hit.**
-Measured against bd 1.2.2 on nine routes, 2026-09-06 (every command and output in
-`docs/research/beads.md`). bd's guard is two rules and neither
+Measured against bd 1.2.2 on nine routes, 2026-09-06 (every command and output is kept in
+Air's `beads` skill, `references/bd-facts.md`). bd's guard is two rules and neither
 is an ancestor walk:
 
 1. **An existing `parent-child` row on the same pair**, so any other edge type between them is
@@ -235,7 +234,7 @@ frontier thins.
 - A spike closes → cut its dependents now, from the finding.
 - A landed sibling already satisfies a child's acceptance → close it with the evidence (six of
   ten beads on one adopter's lane were already fixed on `main`; checking took 20 minutes,
-  `overnight-fleet-retrospective.md:509-517`).
+  an adopter's retrospective of its overnight fleet run of 2026-08-15).
 - A landed sibling moved a cited file → `air next` prints "stale since <sha>"; re-verify or
   re-file with `supersedes`.
 - A capture says the approach is wrong → stop filing; tighten `--design` or close the epic with a
@@ -277,9 +276,8 @@ increase completion count").
 
 Air additions: an acceptance that cannot be written as one runnable condition is not ready to
 file; a checklist description is an uncut epic; `--design` empty on an epic is a defect (zero of
-49 the adopter's beads used it, `task-specification-research.md:584-594`); `bd ready` output must
-be read with `-n 0` (the default cap of 100 produced a wrong conclusion about five beads,
-`bead-dedup-audit-2026-08-17.md:134-144`).
+49 of an adopter's beads used it, an adopter's task-specification research, read 2026-08-20); `bd ready` output must be read with `-n 0`
+(the default cap of 100 produced a wrong conclusion about five beads, an adopter's bead dedup audit of 2026-08-17).
 
 ## Judgment calls (Metis)
 
@@ -291,8 +289,15 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 ## Additional resources
 
 - `references/decomposition-patterns.md`: Metis's pattern catalog (verbatim, vocabulary note on top).
-- `docs/research/evidence.md`: sources for every rule above, the agile
-  mapping, the adopter's evidence, and the dialectic on ceremony.
+- Agile sources, all accessed 2026-08-20: INVEST and SMART (Wake 2003,
+  https://xp123.com/invest-in-good-stories-and-smart-tasks/); the splitting patterns and their
+  selection rule (Lawrence and Green,
+  https://www.humanizingwork.com/the-humanizing-work-guide-to-splitting-user-stories/); the
+  walking skeleton (Cockburn as quoted at
+  https://gojko.net/2014/06/09/forget-the-walking-skeleton-put-it-on-crutches/; Patton,
+  https://www.jpattonassociates.com/wp-content/uploads/2015/03/story_mapping.pdf); "the
+  Developers who will be doing the work are responsible for the sizing" (Scrum Guide 2020,
+  https://scrumguides.org/scrum-guide.html). Metis paths are at metis `6745810`.
 - `phase-transitions` for when an epic or bead may move; `scoping-workstreams` for the
   read → explore → design → plan → file → graph → self-check loop; `beads` for `bd` quoting and traps.
 
@@ -305,7 +310,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
 - Ported 2026-08-18; extended 2026-08-20.
 - Adaptations (v1.0.0): Metis vocabulary (Vision/Initiative/Task; initiative phases
   discovery→design→ready→decompose→active→completed) remapped to Air's (feature/epic/bead; epic
-  path with the triage commitment point; bead step machine from `docs/research/evidence.md`),
+  path with the triage commitment point; the bead step machine from Air's 2026-08-20 research),
   with a vocabulary map marking what is Metis's and what is Air's; "Air addition" paragraphs for
   the triage commitment point, `bd dep` edges, acceptance lines, and a "Doing it in bd" section;
   the reference file copied verbatim with a four-line note prepended.
@@ -314,9 +319,7 @@ be read with `-n 0` (the default cap of 100 produced a wrong conclusion about fi
   order and selection rule; INVEST-shaped child checklist; one-wave rule; re-cut rules from
   Metis's feature-creep rule), Air's sizing unit with the adopter's floor and `--estimate`,
   per-worker queue cutting per `docs/decisions.md` 2026-08-20, and the adopter's evidence lines
-  (file:line). Metis reasoning kept and labelled. Full sources and access dates:
-  `docs/research/evidence.md`.
-- Citations of the form `task-specification-research.md:<lines>` are into this repo's copy at
-  `private/research/adopter-notes/notes/task-specification-research.md`, not into
-  The adopter's tree: the adopter's copy pinned here at `f2ca891` (`private/research/adopter-notes/PROVENANCE.md`). The adopter is consolidating `docs/notes/` and the original will be
-  deleted, so the line numbers above were re-checked against our copy on 2026-08-22 (air-xsj).
+  Metis reasoning kept and labelled. Full sources and access dates: "Additional resources".
+- An adopter's evidence is cited by what it is and its date, not by path (owner, 2026-09-25):
+  the notes first cited here by `file:line` (read 2026-08-20, re-checked 2026-08-22, air-xsj)
+  were consolidated by the adopter and no longer exist at those paths.

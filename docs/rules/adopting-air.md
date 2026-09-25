@@ -214,9 +214,9 @@ Three consequences for a repo adopting Air:
    lease (under `AIR_ENFORCE=1`, which worker launches set), advises the coordinator, and never
    asks the owner. `air lease needs "<command>"` says what a command needs and whether you hold
    it. A repo with its own lease guard moves its patterns here and retires the guard's matching
-   half; running both only duplicates the refusal (plan 0009 §11).
+   half; running both only duplicates the refusal (2026-09-25).
 
-   A fifth field, `"precheck": true`, is **opt-in and off by default** (plan 0009 B2). Under a
+   A fifth field, `"precheck": true`, is **opt-in and off by default** (2026-09-25). Under a
    verification lane workers run a cheap precheck instead of the full verify; with the key, a
    branch is batch-ready only with a green `air record precheck -- <your precheck command>` at
    its head, matched by the same key as a verify green. `air status --json` names a branch
@@ -514,9 +514,8 @@ because a mechanism whose evidence has been thrown away is a mechanism nobody ca
   costume; fixed 2026-08-21.
 - **Sessions started before install** have the CLI but no channel and no hooks; restart them
   through `air coordinator` / `air worker`.
-- **Round review**: `jq` over `.air/events/*.ndjson` and `air status --json`; the measurement
-  spec (`../research/verification/ticks/2026-08-18-0430-measurement-spec.md`) says what each
-  number means. What still had to be relayed by hand is the next thing Air builds.
+- **Round review**: `jq` over `.air/events/*.ndjson` and `air status --json`; `air audit` says what
+  each mechanism counted. What still had to be relayed by hand is the next thing Air builds.
 
 ## 5a. Upgrading an existing installation (Air's own surface moved)
 

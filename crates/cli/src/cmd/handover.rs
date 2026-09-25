@@ -249,8 +249,8 @@ pub fn digest_dir(repo: &Path) -> Option<String> {
 ///
 /// Read by one thing, the Stop hook's nudge, which offers ready beads to every worker but this
 /// one: a lane claims none, and an adopter recorded the Stop hook offering its lane ready beads
-/// as advice that was wrong under a lane (plan 0009 §11). The gate and `air handover` still do
-/// not branch on it. Removed when the lane has its own launcher and role (plan 0009 step 2).
+/// as advice that was wrong under a lane (an adopter's fleet protocol, 2026-09-25). The gate and `air handover` still do
+/// not branch on it. Removed when the lane has its own launcher and role (docs/design.md §10, the lane's launcher).
 pub fn verify_lane(repo: &Path) -> Option<String> {
     air_json(repo)?
         .get("verify_lane")?

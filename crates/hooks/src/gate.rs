@@ -459,7 +459,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
 ///
 /// **The decision, recorded because it was a decision** (the bead offered three routes). This
 /// text does NOT branch on `verify_lane` (the nudge reads it since 2026-09-25, only to know who
-/// the lane is; plan 0009 §11): a
+/// the lane is; an adopter's fleet protocol, 2026-09-25): a
 /// hook branching on it would be a second copy of a decision `air handover` already makes
 /// correctly — which is the drift that made this wrong rather than merely unhelpful. Nor is
 /// the wording made vague enough to be true under both, because the two repairs are opposite

@@ -6,7 +6,8 @@ Truth
 - The header names the commit and the binary version, and both match the tree you read.
 - Every number was produced by a command run today, and the command is shown or cited.
 - Every behaviour claim points at a file, a command, or a table.
-- Nothing describes a planned or proposed state; proposals live in `docs/plans/`.
+- Nothing outside the TODO section describes a planned or proposed state; proposals are TODO
+  lines, not files.
 
 Diagrams
 - Each structure and each flow described in prose has a diagram, and the diagram uses the

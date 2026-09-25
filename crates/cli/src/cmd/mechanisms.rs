@@ -140,7 +140,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         what: "A Bash command matching a pattern under \"leases\" in .claude/air.json, from a \
                worker or coordinator that does not hold that lease: refused under \
                AIR_ENFORCE=1, advised otherwise. The owner is never asked.",
-        added: "2026-09-25 (plan 0009 §11)",
+        added: "2026-09-25 (from an adopter's fleet protocol)",
         source: "crates/cli/src/cmd/hook.rs lease_gate; crates/cli/src/cmd/lease.rs",
         fires: Fires::Decisions(&[
             ("hook.PreToolUse", "lease-refuse"),
@@ -219,7 +219,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         fires: Fires::Condition("landed-not-closed"),
         // Not ZeroFirings: this one firing is the mechanism working. The adopter's closer put
         // 14 partial and 1 not-done bead into `closed` by never asking
-        // (docs/plans/0029-bead-closure.md D.6, cited via air-ayp). It goes when acceptance is
+        // (the adopter's plan 0029 on bead closure, D.6, cited via air-ayp). It goes when acceptance is
         // machine-checkable by construction, at which point the merge either satisfies it or
         // does not and there is no judgement left to hold open.
         removal: Removal::Judgement(
@@ -471,7 +471,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         source: "crates/cli/src/cmd/readers.rs, main_warning",
         fires: Fires::Decisions(&[("land", "main-readers")]),
         // The subject is a landing with an unrecorded run in main. With no session in the
-        // main checkout (plan 0009) that is a program somebody ran by hand, so a zero here is
+        // main checkout (docs/design.md §10) that is a program somebody ran by hand, so a zero here is
         // only evidence over a round in which landings happened (the `land` rows say so).
         removal: Removal::ZeroFirings(
             "a full round of landings with zero firings, or every run in the main checkout recorded through `air record`, so the in-flight refusal already sees it",
