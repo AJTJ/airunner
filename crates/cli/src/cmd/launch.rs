@@ -6,6 +6,7 @@
 //! the isolation is the cwd plus the PreToolUse fence in `air_hooks::fence`), the roles prose
 //! appended to the system prompt, a deny list that holds in every permission mode, and env
 //! that used to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
+//! Lane (`air lane`, air-jc2p.2): a worker launch with `AIR_ROLE=lane` and `air land` allowed.
 //! Coordinator: `claude` in the main checkout with the Air channel attached so attention
 //! conditions are delivered into the session, plus Metis when the repo declares it (air-g5o).
 //!
@@ -43,6 +44,8 @@ pub const WORKER_DENY: &[&str] = &[
     "Bash(claude *)",
     "Bash(air worker *)",
     "Bash(air coordinator *)",
+    // A worker that could start a lane could start a session that lands (air-jc2p.2).
+    "Bash(air lane *)",
     "EnterWorktree",
     "ExitWorktree",
     // Owner, 2026-08-30 (air-bm3): a worker reaches the owner through `air capture`, which
@@ -57,6 +60,18 @@ pub const WORKER_DENY: &[&str] = &[
     // before the matcher did was case 3b (the input never arrived) and settled nothing.
     "AskUserQuestion",
 ];
+
+/// Deny rules for the verification lane: a worker's, minus `air land` (air-jc2p.2, owner
+/// 2026-09-14: the lane lands, and landing is refused to every other role). Derived rather than
+/// listed, so a rule added for workers reaches the lane without anyone remembering to.
+/// Removed with the lane (roles.md, its removal condition).
+pub fn lane_deny() -> Vec<&'static str> {
+    WORKER_DENY
+        .iter()
+        .copied()
+        .filter(|d| *d != "Bash(air land *)")
+        .collect()
+}
 
 /// Deny rules for the coordinator: it steers and writes on main, but nothing it does reaches
 /// a remote.
@@ -178,9 +193,10 @@ fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
 /// AIR_ENFORCE=1: the hand-over gate denies instead of advising (air-i59; first bypass of the
 /// advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
 /// AIR_PROJECT: which fleet this session may touch (air-0lk); both roles set it.
-pub fn worker_env(name: &str, project: &str) -> Vec<(String, String)> {
+/// `role` is `worker` or `lane` (air-jc2p.2): the lane is enforced and named as a worker is.
+pub fn role_env(role: &str, name: &str, project: &str) -> Vec<(String, String)> {
     [
-        ("AIR_ROLE", "worker"),
+        ("AIR_ROLE", role),
         ("BEADS_ACTOR", name),
         ("AIR_ENFORCE", "1"),
         ("AIR_PROJECT", project),
@@ -306,7 +322,23 @@ const RESERVED: &[&str] = &["main", "coordinator", "lane"];
 /// peer-on-file and hand-over hooks, and one PreToolUse denial of an Edit/Write whose resolved
 /// path leaves the worktree (`hook.rs`, `air_hooks::fence`).
 pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
-    let settings = settings_blob(&worker_env(name, project));
+    role_argv("worker", name, project, roles, WORKER_DENY, extra)
+}
+
+/// Pure: the lane's argv, a worker's with `AIR_ROLE=lane` and [`lane_deny`] (air-jc2p.2).
+pub fn lane_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
+    role_argv("lane", name, project, roles, &lane_deny(), extra)
+}
+
+fn role_argv(
+    role: &str,
+    name: &str,
+    project: &str,
+    roles: &Path,
+    deny: &[&str],
+    extra: &[String],
+) -> Vec<String> {
+    let settings = settings_blob(&role_env(role, name, project));
     let mut v: Vec<String> = vec![
         "--append-system-prompt-file".into(),
         roles.display().to_string(),
@@ -316,21 +348,29 @@ pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) ->
         display_name(project, name),
         "--disallowed-tools".into(),
     ];
-    v.extend(WORKER_DENY.iter().map(|s| (*s).to_string()));
+    v.extend(deny.iter().map(|s| (*s).to_string()));
     v.extend(extra.iter().cloned());
     v
 }
 
-/// Worker argv including the repo's own deny rules (inserted before any pass-through args),
-/// with any pass-through `--settings` merged into Air's so the line carries one (air-9dg).
+/// Worker (or lane) argv including the repo's own deny rules (inserted before any pass-through
+/// args), with any pass-through `--settings` merged into Air's so the line carries one
+/// (air-9dg). The lane takes the repo's `worker_deny` too: it is a worker with one permission
+/// added.
 fn worker_argv_for(
     repo: &Path,
+    role: &str,
     name: &str,
     roles: &Path,
     extra: &[String],
 ) -> Result<Vec<String>, String> {
     let (extra, theirs) = split_settings(extra)?;
-    let mut base = worker_argv(name, &super::tmux::project_prefix(repo), roles, &[]);
+    let project = super::tmux::project_prefix(repo);
+    let mut base = if role == "lane" {
+        lane_argv(name, &project, roles, &[])
+    } else {
+        worker_argv(name, &project, roles, &[])
+    };
     merge_settings(&mut base, &theirs);
     base.extend(repo_deny(repo, "worker_deny"));
     base.extend(extra);
@@ -708,42 +748,84 @@ pub fn worker(
         );
         return 1;
     }
+    launch_worker_like(repo, "worker", name, extra, tmux, task, print)
+}
+
+/// `air lane [<name>]`: the verification lane, a worker session with `AIR_ROLE=lane` and the
+/// worker deny list minus `air land` (air-jc2p.2). The name defaults to `lane`; a repo whose
+/// lane already has a worktree under another name (an adopter's `w4`) passes it.
+pub fn lane(
+    repo: &Path,
+    name: Option<&str>,
+    extra: &[String],
+    tmux: bool,
+    task: Option<&str>,
+    print: bool,
+) -> i32 {
+    let name = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or("lane");
+    if matches!(name, "main" | "coordinator") || name.contains('/') {
+        eprintln!("air lane: name must be a worktree name, no slashes, not main or coordinator");
+        return 1;
+    }
+    launch_worker_like(repo, "lane", name, extra, tmux, task, print)
+}
+
+/// Create or reuse `.claude/worktrees/<name>` (air-fdz). Not under `--print`, which runs
+/// nothing. `who` prefixes every line.
+fn ensure_worktree(repo: &Path, name: &str, who: &str) -> Result<(), ()> {
+    match super::worktree::ensure(&super::worktree::main_checkout(repo), name) {
+        Ok(c) => {
+            if !c.existed {
+                eprintln!("{who}: created {} on {}", c.path.display(), c.branch);
+            }
+            if !c.copied.copied.is_empty() {
+                eprintln!(
+                    "{who}: copied {} file(s) from .worktreeinclude",
+                    c.copied.copied.len()
+                );
+            }
+            for s in c.copied.skipped.iter().chain(c.copied.unsupported.iter()) {
+                eprintln!("{who}: .worktreeinclude: skipped {s}");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{who}: {e}");
+            Err(())
+        }
+    }
+}
+
+fn launch_worker_like(
+    repo: &Path,
+    role: &str,
+    name: &str,
+    extra: &[String],
+    tmux: bool,
+    task: Option<&str>,
+    print: bool,
+) -> i32 {
+    let who = format!("air {role}");
     let roles = match roles_file(repo) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("air worker: {e}");
+            eprintln!("{who}: {e}");
             return 1;
         }
     };
     // The worktree is Air's to create and fill (air-fdz); claude is handed the existing one
-    // by name and keeps its isolation. Not under `--print`, which runs nothing.
-    if !print {
-        match super::worktree::ensure(&super::worktree::main_checkout(repo), name) {
-            Ok(c) => {
-                if !c.existed {
-                    eprintln!("air worker: created {} on {}", c.path.display(), c.branch);
-                }
-                if !c.copied.copied.is_empty() {
-                    eprintln!(
-                        "air worker: copied {} file(s) from .worktreeinclude",
-                        c.copied.copied.len()
-                    );
-                }
-                for s in c.copied.skipped.iter().chain(c.copied.unsupported.iter()) {
-                    eprintln!("air worker: .worktreeinclude: skipped {s}");
-                }
-            }
-            Err(e) => {
-                eprintln!("air worker: {e}");
-                return 1;
-            }
-        }
+    // by name and keeps its isolation.
+    if !print && ensure_worktree(repo, name, &who).is_err() {
+        return 1;
     }
-    let env = worker_env(name, &super::tmux::project_prefix(repo));
-    let argv = match worker_argv_for(repo, name, &roles, extra) {
+    let env = role_env(role, name, &super::tmux::project_prefix(repo));
+    let argv = match worker_argv_for(repo, role, name, &roles, extra) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("air worker: {e}");
+            eprintln!("{who}: {e}");
             return 1;
         }
     };
@@ -758,7 +840,7 @@ pub fn worker(
         Some(t) => match task_file(repo, name, t) {
             Ok(p) => Some(task_prompt(&p)),
             Err(e) => {
-                eprintln!("air worker: {e}");
+                eprintln!("{who}: {e}");
                 return 1;
             }
         },
@@ -839,6 +921,23 @@ mod tests {
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
+    }
+
+    /// air-jc2p.2: the lane is a worker with `air land` allowed, and nothing else changed.
+    #[test]
+    fn lane_argv_is_a_workers_with_land_allowed() {
+        let v = lane_argv("lane", "air", Path::new("/r/.air/roles.md"), &[]);
+        let i = v.iter().position(|a| a == "--settings").unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&v[i + 1]).unwrap();
+        assert_eq!(settings["env"]["AIR_ROLE"], "lane");
+        assert_eq!(settings["env"]["AIR_ENFORCE"], "1");
+        assert!(v.windows(2).any(|w| w[0] == "--name" && w[1] == "air-lane"));
+        assert!(!v.contains(&"Bash(air land *)".to_string()));
+        for d in WORKER_DENY.iter().filter(|d| **d != "Bash(air land *)") {
+            assert!(v.contains(&(*d).to_string()), "{d}");
+        }
+        // And a worker cannot start one.
+        assert!(WORKER_DENY.contains(&"Bash(air lane *)"));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
@@ -980,7 +1079,7 @@ mod tests {
     /// air-9dg: the printed line carries the env as shell assignments in front of the exec.
     #[test]
     fn print_env_line_prefixes_assignments() {
-        let env = worker_env("w1", "air");
+        let env = role_env("worker", "w1", "air");
         let line = print_env_line(&env, "claude", &["--model".into(), "x".into()]);
         assert_eq!(
             line,

@@ -1418,9 +1418,11 @@ fn a_declared_command_needs_its_lease() {
     assert!(!out.contains("air:"), "held is silent: {out}");
 }
 
-/// An adopter's fleet protocol (2026-09-25), end to end: a worker with no claim stopping while a task is ready is nudged
-/// to claim it; the same worker named as `verify_lane` in `.claude/air.json` is not, because
-/// the lane claims no bead. An adopter recorded the Stop hook offering its lane ready beads.
+/// An adopter's fleet protocol (2026-09-25), end to end: a worker with no claim stopping while a
+/// task is ready is nudged to claim it; the same session launched as the lane (`AIR_ROLE=lane`)
+/// is not, because the lane claims no bead. An adopter recorded the Stop hook offering its lane
+/// ready beads. Since air-jc2p.2 the role says so; `verify_lane` in `.claude/air.json` no
+/// longer moves the nudge either way.
 #[test]
 fn stop_nudge_skips_the_verification_lane() {
     use std::io::Write;
@@ -1434,14 +1436,14 @@ fn stop_nudge_skips_the_verification_lane() {
     )
     .unwrap();
     assert_eq!(air(&main, &bd, &["status"]).0, 0);
-    let stop = |session: &str| -> String {
+    let stop = |session: &str, role: &str| -> String {
         let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&main)
             .arg("hook")
             .env("AIR_BD_BIN", &bd)
             .env("FAKE_BD_DIR", &main)
-            .env("AIR_ROLE", "worker")
+            .env("AIR_ROLE", role)
             .env("BEADS_ACTOR", "alpha")
             .current_dir(&alpha)
             .stdin(std::process::Stdio::piped())
@@ -1466,16 +1468,18 @@ fn stop_nudge_skips_the_verification_lane() {
             String::from_utf8_lossy(&out.stderr)
         )
     };
-    let worker = stop("s-worker");
+    let worker = stop("s-worker", "worker");
     assert!(worker.contains("air claim zz-t"), "{worker}");
-
+    let lane = stop("s-lane", "lane");
+    assert!(!lane.contains("air claim"), "{lane}");
+    // The config key no longer decides it: a worker named as the lane there is still nudged.
     std::fs::write(
         main.join(".claude/air.json"),
         r#"{"verify_command": "true", "verify_lane": "alpha"}"#,
     )
     .unwrap();
-    let lane = stop("s-lane");
-    assert!(!lane.contains("air claim"), "{lane}");
+    let named = stop("s-named", "worker");
+    assert!(named.contains("air claim zz-t"), "{named}");
 }
 
 /// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as

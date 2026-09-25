@@ -294,6 +294,28 @@ enum Cmd {
         #[arg(last = true)]
         extra: Vec<String>,
     },
+    /// Start the verification lane: a worker session in `.claude/worktrees/<name>` (default
+    /// `lane`) with AIR_ROLE=lane and the worker deny list minus `air land`. The lane lands
+    /// batches; `air land` is refused to every other launched role (air-jc2p.2).
+    Lane {
+        /// Worktree name; `lane` when omitted.
+        name: Option<String>,
+        /// Run in a tmux pane the owner can attach to.
+        #[arg(long)]
+        tmux: bool,
+        /// Initial task, as its first prompt (implies --tmux).
+        #[arg(long)]
+        task: Option<String>,
+        /// Model to launch on; inherited when omitted.
+        #[arg(long)]
+        model: Option<String>,
+        /// Print the command instead of running it.
+        #[arg(long)]
+        print: bool,
+        /// Extra arguments passed to `claude` (after `--`).
+        #[arg(last = true)]
+        extra: Vec<String>,
+    },
     /// Start the interactive coordinator session in the main checkout with the Air channel attached.
     Coordinator {
         /// Model to launch on (air-air); inherited when omitted.
@@ -510,6 +532,21 @@ fn main() -> ExitCode {
             extra,
             ..
         } => cmd::launch::worker(
+            &repo,
+            name.as_deref(),
+            &with_model(model.as_deref(), &extra),
+            tmux,
+            task.as_deref(),
+            print,
+        ),
+        Cmd::Lane {
+            name,
+            tmux,
+            task,
+            model,
+            print,
+            extra,
+        } => cmd::launch::lane(
             &repo,
             name.as_deref(),
             &with_model(model.as_deref(), &extra),

@@ -221,6 +221,18 @@ fn launchers_print_the_exact_command() {
         assert!(err.contains("main, coordinator, lane"), "{err}");
     }
 
+    // air-jc2p.2: the lane is a worker launch with its own role and `air land` allowed.
+    let (code, out, err) = air(&repo, None, &["lane", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("AIR_ROLE=lane BEADS_ACTOR=lane AIR_ENFORCE=1 AIR_PROJECT=zz claude "),
+        "{out}"
+    );
+    assert!(
+        !out.contains("'Bash(air land *)'") && out.contains("'Bash(air close *)'"),
+        "{out}"
+    );
+
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
     assert!(

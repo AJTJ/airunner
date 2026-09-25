@@ -247,10 +247,12 @@ pub fn digest_dir(repo: &Path) -> Option<String> {
 
 /// `verify_lane` from `.claude/air.json`: which worker is the verification lane.
 ///
-/// Read by one thing, the Stop hook's nudge, which offers ready beads to every worker but this
-/// one: a lane claims none, and an adopter recorded the Stop hook offering its lane ready beads
-/// as advice that was wrong under a lane (an adopter's fleet protocol, 2026-09-25). The gate and `air handover` still do
-/// not branch on it. Removed when the lane has its own launcher and role (docs/design.md §10, the lane's launcher).
+/// The repo's declaration that a lane runs, which picks the closing sequence in roles.md (no
+/// verify of your own under a lane). Air reads it in one place: `air batch cut`'s refusal in the
+/// main checkout names the lane's worktree from it. The Stop hook's nudge read it until the lane
+/// had its own launcher and role (air-jc2p.2); it reads `AIR_ROLE=lane` now, which cannot name
+/// the wrong worker. The gate and `air handover` do not branch on it. Removed when the repo
+/// flow can be told from whether a lane session exists rather than from a declaration.
 pub fn verify_lane(repo: &Path) -> Option<String> {
     air_json(repo)?
         .get("verify_lane")?

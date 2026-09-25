@@ -23,6 +23,7 @@ and habits. If yours does not, this is the whole procedure.
     air record verify -- make verify              # the first proof
     air coordinator                               # main checkout, the channel attached
     air worker --tmux --task "<a complete task>"   # worktree worker-1, tmux <project>-worker-1
+    air lane --tmux                               # the verification lane; only it lands
 
 `air init --write` gates on bd and Claude Code being present, then does the rest: `git init` if
 needed, `bd init`, `.air/` in `.gitignore`, `.claude/air.json` with deny patterns proposed from
@@ -453,7 +454,7 @@ their tree.
 | "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode. Since air-8gj workers are started IN their worktree without `claude --worktree`, so they no longer see the harness's worktree refusals (the adopter: 455 in five days, 88% with no git token, none of them a write to main); the one denial left is Air's PreToolUse hook on an Edit/Write whose resolved path leaves the worktree |
 | "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
 | "Check on the fleet every N minutes" | Channel push: idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
-| "The owner merges every green branch at the end of the round" | Landing is the coordinator's, and a branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
+| "The owner merges every green branch at the end of the round" | Landing is the verification lane's (`air lane`; air-jc2p.2): `air land` is refused to workers and the coordinator, and the owner's own shell may still run it. A branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
 | "Close the landed beads one by one" | `air close <id>… --reason "<why>"`: one `bd` process for the whole pass, and the matching claims released in one ledger transaction. `bd` costs ~1.4 s per process here whatever it is asked, so the count of processes IS the cost (air-869) |
 | "Do not set awaiting_review without green" (advisory) | Refused, not advised: worker launches set `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fixing command (air-i59) |
 | "Say which fleet a pane belongs to" | tmux sessions and Claude session names (`claude --name`, what `ListAgents` shows) are `<project>-<name>`, and names carry the role: `worker-<N>`, `lane`, `coordinator` (air-5lg, air-jc2p.4). `<project>` is `"project"` in `.claude/air.json`, else the beads prefix; a launch whose tmux session name another checkout already uses is refused, naming that checkout. Existing `w<N>` worktrees keep working as workers |

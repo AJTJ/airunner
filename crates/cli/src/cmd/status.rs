@@ -2478,7 +2478,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 // air-9dg: a worker whose hooks do not see AIR_ENFORCE=1 has the one refusal
                 // switched off, and until this line nothing said so. Only `Some(false)` on a
                 // worker speaks: a pre-v15 row is unknown and the coordinator never enforces.
-                let unenforced = if w.role == "worker" && x.enforce == Some(false) {
+                let unenforced = if super::is_worker_like(&w.role) && x.enforce == Some(false) {
                     " UNENFORCED (hooks do not see AIR_ENFORCE=1; relaunch via air worker)"
                 } else {
                     ""

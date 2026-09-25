@@ -175,6 +175,17 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jc2p.2. The anchor gives the coordinator back `air land`, which is the one change the
+    // ruling made; the worker refusal and the lane's permission are other arms and stand.
+    (
+        "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        \"lane\" | \"owner\" => Ok(()),",
+            to: "        \"lane\" | \"owner\" | \"coordinator\" => Ok(()),",
+            also_red: &[],
+        },
+    ),
     // air-jc2p.4. The anchor takes any session of our name as ours, which is the one mistake
     // the check exists to prevent: the owner attached to another fleet's pane. The absent and
     // own-session halves are untouched, so only the refusal falls.
@@ -1448,17 +1459,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
-        Mutation {
-            // Let every role land. The worker half of the probe falls; the coordinator and
-            // owner halves stay green, which shows the anchor reaches the role gate alone.
-            file: "crates/cli/src/cmd/land.rs",
-            from: "    if role != \"worker\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
-            to: "    if role != \"nobody\" {\n        return Ok(());\n    }\n    Err(\n        \"refused: `air land`",
-            also_red: &[],
-        },
-    ),
-    (
         "attention: idle-without-claim counts beads the worker may claim, not bd's raw ready set",
         Mutation {
             // Put the condition back on bd's raw count. Exactly the pre-fix behaviour, one
@@ -1626,7 +1626,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // GREEN half survives, which is what shows the anchor reaches the role gate alone
             // rather than taking out the check.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "    if let Some(abs) = input.edited_path()\n        && role == \"worker\"",
+            from: "    if let Some(abs) = input.edited_path()\n        && super::is_worker_like(role)",
             to: "    if let Some(abs) = input.edited_path()\n        && role == \"coordinator\"",
             also_red: &[],
         },
@@ -4402,7 +4402,7 @@ fn probe_land_refusals() -> Probe {
         && refusals
             .iter()
             .all(|f| check(&here(), f).err().is_some_and(readable));
-    let green = may_land("coordinator").is_ok()
+    let green = may_land("lane").is_ok()
         && check(&here(), &ok()) == Ok(true)
         && check(
             &here(),
@@ -5210,8 +5210,13 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
 /// may work in a worktree. The role is now the launcher's word, which neither `--repo` nor the
 /// directory nor the command's spelling can change.
 ///
-/// Red: a worker is refused both commands, and an unknown `AIR_ROLE` counts as a worker. Green:
-/// the coordinator and the owner (no `AIR_ROLE`, a shell Air did not start) may run both.
+/// Then air-jc2p.2 (owner, 2026-09-14): landing is the verification lane's, and refused to the
+/// coordinator too, so main moves only by the lane's landing.
+///
+/// Red: a worker is refused both commands, an unknown `AIR_ROLE` counts as a worker, the lane is
+/// refused `air close` as a worker is, and the coordinator is refused `air land`. Green: the lane
+/// and the owner (no `AIR_ROLE`, a shell Air did not start) may land; the coordinator and the
+/// owner may still close.
 fn probe_land_role_is_the_launchers() -> Probe {
     use crate::cmd::close::may_close;
     use crate::cmd::land::may_land;
@@ -5219,12 +5224,15 @@ fn probe_land_role_is_the_launchers() -> Probe {
 
     let red = may_land("worker").is_err()
         && may_close("worker").is_err()
-        && may_land(role_from(Some("lane-typo"))).is_err();
-    let green = may_land(role_from(Some("coordinator"))).is_ok()
+        && may_close(role_from(Some("lane"))).is_err()
+        && may_land(role_from(Some("lane-typo"))).is_err()
+        && may_land(role_from(Some("coordinator"))).is_err();
+    let green = may_land(role_from(Some("lane"))).is_ok()
         && may_land(role_from(None)).is_ok()
+        && may_close(role_from(Some("coordinator"))).is_ok()
         && may_close(role_from(None)).is_ok();
     Probe {
-        name: "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
+        name: "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
         red_fires: red,
         green_passes: green,
     }
