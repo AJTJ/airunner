@@ -62,7 +62,7 @@ individually (an adopter parked a lane whose batch never came, 2026-08-29).
 
     air claim <id> [--files a,b]
     … the work, every commit with a `Bead: <id>` trailer; the digest, committed
-    … the repo's precheck, if it names one
+    air record precheck -- <the repo's precheck>   # if it names one
     … your branch is now batch-ready in `air status`; keep working, the lane takes it
     bd close <id> --reason-file <proof>   # on the lane's green; `air handover` says when
 
@@ -203,15 +203,15 @@ and named to its worker, never resolved by the lane. A red lands nothing.
 member branches at the shas it merged. `air record verify -- <cmd>` at that commit records the
 green or red, and the landing row names the member heads the batch contained (air-80x.2).
 `air status` lists the branches that are batch-ready as a fact, `batch-ready: <worker> at
-<sha> (<beads>)`: not landable on its own (a green at a head that contains `main`), and a
-`Bead:` trailer naming a bead the worker holds; `--json` gives the first fact each other
-branch lacks (air-80x.3). Being behind `main` does not take a branch out: the lane merges it
-forward at the cut (owner, 2026-09-25). A red batch is reported by member, in `air record`'s
-output and in `air status`, until a newer batch supersedes it; nothing lands, closes or claims
-differently on a red (air-80x.4). **A member can look it up rather than wait to be told**:
-`air handover`, run in your own worktree, names the batch, the lane and where the lane's output
-is when the standing red batch has your branch in it (air-hpp8). Silence there is not a statement that you were not in one — Air knows the
-membership only from what the run recorded. **[fact]**
+<sha> (<beads>)`: not landable on its own (a green at a head that contains `main`), a `Bead:`
+trailer naming a bead the worker holds, and a green `air record precheck` at that head where
+`.claude/air.json` sets `"precheck": true`; `--json` gives the first fact each other branch
+lacks (air-80x.3). Being behind `main` does not take a branch out: the lane merges it forward
+at the cut (owner, 2026-09-25). A red batch is reported by member, in `air record`'s output
+and in `air status`, until a newer batch supersedes it; nothing lands, closes or claims
+differently on a red (air-80x.4). **A member can look it up**: `air handover` in your own
+worktree names the batch, the lane and the lane's output when the standing red batch has your
+branch in it (air-hpp8); silence there is not proof you were not in one. **[fact]**
 
 **What Air refuses, and what it accepts.** The close gate accepts a green at a verified commit
 that contains `main` and every commit carrying the bead's trailer: a worker closes on the

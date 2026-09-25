@@ -488,7 +488,7 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `no-claimed-bead`
+    /// `green-at-head` | `no-claimed-bead` | `no-precheck`
     pub check: &'static str,
     pub detail: String,
 }
@@ -506,6 +506,11 @@ pub struct BatchFacts {
     pub carried: Vec<String>,
     /// Beads this worker holds an open claim on.
     pub held: Vec<String>,
+    /// The repo declares a precheck (`"precheck": true` in `.claude/air.json`), so a branch
+    /// needs a green one at its head to be batch-ready.
+    pub precheck_required: bool,
+    /// A `precheck` run is green at `head` under the repo's green key. Read only when required.
+    pub precheck_green_at_head: bool,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -563,11 +568,38 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             ),
         ));
     }
+    // Plan 0009 B2: where the repo declares a precheck, the lane cuts a head only on a
+    // recorded green one AT that head. An adopter built exactly this from a log file its lane
+    // script parsed, 2026-09-05..07: a worker was cut before its check finished, the
+    // coordinator relayed "checked" for a check still running, and a hand-over that died before
+    // its precheck left the previous run's green trailer naming a head two commits back. A row
+    // keyed by sha has none of those: running is not green, and an older head is not this one.
+    // Removed when the repo drops the key: a round under it with no batch red a member's
+    // precheck would have caught means the precheck only delays the cut.
+    if f.precheck_required && !f.precheck_green_at_head {
+        return Err(not(
+            "no-precheck",
+            format!(
+                "{} at {short}: no green precheck at this head, and this repo gates the batch on \
+                 one (`precheck` in .claude/air.json); run `air record precheck -- <the repo's \
+                 precheck command>` in {}'s worktree",
+                f.worker, f.worker
+            ),
+        ));
+    }
     Ok(BatchReady {
         worker: f.worker.clone(),
         head: f.head.clone(),
         beads,
     })
+}
+
+/// `precheck` from `.claude/air.json`: `true` gates batch-ready on a green `precheck` run at
+/// the branch head (plan 0009 B2). Absent or anything but `true` leaves the rule unchanged.
+pub fn precheck_declared(repo: &Path) -> bool {
+    super::handover::air_json(repo)
+        .and_then(|j| j.get("precheck")?.as_bool())
+        .unwrap_or(false)
 }
 
 /// Every worker worktree through [`batch_ready_rule`]: git and the ledger only, no bd. The
@@ -599,6 +631,7 @@ pub fn batch_ready_for(
         }
     };
     let claims = ledger.open_claims().unwrap_or_default();
+    let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         if super::hook::role_for(&worker) != "worker" {
@@ -618,7 +651,18 @@ pub fn batch_ready_for(
                 continue;
             }
         };
+        // Its own kind, so a precheck green never stands for a verify green nor the reverse.
+        let precheck_green_at_head = precheck_required
+            && match super::green::at(ledger, &path, &head, Kind::Precheck) {
+                Ok(e) => e.holds(),
+                Err(e) => {
+                    errors.push(format!("{worker}: precheck lookup: {e}"));
+                    false
+                }
+            };
         let facts = BatchFacts {
+            precheck_required,
+            precheck_green_at_head,
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
             green_at_head,
             carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
@@ -2455,9 +2499,12 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             .collect();
         // A bead waiting on review is not work in progress: the worker is still idle and
         // should be nudged, which is what `idle-without-claim` also decides (air-3eu).
+        // A run in flight is progress, whatever its kind: an adopter's coordinator nudged a
+        // worker as idle 400 s into a precheck Air could not see (plan 0009 B2).
         let idle_no_claim = w.role == "worker"
             && w.claims.is_empty()
-            && w.session.as_ref().is_some_and(|x| x.state == "idle");
+            && w.session.as_ref().is_some_and(|x| x.state == "idle")
+            && !verify_running(s, &w.worker);
         out.push_str(&format!(
             "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}{}\n",
             w.worker,
@@ -2489,7 +2536,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // Silent when nothing is running: a coordinator who lands into an empty screen is right
     // to. Present, it is the one thing that makes landing now cost someone 420 s (air-4cr).
     for f in &s.verifies_in_flight {
-        out.push_str(&format!("verify in flight: {}\n", in_flight_line(f, &s.at)));
+        out.push_str(&format!(
+            "{} in flight: {}\n",
+            f.kind.as_str(),
+            in_flight_line(f, &s.at)
+        ));
     }
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
     if let Some(b) = &s.red_batch {

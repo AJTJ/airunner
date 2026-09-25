@@ -1527,6 +1527,85 @@ fn status_lists_batch_ready_branches_as_a_fact() {
     assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
 }
 
+/// Plan 0009 B2, end to end: where `.claude/air.json` declares `"precheck": true`, a branch is
+/// batch-ready only once `air record precheck` is green at its head, and that green is never a
+/// verify green: the branch contains main, so a verify green would make it landable and take it
+/// out of the batch (`green-at-head`), and the close gate would stop naming the missing verify.
+#[test]
+fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
+    let (_tmp, main, alpha) = land_repo("true");
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "precheck": true}"#,
+    )
+    .unwrap();
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
+    let head = git(&alpha, &["rev-parse", "HEAD"]);
+    let status = || -> serde_json::Value {
+        let (code, out, err) = air(&main, &bd, &["--json", "status"]);
+        assert_eq!(code, 0, "{out}{err}");
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["snapshot"].clone()
+    };
+
+    let s = status();
+    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{s}");
+    let not = s["not_batch_ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["worker"] == "alpha")
+        .cloned()
+        .unwrap();
+    assert_eq!(not["check"], "no-precheck", "{s}");
+    assert!(
+        not["detail"]
+            .as_str()
+            .unwrap()
+            .contains("air record precheck --"),
+        "{s}"
+    );
+
+    // A red precheck is not enough; a green one at this head is.
+    assert_eq!(
+        air(&alpha, &bd, &["record", "precheck", "--", "false"]).0,
+        1
+    );
+    assert!(status()["batch_ready"].as_array().unwrap().is_empty());
+    let (code, o, e) = air(&alpha, &bd, &["record", "precheck", "--", "true"]);
+    assert_eq!(code, 0, "{o}{e}");
+    assert!(o.contains("recorded green precheck for alpha"), "{o}");
+    let s = status();
+    assert_eq!(s["batch_ready"][0]["worker"], "alpha", "{s}");
+    assert_eq!(s["batch_ready"][0]["head"], head, "{s}");
+
+    // Not a verify: the close gate still wants one.
+    let (_, o, _) = air(&alpha, &bd, &["--json", "handover"]);
+    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
+    assert!(
+        v["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["check"] == "verify-green-at-head"),
+        "{o}"
+    );
+
+    // A new commit is a new head: the precheck at the old one does not carry over.
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let s = status();
+    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{s}");
+}
+
 /// air-19u: bd under load took 20 s, the MCP tool budget, so status returned nothing when the
 /// fleet was busiest. With a bd that sleeps 25 s, status answers from the ledger in well under
 /// 3 s, says bd was slow, keeps sessions and claims, and serves the last cached counts.
