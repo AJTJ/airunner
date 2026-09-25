@@ -115,6 +115,16 @@ the deny list, and the role's environment. When asked, or when run from a sessio
 terminal, it starts a detached tmux session named after the project and the worker. The
 coordinator launcher starts Claude Code in the main checkout with the channel attached.
 
+Names carry the role and the project. Worktrees are worker-1, worker-2 and so on, lane, and
+coordinator, each on a branch named worktree- and the worktree's name. The tmux session and the
+Claude Code session name, which is what ListAgents shows and SendMessage addresses, are both the
+project and the worktree name, as in air-worker-1. The project is the project key in
+.claude/air.json, else the beads prefix, else the main checkout's directory name. A launch
+whose tmux session name already exists in another directory is refused, naming that directory,
+since it belongs to another checkout. One that exists in the same directory is the same role's
+session and is attached to. A name grants nothing: the role reads from a name only for display
+and for which branches a scan considers, and a legacy w1 reads as a worker.
+
 ### 3.1 Roles and permissions
 
 Every permission comes from the AIR_ROLE environment variable, which only the launchers set.
@@ -221,7 +231,7 @@ Every hook call, including the silent ones, writes one event line.
 | .air/installed.json | The version and notices this repository has been installed with. |
 | .air/ready.json | A cached list of ready beads, used by the stop nudge. |
 | .air/tasks | A worker's first task, kept off the command line. |
-| .claude/air.json | The repository's config: extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, where digests and journals live, and whether Metis is attached. |
+| .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, where digests and journals live, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per worker. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
@@ -231,12 +241,14 @@ worker's name, AIR_PROJECT is the project, and AIR_ENFORCE turns the gate from a
 refusal for workers. Other variables override where Air finds Claude Code, beads, and tmux, and
 change its timeouts and polling interval.
 
-This is the worker launch, as the launcher prints it for a worker named w9 in this repository:
+This is the worker launch, as the launcher prints it for a worker named worker-9 in this
+repository:
 
 ```
-AIR_ROLE=worker BEADS_ACTOR=w9 AIR_ENFORCE=1 AIR_PROJECT=air claude
+AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
   --append-system-prompt-file .air/roles.md
   --settings '{"env":{...}}'
+  --name air-worker-9
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
     'Bash(air worker *)' 'Bash(air coordinator *)' EnterWorktree ExitWorktree AskUserQuestion

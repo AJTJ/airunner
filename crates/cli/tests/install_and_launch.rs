@@ -214,9 +214,12 @@ fn launchers_print_the_exact_command() {
     assert!(out.trim().ends_with("--model opus"), "{out}");
     assert!(repo.join(".air/roles.md").exists());
 
-    let (code, _, err) = air(&repo, None, &["worker", "main", "--print"]);
-    assert_eq!(code, 1);
-    assert!(err.contains("not `main`"));
+    // air-jc2p.4: names that read as another role are not a worker's.
+    for reserved in ["main", "coordinator", "lane"] {
+        let (code, _, err) = air(&repo, None, &["worker", reserved, "--print"]);
+        assert_eq!(code, 1, "{reserved}");
+        assert!(err.contains("main, coordinator, lane"), "{err}");
+    }
 
     let (code, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert_eq!(code, 0);
@@ -739,7 +742,7 @@ fn status_names_the_workers_tmux_session() {
     assert!(s.contains("tmux zz-main"), "{s}");
 }
 
-/// air-5lg: `air worker` with no name takes the next free `w<N>` rather than refusing, so a
+/// air-5lg: `air worker` with no name takes the next free `worker-<N>` (air-jc2p.4) rather than refusing, so a
 /// coordinator that has no semantically useful name to give does not invent one from the bead
 /// (a worker outlives its bead; owner ruling 2026-08-22).
 #[test]
@@ -759,10 +762,15 @@ fn worker_with_no_name_picks_the_next_free_lane() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(stderr.contains("no name given; using w1"), "{stderr}");
-    assert!(stdout.contains("new-session -d -s zz-w1 -e "), "{stdout}");
+    assert!(stderr.contains("no name given; using worker-1"), "{stderr}");
     assert!(
-        stdout.contains("/.claude/worktrees/w1 "),
+        stdout.contains("new-session -d -s zz-worker-1 -e "),
+        "{stdout}"
+    );
+    // air-jc2p.4: the harness's session name is the tmux session's.
+    assert!(stdout.contains(" --name zz-worker-1 "), "{stdout}");
+    assert!(
+        stdout.contains("/.claude/worktrees/worker-1 "),
         "the lane's worktree is claude's cwd: {stdout}"
     );
 }

@@ -281,6 +281,21 @@ pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
     *slot = serde_json::Value::Object(merged).to_string();
 }
 
+/// Pure: the Claude Code session name (`claude --name`, "Set a display name for this
+/// session", `claude --help` on 2.1.272), which is what `ListAgents` shows and `SendMessage`
+/// addresses. The same string as the tmux session, so one name finds a session everywhere:
+/// `<project>-worker-1`, `<project>-lane`, `<project>-coordinator`. Before this Air set none and
+/// the harness made one up (an adopter's showed a random word and a number), naming neither the role nor
+/// the fleet (owner, 2026-09-25, air-jc2p.4).
+pub fn display_name(project: &str, name: &str) -> String {
+    super::tmux::session_name(project, name)
+}
+
+/// Names `air worker` will not take: they read as another role everywhere a name is shown
+/// (`hook::role_for`), and `main` is the main checkout. Refused rather than accepted, because a
+/// worker called `lane` would be listed as the lane while holding a worker's permissions.
+const RESERVED: &[&str] = &["main", "coordinator", "lane"];
+
 /// Pure: the argv for a worker session. No `--worktree` (air-8gj): Air creates the worktree
 /// (air-fdz) and starts claude with its cwd inside it. The harness's own worktree isolation,
 /// which the flag switched on, is off: in the adopter's record it stopped no observed write to
@@ -297,6 +312,8 @@ pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) ->
         roles.display().to_string(),
         "--settings".into(),
         settings.to_string(),
+        "--name".into(),
+        display_name(project, name),
         "--disallowed-tools".into(),
     ];
     v.extend(WORKER_DENY.iter().map(|s| (*s).to_string()));
@@ -343,6 +360,8 @@ pub fn coordinator_argv(
         roles.display().to_string(),
         "--settings".into(),
         settings,
+        "--name".into(),
+        display_name(project, "coordinator"),
         "--disallowed-tools".into(),
     ];
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
@@ -488,6 +507,18 @@ fn spawn_tmux(
         println!("{}", print_line("tmux", &targv));
         return 0;
     }
+    // A session of this name already running: this role's own is attached to, another
+    // checkout's is refused naming it (air-jc2p.4).
+    let ours = super::readers::resolved(cwd);
+    let same = |a: &str, b: &str| super::readers::resolved(Path::new(a)) == b;
+    match super::tmux::existing(&session, &ours, &super::tmux::sessions_with_paths(), same) {
+        Err(e) => {
+            eprintln!("air: {e}");
+            return 1;
+        }
+        Ok(super::tmux::Existing::Ours) => return attach_existing(&session, socket, detached),
+        Ok(super::tmux::Existing::None) => {}
+    }
     if !detached {
         // A tty: the session opens here. Replace this process so the terminal talks to tmux.
         let mut cmd = Command::new("tmux");
@@ -527,6 +558,45 @@ fn spawn_tmux(
         Err(e) => {
             eprintln!("air worker: could not run tmux: {e}");
             1
+        }
+    }
+}
+
+/// The role's session is already running: with a tty, attach this terminal to it; without one,
+/// say how. Never a second `claude` for the same role (air-jc2p.1: running `air coordinator`
+/// twice reuses the worktree and the session).
+fn attach_existing(session: &str, socket: Option<String>, detached: bool) -> i32 {
+    let l = socket
+        .as_deref()
+        .map(|s| format!("-L {s} "))
+        .unwrap_or_default();
+    if detached {
+        println!("tmux session {session} is already running");
+        println!("attach: tmux {l}attach -t {session}");
+        return 0;
+    }
+    let mut args: Vec<String> = Vec::new();
+    if let Some(s) = socket {
+        args.extend(["-L".to_string(), s]);
+    }
+    args.extend(["attach".into(), "-t".into(), format!("={session}")]);
+    let mut cmd = Command::new("tmux");
+    cmd.args(&args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        eprintln!("air: could not exec tmux: {err}");
+        1
+    }
+    #[cfg(not(unix))]
+    {
+        match cmd.status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(e) => {
+                eprintln!("air: could not run tmux: {e}");
+                1
+            }
         }
     }
 }
@@ -630,8 +700,12 @@ pub fn worker(
             &owned
         }
     };
-    if name == "main" || name.contains('/') {
-        eprintln!("air worker: name must be a worktree name (not `main`, no slashes)");
+    if RESERVED.contains(&name) || name.contains('/') {
+        eprintln!(
+            "air worker: name must be a worktree name, no slashes, and not one of {}: those \
+             read as another role",
+            RESERVED.join(", ")
+        );
         return 1;
     }
     let roles = match roles_file(repo) {
@@ -757,6 +831,11 @@ mod tests {
         assert_eq!(settings["env"]["AIR_ENFORCE"], "1");
         // air-0lk: which fleet this session may touch.
         assert_eq!(settings["env"]["AIR_PROJECT"], "air");
+        // air-jc2p.4: the harness's session name is the tmux session's, project and role.
+        assert!(
+            v.windows(2)
+                .any(|w| w[0] == "--name" && w[1] == "air-frontend")
+        );
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
@@ -913,6 +992,10 @@ mod tests {
     fn coordinator_argv_attaches_the_channel() {
         let v = coordinator_argv("air", Path::new("/r/.air/roles.md"), "--channels", &[], &[]);
         assert_eq!(&v[..2], ["--channels", "server:air"]);
+        assert!(
+            v.windows(2)
+                .any(|w| w[0] == "--name" && w[1] == "air-coordinator")
+        );
         // The remote is the boundary, not main (air-iy1): push denied, commit allowed.
         assert!(v.contains(&"Bash(git push *)".to_string()));
         assert!(!v.contains(&"Bash(git commit *)".to_string()));
