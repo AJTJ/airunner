@@ -126,7 +126,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Worktree protocol for this repo | [`docs/rules/worktree-protocol.md`](docs/rules/worktree-protocol.md) |
 | Decomposing a feature, sizing beads, cutting per-worker queues | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
-| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` |
+| Writing prose, docs, commits, PRs, tests, reviews | skills `plain-language`, `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads`, `parallel-worktrees` |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
 | What a round left behind (session journals, round logs, per-bead digests; records, not reading) | [`docs/journal/`](docs/journal/), [`docs/digests/`](docs/digests/) |
 
@@ -162,85 +162,17 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 
 ## This repo's work flow
 
-How a finished bead is handed on is **this repo's** choice, not Air's, and it lives here
-because `.air/roles.md` deliberately does not say it (air-8zu). Air states what it records and
-what it refuses; the sequence is ours.
+The fleet protocol — both closing sequences, the lane's loop, landing, proof — is Air's and
+lives in [`docs/rules/roles.md`](docs/rules/roles.md), shipped as `.air/roles.md` (owner,
+2026-09-25). What is this repo's own:
 
-**A worker closes its own bead with proof** (owner, 2026-08-22, air-7o3). No `awaiting_review`,
-no waiting for review. Two variants; **which one is in force is the `verify_lane` key in
-`.claude/air.json`**: `"verify_lane": "<worker>"` names the lane and puts variant B in force
-for everyone, and an absent key means variant A. Air reads neither variant; it refuses the same
-thing under both (a close needs a green at a commit containing `main`, at HEAD or at a verified
-descendant, air-80x.1).
-
-**Variant A, no verification lane** (`verify_lane` absent):
-
-    air claim <id> [--files a,b]
-    … implement; write the digest (docs/digests/YYYY-MM-DD-<worker>-<bead>.md) and commit it
-    …   it opens with front matter naming the bead:  ---\n bead: <id>\n ---
-    …   COMMIT it: an untracked digest is refused since air-ahl, because a file only your
-    …   worktree has is a note to self rather than proof
-    … append anything the digest will not carry to docs/journal/<session>.md as you go
-    git merge main
-    air record verify -- make verify        # last, so the green is at the commit containing main
-    bd close <id> --reason "<proof>"      # or --reason-file <path>; see below
-    … next bead
-
-**Variant B, a verification lane runs** (`"verify_lane": "<worker>"`; owner, 2026-09-05, air-80x).
-The worker does **not** run verify: the batch only forms if workers stop verifying individually,
-which is what the adopter's 2026-08-29 round learned by parking a lane whose batch never came.
-
-    air claim <id> [--files a,b]
-    … implement; write and commit the digest as above, with a `Bead: <id>` trailer on the work
-    … append anything the digest will not carry to docs/journal/<session>.md as you go
-    git merge main                          # your branch now shows in `air status` as batch-ready
-    … wait for the lane's green; `air handover` says when the close would pass
-    bd close <id> --reason "<proof: the lane's green at <sha>, which contains your commits>"
-    …   or --reason-file <path>; see below
-    … next bead; a commit made after the lane cut its batch waits for the next batch
-
-The lane's own sequence, and it holds no bead while it batches: read `air status` (the
-`batch-ready:` lines, or `--json` `batch_ready`), `git merge main` plus every batch-ready branch
-at the sha listed, `air record verify -- make verify`, then signal the coordinator with the
-members; a branch that conflicts is dropped from the batch and named to its worker, never
-resolved by the lane. The coordinator lands the batch with `air land --worker <lane>`, which
-attributes every bead the range names. A red batch lands nothing and is reported by member.
-
-The digest's front matter is what the hand-over gate reads (air-agq). It used to find a
-digest by looking for the worker's name in a filename and an mtime newer than the claim, which
-accepted a digest written for a different bead, and accepted `touch` on an old one. A gate that
-guards fails toward permitting, so it now wants the bead declared rather than guessed.
-
-**The journal is not the digest** (air-3xww). The digest is what a bead did and its proof;
-the journal is a bug you hit, a wrong turn and what corrected it, a claim you later found wrong,
-a thing you checked that was fine. It is also not a capture: a capture says somebody should act
-and the coordinator triages every one, while these say nobody should. Nothing in Air reads the
-files. `journal_dir` in `.claude/air.json` names the directory.
-
-**Use `--reason-file <path>` once the proof is more than a line or two, and it usually is.** The
-harness classifies a long `--reason "…"` by the shape of the command line and refuses it, and the
-obvious next move is to shorten the proof — so this rule and the one below pull against each other
-at exactly the length where proof becomes worth having (air-45pw's failure, hit one command over
-while closing air-gazh). Nothing about the content changes, only the route. Every command that
-takes long text now has one: `bd close --reason-file`, `air close --reason-file` (air-lyjr) and
-`air capture --file` (air-45pw). `air close` applies one file to every id it is given, exactly as
-`--reason` already did.
-
-**Proof is a command and its output, a `file:line`, or a passing test.** Not a description of
-the approach — "refactored the parser" is not proof; `make verify` green at `<sha>`, with the
-probe count your own run printed, is. The owner's words: *"the explanation should be proof, not
-verbosity. Very clear proof."* Quote the count from the run you just did, never from here: this
-sentence carried `27 probes` against a real 34 for long enough that two lanes could have copied
-it (air-jc0).
-
-**If part of a bead needs the owner, close what you did and file a standalone successor bead**
-naming what he must do. Do not leave the bead open for the remainder: open beads get re-claimed
-and re-derived by the next worker, which is the failure this avoids.
-
-**What makes this safe rather than an honour system:** `air handover`'s gate matches `bd close`
-and `bd update -s closed` as well as `-s awaiting_review` (`is_handover_command`), and worker
-launches set `AIR_ENFORCE=1` by default since air-i59. So a close without a recorded green at a
-HEAD containing `main` is *refused*, not advised. The proof is enforced at the moment of
-closing. Run `air handover` first if you want the missing pieces named before bd refuses them.
-
-`awaiting_review` survives only on beads that already carry it.
+- **Verify** is `make verify`, recorded as `air record verify -- make verify`. There is no
+  precheck and no test-state reset.
+- **The lane**, when one runs, is `verify_lane` in `.claude/air.json`; absent, no lane runs.
+- **Digests** go in `docs/digests/YYYY-MM-DD-<worker>-<bead>.md`, open with front matter
+  `---` / `bead: <id>` / `---`, and are committed (the gate reads the declared bead, air-agq,
+  and refuses an untracked file, air-ahl).
+- **Journals** go in `docs/journal/<session>.md` (`journal_dir`): a bug you hit, a wrong turn,
+  a claim you later found wrong. Not the digest, not a capture; nothing reads them (air-3xww).
+- **Proof counts** are quoted from the run you just did, never from a doc: a sentence here once
+  carried `27 probes` against a real 34 (air-jc0).

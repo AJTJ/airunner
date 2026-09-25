@@ -1581,6 +1581,37 @@ pub const SURFACE: &[SurfaceChange] = &[
                  started any other way must set AIR_ROLE=worker, or it is treated as the owner \
                  and may land. A shell with no AIR_ROLE is the owner.",
     },
+    SurfaceChange {
+        id: "batch-ready-behind-main",
+        since: "2026-09-25 (owner ruling, plan 0009 §11)",
+        headline: "A branch behind `main` is now batch-ready: `air status` no longer drops it \
+                   with `behind-main`. The lane merges main forward at the cut, so a landing no \
+                   longer takes every waiting branch out of the queue until its worker re-merges.",
+        silent_break: false,
+        action: "Workers under a lane stop merging main just to re-enter the queue. A lane that \
+                 cuts from the listed shas already merges main first; one that assumed every \
+                 member contained main must now drop, and name, a member that conflicts with it.",
+    },
+    SurfaceChange {
+        id: "nudge-skips-the-lane",
+        since: "2026-09-25 (plan 0009 §11)",
+        headline: "The Stop hook no longer offers ready beads to the worker `.claude/air.json` \
+                   names as `verify_lane`. The lane claims no bead.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "roles-is-the-protocol",
+        since: "2026-09-25 (owner ruling)",
+        headline: "`.air/roles.md` now carries the whole fleet protocol: both closing sequences \
+                   (with and without a lane), proof and `--reason-file`, the lane's loop, conflict \
+                   facts, and landing a batch with `air land --worker <lane>`. An unclear \
+                   acceptance is no longer a reason to ask the owner; the coordinator rewrites it.",
+        silent_break: false,
+        action: "Delete the repo's own copies of that protocol from CLAUDE.md and rules files. \
+                 Keep only what is the repo's: domain rules, its verify and precheck commands, \
+                 worktree setup, shared resources and leases, and any test-state reset.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2369,16 +2400,12 @@ mod tests {
         // air-12k: the heartbeat is the failsafe, and roles.md promises no `stuck` condition.
         assert!(ROLES_MD.contains("the heartbeat is the failsafe"));
         assert!(!ROLES_MD.contains("the channel (stuck,"));
-        // air-97z: roles.md states landing as a role boundary and as facts Air records, and
-        // names no landing command. A repo with its own lander keeps it, so the prose that used
-        // to prescribe `air land --all` here is asserted ABSENT, the same shape as the
-        // awaiting_review check below. The deny-list line may still name `air land`: that is a
-        // statement about what Air refuses a worker, not an instruction to a repo.
+        // air-97z kept landing commands out of roles.md so a repo's own lander stayed the
+        // repo's. Reversed 2026-09-25 (owner): the fleet protocol is Air's, so roles.md names
+        // how a lane's batch lands. `--all` is still absent: under a lane the unit is the batch.
         assert!(ROLES_MD.contains("Landing is the coordinator's, not a worker's."));
-        assert!(
-            !ROLES_MD.contains("Landing is the coordinator's: `air land"),
-            "roles.md must not prescribe a landing command (air-97z)"
-        );
+        assert!(ROLES_MD.contains("`air land --worker <lane>`"));
+        assert!(!ROLES_MD.contains("`air land --all`"));
         // air-03w (owner, 2026-08-29): signalling on close is part of the worker role, and
         // the `landable` condition is the failsafe under it. The binary and the prose are one
         // file (`include_str!`), so this asserts on ROLES_MD and the equality above carries it
@@ -2388,15 +2415,20 @@ mod tests {
         assert!(ROLES_MD.contains("`landable` condition"));
         assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
         assert!(ROLES_MD.contains("epic `## Success"));
-        // air-8zu: roles.md states what Air records and refuses, never one repo's closing
-        // procedure. The adopter closes with proof and was being told to set awaiting_review by
+        // air-8zu: the adopter closes with proof and was being told to set awaiting_review by
         // a file it cannot edit. `awaiting_review` may appear only where the refusal lists
-        // what the gate matches, never as an instruction.
+        // what the gate matches, never as an instruction. Since 2026-09-25 (owner) roles.md
+        // carries the closing procedure itself, both variants, instead of deferring to the
+        // repo's CLAUDE.md: the protocol is Air's, and only the commands are the repo's.
         assert!(
             !ROLES_MD.contains("`bd update <id> -s awaiting_review`"),
             "roles.md must not prescribe a bead-status step"
         );
-        assert!(ROLES_MD.contains("is the repo's own flow, in its CLAUDE.md"));
+        let protocol = flat(ROLES_MD);
+        assert!(protocol.contains("the fleet's whole protocol"));
+        assert!(protocol.contains("You close your own bead, with proof"));
+        assert!(protocol.contains("You need not merge main to stay batch-ready"));
+        assert!(protocol.contains("commit forward and never amend"));
         // air-8gj: the worktree fence is Air's, not the harness's. Both halves are pinned,
         // because dropping either leaves roles.md promising a block that is not there — which
         // is the direction a rules file must not fail in. The claim that used to stand here
@@ -2479,7 +2511,7 @@ mod tests {
         assert!(ROLES_MD.contains("main moving no longer retracts a CLOSE"));
         // air-80x.6: the verification lane, under Worker, as facts Air records and refusals
         // Air makes. Two sentences pinned the way air-03w and air-97z pinned theirs; and the
-        // section names no cadence and no worker, because those are the repo's flow.
+        // section names no cadence and no worker: the lane cuts when branches are ready.
         let lane = ROLES_MD
             .split("### Verification lane")
             .nth(1)
@@ -2496,7 +2528,10 @@ mod tests {
         // broken this pin twice; and pinned as the CONDITION rather than the whole sentence,
         // because deleting the permission would be wrong for a lane that merges main forward.
         assert!(flat(lane).contains("it may hold one **if its worktree survives the cut**"));
-        assert!(flat(lane).contains("Air reads neither"));
+        // 2026-09-25 (owner): the lane's loop is Air's protocol now, and the batch comes from
+        // `air status`, never from a sha relayed in a message (plan 0009 B1).
+        assert!(flat(lane).contains("The lane's loop."));
+        assert!(flat(lane).contains("never a sha from a message"));
         assert!(lane.contains(
             "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"
         ));

@@ -140,8 +140,8 @@ pub struct Missing {
     /// contradicts it. A fix that failed outright would have been found in one use.
     ///
     /// So a `flow_dependent` fix now states **what must become true**, not which command a
-    /// particular flow uses to make it true. `verify_lane` is still read nowhere: the repo's
-    /// flow decides who runs the verify, and Air names the condition either way.
+    /// particular flow uses to make it true. The gate still does not read `verify_lane`
+    /// (only the Stop nudge does, to know who the lane is): Air names the condition either way.
     pub flow_dependent: bool,
 }
 
@@ -457,8 +457,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
 /// cut at, and record a green, which is the lane's job. One obeyed and lost its batch
 /// membership.
 ///
-/// **The decision, recorded because it was a decision** (the bead offered three routes). Air
-/// does NOT read `verify_lane`: that key is the repo's own, for choosing its own flow, and a
+/// **The decision, recorded because it was a decision** (the bead offered three routes). This
+/// text does NOT branch on `verify_lane` (the nudge reads it since 2026-09-25, only to know who
+/// the lane is; plan 0009 §11): a
 /// hook branching on it would be a second copy of a decision `air handover` already makes
 /// correctly — which is the drift that made this wrong rather than merely unhelpful. Nor is
 /// the wording made vague enough to be true under both, because the two repairs are opposite
@@ -489,7 +490,7 @@ pub fn stop_message(v: &Verdict, worker: &str, head: &str) -> String {
         })
         .collect();
     // air-155w: this used to say `air handover` "reads your repo's flow", which Air does
-    // not do and deliberately does not do — `verify_lane` is read nowhere. The promise was
+    // not do and deliberately does not do — this text does not branch on `verify_lane`. The promise was
     // the same defect one surface over: a claim about a decision made somewhere else. What
     // is true is that `air handover` prints every check in full, and since that text is now
     // flow-safe too, the pointer no longer has to promise anything about flows.

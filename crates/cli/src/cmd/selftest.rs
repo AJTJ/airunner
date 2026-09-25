@@ -6329,13 +6329,14 @@ fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
 
 /// air-80x.3: the verify lane needs one fact, which branches to merge into the next batch,
 /// and it lived in messages; in the adopter's 2026-08-29 round the batch never formed. The rule
-/// is three lookups: head contains main, no green at that head, a `Bead:` trailer names a
-/// bead the worker holds.
+/// is two lookups: not already landable (green at a head containing main), and a `Bead:`
+/// trailer names a bead the worker holds. Being behind main is NOT a reason to be absent
+/// (plan 0009 §11): the lane merges main forward at the cut.
 ///
-/// Red: a branch that merged main and committed a claimed bead is listed, on the status line
-/// with its beads. Green: the same branch with a green at its head is absent (it is landable,
-/// nothing to batch); a branch behind main is absent; a branch naming only an unclaimed bead
-/// is absent; and every absence carries the first fact it lacks.
+/// Red: a branch that committed a claimed bead is listed, on the status line with its beads,
+/// and still listed once main has moved past it, green or not. Green: the same branch landable
+/// on its own is absent; a branch naming only an unclaimed bead is absent; and every absence
+/// carries the first fact it lacks.
 ///
 /// The mutation that made it red, seen: `batch_ready_rule` dropping the `green_at_head` arm,
 /// which lists a landable branch for a batch it does not need.
@@ -6358,14 +6359,21 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
     let red_fires = ready
         .as_ref()
         .is_ok_and(|b| b.worker == "alpha" && b.beads == ["zz-1"])
-        && line.contains("batch-ready: alpha at abcdef12 (zz-1)\n");
+        && line.contains("batch-ready: alpha at abcdef12 (zz-1)\n")
+        && batch_ready_rule(&BatchFacts {
+            contains_main: false,
+            ..base.clone()
+        })
+        .is_ok()
+        && batch_ready_rule(&BatchFacts {
+            contains_main: false,
+            green_at_head: true,
+            ..base.clone()
+        })
+        .is_ok();
 
     let green = batch_ready_rule(&BatchFacts {
         green_at_head: true,
-        ..base.clone()
-    });
-    let behind = batch_ready_rule(&BatchFacts {
-        contains_main: false,
         ..base.clone()
     });
     let unclaimed = batch_ready_rule(&BatchFacts {
@@ -6373,13 +6381,12 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         ..base.clone()
     });
     let green_passes = green.as_ref().is_err_and(|n| n.check == "green-at-head")
-        && behind.as_ref().is_err_and(|n| n.check == "behind-main")
         && unclaimed
             .as_ref()
             .is_err_and(|n| n.check == "no-claimed-bead" && n.detail.contains("zz-1 zz-9"))
         && !render_for_probe(&Snapshot::default()).contains("batch-ready");
     Probe {
-        name: "status: batch-ready is three facts (contains main, no green at head, a claimed bead named); a green or behind branch is absent with its reason",
+        name: "status: batch-ready is two facts (not landable on its own, a claimed bead named); a branch behind main stays listed, a landable one is absent with its reason",
         red_fires,
         green_passes,
     }
@@ -8352,6 +8359,8 @@ fn probe_stop_nudge() -> Probe {
         stop_nudge("worker", false, &ready, false).is_some_and(|r| r.contains("air claim zz-1"));
     let then_pass = stop_nudge("worker", false, &ready, true).is_none()
         && stop_nudge("coordinator", false, &ready, false).is_none()
+        // The verification lane claims nothing, so it is offered nothing (plan 0009 §11).
+        && stop_nudge("lane", false, &ready, false).is_none()
         && stop_nudge("worker", true, &ready, false).is_none();
     Probe {
         name: "stop: nudge once when ready beads and no claim",

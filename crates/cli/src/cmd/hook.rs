@@ -410,14 +410,20 @@ fn dispatch(
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
+            // The lane claims no bead, so it is offered none (plan 0009 §11).
+            let nudge_role = if super::handover::verify_lane(cwd).as_deref() == Some(worker) {
+                "lane"
+            } else {
+                role
+            };
             let would_speak =
-                !has_work && !stop_hook_active && !cached.is_empty() && role == "worker";
+                !has_work && !stop_hook_active && !cached.is_empty() && nudge_role == "worker";
             let ready = if would_speak {
                 ready_cache::confirm(cwd).unwrap_or_default()
             } else {
                 Vec::new()
             };
-            let nudge = stop_nudge("worker", has_work, &ready, stop_hook_active);
+            let nudge = stop_nudge(nudge_role, has_work, &ready, stop_hook_active);
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
                 .last_emission(&input.session_id, "nudge")

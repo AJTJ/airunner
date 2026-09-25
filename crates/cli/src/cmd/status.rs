@@ -488,7 +488,7 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `behind-main` | `green-at-head` | `no-claimed-bead`
+    /// `green-at-head` | `no-claimed-bead`
     pub check: &'static str,
     pub detail: String,
 }
@@ -498,9 +498,9 @@ pub struct NotBatchReady {
 pub struct BatchFacts {
     pub worker: String,
     pub head: String,
-    /// `git merge-base --is-ancestor main <head>`.
+    /// `git merge-base --is-ancestor main <head>`. With `green_at_head`, landable on its own.
     pub contains_main: bool,
-    /// `green::at(head)` holds: the branch is landable on its own and needs no batch.
+    /// `green::at(head)` holds. Landable, and so not for a batch, only while it contains main.
     pub green_at_head: bool,
     /// Beads declared by `Bead:` trailers in `main..head`.
     pub carried: Vec<String>,
@@ -508,10 +508,16 @@ pub struct BatchFacts {
     pub held: Vec<String>,
 }
 
-/// THE batch-ready rule, pure (air-80x.3): a branch whose head contains main, that has no
-/// green at that head, and whose commits name a bead the worker holds. All three, in that
-/// order, so the reason a branch is absent is the first fact it lacks. Nothing here is a
-/// judgement: each fact is a git or ledger lookup the lane could make itself.
+/// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
+/// head that contains main) and whose commits name a bead the worker holds. In that order, so
+/// the reason a branch is absent is the first fact it lacks. Nothing here is a judgement: each
+/// fact is a git or ledger lookup the lane could make itself.
+///
+/// It does NOT require the head to contain main (plan 0009 §11, owner 2026-09-25). The lane
+/// merges main forward at the cut, and a member that conflicts with main is dropped and named
+/// like any conflict. Requiring it took every waiting branch out of the queue at every landing
+/// until its worker re-merged; an adopter's workers were told to merge "for your own close and
+/// for staleness, not for the cut" to work round exactly that.
 ///
 /// Removal: when the harness or bd carries a branch-ready state Air can read instead.
 pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
@@ -522,20 +528,11 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         check,
         detail,
     };
-    if !f.contains_main {
-        return Err(not(
-            "behind-main",
-            format!(
-                "{} at {short} does not contain main; `git merge main` first",
-                f.worker
-            ),
-        ));
-    }
-    if f.green_at_head {
+    if f.contains_main && f.green_at_head {
         return Err(not(
             "green-at-head",
             format!(
-                "{} at {short} is already green: landable on its own, nothing to batch",
+                "{} at {short} is already green with main merged: landable on its own, nothing to batch",
                 f.worker
             ),
         ));
