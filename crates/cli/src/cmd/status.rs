@@ -856,8 +856,11 @@ pub fn select(repo: &Path) -> Selection {
     };
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if super::hook::role_for(&worker) != "worker" {
-            continue; // the coordinator's own checkout is not a candidate, and never was
+        // The coordinator's checkout (`main`, or its own worktree) is not a candidate, and
+        // never was: its commits reach main in a lane's batch. The lane's branch IS one, since
+        // `air land --worker <lane>` lands the batch through here (air-jc2p.4).
+        if super::hook::role_for(&worker) == "coordinator" {
+            continue;
         }
         let head = match git::head(&path) {
             Ok(h) => h,

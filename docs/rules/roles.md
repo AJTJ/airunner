@@ -12,6 +12,9 @@ Your role is `AIR_ROLE`, set by the launcher: `worker` or `coordinator`. It is n
 directory you are in, since any role may work in a worktree. A shell Air did not start has no
 `AIR_ROLE` and is the owner. Air records the role on every session and event. **[fact]**
 `AIR_ROLE`, `BEADS_ACTOR` and `AIR_PROJECT` are set by the launcher, never by files.
+Names carry the role and the project: worktrees `worker-<N>`, `lane` and `coordinator`, and
+the tmux session and the session name `ListAgents` shows are `<project>-<name>`. A name grants
+nothing; a legacy `w<N>` reads as a worker. **[fact]**
 
 **Act only on your own project; talk to any of them.** Other fleets run on this machine.
 Another project's worktrees, tmux sessions and workers are never yours to kill, restart,

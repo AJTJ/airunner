@@ -175,6 +175,18 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jc2p.4. The anchor takes any session of our name as ours, which is the one mistake
+    // the check exists to prevent: the owner attached to another fleet's pane. The absent and
+    // own-session halves are untouched, so only the refusal falls.
+    (
+        "names: worktree, tmux and Claude session names carry role and project; another checkout's session of our name is refused by name; no name grants a permission",
+        Mutation {
+            file: "crates/cli/src/cmd/tmux.rs",
+            from: "Some((_, path)) if same(path, ours) => Ok(Existing::Ours),",
+            to: "Some((_, path)) if same(path, ours) || !path.is_empty() => Ok(Existing::Ours),",
+            also_red: &[],
+        },
+    ),
     // The lease-needed gate. The anchor makes ANY holder count as this session's, which is
     // the one comparison the gate exists to make: the second store the adopter's guard read
     // answered exactly this question wrongly. Red falls (w2's lease lets w1 run `make api`);
@@ -2411,6 +2423,7 @@ fn all_probes() -> Vec<Probe> {
         probe_verify_in_flight(),
         probe_landing_state(),
         probe_land_role_is_the_launchers(),
+        probe_names_carry_role_and_project(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
@@ -5212,6 +5225,54 @@ fn probe_land_role_is_the_launchers() -> Probe {
         && may_close(role_from(None)).is_ok();
     Probe {
         name: "land and close: the role is the launcher's AIR_ROLE, so no directory and no --repo makes a worker the coordinator",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-jc2p.4 (owner, 2026-09-25): worktree, tmux and Claude session names carry the role and
+/// the project, and a name collides across fleets on one machine only by refusal. Before it,
+/// `tmux ls` showed `air-w1` and `ListAgents` showed a harness-made name (an adopter's
+/// random word and number), neither saying what the session was for, and a two-letter bd prefix was the
+/// only thing keeping two fleets' session names apart.
+///
+/// Red: a tmux session of our name started in another checkout is refused, naming that
+/// checkout; and a worktree NAMED `lane` launched as a worker is still refused `air land`, since
+/// no permission comes from a name. Green: our own session is reused, an absent one started;
+/// the auto name is `worker-1`; the Claude name is the tmux name; legacy `w1` reads as a worker.
+fn probe_names_carry_role_and_project() -> Probe {
+    use crate::cmd::hook::role_for;
+    use crate::cmd::land::may_land;
+    use crate::cmd::launch::display_name;
+    use crate::cmd::tmux::{Existing, existing, free_worker_name, session_name};
+
+    let live = vec![(
+        "air-lane".to_string(),
+        "/fleet-a/.claude/worktrees/lane".to_string(),
+    )];
+    let eq = |a: &str, b: &str| a == b;
+    let refused = existing("air-lane", "/fleet-b/.claude/worktrees/lane", &live, eq);
+    let red = refused
+        .as_ref()
+        .is_err_and(|e| e.contains("/fleet-a/.claude/worktrees/lane"))
+        && role_for("lane") == "lane"
+        && may_land(crate::cmd::role_from(Some("worker"))).is_err();
+    let green = existing("air-lane", "/fleet-a/.claude/worktrees/lane", &live, eq)
+        == Ok(Existing::Ours)
+        && existing(
+            "air-coordinator",
+            "/fleet-a/.claude/worktrees/coordinator",
+            &live,
+            eq,
+        ) == Ok(Existing::None)
+        && free_worker_name(&[], &[], "air") == "worker-1"
+        && display_name("air", "worker-1") == session_name("air", "worker-1")
+        && display_name("air", "coordinator") == "air-coordinator"
+        && role_for("w1") == "worker"
+        && role_for("worker-2") == "worker"
+        && role_for("coordinator") == "coordinator";
+    Probe {
+        name: "names: worktree, tmux and Claude session names carry role and project; another checkout's session of our name is refused by name; no name grants a permission",
         red_fires: red,
         green_passes: green,
     }

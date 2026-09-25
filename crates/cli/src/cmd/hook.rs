@@ -1057,11 +1057,16 @@ pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> 
     }
 }
 
+/// The role a checkout's NAME reads as, for display and for which branches a scan considers:
+/// `coordinator` (and the main checkout, `main`, where it used to run), `lane`, and a worker for
+/// every other name, legacy `w<N>` included (an adopter keeps w1..w4; owner, 2026-09-25,
+/// air-jc2p.4). **Never a permission**: what a session may do comes from `AIR_ROLE` alone
+/// ([`super::role_from`]), so a worktree someone names `lane` lands nothing.
 pub fn role_for(worker: &str) -> &'static str {
-    if worker == "main" {
-        "coordinator"
-    } else {
-        "worker"
+    match worker {
+        "main" | "coordinator" => "coordinator",
+        "lane" => "lane",
+        _ => "worker",
     }
 }
 

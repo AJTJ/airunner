@@ -270,7 +270,8 @@ enum Cmd {
     /// <project>-<name> instead, prints `tmux attach -t <project>-<name>`, and exits 0.
     /// AIR_CLAUDE_BIN overrides the claude binary; AIR_TMUX_SOCKET selects a tmux socket.
     Worker {
-        /// Worktree name for the lane. Omitted, Air picks the next free `w<N>` (air-5lg).
+        /// Worktree name. Omitted, Air picks the next free `worker-<N>` (air-5lg, air-jc2p.4).
+        /// `main`, `coordinator` and `lane` are refused: they name other roles.
         name: Option<String>,
         /// Remove the lane's worktree instead of launching. Refused, naming what holds it,
         /// while it has uncommitted work, a harness lock, or a tmux session; the branch stays.
