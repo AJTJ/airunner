@@ -42,10 +42,13 @@ pub fn leaves(resolved: &Path, worktree: &Path) -> bool {
     !resolved.starts_with(worktree)
 }
 
-/// The denial, naming the path and the worktree, or `None` when the edit stays inside.
-pub fn denial(path: &Path, worktree: &Path) -> Option<String> {
+/// The denial, naming the path and the worktree, or `None` when the edit stays inside it or
+/// lands under one of `shared`: the main checkout's `.air/journal/` and `.air/digests/`, which
+/// every worktree writes to by design (air-1qnp). Removed with those directories.
+pub fn denial(path: &Path, worktree: &Path, shared: &[PathBuf]) -> Option<String> {
     let resolved = resolve(path);
-    leaves(&resolved, worktree).then(|| {
+    let into_shared = shared.iter().any(|s| resolved.starts_with(resolve(s)));
+    (leaves(&resolved, worktree) && !into_shared).then(|| {
         format!(
             "air: refusing an edit outside this session's worktree: {} resolves to {}, which \
              is not under {}. A worker edits its own worktree only (air-8gj); the main \
@@ -87,7 +90,22 @@ mod tests {
             resolve(Path::new("/nonexistent-zz/a/b")),
             PathBuf::from("/nonexistent-zz/a/b")
         );
-        assert!(denial(&new, &real).is_none());
-        assert!(denial(&real.join("..").join("elsewhere.rs"), &real).is_some());
+        assert!(denial(&new, &real, &[]).is_none());
+        assert!(denial(&real.join("..").join("elsewhere.rs"), &real, &[]).is_some());
+    }
+
+    #[test]
+    fn a_shared_air_directory_is_not_outside() {
+        let main = tempfile::tempdir().unwrap();
+        let wt = main.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let wt = wt.canonicalize().unwrap();
+        let journal = main.path().join(".air").join("journal");
+        let shared = [journal.clone()];
+        // A journal entry in the main checkout's .air/journal/ passes, even before it exists.
+        assert!(denial(&journal.join("w1.md"), &wt, &shared).is_none());
+        // Its neighbours do not: .air/ itself and the main checkout's source stay fenced.
+        assert!(denial(&main.path().join(".air").join("ledger.db"), &wt, &shared).is_some());
+        assert!(denial(&main.path().join("src.rs"), &wt, &shared).is_some());
     }
 }

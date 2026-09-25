@@ -264,9 +264,11 @@ fn declares_verify(makefile: &str) -> bool {
     })
 }
 
-/// Where each session appends what it hit (air-3xww). The value `air init` writes into a
-/// fresh `.claude/air.json`; an existing one keeps whatever it says.
-pub const DEFAULT_JOURNAL_DIR: &str = "docs/journal";
+/// Where each session appends what it hit (air-3xww), relative to the main checkout, when
+/// `.claude/air.json` names no `journal_dir`. Inside the gitignored `.air/` since air-1qnp
+/// (owner, 2026-09-25: Air's generated records do not litter the adopter's tree), and the
+/// same place `handover::journal_path` resolves to from any worktree.
+pub const DEFAULT_JOURNAL_DIR: &str = ".air/journal";
 
 /// The README `air init` drops in the journal directory, so an empty directory is not a
 /// mystery. Says what belongs in it and, as loudly, that nothing reads it.
@@ -551,10 +553,8 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                 "coordinator_deny": [],
                 "metis": true,
                 "adopters": false,
-                // air-3xww: where each session appends what it hit. Configured like
-                // `digest_dir` because where a repo keeps its prose is the repo's; Air reads
-                // the files themselves nowhere.
-                "journal_dir": DEFAULT_JOURNAL_DIR,
+                // No `journal_dir` since air-1qnp: journals default to `.air/journal/`, and
+                // the key is an override for a repo that wants them tracked.
             });
             std::fs::write(
                 dir.join(".claude/air.json"),

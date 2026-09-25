@@ -110,8 +110,9 @@ checks that were passing while examining nothing; a claim "true where it was use
 stated"; a lookup wearing the clothes of a judgement — was messages, and reached the round log
 only because a coordinator hand-copied it. The same night, a coordinator hit an account limit.
 
-So: **one file per session, appended, under a `journal_dir` your `.claude/air.json` names.**
-`air init` scaffolds the directory with a README. The distinction to hold onto, because "put it
+So: **one file per session, appended, in the main checkout's `.air/journal/`** (gitignored;
+a `journal_dir` in `.claude/air.json` puts them in your tree instead). `air init` scaffolds the
+directory with a README. The distinction to hold onto, because "put it
 in a capture" is the obvious advice and it is wrong here: a capture says somebody should act, and
 every one is triaged; these entries say **nobody** should act. Routing them to captures fills the
 inbox with things that need no triage.
@@ -186,7 +187,9 @@ Three consequences for a repo adopting Air:
      "coordinator_deny": []
    }
    ```
-   `digest_dir` turns on the fourth hand-over check. Deny entries are *patterns* so a new
+   `digest_dir` turns on the fourth hand-over check, with the digest tracked in that directory;
+   `"digests": true` turns it on with the digest in the gitignored `.air/digests/` instead
+   (air-1qnp). Neither key, no digest check. Deny entries are *patterns* so a new
    publish target is covered the day it exists (**[an adopter]** `make deploy-site` shipped
    outside an enumerated list).
 

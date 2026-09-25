@@ -14,7 +14,7 @@ the skill that uses them (`.claude/skills/*/references/`).
 
 | Record | Where |
 |---|---|
-| One file per session, appended as it goes; the three round logs | [`journal/`](journal/README.md) |
+| One file per session, appended as it goes; the round logs | `.air/journal/` in the main checkout (gitignored, not in git since air-1qnp) |
 
 Adopter material (names, paths, copied files, the corpus behind the failure catalogue) lives
 in `private/`, which is gitignored (air-bpj).
