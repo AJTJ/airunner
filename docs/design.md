@@ -453,9 +453,20 @@ bead count, the limit and that variable. The check after a timed-out claim gets 
 
 Two beads limits stay short because something above them is shorter. The status tick gets four
 times beads' median cost, between two and eight seconds and flat whatever the bead count,
-because air status serves the coordinator's tools, which are cut off at twenty seconds; a
+because air status serves the coordinator's status tools, which are cut off at twenty seconds; a
 timeout there falls back to cached counts. The stop nudge gets three seconds because it runs
 inside a hook that Claude Code kills at five.
+
+Each MCP tool runs its air command as a subprocess with a limit of its own. Status, attention,
+holdings, inbox, capture and the resources get twenty seconds. A tool whose command makes a
+beads call at the full beads limit gets one more such limit than its command can spend, taken
+from the same function the command uses, so the command's own timeout is the one the
+coordinator reads: close gets two limits for its bead count (130 seconds for one bead), triage
+and handover two, release three, claim seven. None may reach Claude Code's own limit on a tool call,
+MCP_TOOL_TIMEOUT, five minutes by default (code.claude.com/docs/en/env-vars, read 2026-09-25):
+every tool limit is capped ten seconds under it, which caps claim and a close of seventeen or
+more beads at 290 seconds. The subprocess leads its own process group, and a timeout kills the
+group, so no beads process outlives the call (air-se4n).
 
 Three budgets fail open, because they sit on the hook path: git gets a second and a half, the
 SQLite lock gets one second, and the hook itself gets five seconds. Claude Code enforces the last

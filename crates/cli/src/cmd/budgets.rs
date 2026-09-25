@@ -114,7 +114,7 @@ pub const CATALOGUE: &[Budget] = &[
     },
     Budget {
         name: air_ledger::budgets::MCP_TOOL,
-        site: "crates/cli/src/cmd/mcp.rs TOOL_TIMEOUT (20 s)",
+        site: "crates/cli/src/cmd/mcp.rs tool_budget (reads READ_TIMEOUT 20 s; bd-writing tools the command's bd budget via budget_for x (calls + 1), capped 10 s under Claude Code's MCP_TOOL_TIMEOUT, default 300 s)",
         protects: "one `air` subprocess behind an MCP tool call",
         fails: Fails::Closed,
     },

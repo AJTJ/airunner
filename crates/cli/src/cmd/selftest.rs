@@ -956,6 +956,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "mcp: a bd-writing tool's budget is above its command's own and under Claude Code's MCP_TOOL_TIMEOUT, and a killed tool takes its bd child with it",
+        Mutation {
+            // Signal the leader's pid instead of its group: the stub's child survives, keeps
+            // the stdout pipe, and the call no longer returns at its budget.
+            file: "crates/cli/src/git.rs",
+            from: r#"            .args(["-KILL", "--", &format!("-{}", c.id())])"#,
+            to: r#"            .args(["-KILL", "--", &format!("{}", c.id())])"#,
+            also_red: &[],
+        },
+    ),
+    (
         "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
         Mutation {
             // Keep the cwd as the tool gave it: the root is looked up and thrown away, which
@@ -2412,6 +2423,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_session_reads_stuck(),
         probe_hook_reads_from_the_worktree_root(),
         probe_acceptance_budget_scales_with_ids(),
+        probe_mcp_tool_budget_and_group_kill(),
         probe_contradicts_names_only_the_refuted(),
         probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
@@ -8594,6 +8606,137 @@ exit 0
             .map_err(|e| e.to_string())?;
     }
     Ok((dir, script))
+}
+
+/// air-se4n: `air mcp` ran every tool under a flat 20 s, so `air close` through the channel was
+/// killed well inside its own bd budget (60 s + 5 s per id), and the kill reached only the
+/// `air` subprocess, not the `bd` it had started.
+///
+/// Red, the old shape: a flat 20 s is below the command's own budget for one id, and killing
+/// only the leader of a stub whose child outlives it leaves that child running. Green: every
+/// bd-writing tool's budget is above its command's own at 1 to 20 ids and under Claude Code's
+/// limit, reads stay at 20 s, and `run_group` kills the whole group, returning at the budget
+/// even though the orphan holds the stdout pipe.
+fn probe_mcp_tool_budget_and_group_kill() -> Probe {
+    use crate::cmd::mcp::{GroupRun, run_group, tool_budget};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    // Alive and not a zombie. Polls briefly: an orphan killed with its group is reaped by
+    // launchd/init, not by us.
+    let alive = |pid: &str| -> bool {
+        let t0 = Instant::now();
+        loop {
+            let stat = Command::new("ps")
+                .args(["-o", "stat=", "-p", pid])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            if stat.is_empty() || stat.starts_with('Z') {
+                return false;
+            }
+            if t0.elapsed() > Duration::from_millis(1000) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    // Cleanup of a stub child either half may have left; already gone is fine.
+    let reap = |pid: &str| {
+        let _ = Command::new("kill")
+            .args(["-KILL", pid])
+            .stderr(Stdio::null())
+            .status();
+    };
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let pidfile = dir.join("child.pid");
+        // A stand-in for `air` running `bd`: the child outlives its parent unless killed.
+        // `quiet` gives the child its own stdout so the leader-only kill cannot hang the
+        // drain; the green run keeps the pipe to prove the group kill returns anyway.
+        let stub = |quiet: bool| {
+            let redirect = if quiet { " >/dev/null 2>&1" } else { "" };
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(format!(
+                "sleep 10{redirect} & echo $! > '{}'; wait",
+                pidfile.display()
+            ));
+            c
+        };
+        let read_pid = || -> Result<String, String> {
+            let t0 = Instant::now();
+            loop {
+                let s = std::fs::read_to_string(&pidfile).unwrap_or_default();
+                if s.ends_with('\n') {
+                    return Ok(s.trim().to_string());
+                }
+                if t0.elapsed() > Duration::from_secs(5) {
+                    return Err("stub never wrote its child's pid".into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let budget = Duration::from_millis(300);
+
+        // Red: the old kill, the leader only.
+        let child = stub(true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let timed_out = matches!(crate::git::wait_drained(child, budget), Ok(None));
+        let orphan = read_pid()?;
+        let orphan_survived = timed_out && alive(&orphan);
+        reap(&orphan);
+        let _ = std::fs::remove_file(&pidfile);
+
+        // The old budget: a flat 20 s for every tool.
+        let shipped = air_bd::BdCli::new(&dir);
+        let flat_below = Duration::from_secs(20) < shipped.budget(1);
+
+        // Green: the group kill, with the orphan holding the pipe.
+        let t0 = Instant::now();
+        let killed = matches!(run_group(stub(false), budget), Err(GroupRun::Timeout));
+        let prompt = t0.elapsed() < Duration::from_secs(5);
+        let child_pid = read_pid()?;
+        let child_gone = !alive(&child_pid);
+        reap(&child_pid);
+
+        let harness = Duration::from_secs(300);
+        let bd_tools = [
+            "air_close",
+            "air_triage",
+            "air_release",
+            "air_claim",
+            "air_handover",
+        ];
+        let covers = (1..=20).all(|n| {
+            let one = shipped.budget(n);
+            let close = tool_budget("air_close", one, harness);
+            close < harness
+                && (close > one || close == harness.saturating_sub(Duration::from_secs(10)))
+        }) && bd_tools
+            .iter()
+            .all(|t| tool_budget(t, shipped.budget(1), harness) > shipped.budget(1));
+        let reads_short = ["air_status", "air_attention", "air_inbox", "air_holdings"]
+            .iter()
+            .all(|t| tool_budget(t, shipped.budget(1), harness) == Duration::from_secs(20));
+        let under_lowered = tool_budget("air_claim", shipped.budget(1), Duration::from_secs(60))
+            < Duration::from_secs(60);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((
+            orphan_survived && flat_below,
+            killed && prompt && child_gone && covers && reads_short && under_lowered,
+        ))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "mcp: a bd-writing tool's budget is above its command's own and under Claude Code's MCP_TOOL_TIMEOUT, and a killed tool takes its bd child with it",
+        red_fires: red,
+        green_passes: green,
+    }
 }
 
 /// air-fzv, then air-8lj8: every multi-id bd call's budget scales with the id count, from ONE
