@@ -18,7 +18,8 @@
 //! air-ej4 adds the empty-but-ready scaffold: the four things Air ASSUMES a repo has and used
 //! to leave the adopter to discover at their first hand-over. A `Makefile` whose `verify`
 //! target fails until it is edited, a `.worktreeinclude` comment header, and, inside the
-//! `CLAUDE.md` stub, the hand-over sequence and the `Bead: <id>` trailer rule. Each follows the
+//! `CLAUDE.md` stub, a pointer to `.air/roles.md` and a list of what is the repo's own (it
+//! carried a hand-over sequence of its own until air-vuwx). Each follows the
 //! same rule as `.claude/air.json`: created only when absent, never edited. The failing verify
 //! target is the load-bearing part. A placeholder that PASSED would let the first
 //! `air record verify -- make verify` record a green for a check nobody has written, and the
@@ -184,30 +185,27 @@ struct Plan {
     written: bool,
 }
 
-const CLAUDE_MD_STUB: &str = r#"# CLAUDE.md
+/// The CLAUDE.md `air init` writes when the repo has none. The fleet protocol is Air's and lives
+/// in `.air/roles.md` (owner, 2026-09-25); this stub used to say the opposite, that the
+/// hand-over flow was the repo's own, and carried a second copy of the close sequence
+/// (air-vuwx). It now names only what roles.md leaves to the repo.
+pub(crate) const CLAUDE_MD_STUB: &str = r#"# CLAUDE.md
 
-This repo runs a small fleet with Air. Roles, the loop, and what Air enforces: `.air/roles.md`
-(appended to every session by `air worker` / `air coordinator`). Work is tracked in beads
-(`bd ready`, `air claim`, `air capture`). Domain rules for this codebase go below.
+This repo runs a small fleet with Air. The fleet's protocol (roles, how a bead goes from a claim
+to main, proof, landing, and what Air refuses) is Air's and lives in `.air/roles.md`, appended
+to every session by `air worker` / `air coordinator`. It is not restated here. Work is tracked
+in beads (`bd ready`, `air claim`, `air capture`).
 
-## This repo's work flow
+## What is this repo's own
 
-`.air/roles.md` says what Air records and what it refuses, and deliberately does not say how a
-finished bead is handed on: that is this repo's choice, so it lives here. Until you change it,
-a worker closes its own bead with proof.
+- **Verify** is `make verify`, recorded as `air record verify -- make verify`. Replace the
+  placeholder in the Makefile with this repo's real check.
+- **Precheck**: none yet. If workers under a verification lane should run one, name it here
+  and set `"precheck": true` in `.claude/air.json`.
+- **Worktree setup**: untracked files a new worktree needs are listed in `.worktreeinclude`.
+- **Shared resources** (a port, a simulator, Docker) are `"leases"` in `.claude/air.json`.
 
-    air claim <id> [--files a,b]
-    ... implement; every commit that does the bead's work carries a `Bead: <id>` trailer
-    git merge main
-    air record verify -- make verify    # last, so the green is at a commit containing main
-    bd close <id> --reason "<proof>"
-    ... next bead
-
-Proof is a command and its output, a `file:line`, or a passing test. Not a description of the
-approach: "refactored the parser" is not proof.
-
-**The `Bead: <id>` trailer is not optional.** `air land` attributes a landing by reading that
-trailer and nothing else. No prose is read, and a commit without one is attributed to nothing.
+Domain rules for this codebase go below.
 "#;
 
 /// The header of the `Makefile` `air init` writes into a repo that has none (air-ej4).
@@ -720,18 +718,16 @@ mod tests {
     }
 
     #[test]
-    fn the_stub_carries_the_flow_and_the_trailer() {
-        // The two of the four that are paragraphs rather than files (air-ej4). `air land`
-        // reads the trailer and nothing else, so a stub that omits it scaffolds a repo whose
-        // landings attribute nothing.
-        assert!(CLAUDE_MD_STUB.contains("Bead: <id>"), "{CLAUDE_MD_STUB}");
-        for step in [
-            "air claim <id>",
-            "git merge main",
-            "air record verify --",
-            "bd close <id>",
-        ] {
-            assert!(CLAUDE_MD_STUB.contains(step), "missing {step}");
+    fn the_stub_points_at_roles_and_keeps_only_the_repos_own() {
+        // air-vuwx: the protocol is Air's (owner, 2026-09-25), so the stub names roles.md and
+        // the repo's own commands, and carries no close sequence of its own to drift from it.
+        assert!(CLAUDE_MD_STUB.contains(".air/roles.md"), "{CLAUDE_MD_STUB}");
+        assert!(CLAUDE_MD_STUB.contains("air record verify -- make verify"));
+        for gone in ["work flow", "bd close", "git merge main"] {
+            assert!(
+                !CLAUDE_MD_STUB.contains(gone),
+                "restates the protocol: {gone}"
+            );
         }
     }
 }

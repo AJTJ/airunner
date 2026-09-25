@@ -110,8 +110,10 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         "{}",
         &skill[..60]
     );
+    // Retired 2026-09-25 (air-vuwx): it restated a hand-over protocol roles.md contradicts.
     assert!(
-        repo.join(".claude/skills/air-phase-transitions/SKILL.md")
+        !repo
+            .join(".claude/skills/air-phase-transitions/SKILL.md")
             .exists()
     );
 
