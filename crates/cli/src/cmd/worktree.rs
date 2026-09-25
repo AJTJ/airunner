@@ -68,6 +68,25 @@ pub fn branch_for(name: &str) -> String {
 /// the include listing walks ignored directories (`node_modules`), both of which can take
 /// seconds in a real repo.
 fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let (code, stdout, stderr) = git_status(cwd, args, timeout)?;
+    if code != 0 {
+        return Err(format!(
+            "git {} exited {code}: {}",
+            args.join(" "),
+            stderr.trim()
+        ));
+    }
+    Ok(stdout)
+}
+
+/// The same budget with the exit code handed back rather than turned into an error:
+/// `air batch cut` asks `git merge` and `git merge-tree`, whose exit 1 is an answer (a
+/// conflict), not a failure, and whose stdout is needed on exactly that path.
+pub(crate) fn git_status(
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(i32, String, String), String> {
     let t0 = std::time::Instant::now();
     let child = Command::new("git")
         .arg("-C")
@@ -94,15 +113,11 @@ fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
             ));
         }
     };
-    if !status.success() {
-        return Err(format!(
-            "git {} exited {}: {}",
-            args.join(" "),
-            status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&stdout).to_string())
+    Ok((
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&stdout).to_string(),
+        String::from_utf8_lossy(&stderr).to_string(),
+    ))
 }
 
 /// **Fail direction: CLOSED.** `air worker --create` and worktree removal are CLI commands the
@@ -114,7 +129,7 @@ fn git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
 /// nothing to do with the one-shot `git` calls elsewhere. Moved by `air audit`'s
 /// `git-worktree` row — a p99 anywhere near 120 s means a repo where creating a worktree needs
 /// its own budget rather than a bigger constant.
-const GIT_BUDGET: Duration = Duration::from_secs(120);
+pub(crate) const GIT_BUDGET: Duration = Duration::from_secs(120);
 
 /// Pure: one `.worktreeinclude` line (gitignore syntax) as a git pathspec with `:(glob)`
 /// magic, so `git ls-files` does the matching with its own engine. `None` for a blank line, a

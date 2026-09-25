@@ -4,6 +4,7 @@ pub mod acceptance;
 pub mod attribution;
 pub mod audit;
 pub mod batch;
+pub mod batch_cut;
 pub mod bd_latency;
 pub mod budgets;
 pub mod capture;

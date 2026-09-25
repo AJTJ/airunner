@@ -65,7 +65,29 @@ enum LeaseOp {
 }
 
 #[derive(Debug, Subcommand)]
+enum BatchOp {
+    /// The lane's cut: main plus every batch-ready branch that merges cleanly, drops named.
+    ///
+    /// Run in the lane's worktree. The batch-ready set from `air status`, oldest
+    /// ready first (committer time of the listed head); `git merge-tree` of each member against
+    /// main and each earlier accepted member, dropping and naming the first conflict; then
+    /// `git merge main` and each member at its listed sha, judged by the index and conflict
+    /// markers, never by output. Each drop is an event line. It does not verify or land; it
+    /// prints the next command.
+    Cut {
+        /// Read the set and run the pre-check only; merges nothing and needs no clean tree.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum Cmd {
+    /// The verification lane's batch.
+    Batch {
+        #[command(subcommand)]
+        op: BatchOp,
+    },
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
     Record {
@@ -413,6 +435,9 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let code = match cmd {
+        Cmd::Batch {
+            op: BatchOp::Cut { dry_run },
+        } => cmd::batch_cut::run(&repo, dry_run, cli.json),
         Cmd::Record { kind, command } => cmd::record::run(&repo, &kind, &command, cli.json),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
