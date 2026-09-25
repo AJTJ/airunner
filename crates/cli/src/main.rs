@@ -62,6 +62,12 @@ enum LeaseOp {
     },
     /// Refresh heartbeats on every lease this worktree holds (hooks do this automatically).
     Beat,
+    /// Which lease(s) a shell command needs, per `"leases"` in .claude/air.json, and whether
+    /// this session holds them. The same rules the PreToolUse hook applies. Always exits 0.
+    Needs {
+        /// The command, quoted as one argument, e.g. `air lease needs "make api"`.
+        command: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -440,6 +446,7 @@ fn main() -> ExitCode {
                 cmd::lease::break_lease(&repo, &resource, force, cli.json)
             }
             LeaseOp::Beat => cmd::lease::beat(&repo),
+            LeaseOp::Needs { command } => cmd::lease::needs_cmd(&repo, &command, cli.json),
         },
         Cmd::Triage { id, bead, drop } => {
             cmd::capture::triage(&repo, &id, bead.as_deref(), drop.as_deref(), cli.json)

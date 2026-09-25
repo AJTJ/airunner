@@ -175,6 +175,19 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // The lease-needed gate. The anchor makes ANY holder count as this session's, which is
+    // the one comparison the gate exists to make: the second store the adopter's guard read
+    // answered exactly this question wrongly. Red falls (w2's lease lets w1 run `make api`);
+    // green stands, because every green case is either unmatched, the owner, or really held.
+    (
+        "lease: a declared command from a session without the lease is refused (advised unenforced)",
+        Mutation {
+            file: "crates/cli/src/cmd/lease.rs",
+            from: "Some(l) if l.worker == me => match defect(&l) {",
+            to: "Some(l) if l.worker == me || !me.is_empty() => match defect(&l) {",
+            also_red: &[],
+        },
+    ),
     // air-88av. The anchor widens the lookup from "unmerged" to "everything but a deletion" —
     // lowercase in `--diff-filter` EXCLUDES, so `d` matches every modified path. Verified in a
     // fixture rather than reasoned about, after my first comment here claimed the opposite.
@@ -2095,6 +2108,72 @@ fn probe_lease_store_is_named() -> Probe {
     }
 }
 
+/// The lease-needed gate (`hook::lease_gate`): `air lease` knew who held `runtime` and not
+/// which command needed it, so an adopter wrote a ~1,500-line guard that read a second store.
+/// Red: w1 runs `cd app && make api` while w2 holds `runtime`; enforced, it is refused naming
+/// the holder and `air lease take runtime`; advisory, it is allowed with the same words. Green:
+/// w1 holding the lease runs it; the owner runs it; a quoted mention inside a `bd create`
+/// description, a heredoc body, and `git grep adb` are not commands; `make test` matches nothing.
+fn probe_lease_needed_gate() -> Probe {
+    use crate::cmd::hook::lease_gate;
+    use air_hooks::HookOutcome;
+    use air_ledger::leases::{Holder, Lease};
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let decl = crate::cmd::lease::declared_from(
+            &serde_json::json!({"runtime": ["make api*", "Bash(adb *)"]}),
+        );
+        let healthy = |_: &Lease| None;
+        let take = |w: &str| {
+            let h = Holder {
+                worker: w,
+                ..Holder::default()
+            };
+            l.lease_take("runtime", &h, "api", "t0", healthy)
+                .map_err(|e| e.to_string())
+        };
+        take("w2")?;
+        let gate = |w: &str, role: &str, cmd: &str, enforce: bool| {
+            lease_gate(&l, w, role, &decl, cmd, enforce, healthy).map(|d| d.map(|d| d.outcome))
+        };
+        let refused = matches!(
+            gate("w1", "worker", "cd app && make api", true)?,
+            Some(HookOutcome::Block { reason })
+                if reason.contains("w2") && reason.contains("air lease take runtime")
+        );
+        let advised = matches!(
+            gate("main", "coordinator", "timeout 60 adb", false)?,
+            Some(HookOutcome::Allow { context: Some(c) }) if c.contains("w2")
+        );
+        let quiet = |w: &str, role: &str, cmd: &str| -> Result<bool, String> {
+            Ok(!matches!(
+                gate(w, role, cmd, true)?,
+                Some(HookOutcome::Block { .. })
+            ))
+        };
+        let owner = quiet("main", "owner", "make api")?;
+        let not_run = quiet(
+            "w1",
+            "worker",
+            "bd create -d \"then make api && adb shell\"",
+        )? && quiet(
+            "w1",
+            "worker",
+            "git commit -F- <<EOF\nadb shell\nEOF\ngit log",
+        )? && quiet("w1", "worker", "git grep -n adb && make test")?;
+        l.lease_break("runtime").map_err(|e| e.to_string())?;
+        take("w1")?;
+        let held = quiet("w1", "worker", "FOO=1 make api-dev | tee log")?;
+        Ok((refused && advised, owner && not_run && held))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "lease: a declared command from a session without the lease is refused (advised unenforced)",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-air: "which model is this worker on" was a question the coordinator had to ASK, and a
 /// wrong model that is invisible costs the round while a visible one costs a relaunch.
 ///
@@ -2177,6 +2256,7 @@ fn all_probes() -> Vec<Probe> {
         probe_every_condition_kind_is_registered(),
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
+        probe_lease_needed_gate(),
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),

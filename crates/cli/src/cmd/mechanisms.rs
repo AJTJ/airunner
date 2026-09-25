@@ -135,6 +135,22 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "lease-needed",
+        class: "refusal",
+        what: "A Bash command matching a pattern under \"leases\" in .claude/air.json, from a \
+               worker or coordinator that does not hold that lease: refused under \
+               AIR_ENFORCE=1, advised otherwise. The owner is never asked.",
+        added: "2026-09-25 (plan 0009 §11)",
+        source: "crates/cli/src/cmd/hook.rs lease_gate; crates/cli/src/cmd/lease.rs",
+        fires: Fires::Decisions(&[
+            ("hook.PreToolUse", "lease-refuse"),
+            ("hook.PreToolUse", "lease-would-refuse"),
+        ]),
+        removal: Removal::Judgement(
+            "the harness can scope a tool permission to a held resource; or a round with `leases` declared records `lease-held` decisions (matching commands ran) and zero lease-refuse or lease-would-refuse",
+        ),
+    },
+    Mechanism {
         id: "handover-would-refuse",
         class: "refusal",
         what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",

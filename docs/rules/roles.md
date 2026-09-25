@@ -166,7 +166,10 @@ captures alone.
 
 Things that need a shared resource (a port, the simulator, Docker, the browser):
 `air lease take <resource> --reason "<why>"`; release when done. A held lease names its holder;
-do not route around it. **[Air enforces: a healthy holder is not broken by `take`]**
+do not route around it. **[Air enforces: a healthy holder is not broken by `take`]** Which
+commands need which lease is the repo's `"leases"` in `.claude/air.json`; `air lease needs
+"<command>"` answers for one command. **[Air enforces: such a command from a worker that does not
+hold the lease is refused; the coordinator is told instead]**
 
 Not available to a worker, by deny rule in every permission mode: `air land`, `air close`,
 `git push`, `bd create`, `bd sync`, raw `bd update --claim`, a nested `claude`, leaving the

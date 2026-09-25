@@ -734,10 +734,115 @@ fn pre_tool_use(
         let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
         return handover_gate(ledger, worker, cwd, cmd, enforce);
     }
+    // Lease-needed gate: a command the repo declares as needing a lease, from a session that
+    // does not hold it (`lease_gate`). The owner is never asked; the config read is skipped.
+    if let Some(cmd) = input.bash_command()
+        && role != "owner"
+    {
+        let declared = super::lease::declared(cwd);
+        if !declared.is_empty() {
+            let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
+            let t = now();
+            let stale = super::lease::stale_secs();
+            if let Some(d) = lease_gate(ledger, worker, role, &declared, cmd, enforce, |l| {
+                super::lease::defect(l, &t, stale)
+            })? {
+                return Ok(d);
+            }
+        }
+    }
     Ok(Dispatched::new(
         HookOutcome::Allow { context: None },
         "observed",
         moved,
+    ))
+}
+
+/// The lease-needed gate for one Bash command. `None` when the command needs no declared lease
+/// or the caller is the owner (no `AIR_ROLE`), who is never refused.
+///
+/// The failure it removes is an adopter's, twice over (see the block comment above
+/// `lease::declared`): `air lease` knew who held `runtime` and not which command needed it, so
+/// the adopter's own ~1,500-line guard decided that, read a second lock store, and refused a
+/// held lease naming the command that had just taken it (2026-08-29).
+///
+/// Advisory unless `enforce` (`AIR_ENFORCE=1`), the hand-over gate's switch: worker launches
+/// set it, coordinator launches do not, so a worker is refused and the coordinator is told.
+/// Every decision is one event line, `lease-held` included, so the removal condition (a round
+/// of matching commands with zero refusals) can be counted from the record. Fails open: a
+/// ledger error returns `Err`, which the hook turns into an allow with a `fail-open` line.
+///
+/// Removal: when the harness can scope a tool permission to a held resource, or when a round
+/// with `leases` declared shows `lease-held` decisions and zero `lease-refuse` or
+/// `lease-would-refuse`.
+pub fn lease_gate(
+    ledger: &Ledger,
+    worker: &str,
+    role: &str,
+    declared: &[(String, Vec<String>)],
+    cmd: &str,
+    enforce: bool,
+    defect: impl Fn(&air_ledger::leases::Lease) -> Option<String>,
+) -> Result<Option<Dispatched>, String> {
+    use super::lease::{Standing, advice, needs, standing};
+    if role == "owner" {
+        return Ok(None);
+    }
+    let need = needs(declared, cmd);
+    if need.is_empty() {
+        return Ok(None);
+    }
+    let mut missing = Vec::new();
+    let mut rows = Vec::new();
+    for n in &need {
+        let row = ledger.lease(&n.resource).map_err(|e| e.to_string())?;
+        let s = standing(row, worker, &defect);
+        let holder = match &s {
+            Standing::Mine | Standing::MineDead(_) => Some(worker.to_string()),
+            Standing::Other(l, _) => Some(l.worker.clone()),
+            Standing::Free => None,
+        };
+        rows.push(serde_json::json!({
+            "resource": n.resource, "pattern": n.pattern, "holder": holder,
+            "held": s == Standing::Mine,
+        }));
+        if let Some(a) = advice(n, &s, worker) {
+            missing.push(a);
+        }
+    }
+    let inputs = serde_json::json!({"command": cmd, "enforce": enforce, "needs": rows});
+    let denominator = format!("{} lease(s) needed", need.len());
+    if missing.is_empty() {
+        return Ok(Some(
+            Dispatched::new(
+                HookOutcome::Allow { context: None },
+                "lease-held",
+                "every lease the command needs is held",
+            )
+            .inputs(inputs)
+            .denominator(denominator),
+        ));
+    }
+    let msg = format!("air: {}", missing.join("\n"));
+    let (outcome, decision) = if enforce {
+        (
+            HookOutcome::Block {
+                reason: msg.clone(),
+            },
+            "lease-refuse",
+        )
+    } else {
+        (
+            HookOutcome::Allow {
+                context: Some(msg.clone()),
+            },
+            "lease-would-refuse",
+        )
+    };
+    Ok(Some(
+        Dispatched::new(outcome, decision, msg)
+            .inputs(inputs)
+            .denominator(denominator),
     ))
 }
 
