@@ -32,8 +32,8 @@ Consequences for agents:
   (`lease_expires_at`, `heartbeat_at`). Treat status + assignee as the cross-machine truth.
 - Do not upgrade or downgrade `bd` on your own. `bd` is pinned; changing it is an owner
   decision.
-- Full findings, sources, and the CLI surface of 1.2.1:
-  `docs/research/beads.md` (item 2), `§1.7`, `§1.8`.
+- Full findings, sources, the ready and claim semantics, and the surface Air uses on the pinned
+  1.2.2: `references/bd-facts.md`. Why bd, and why pinned: `docs/design.md` §11.
 
 ## First step
 
@@ -286,7 +286,7 @@ measured on a live fleet.
   `another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
   The adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (the adopter `f2ca891`, not copied
   into this repo) for the Known traps section; version-trap facts from
-  `docs/research/beads.md`. Read for context, not copied:
+  `references/bd-facts.md` (formerly `docs/research/beads.md`). Read for context, not copied:
   `beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
   `beads/docs/integrations/claude-code.md`.
 - Ported 2026-08-18.

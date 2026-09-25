@@ -13,7 +13,7 @@ pub enum Kind {
     Verify,
     DocsCheck,
     Fitness,
-    /// A worker's cheap check under a verification lane (plan 0009 B2). Its own kind so that a
+    /// A worker's cheap check under a verification lane (precheck, 2026-09-25). Its own kind so that a
     /// precheck green is never read as a verify green: every green query takes the kind.
     Precheck,
 }

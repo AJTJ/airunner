@@ -80,7 +80,12 @@ Say which failures are open (the system proceeds) and which are closed (it refus
 *The one explicit list of what is still to do: one line per item, dated, pointing at where
 the detail lives. Bead id on the line once filed; delete the line when it lands.*
 
-## 11. Glossary
+## 11. Technology decisions
+
+*One row per choice: the decision, why in one to three lines, and a source (URL with access
+date, or `path:line`). Evidence an agent needs at work time lives in a skill's references.*
+
+## 12. Glossary
 
 *One line per term used in a specific sense.*
 ```

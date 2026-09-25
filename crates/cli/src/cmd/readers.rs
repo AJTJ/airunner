@@ -38,7 +38,7 @@
 //! `unknown (why)`, never an empty list.
 //!
 //! **Removed when** every process that runs in a fleet tree is one Air recorded (a recorded
-//! precheck run kind, plan 0009 B2, and the lane's verify already are), so the ledger alone
+//! precheck run kind of 2026-09-25, and the lane's verify already are), so the ledger alone
 //! answers "what is running there"; or when the harness exposes a session's background tasks.
 
 use std::collections::{BTreeMap, BTreeSet};

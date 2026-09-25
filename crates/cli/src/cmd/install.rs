@@ -1583,7 +1583,7 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
     SurfaceChange {
         id: "batch-ready-behind-main",
-        since: "2026-09-25 (owner ruling, plan 0009 §11)",
+        since: "2026-09-25 (owner ruling, from an adopter's fleet protocol)",
         headline: "A branch behind `main` is now batch-ready: `air status` no longer drops it \
                    with `behind-main`. The lane merges main forward at the cut, so a landing no \
                    longer takes every waiting branch out of the queue until its worker re-merges.",
@@ -1594,7 +1594,7 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
     SurfaceChange {
         id: "nudge-skips-the-lane",
-        since: "2026-09-25 (plan 0009 §11)",
+        since: "2026-09-25 (from an adopter's fleet protocol)",
         headline: "The Stop hook no longer offers ready beads to the worker `.claude/air.json` \
                    names as `verify_lane`. The lane claims no bead.",
         silent_break: false,
@@ -1614,7 +1614,7 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
     SurfaceChange {
         id: "leases-declared",
-        since: "2026-09-25 (plan 0009 §11)",
+        since: "2026-09-25 (from an adopter's fleet protocol)",
         headline: "`.claude/air.json` can declare which commands need which lease, \
                    `\"leases\": {\"runtime\": [\"make api*\", \"adb *\"]}` in the deny-rule \
                    pattern syntax. Air's PreToolUse hook then refuses such a command from a \
@@ -1627,7 +1627,7 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
     SurfaceChange {
         id: "precheck-is-a-run",
-        since: "2026-09-25 (plan 0009 B2)",
+        since: "2026-09-25 (owner)",
         headline: "`air record precheck -- <cmd>` records a worker's precheck like a verify, and \
                    it is never read as a verify green. A running one is shown as `precheck in \
                    flight` and keeps the worker from reading as idle; it does not hold a landing. \
@@ -1653,7 +1653,7 @@ pub const SURFACE: &[SurfaceChange] = &[
     },
     SurfaceChange {
         id: "batch-cut",
-        since: "2026-09-25 (plan 0009 step 3)",
+        since: "2026-09-25 (owner)",
         headline: "New `air batch cut`, run in the lane's worktree: the batch-ready set, oldest \
                    ready first (committer time of the listed head); a `git merge-tree` pre-check \
                    of each member against main and each earlier member; then `git merge main` and \
@@ -2584,10 +2584,10 @@ mod tests {
         // because deleting the permission would be wrong for a lane that merges main forward.
         assert!(flat(lane).contains("it may hold one **if its worktree survives the cut**"));
         // 2026-09-25 (owner): the lane's loop is Air's protocol now, and the batch comes from
-        // `air status`, never from a sha relayed in a message (plan 0009 B1).
+        // `air status`, never from a sha relayed in a message (owner, 2026-09-25).
         assert!(flat(lane).contains("The lane's loop."));
         assert!(flat(lane).contains("never a sha from a message"));
-        // Plan 0009 step 3: the cut is a program, so the loop names it rather than the merges.
+        // The cut as a program (2026-09-25): the cut is a program, so the loop names it rather than the merges.
         assert!(flat(lane).contains("`air batch cut` in your worktree"));
         assert!(lane.contains(
             "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"

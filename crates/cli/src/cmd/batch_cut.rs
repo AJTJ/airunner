@@ -1,4 +1,4 @@
-//! `air batch cut` — the verification lane's cut as a program (plan 0009 §5, step 3).
+//! `air batch cut` — the verification lane's cut as a program (built 2026-09-25; docs/design.md §4.1).
 //!
 //! **The failure it removes** (an adopter, 2026-09-07, `private/adopter-corpus/`, 2026-09-14
 //! `scripts/lane-merge.sh:5-35` and `FINDINGS-scripts-and-rules.md` §1.10). The lane cut every
@@ -35,13 +35,13 @@
 //!
 //! Every drop is an event line (`command: batch-cut`, `decision: dropped`, the member, the
 //! other side, the paths). An event line and not a ledger table: nothing reads drops back yet,
-//! and a table with no reader is the do-less failure. The table plan 0009 §5 asks for is
+//! and a table with no reader is the do-less failure. The table the fleet design asks for (docs/design.md §10) is
 //! added when a second red or a retry needs to be told from a first by a program.
 //!
 //! It does not verify and does not land: the next command is printed.
 //!
 //! Removal: when `git merge` itself reports the conflicting pair and the lane's cut needs no
-//! set or order Air holds (plan 0009 §5), or with the lane (verify cheap enough that no batch
+//! set or order Air holds (docs/design.md §10), or with the lane (verify cheap enough that no batch
 //! of more than one branch forms).
 
 use std::path::Path;

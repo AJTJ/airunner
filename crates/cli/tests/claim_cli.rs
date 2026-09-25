@@ -1330,7 +1330,7 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
-/// Plan 0009 §11, end to end: `"leases"` in `.claude/air.json` makes Air's PreToolUse hook
+/// An adopter's fleet protocol (2026-09-25), end to end: `"leases"` in `.claude/air.json` makes Air's PreToolUse hook
 /// refuse a declared command from a worker that does not hold the lease — the core of an
 /// adopter's own ~1,500-line guard, which read a second lock store. No config, the owner, an
 /// unmatched command and a held lease are all allowed; unenforced, the refusal is advice.
@@ -1418,7 +1418,7 @@ fn a_declared_command_needs_its_lease() {
     assert!(!out.contains("air:"), "held is silent: {out}");
 }
 
-/// Plan 0009 §11, end to end: a worker with no claim stopping while a task is ready is nudged
+/// An adopter's fleet protocol (2026-09-25), end to end: a worker with no claim stopping while a task is ready is nudged
 /// to claim it; the same worker named as `verify_lane` in `.claude/air.json` is not, because
 /// the lane claims no bead. An adopter recorded the Stop hook offering its lane ready beads.
 #[test]
@@ -1606,7 +1606,7 @@ fn status_lists_batch_ready_branches_as_a_fact() {
     );
 
     // main moves: the green branch is no longer landable, and it is batch-ready again without
-    // re-merging, because the lane merges main forward at the cut (plan 0009 §11).
+    // re-merging, because the lane merges main forward at the cut (an adopter's fleet protocol, 2026-09-25).
     std::fs::write(main.join("README"), "b\n").unwrap();
     git(&main, &["commit", "-q", "-am", "docs: readme"]);
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
@@ -1615,7 +1615,7 @@ fn status_lists_batch_ready_branches_as_a_fact() {
     assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
 }
 
-/// Plan 0009 B2, end to end: where `.claude/air.json` declares `"precheck": true`, a branch is
+/// Precheck (2026-09-25), end to end: where `.claude/air.json` declares `"precheck": true`, a branch is
 /// batch-ready only once `air record precheck` is green at its head, and that green is never a
 /// verify green: the branch contains main, so a verify green would make it landable and take it
 /// out of the batch (`green-at-head`), and the close gate would stop naming the missing verify.
@@ -2343,7 +2343,7 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     }
 }
 
-/// Plan 0009 step 3, end to end: `air batch cut` in the lane's worktree. Four batch-ready
+/// `air batch cut` (2026-09-25), end to end: `air batch cut` in the lane's worktree. Four batch-ready
 /// members: alpha clean; beta and gamma both rewrite `shared.txt`, gamma ready first by its
 /// commit time though beta sorts first by name; delta rewrites `m.txt`, which main rewrote after
 /// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's

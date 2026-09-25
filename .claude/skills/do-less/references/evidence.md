@@ -1,20 +1,17 @@
-# Evidence: the findings Air's rules rest on
+# Evidence the do-less rule rests on
 
-This file is the reference for the verified findings that Air's rules, skills and decisions
-cite. It was written on 2026-09-14 by condensing nine documents that are being deleted:
-`docs/research/guardrails-as-throttles.md` (§1 here; findings F1 to F10 keep their numbers so
-that `CLAUDE.md` and `.claude/skills/do-less/SKILL.md`, which cite that file by name, can be
-repointed), `docs/research/metis-decomposition-and-agile.md` (§2), `docs/research/metis-deep-dive.md`
-(§3; `crates/cli/src/cmd/metis.rs:12` points here for it), `docs/research/SYNTHESIS.md` §1b (§4),
-`docs/research/claude-code-billing.md` (§5), and the five verification slices
-`docs/research/verification/fleet-size-partition-cadence.md`, `mas-literature-part1.md`,
-`mas-literature-part2.md`, `protocols-leases-resources.md` and `specs-guards-tooling.md` (§6).
-Every claim keeps the source the deleted document gave it: a URL with the access date, or a
-`path:line`. Metis paths are relative to `~/projects/metis` at commit `6745810`.
-The adopter is called "an adopter" throughout; its notes are cited by the path the deleted
-document used, relative to the adopter's checkout on the date read. The copies Air holds are
-under `private/adopter-corpus/<adopter>/2026-09-14/docs/`, and some notes cited below are no
-longer in that copy.
+The verified findings behind `do-less` and CLAUDE.md's "Do less" rule: guardrails as throttles
+(F1 to F10 and the taxonomy of which constraints age well), the corpus principles, and the
+claims that did not survive a check and must not be repeated. Moved here on 2026-09-25 from
+`docs/research/evidence.md` (written 2026-09-14 by condensing nine earlier research documents),
+when `docs/research/` was retired; the technology decisions these findings support are listed
+in `docs/design.md` §11. Every claim keeps the source it had: a URL with the access date, or a
+`path:line`. Adopter notes are cited as "an adopter's", by the path they had when read; some of
+those files no longer exist.
+
+The decomposition and sizing evidence that used to sit between these sections lives in the
+`decomposition` skill, whose rules it produced. Metis and billing are one line each in
+`docs/design.md` §11.
 
 ## 1. Guardrails as throttles (from `guardrails-as-throttles.md`, 2026-08-21)
 
@@ -119,7 +116,7 @@ tasks" (https://www.anthropic.com/engineering/multi-agent-research-system). Cogn
 implicit decisions, and conflicting decisions carry bad results"
 (https://cognition.com/blog/dont-build-multi-agents). Gas Town is the local cautionary case,
 about $100 an hour with merges over failing tests and an open verification chain
-(`docs/research/beads.md:123` and the sources cited there). For Air: the fleet is a workflow over a
+(`../../beads/references/bd-facts.md`, "Gas Town", and the sources cited there). For Air: the fleet is a workflow over a
 ledger, not agents talking; every role beyond "the session in main" and "a session in a
 worktree" is the MAST category 1 risk with no measured need.
 
@@ -132,7 +129,7 @@ update (2025-07-14) puts software at 2 to 6 months
 (https://metr.org/blog/2025-07-14-how-does-time-horizon-vary-across-domains/); Time Horizon
 1.1 (2026-01-29) gives 131 days post-2023 (https://metr.org/blog/2026-1-29-time-horizon-1-1/).
 Counter-evidence: METR's RCT found experienced developers 19% slower with AI tools while
-believing themselves faster (§6); horizon is not throughput. The trend sets the cadence: a
+believing themselves faster (§3); horizon is not throughput. The trend sets the cadence: a
 constraint written against this quarter's model is a bet to re-check next quarter.
 
 ### F9. The false-success failure does not go away with capability; prompting against it weakens while the base rate stays
@@ -140,7 +137,7 @@ constraint written against this quarter's model is a bet to re-check next quarte
 Exploratory, established (model cards, verified by pdftotext). Impossible-task gaming: Opus 4
 and Sonnet 4 51% without the anti-hack sentence, 19% and 7% with it (Opus 4.1 addendum, Table
 5.B footnote 3); Opus 4.5 55% to 35%, Sonnet 4.5 53% to 20%, Haiku 4.5 30% to 23%; the task
-set changed between cards, so 51% is a property of an eval version (§6, part 2). SpecBench
+set changed between cards, so 51% is a property of an eval version (§3, part 2). SpecBench
 (May 2026): "while every frontier agent saturates the visible suite, reward hacking
 persists", and the gap "grows by 28 percentage points for every tenfold increase in code
 size" (https://arxiv.org/abs/2605.21384). An adopter, 2026-08-21: `make verify` silently
@@ -207,148 +204,11 @@ hand-over gate's fact checks, `air record`'s integrity flags and backgrounded re
 `git push`, `git commit`-on-main and `bd sync` denies, leases, the event log, pid liveness,
 env-by-flag. What has happened to each since is in `docs/decisions.md` and `air audit`.
 
-## 2. Decomposition and sizing (from `metis-decomposition-and-agile.md`, 2026-08-20)
 
-Metis paths were read at `6745810`; agile sources were accessed 2026-08-20. The decomposition
-procedure and the per-phase exit criteria are not repeated because they are the
-`decomposition` and `phase-transitions` skills verbatim.
-
-### Steal, adapt, reject
-
-Stolen verbatim into the skills: decompose ahead of capacity, never the whole feature;
-decompose is a visible buffer, measure time in it; exit criteria are observable, specific,
-relevant, achievable (`plugins/metis/skills/phase-transitions/references/phase-flow.md:73-78`);
-criteria "cannot be removed once defined (only refined)" (`.metis/adrs/METIS-A-0003.md:55`), so
-an epic's "Done when" may be tightened, never dropped; at most 7 exit criteria per document
-(ADR-003:41), so an epic design has at most 7 acceptance-shaped lines and a bead exactly one;
-the feature-creep rule (small and related becomes a child, significant becomes a capture, a
-scope change stops and re-designs or splits the epic;
-`plugins/metis/skills/project-patterns/references/feature-development.md:138-157`); the sizing
-table Small/Medium/Large as bead, epic, several epics (`feature-development.md:126-136`); the
-anti-pattern names; the Ralph-fit list as the test of a worker-shaped bead
-(`docs/explanation/ralph-loops.md:127-137`). From agile rather than Metis: INVEST and SMART
-(Wake 2003, https://xp123.com/invest-in-good-stories-and-smart-tasks/), the nine splitting
-patterns and the selection rule (Lawrence and Green,
-https://www.humanizingwork.com/the-humanizing-work-guide-to-splitting-user-stories/), the
-walking-skeleton release slice (Cockburn as quoted at
-https://gojko.net/2014/06/09/forget-the-walking-skeleton-put-it-on-crutches/; Patton,
-https://www.jpattonassociates.com/wp-content/uploads/2015/03/story_mapping.pdf), and "the
-Developers who will be doing the work are responsible for the sizing" (Scrum Guide 2020,
-https://scrumguides.org/scrum-guide.html).
-
-Adapted: Metis's `ready` phase becomes the triage commitment point on children, not a phase
-on the epic; its exit criteria (design reviewed, capacity available, no blocking dependencies)
-are carried by the non-empty `--design`, by pull, and by `bd ready`. Exit criteria become
-evidence rows, not checkboxes. Human-in-the-loop prose becomes a role split: the owner picks
-the feature, the coordinator decomposes and moves epics, workers move beads only through the
-gate; "Do NOT create large numbers of tasks without human review" becomes a number, the
-walking skeleton plus one wave. Complexity XS to XL becomes a filing-time rule. "Task backlog
-is sufficient to start" becomes "at least one ready child per idle worker".
-
-Rejected: a stored epic phase (owner tabled it, `decisions.md` 2026-08-18 item 4; derivable
-from design, children, claims and closes, and storing it invites Metis's own failure, a flag
-nothing evaluates); a fourth level (Metis removed its own `Strategy` type in ADR-007);
-sprints, points, velocity (not in Metis, not in the record as a pain); checkbox acceptance
-criteria (an adopter's record says acceptance is the weak link when it is prose; one runnable
-condition per bead); a Ralph decompose loop as machinery; a groomed-backlog ritual; "every
-piece of work traces to the vision" as an enforced rule.
-
-Two findings changed the prior: Metis is Kanban plus phases and says so, with no sprint,
-points or velocity anywhere in its source; and its decomposition reasoning is thinner than its
-phase reasoning, lacking the splitting patterns and the selection rule.
-
-### What an adopter's live fleet showed
-
-Numbers are the notes' own, read 2026-08-20 in the adopter's checkout at `71191e0`.
-
-What worked. The cut by disjoint file sets is the most effective mechanism the record
-measured: of 353 files touched in the overnight run, 86% were touched by exactly one branch,
-and seven files ever conflicted across 63 merges (`docs/notes/overnight-fleet-retrospective.md:326-331`);
-"What prevented the rest was the file split agreed in the first ten minutes, peer-to-peer, not
-the barrier" (`:341-343`). Decomposition churn is the system working: 80 of 152 beads in one
-round were epic children, "mostly decomposition, not redundancy"
-(`docs/notes/bead-admission-control.md:15-27`); duplication was 1 in 152 that round and about
-3% corpus-wide (`docs/plans/0022-agent-working-procedure.md:89-91`); a cap on beads per agent
-was rejected because it "punishes decomposition" (`bead-admission-control.md:81`). Re-verifying
-premises at claim time turned six re-implementations into six closes: six of ten beads on one
-lane were already fixed on `main` (`overnight-fleet-retrospective.md:509-517`).
-
-What went badly, and the rule each produced:
-
-| Failure | Evidence | Rule |
-|---|---|---|
-| Compound beads that were epics, acceptance "satisfiable by deferring all nine" | `docs/notes/task-specification-research.md:571-581` | A checklist in a description is an uncut epic |
-| Two children whose acceptances owned the same edit while their prose respected the boundary | `docs/notes/bead-dedup-audit-2026-08-17.md:48-60` | Lane is checked on the acceptance, not the description |
-| A missing edge "nobody had seen", "not findable by the agent doing the filing" | `bead-dedup-audit-2026-08-17.md:70`; `0022:100-102` | Edges are cut by whoever has the whole tree in view; a shared file means a `blocks` edge |
-| "Record a dependency whenever two beads touch the same file" was prose, NOT ENFORCED | `overnight-fleet-retrospective.md:546-552` | Lane at claim; stale-citation flag |
-| 12 of 49 beads with acceptance no agent could reach, "a queue-shape defect" | `task-specification-research.md:526-545` | Acceptance runnable inside the worktree by the agent |
-| Description and acceptance disagreeing: "Neither will ask" | `task-specification-research.md:550-570` | Triage checks agreement; a contradiction goes to the owner |
-| `--design` empty in all 49 beads | `task-specification-research.md:584-594` | Non-empty `--design` before a child claim |
-| Nine beads with wrong citations, one making an acceptance clause unreachable | `docs/notes/human-queue-triage.md:1081-1096` | Citations resolve at filing and at claim |
-| Acceptance literally met while the data on disk had not changed | `overnight-fleet-retrospective.md:33` | Write it so that satisfying it is the work (`task-specification-research.md:634-637`) |
-| `bd create` writes straight into `bd ready` | `0022:60-62` | Capture then triage (`decisions.md` 2026-08-18) |
-| Owner-only work filed faster than it clears: 27 of 152, then 9 of 39 | `bead-admission-control.md:29-31` | `owner` and `human` labels at filing |
-| `bd ready` silently caps at 100; an edge on an epic propagated to every child | `bead-dedup-audit-2026-08-17.md:134-144`, `:99-100` | Always `-n 0` or `--json`; edges between children, never on the epic |
-
-The notes also set a size floor, "Do not decompose below one session and one reviewable diff"
-(`task-specification-research.md:757-759`), and found that "a wrong or over-tight success
-condition broke twice as many tasks as a thin description did" (`:85-92`). Plan 0022 declined
-forward-only phase enforcement ("A phase machine will be exactly that kind of wrong the first
-time real work does not fit its model", `0022:237-239`) and a third tracker for the
-Vision/Initiative/Task hierarchy (`0022:227-231`); Air agrees and stores no phase.
-
-### Sizing
-
-The unit is one worker session that ends with `air handover` succeeding; not hours, not
-points. Scrum's only hard sizing statement is about who sizes, and in Air the doer is a fresh
-session that cannot negotiate scope, so the filer sizes for it and the ledger supplies the
-feedback Scrum gets from the team: single-agent success rate per bead. Metis's "2-3 iterations
-ideal, not 15" (`ralph-loops.md:142`) is the same unit. Metis's XS to XL on initiatives is
-never read by anything, the `exit_criteria_met` pattern again; an adopter's retrospective names
-the opposite gap, "the missing instrument is a size estimate at filing time", with bead
-duration CV 1.38, median 8 minutes, p90 41 (`overnight-fleet-retrospective.md:350-355,723-726`).
-The reconciliation: record a guess that something consumes. `bd create --estimate <minutes>`
-exists in 1.2.1 and the ledger has session start and hand-over times, so estimate against
-actual is a free metric; record it, never gate on it (`decisions.md` 2026-08-18 item 5).
-
-| Signal at filing time | Verdict |
-|---|---|
-| Acceptance needs "and" | Split |
-| Description has a checklist | An epic that was not cut |
-| Touches more than one lane | Split by lane, or record the edge and accept serial landing |
-| Worker must choose between approaches | Spike first, or the coordinator decides in the description |
-| Diff reviewable in one sitting (under about 400 changed lines) | Right size; an unsourced starting point to be replaced by a ledger number |
-| Three small beads or one medium | Three, but not below one reviewable diff |
-| Many unanswerable questions while writing the acceptance | Too uncertain to file; spike or capture (`task-specification-research.md:265`) |
-| Epic has more than about 12 children | Probably two capability increments |
-
-An epic is a capability increment with one runnable "Done when" command; two commands means
-two epics, and a "Done when" one bead can make green means a bead.
-
-## 3. Metis (from `metis-deep-dive.md` §1.4 and §5, read 2026-08-17)
-
-Metis enforces two things in code: phase adjacency, forward-only with no skipping, from a
-single transition table on the type enum (`crates/metis-docs-core/src/domain/documents/types.rs:188-238`),
-and the rule that a task may only be reassigned into an initiative in `decompose` or `active`
-(`crates/metis-docs-core/src/application/services/workspace/reassignment.rs:169-176`).
-Everything else is prose. Exit-criteria checkboxes (ADR-003) are never evaluated:
-`exit_criteria_met()` returns a hard-coded `false` for Vision, Initiative and Task
-(`vision/mod.rs:303-308`, `initiative/mod.rs:419-424`, `task/mod.rs:388-393`); the MCP
-`transition_phase` tool declares `force: Option<bool>` and never reads it
-(`crates/metis-docs-mcp/src/tools/transition_phase.rs:30`); "human must approve initiative
-transitions" is instruction text only (`crates/metis-docs-mcp/instructions.md:236-277`), and
-the server cannot tell an agent from a human. The gaps an orchestration runtime needs filled:
-no process supervision; no claiming, lease or assignee; no git worktrees, branches or merges;
-no merge or verification gate, since "done" is a string the model prints
-(`plugins/metis/hooks/stop-hook.sh:126-141`) plus a human click; no human-decision queue; no
-event log; nothing computes readiness from `blocked_by`; repo-scoped by design (ADR-007); no
-permission model; no metrics. What it does give is a durable, agent-writable task document
-with a phase machine and an MCP surface models use well.
-
-## 4. Corpus principles (from `SYNTHESIS.md` §1b, 2026-08-18)
+## 2. Corpus principles (from `SYNTHESIS.md` §1b, 2026-08-18)
 
 Each principle is followed by the verification row that checked it, in the slices condensed
-in §6.
+in §3.
 
 1. A fleet is a workflow, not a multi-agent system; the MAS literature does not describe worktree fleets, single-machine concurrency and the human-coordination canon do (part 1 row 34; fleet-size row 3).
 2. Verification is the only observation point; agents report success they did not achieve, and any protocol terminating on self-report is unsound (part 2 rows 56-57, 40-41).
@@ -361,40 +221,13 @@ in §6.
 9. A task spec's acceptance is one observable condition checkable inside the worktree; write the check, not the prose (specs rows 1, 4, 9, 42).
 10. CLI-first for agent-facing operations; the "5-28x cheaper" figure is a scaffolding effect, what survives is equal failure frequency and 12.9% against 2.2% wasted spend (part 2 row 42; specs row 44).
 
-## 5. Billing (from `claude-code-billing.md`, verified 2026-08-17, re-verified 2026-08-18)
 
-Subscription plans pool usage. Claude Code on Pro or Max draws from a rolling 5-hour window
-plus a weekly cap shared with Claude chat, and headless `claude -p` runs, `--worktree` sessions
-and in-session subagents "draw from the same subscription limits" as interactive sessions,
-with no separate billing (https://code.claude.com/docs/en/costs.md, verified 2026-08-17).
-There is no hard cap on concurrent instances; rate limits pool across every session on the
-account. The practical ceiling of "3 to 5 concurrent workers" on Max is an estimate, not
-derivable from any Anthropic-published allowance (no per-seat token budget or
-concurrent-session limit is stated); it rests on an adopter's own 4-agent runs
-(`SESSION_SOFT=4`). Before scaling past that, record the observed
-`rate_limits.five_hour.used_percentage` during 4-agent rounds; the status line exposes it for
-subscribers after the first API response (https://code.claude.com/docs/en/statusline,
-verified 2026-08-18).
-
-The Agent SDK's authentication status is policy, not contract. Anthropic paused planned
-changes on 2026-06-15: "Claude Agent SDK, `claude -p`, and third-party app usage still draw
-from your subscription's usage limits", with no separate monthly credit and a promise to
-announce any change before it takes effect
-(https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan,
-verified 2026-08-17). API-key auth is pay-per-token at the per-model rates on
-https://platform.claude.com/docs/en/about-claude/pricing, with a 50% batch discount and cache
-reads at 10% of input price; the price table is not carried here because it moves.
-`claude -p --max-budget-usd <n>` stops print-mode runs at a dollar limit
-(https://code.claude.com/docs/en/cli-reference.md). Managed Agents (beta) add $0.08 per
-session-hour on top of token rates, a beta-era number. Re-verify every figure here before any
-capacity decision.
-
-## 6. Verified numbers and claims not to repeat (from the five verification slices, fetched 2026-08-18)
+## 3. Verified numbers and claims not to repeat (from the five verification slices, fetched 2026-08-18)
 
 Each slice re-fetched the primary source behind an adopter's externally cited claims. Only
 the corrections, the strengthened findings and the load-bearing numbers are kept; rows that
 only verified a line number in a file outside this repo are dropped. Row numbers refer to the
-deleted slices and are kept so §4's citations stay meaningful.
+deleted slices and are kept so §2's citations stay meaningful.
 
 ### Fleet size, partitioning, integration cadence
 

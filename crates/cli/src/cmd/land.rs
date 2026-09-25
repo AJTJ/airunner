@@ -682,7 +682,7 @@ pub fn run(
     // `in_flight_refusal`; what happens here is only which of the two paths was taken.
     let at = now();
     // A precheck is not destroyed by main moving: it answers for the worker's head, and
-    // batch-ready does not ask that head to contain main (plan 0009 §11). Refusing on one would
+    // batch-ready does not ask that head to contain main (an adopter's fleet protocol, 2026-09-25). Refusing on one would
     // hold landings for every worker's cheap check under a lane, and protect nothing.
     let flights: Vec<_> = super::status::verifies_in_flight(&ledger)
         .into_iter()

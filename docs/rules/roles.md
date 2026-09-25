@@ -4,8 +4,7 @@
 > **[fact]** something Air records or answers; everything else is yours to judge. This file is
 > the fleet's whole protocol: how work moves from a claim to main, for every role. The repo's
 > CLAUDE.md holds only what is its own — its domain rules, its verify and precheck commands,
-> its worktree setup, its shared resources (owner, 2026-09-25). Background:
-> [`../research/agent-roles-and-confinement.md`](../research/agent-roles-and-confinement.md).
+> its worktree setup, its shared resources (owner, 2026-09-25).
 
 ## Which role am I
 
@@ -194,7 +193,7 @@ cut** (air-80x.6, narrowed by air-4noi). A lane that resets hard to main on ever
 simplest way to make a batch contain main and nothing else — would hold that bead in a tree it
 is about to wipe; a lane that merges main forward and integrates on a throwaway branch keeps
 it. Which worker is the lane is `verify_lane` in `.claude/air.json`; the Stop hook offers
-it no ready beads (plan 0009 §11). **[fact]**
+it no ready beads. **[fact]**
 
 **The lane's loop.** `air batch cut` in your worktree merges `main` and every batch-ready branch
 at the sha `air status` lists, never a sha from a message, and drops and names one that conflicts
@@ -409,7 +408,7 @@ A refusal names its rule and the fixing command. Silence from Air is not a denia
 
 ## Provenance
 
-Cut to facts and refusals after `../research/guardrails-as-throttles.md` (2026-08-21): advice
+Cut to facts and refusals after the guardrails-as-throttles research of 2026-08-21: advice
 to a capable model was removed; what remains is what Air records, answers, or refuses. Duties
 adapted from the adopter's `main-agent-protocol.md` and `worktree-protocol.md`; decisions in
 `../decisions.md` (2026-08-20/21). Standstill lines (worker run-to-completion, from

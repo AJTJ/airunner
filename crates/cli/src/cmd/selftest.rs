@@ -188,7 +188,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // Plan 0009 B2: the one arm that reads the precheck, inverted rather than deleted, so the
+    // Precheck (2026-09-25): the one arm that reads the precheck, inverted rather than deleted, so the
     // undeclared path (the green half) is untouched and only the declared refusal falls.
     (
         "status: where the repo declares a precheck, batch-ready wants a green one at the head (`no-precheck` names the command); undeclared, the rule is unchanged",
@@ -212,7 +212,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             ],
         },
     ),
-    // Plan 0009 step 3: without the order rule, whichever member was typed first survives a
+    // The cut as a program (2026-09-25): without the order rule, whichever member was typed first survives a
     // pairwise conflict. Anchored on the one call, not the whole drop rule.
     (
         "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
@@ -4477,7 +4477,7 @@ fn probe_idle_without_claim_counts_claimable_only() -> Probe {
 /// no verify running is still reported, and a verify belonging to somebody else does not
 /// silence it — so the fix cannot be a blanket suppression.
 ///
-/// Plan 0009 B2 widened red to a `precheck` in flight: an adopter's coordinator nudged a worker
+/// The precheck ruling of 2026-09-25 widened red to a `precheck` in flight: an adopter's coordinator nudged a worker
 /// as idle 400 s into a precheck Air could not see. It silences the condition and the status
 /// line's "idle, no claim" alike, and the in-flight line names the kind. The mutation that made
 /// that half red, seen: the status line's `idle_no_claim` without `!verify_running(..)`.
@@ -6563,7 +6563,7 @@ fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
 /// and it lived in messages; in the adopter's 2026-08-29 round the batch never formed. The rule
 /// is two lookups: not already landable (green at a head containing main), and a `Bead:`
 /// trailer names a bead the worker holds. Being behind main is NOT a reason to be absent
-/// (plan 0009 §11): the lane merges main forward at the cut.
+/// (an adopter's fleet protocol, 2026-09-25): the lane merges main forward at the cut.
 ///
 /// Red: a branch that committed a claimed bead is listed, on the status line with its beads,
 /// and still listed once main has moved past it, green or not. Green: the same branch landable
@@ -6626,7 +6626,7 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
     }
 }
 
-/// Plan 0009 B2: where `.claude/air.json` declares `"precheck": true`, a branch is batch-ready
+/// Precheck (2026-09-25): where `.claude/air.json` declares `"precheck": true`, a branch is batch-ready
 /// only with a green `precheck` run at its head. An adopter gated its lane on a precheck log
 /// file and "checked at <sha>" messages, 2026-09-05..07, and cut a worker before its check
 /// finished; a ledger row at the head is the fact that log stood for.
@@ -6672,7 +6672,7 @@ fn probe_batch_ready_wants_a_precheck_where_declared() -> Probe {
     }
 }
 
-/// Plan 0009 B2, the other half: a `precheck` is a worker's cheap check, and the close gate,
+/// Precheck (2026-09-25), the other half: a `precheck` is a worker's cheap check, and the close gate,
 /// the landable list and `air land` all ask for a `verify` green. They ask through
 /// `green::at` and the ledger's kind-keyed queries, so this is one question: does a green
 /// precheck at a sha answer "is this sha verify-green"? It must not; the reverse holds too.
@@ -6729,7 +6729,7 @@ fn probe_a_precheck_green_is_never_a_verify_green() -> Probe {
     }
 }
 
-/// Plan 0009 step 3: which member a pairwise conflict drops is decided by the order rule, never
+/// The cut as a program (2026-09-25): which member a pairwise conflict drops is decided by the order rule, never
 /// by the order the shas were typed. An adopter's lane skipped its dry-merge once on 2026-09-07
 /// and typing order decided which member "conflicted" (`batch_cut.rs` module doc).
 ///
@@ -8763,7 +8763,7 @@ fn probe_stop_nudge() -> Probe {
         stop_nudge("worker", false, &ready, false).is_some_and(|r| r.contains("air claim zz-1"));
     let then_pass = stop_nudge("worker", false, &ready, true).is_none()
         && stop_nudge("coordinator", false, &ready, false).is_none()
-        // The verification lane claims nothing, so it is offered nothing (plan 0009 §11).
+        // The verification lane claims nothing, so it is offered nothing (an adopter's fleet protocol, 2026-09-25).
         && stop_nudge("lane", false, &ready, false).is_none()
         && stop_nudge("worker", true, &ready, false).is_none();
     Probe {
@@ -9517,7 +9517,7 @@ fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
 ///
 /// The owner asked whether making the planning rule programmatic is "what metis does
 /// basically". It is not: Metis enforces forward-only phases on its own documents and does not
-/// enforce that anyone plans in it (`docs/research/evidence.md`). The harness has
+/// enforce that anyone plans in it (`docs/design.md` §11, the Metis row). The harness has
 /// no per-ROLE MCP configuration either — a `.mcp.json` in the repo reaches every session,
 /// workers included — so the attach is Air's, per role, per launch.
 ///
@@ -10028,7 +10028,7 @@ fn probe_reclaim_churn_reads_the_owner_gated_population() -> Probe {
 /// renders it as "not ready yet", exactly like ordinary queueing.
 ///
 /// **bd does not prevent this**, measured 2026-09-06 against 1.2.2, the pinned version
-/// (`docs/research/beads.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules and
+/// (`.claude/skills/beads/references/bd-facts.md`, "bd's dependency guard is two rules, not an ancestor walk"). Its guard is two rules and
 /// neither is an ancestor walk: an existing `parent-child` row on the same pair, which always
 /// catches the DIRECT parent, and a dotted-id prefix test, which catches deeper ancestors only
 /// when the id encodes the chain. `bd create --graph` assigns flat ids and links by
@@ -10489,31 +10489,20 @@ pub const RETIRED_KINDS: &[(&str, &str)] = &[
 /// exist**. Declared, with the bead, because the alternative is reading intent out of prose.
 ///
 /// This list is the whole reason the check is honest. Without it the first thing it refuses is
-/// `docs/rules/worktree-protocol.md`'s own record that `air peer` was planned and never built —
-/// which is air-w91's provenance line — and `roles.md`'s paragraph explaining that `stuck` was
-/// deleted. A check that fails on the documentation of a deletion teaches people to stop
+/// `roles.md`'s paragraph explaining that `stuck` was deleted. (The worktree protocol's record
+/// that `air peer` and `air merge-advice` were planned and never built was the other entry,
+/// air-w91's provenance line; that file was retired on 2026-09-25 and `docs/design.md` §8 now
+/// says it in plain words.) A check that fails on the documentation of a deletion teaches people to stop
 /// documenting deletions.
 /// Keyed by FILE as well as span: an absence is documented in a place. Keyed by span alone
 /// this list excused `stuck` in every document including one that used it as an instruction,
 /// which is the drift the check exists to catch — found by the probe's own red half staying
 /// silent (air-wfd).
-pub const DOCUMENTED_ABSENCE: &[(&str, &str, &str)] = &[
-    (
-        "docs/rules/worktree-protocol.md",
-        "air peer",
-        "air-w91: planned in the subsystem table, never built",
-    ),
-    (
-        "docs/rules/worktree-protocol.md",
-        "air merge-advice",
-        "air-w91: same list, same fate",
-    ),
-    (
-        "docs/rules/roles.md",
-        "stuck",
-        "air-12k: roles.md explains the deletion and why the heartbeat replaced it",
-    ),
-];
+pub const DOCUMENTED_ABSENCE: &[(&str, &str, &str)] = &[(
+    "docs/rules/roles.md",
+    "stuck",
+    "air-12k: roles.md explains the deletion and why the heartbeat replaced it",
+)];
 
 /// air-wfd: every flag and condition kind the docs name still exists.
 ///
@@ -10646,10 +10635,6 @@ fn probe_docs_name_real_flags_and_kinds() -> Probe {
             "docs/rules/adopting-air.md",
             include_str!("../../../../docs/rules/adopting-air.md"),
         ),
-        (
-            "docs/rules/worktree-protocol.md",
-            include_str!("../../../../docs/rules/worktree-protocol.md"),
-        ),
     ];
     let live: Vec<String> = docs
         .iter()
@@ -10685,14 +10670,14 @@ fn probe_docs_name_real_flags_and_kinds() -> Probe {
     )
     .is_empty();
     let absence_ok = scan(
-        "docs/rules/worktree-protocol.md",
-        "`air peer` and `air merge-advice` were planned and never built.\n",
+        "docs/rules/roles.md",
+        "The `stuck` condition was deleted.\n",
         &excused,
     )
     .is_empty()
         // and the same span in a document that has NOT declared it is still refused, or one
         // line would switch the check off everywhere.
-        && !scan("t.md", "`air peer` is how you check.\n", &excused).is_empty();
+        && !scan("t.md", "A `stuck` worker needs you.\n", &excused).is_empty();
 
     Probe {
         name: "docs: every flag and condition kind the README and the rules name still exists",

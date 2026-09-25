@@ -9,8 +9,9 @@ metadata:
 
 A design doc describes a system as it is. It is the one document a new reader opens to learn
 what the parts are, how they talk, what they promise, and where the edges are. Everything
-else in `docs/` is either a proposal (plans), evidence (research), a ruling (decisions), or a
-record of one session (journal, digests). None of those is a substitute for this one.
+else in `docs/` is a ruling (decisions), a rule shipped to adopters (rules), or a record of one
+session (journal, digests); proposals are lines in this doc's TODO section and technology
+choices are rows in its technology-decisions section. None of those is a substitute for it.
 
 The shape is the ordinary industry one (a Google-style design doc, trimmed of the parts that
 only make sense for a proposal). What this skill adds is three rules that keep it honest.
@@ -28,7 +29,9 @@ only make sense for a proposal). What this skill adds is three rules that keep i
    ownership, guarantees, and why. `references/diagrams.md` says which Mermaid form fits
    which subject and how to keep one readable.
 3. **Write normally.** Aim for four to six thousand words. Cut by moving history to
-   `docs/decisions.md`, evidence to `docs/research/`, and proposals to `docs/plans/`, never
+   `docs/decisions.md`, evidence to the references of the skill that uses it, and proposals
+   to one or two lines each in the TODO section (there are no plan or research files, owner
+   2026-09-25), never
    by compressing sentences into fragments or aphorisms. Plain technical prose, the way you
    would explain the system to a colleague who is going to maintain it. No house style, no
    clever phrasing; the owner asked for this explicitly on 2026-09-14 after a first draft
@@ -60,7 +63,11 @@ leaving a gap.
     was added and where the detail lives. A line gets a bead id when it becomes a bead and is
     deleted when it lands. This replaces any separate TODO or backlog file (owner, 2026-09-14:
     "we work off of a singular design doc now").
-12. Glossary: one line per term the doc uses in a specific sense.
+12. Technology decisions: one row per choice (language, stores, dependencies, harness, the
+    patterns borrowed), with why in one to three lines and a source, a URL with its access date
+    or a `path:line`. This replaces a research directory (owner, 2026-09-25: "having a list of
+    technology decisions and justifications is useful, but that's about it").
+13. Glossary: one line per term the doc uses in a specific sense.
 
 ## Writing it
 
