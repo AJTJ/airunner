@@ -66,31 +66,31 @@ impl Fails {
 pub const CATALOGUE: &[Budget] = &[
     Budget {
         name: air_ledger::budgets::BD,
-        site: "crates/bd/src/lib.rs BdCli::new (10 s; AIR_BD_TIMEOUT_MS)",
+        site: "crates/bd/src/lib.rs DEFAULT_TIMEOUT + PER_ID via budget_for (60 s + 5 s/id; AIR_BD_TIMEOUT_MS)",
         protects: "every `bd` process Air runs outside the four sites below",
         fails: Fails::Closed,
     },
     Budget {
         name: air_ledger::budgets::BD_ACCEPTANCE,
-        site: "crates/cli/src/cmd/status.rs ACCEPTANCE_BASE + ACCEPTANCE_PER_ID (10 s + 2 s/id)",
+        site: "crates/bd/src/lib.rs budget_for, from crates/cli/src/cmd/status.rs acceptance_for (60 s + 5 s/id)",
         protects: "`air land`'s read of the acceptance criteria it prints beside each bead",
         fails: Fails::Closed,
     },
     Budget {
         name: air_ledger::budgets::BD_NUDGE,
-        site: "crates/cli/src/cmd/ready_cache.rs (AIR_NUDGE_BD_TIMEOUT_MS, default 3 s)",
+        site: "crates/cli/src/cmd/ready_cache.rs (AIR_NUDGE_BD_TIMEOUT_MS, default 3 s; the 5 s hook cap forces it)",
         protects: "the Stop nudge's confirmation that a ready bead is still claimable",
         fails: Fails::Closed,
     },
     Budget {
         name: air_ledger::budgets::BD_PROBE,
-        site: "crates/cli/src/cmd/claim.rs (AIR_BD_PROBE_TIMEOUT_MS, default 5 s)",
+        site: "crates/cli/src/cmd/claim.rs PROBE_DEFAULT_MS (AIR_BD_PROBE_TIMEOUT_MS, default 30 s)",
         protects: "the `bd show` that asks whether a timed-out `--claim` landed anyway",
         fails: Fails::Closed,
     },
     Budget {
         name: air_ledger::budgets::BD_STATUS,
-        site: "crates/cli/src/cmd/bd_latency.rs status_bd_budget (4x bd's median, 2-8 s)",
+        site: "crates/cli/src/cmd/bd_latency.rs status_bd_budget (4x bd's median, 2-8 s, flat per id; the 20 s MCP tool limit forces it)",
         protects: "`air status`'s reconcile, and through it the coordinator's channel",
         fails: Fails::Closed,
     },

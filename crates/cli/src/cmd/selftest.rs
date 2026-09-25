@@ -933,12 +933,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "land: the acceptance read's bd budget grows with the id count, and the refusal names the count, the budget and AIR_BD_TIMEOUT_MS",
+        "bd: every multi-id call's budget grows with the id count (acceptance read and air close), and the refusal names the count, the budget and AIR_BD_TIMEOUT_MS",
         Mutation {
-            // Drop the per-id term: the budget is the base again, whatever the count, which
-            // is the flat 10 s that refused the adopter's batch. The probe's scaled read then
-            // times out exactly as its flat one does.
-            file: "crates/cli/src/cmd/status.rs",
+            // Drop the per-id term from the ONE shared function: the budget is the base again,
+            // whatever the count, which is the flat budget that refused the adopter's batch.
+            // The probe's scaled read and close then time out exactly as its flat ones do.
+            file: "crates/bd/src/lib.rs",
             from: "    base.saturating_add(per_id.saturating_mul(n))",
             to: "    base.saturating_add(per_id.saturating_mul(n.min(0)))",
             also_red: &[],
@@ -8510,79 +8510,97 @@ fn probe_no_session_reads_stuck() -> Probe {
     }
 }
 
-/// air-fzv: the acceptance read's bd budget scales with the id count. It was the client's flat
-/// 10 s for the whole id set; the adopter's fourteen-bead batch under the verify lane was
-/// refused until they raised `AIR_BD_TIMEOUT_MS` by hand. Measured here 2026-09-06: one
-/// `bd show` with fourteen ids takes 21 s, one id 2 s.
+/// A stub bd that costs 100 ms per id, slept ONCE for the set (a `sleep` per id costs 200 ms of
+/// spawn each on a loaded machine, which is noise, not the shape): fourteen ids cost 1.4 s.
+/// `show` answers every id with one acceptance clause; `close` answers nothing. Returns the
+/// directory (remove it) and the script.
+fn per_id_stub_bd() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let script = dir.join("bd");
+    std::fs::write(
+        &script,
+        r###"#!/bin/sh
+cmd="$1"; shift; out=''; n=0
+for id in "$@"; do case "$id" in --*) break;; esac; n=$((n+1))
+  out="$out${out:+,}{\"id\":\"$id\",\"status\":\"open\",\"labels\":[],\"description\":\"## Acceptance Criteria\\n- it lands\"}"
+done
+perl -e "select(undef,undef,undef,$n*0.1)"
+case "$cmd" in
+  show) printf '%s\n' "[$out]";;
+esac
+exit 0
+"###,
+    )
+    .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok((dir, script))
+}
+
+/// air-fzv, then air-8lj8: every multi-id bd call's budget scales with the id count, from ONE
+/// function (`air_bd::budget_for`) inside the client. It was a flat 10 s for the whole id set;
+/// the adopter's fourteen-bead batch under the verify lane was refused until they raised
+/// `AIR_BD_TIMEOUT_MS` by hand, and `air close <ids…>` never got the fix the acceptance read
+/// got. Measured here 2026-09-06: one `bd show` with fourteen ids takes 21 s, one id 2 s.
 ///
-/// The probe scales the seconds down to milliseconds and keeps the shape: a stub bd that
-/// costs a fixed time per id, fourteen ids, and two budgets. Red: under a flat budget the
-/// read is refused, and the refusal names the id count, the budget and `AIR_BD_TIMEOUT_MS`.
-/// Green: under `base + per_id × ids` the same read answers for every id, and the real
-/// budget for fourteen ids is above what bd measured.
+/// The probe scales the seconds down to milliseconds and keeps the shape: a stub bd that costs
+/// a fixed time per id, fourteen ids, and two clients with the same base. Red: with no per-id
+/// allowance, both the acceptance read (`show_all`) and `air close` (`close_all`) are refused,
+/// and each refusal names the id count, the budget and `AIR_BD_TIMEOUT_MS`. Green: with the
+/// allowance, the same calls answer, and the shipped default for fourteen ids is above what
+/// bd measured.
 fn probe_acceptance_budget_scales_with_ids() -> Probe {
-    use crate::cmd::status::{acceptance_budget, acceptance_budget_with, acceptance_with};
+    use crate::cmd::status::acceptance_with;
     use std::time::Duration;
 
     let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let script = dir.join("bd");
-        // 100 ms per id, slept ONCE for the set (a `sleep` per id costs 200 ms of spawn each
-        // on a loaded machine, which is noise, not the shape): fourteen ids cost 1.4 s.
-        std::fs::write(
-            &script,
-            r###"#!/bin/sh
-case "$1" in
-  show) shift; out=''; n=0
-    for id in "$@"; do case "$id" in --*) continue;; esac; n=$((n+1))
-      out="$out${out:+,}{\"id\":\"$id\",\"status\":\"open\",\"labels\":[],\"description\":\"## Acceptance Criteria\\n- it lands\"}"
-    done
-    perl -e "select(undef,undef,undef,$n*0.1)"
-    printf '%s\n' "[$out]"; exit 0;;
-  *) exit 0;;
-esac
-"###,
-        )
-        .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| e.to_string())?;
-        }
+        let (dir, script) = per_id_stub_bd()?;
         let ids: Vec<String> = (1..=14).map(|i| format!("zz-{i:02}")).collect();
-        let client = |timeout: Duration| air_bd::BdCli {
+        let client = |per_id: Duration| air_bd::BdCli {
             bin: script.clone(),
             cwd: dir.clone(),
-            timeout,
+            timeout: Duration::from_millis(500),
+            per_id,
             label: air_ledger::budgets::BD_ACCEPTANCE,
         };
         // The old shape: one flat budget whatever the count.
-        let flat = Duration::from_millis(500);
-        let refused = acceptance_with(&client(flat), &ids, false);
-        let red = matches!(&refused, Err(m) if m.contains("14 id(s)")
+        let flat = client(Duration::ZERO);
+        let refused = acceptance_with(&flat, &ids, false);
+        let read_red = matches!(&refused, Err(m) if m.contains("14 id(s)")
             && m.contains("within a budget of 0.5 s")
             && m.contains("AIR_BD_TIMEOUT_MS"));
-        // The new shape, same base, plus an allowance per id. THIRTY times the stub's per-id
+        let close_err = air_bd::WorkLedger::close_all(&flat, &ids, "landed", "")
+            .err()
+            .map(|e| crate::cmd::close::refusal(&e, ids.len(), false));
+        let close_red = matches!(&close_err, Some(m) if m.contains("14 id(s)")
+            && m.contains("within a budget of 0.5 s")
+            && m.contains("AIR_BD_TIMEOUT_MS"));
+        // The new shape: same base, plus an allowance per id. THIRTY times the stub's per-id
         // cost: the probe is about the SHAPE (base + per_id x n), the red half above already
         // proves a flat budget refuses, and the margin is free because a budget is a ceiling
         // and the stub answers in 1.4 s whatever it is set to. Three times was measured at
         // load 53 and lost at load 186; ten times was lost again at load 145 (air-g7e), where
         // this probe failed for the machine's reasons and took four unrelated mutations down
         // with it as "vacuous".
-        let scaled = acceptance_budget_with(14, flat, Duration::from_millis(3000));
-        let answered = acceptance_with(&client(scaled), &ids, false);
+        let scaled = client(Duration::from_millis(3000));
+        let answered = acceptance_with(&scaled, &ids, false);
         let all_read = matches!(&answered, Ok(c) if c.len() == 14
             && c.iter().all(|clauses| clauses.len() == 1));
-        let real = acceptance_budget(14);
-        let covers_measured = real > Duration::from_secs(21) && real > acceptance_budget(1);
+        let closed = air_bd::WorkLedger::close_all(&scaled, &ids, "landed", "").is_ok();
+        let shipped = air_bd::BdCli::new(&dir);
+        let covers_measured =
+            shipped.budget(14) > Duration::from_secs(21) && shipped.budget(14) > shipped.budget(1);
         let _ = std::fs::remove_dir_all(&dir);
-        Ok((red, all_read && covers_measured))
+        Ok((read_red && close_red, all_read && closed && covers_measured))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "land: the acceptance read's bd budget grows with the id count, and the refusal names the count, the budget and AIR_BD_TIMEOUT_MS",
+        name: "bd: every multi-id call's budget grows with the id count (acceptance read and air close), and the refusal names the count, the budget and AIR_BD_TIMEOUT_MS",
         red_fires: red,
         green_passes: green,
     }
