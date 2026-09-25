@@ -493,7 +493,7 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `no-claimed-bead` | `no-precheck`
+    /// `green-at-head` | `no-claimed-bead` | `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
 }
@@ -516,6 +516,12 @@ pub struct BatchFacts {
     pub precheck_required: bool,
     /// A `precheck` run is green at `head` under the repo's green key. Read only when required.
     pub precheck_green_at_head: bool,
+    /// The coordinator's worktree (air-jc2p.1): its commits are prose and filing, not bead
+    /// work, so it needs no claimed bead, and nothing lands it on its own.
+    pub coordinator: bool,
+    /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
+    /// be batch-ready with nothing in it.
+    pub ahead: bool,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -538,7 +544,18 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         check,
         detail,
     };
-    if f.contains_main && f.green_at_head {
+    // The coordinator's branch (air-jc2p.1, owner 2026-09-14: its changes reach main through
+    // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
+    // nothing lands it alone, so there is no landable-alone exit; what it must have is a commit
+    // main lacks. Removed with the lane, when the coordinator would land its own branch again.
+    if f.coordinator {
+        if !f.ahead {
+            return Err(not(
+                "nothing-ahead",
+                format!("{} at {short}: no commit that main lacks", f.worker),
+            ));
+        }
+    } else if f.contains_main && f.green_at_head {
         return Err(not(
             "green-at-head",
             format!(
@@ -553,7 +570,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         .filter(|b| f.held.contains(b))
         .cloned()
         .collect();
-    if beads.is_empty() {
+    if beads.is_empty() && !f.coordinator {
         return Err(not(
             "no-claimed-bead",
             format!(
@@ -639,9 +656,13 @@ pub fn batch_ready_for(
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
-        if super::hook::role_for(&worker) != "worker" {
-            continue;
-        }
+        // The main checkout is main; the lane's branch is the batch, not a member. The
+        // coordinator's worktree is a member (air-jc2p.1).
+        let coordinator = match super::hook::role_for(&worker) {
+            "worker" => false,
+            "coordinator" if worker != "main" => true,
+            _ => continue,
+        };
         let head = match git::head(&path) {
             Ok(h) => h,
             Err(e) => {
@@ -665,9 +686,19 @@ pub fn batch_ready_for(
                     false
                 }
             };
+        let ahead = coordinator
+            && git::run(
+                repo,
+                &["rev-list", "--count", &format!("{main_tip}..{head}")],
+            )
+            .ok()
+            .and_then(|n| n.trim().parse::<u64>().ok())
+            .is_some_and(|n| n > 0);
         let facts = BatchFacts {
             precheck_required,
             precheck_green_at_head,
+            coordinator,
+            ahead,
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
             green_at_head,
             carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))

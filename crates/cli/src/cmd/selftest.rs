@@ -175,6 +175,17 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-jc2p.1. The anchor puts the coordinator back under the claimed-bead rule, which is
+    // exactly what kept its branch out of every batch; the nothing-ahead arm is untouched.
+    (
+        "status: the coordinator's branch is batch-ready with no claimed bead once it has a commit main lacks; a worker's still needs one",
+        Mutation {
+            file: "crates/cli/src/cmd/status.rs",
+            from: "if beads.is_empty() && !f.coordinator {",
+            to: "if beads.is_empty() {",
+            also_red: &[],
+        },
+    ),
     // air-jc2p.2. The anchor gives the coordinator back `air land`, which is the one change the
     // ruling made; the worker refusal and the lane's permission are other arms and stand.
     (
@@ -1092,8 +1103,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // identity falls through to the checkout the shell is in. One guard, it compiles,
             // and the worker arm and the fallback are untouched.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "        (Some(\"coordinator\"), _) => \"main\".to_string(),",
-            to: "        (Some(\"coordinator\"), _) if false => \"main\".to_string(),",
+            from: "        (Some(\"coordinator\"), _) => \"coordinator\".to_string(),",
+            to: "        (Some(\"coordinator\"), _) if false => \"coordinator\".to_string(),",
             also_red: &[],
         },
     ),
@@ -2424,6 +2435,7 @@ fn all_probes() -> Vec<Probe> {
         probe_landing_state(),
         probe_land_role_is_the_launchers(),
         probe_names_carry_role_and_project(),
+        probe_coordinator_branch_is_batch_ready_without_a_bead(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
         probe_air_runs_no_conflicting_merge(),
@@ -6653,6 +6665,7 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         held: vec!["zz-1".into()],
         precheck_required: false,
         precheck_green_at_head: false,
+        ..Default::default()
     };
     let ready = batch_ready_rule(&base);
     let line = render_for_probe(&Snapshot {
@@ -6695,6 +6708,45 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
     }
 }
 
+/// air-jc2p.1 (owner, 2026-09-14): the coordinator works in its own worktree and its changes
+/// reach main through the lane like a worker's. Its commits are prose and filing and name no
+/// bead, so under the worker rule its branch would never be batch-ready and the lane could never
+/// take it: the coordinator would be back to committing on main, which is the failure (an
+/// adopter's coordinator invalidated four workers' landability with one prose commit on
+/// 2026-09-06).
+///
+/// Red: the coordinator's branch with a commit main lacks is batch-ready with no claimed bead.
+/// Green: with nothing ahead it is absent as `nothing-ahead`; and a worker's branch naming no
+/// claimed bead is still absent as `no-claimed-bead`, so nothing else about the rule changed.
+fn probe_coordinator_branch_is_batch_ready_without_a_bead() -> Probe {
+    use crate::cmd::status::{BatchFacts, batch_ready_rule};
+
+    let coord = BatchFacts {
+        worker: "coordinator".into(),
+        head: "c0ffee1234567890".into(),
+        coordinator: true,
+        ahead: true,
+        ..Default::default()
+    };
+    let red_fires =
+        batch_ready_rule(&coord).is_ok_and(|b| b.worker == "coordinator" && b.beads.is_empty());
+    let idle = batch_ready_rule(&BatchFacts {
+        ahead: false,
+        ..coord.clone()
+    });
+    let worker = batch_ready_rule(&BatchFacts {
+        worker: "worker-1".into(),
+        coordinator: false,
+        ..coord.clone()
+    });
+    Probe {
+        name: "status: the coordinator's branch is batch-ready with no claimed bead once it has a commit main lacks; a worker's still needs one",
+        red_fires,
+        green_passes: idle.is_err_and(|n| n.check == "nothing-ahead")
+            && worker.is_err_and(|n| n.check == "no-claimed-bead"),
+    }
+}
+
 /// Precheck (2026-09-25): where `.claude/air.json` declares `"precheck": true`, a branch is batch-ready
 /// only with a green `precheck` run at its head. An adopter gated its lane on a precheck log
 /// file and "checked at <sha>" messages, 2026-09-05..07, and cut a worker before its check
@@ -6718,6 +6770,7 @@ fn probe_batch_ready_wants_a_precheck_where_declared() -> Probe {
         held: vec!["zz-1".into()],
         precheck_required: true,
         precheck_green_at_head: false,
+        ..Default::default()
     };
     let red_fires = batch_ready_rule(&base).is_err_and(|n| {
         n.check == "no-precheck"
@@ -7013,7 +7066,7 @@ fn probe_handover_ok_names_the_main_it_checked() -> Probe {
 fn probe_session_identity_is_the_launchers() -> Probe {
     use crate::cmd::hook::identity_from;
 
-    let red = identity_from(Some("coordinator"), None, "w1") == "main"
+    let red = identity_from(Some("coordinator"), None, "w1") == "coordinator"
         && identity_from(Some("worker"), Some("w2"), "w1") == "w2";
     let mut f = base_facts();
     f.main_is_ancestor = false;

@@ -112,8 +112,12 @@ The worker launcher creates a worktree under .claude/worktrees on its own branch
 the ignored files the repository lists, such as environment files. It writes any first task to a
 file rather than the command line, then starts Claude Code in the worktree with the role prose,
 the deny list, and the role's environment. When asked, or when run from a session without a
-terminal, it starts a detached tmux session named after the project and the worker. The
-coordinator launcher starts Claude Code in the main checkout with the channel attached.
+terminal, it starts a detached tmux session named after the project and the worker. The lane
+launcher is the worker launcher with the lane's role. The coordinator launcher does the same in
+its own worktree, coordinator, always in a tmux session, with the channel attached; run again,
+it attaches to the session already running. Nothing is launched in the main checkout. The
+channel server comes from the tracked .mcp.json, so it is present in every worktree, and the
+ledger resolves to the main checkout's .air from any of them.
 
 Names carry the role and the project. Worktrees are worker-1, worker-2 and so on, lane, and
 coordinator, each on a branch named worktree- and the worktree's name. The tmux session and the
@@ -242,7 +246,7 @@ Every hook call, including the silent ones, writes one event line.
 | .air/tasks | A worker's first task, kept off the command line. |
 | .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, where digests and journals live, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
-| .claude/worktrees | One worktree per worker. |
+| .claude/worktrees | One worktree per session: each worker, the lane, and the coordinator. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
 
 The launchers set four variables on each session. AIR_ROLE is the role. BEADS_ACTOR is the
@@ -357,7 +361,8 @@ tree, at any commit with the same tree. When a verification lane runs, the lane'
 batch commit that contains both the worker's commit and main also counts. That lets workers
 close without running verification themselves. A commit made after the batch was cut is refused,
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
-names a bead its worker holds; it does not have to contain main, because the lane merges main
+names a bead its worker holds, or, for the coordinator's branch, has any commit main lacks; it
+does not have to contain main, because the lane merges main
 in when it cuts the batch.
 
 The lane cuts with air batch cut, then records its verification at the new head. Which of two
@@ -368,14 +373,14 @@ the order anyone typed. The dropped branch's worker resolves the conflict in its
 
 ```mermaid
 sequenceDiagram
-  participant C as coordinator
+  participant C as lane
   participant A as air land
   participant L as ledger
   participant G as git
   participant B as beads
-  C->>A: land a worker's branch
-  A->>A: is AIR_ROLE worker?
-  alt worker
+  C->>A: land the batch branch
+  A->>A: is AIR_ROLE lane, or unset (the owner)?
+  alt worker or coordinator
     A-->>C: refused
   end
   A->>L: is any verification running?
@@ -430,7 +435,7 @@ audit also counts hook events that have no matching follow-up.
 
 ```mermaid
 sequenceDiagram
-  participant C as coordinator
+  participant C as lane
   participant M as air mcp
   participant L as ledger
   C->>M: connect
@@ -541,8 +546,9 @@ Install Air with cargo from this repository. In a new repository, run air init. 
 already uses beads, run air install. Both show their changes first and write only when told to.
 Air doctor exits cleanly when the ledger, the schema, and the beads version are right.
 
-Start the coordinator with air coordinator. From that session, start each worker with air worker
-and a task. The launcher prints the tmux command to attach to it. Air status is the screen to
+Start the coordinator with air coordinator, which opens it in its own worktree and tmux
+session. From that session, start the lane with air lane and each worker with air worker and a
+task. The launcher prints the tmux command to attach to it. Air status is the screen to
 watch, and the channel brings the attention conditions to the coordinator.
 
 Worktrees isolate the branch, not the machine. Cargo's build.jobs defaults to every logical core
@@ -578,14 +584,13 @@ built is described in sections 4 and 6.
 
 - [ ] Describe the fleet everywhere as three workers, a verification lane, and the coordinator,
       in every document, prompt, and status line.
-- [ ] Air creates every tmux session, including the coordinator's. Today only the worker
-      launcher does. `claude --tmux` still needs `--worktree` (2.1.272, 2026-09-14), so Air's
-      detached start stays.
-- [ ] The coordinator works in its own worktree on its own branch, and nobody works in the main
-      checkout. Its prose and its fixes reach main through the lane like a worker's branch.
-      Its permissions no longer depend on the directory, so this is a launcher change. Then
-      status warns when any session's working directory is the main checkout. The worktree
-      module's header still says Claude Code's worktree isolation is used, and it is not.
+- [x] Air creates every tmux session, including the coordinator's. `claude --tmux` still
+      needs `--worktree` (2.1.272, 2026-09-14), so Air's detached start stays. (air-jc2p.1)
+- [x] The coordinator works in its own worktree on its own branch, and nobody works in the main
+      checkout. Its prose and its fixes reach main through the lane like a worker's branch: its
+      branch is batch-ready with no claimed bead once it has a commit main lacks. (air-jc2p.1)
+- [ ] The worktree module's header still says Claude Code's worktree isolation is used, and it
+      is not.
 - [x] The verification lane lands, and landing is refused to every other role, the coordinator
       included. The coordinator keeps filing beads, triage, and launching. (air-jc2p.2)
 - [x] A launch command for the verification lane, air lane, alongside the worker and
@@ -624,7 +629,7 @@ Owner rulings still open on the fleet shape, each with the recommendation:
 - [ ] Rewrite the roles text for the five-session fleet, along with the launcher change. It
       ships to adopters, so it needs a notice. Partly done 2026-09-25: the roles text now
       carries the whole protocol (closing, the lane's loop, landing), with notices; the
-      coordinator-in-a-worktree and lane-lands parts wait for the launcher.
+      coordinator-in-a-worktree and lane-lands parts landed with air-jc2p.1 and air-jc2p.2.
 - [ ] Keep the adopting guide current and condense it lightly.
 - [ ] The fleet starts from the coordinator. The owner starts only the coordinator and asks it to
       set up the fleet, which by default starts three workers and a verification lane, each in
@@ -708,7 +713,7 @@ the decisions log.
 |---|---|
 | bead | One task in beads, the task store. |
 | claim | The ledger's record that a worker holds a bead. |
-| coordinator | The session that triages, files, prioritises, and lands. |
+| coordinator | The session that triages, files, prioritises, and launches, in its own worktree. The lane lands. |
 | worker | A session in its own worktree that claims, implements, and closes beads. |
 | verification lane | The session that verifies batches of the workers' branches. |
 | owner | The person running the fleet, and any shell Air did not start. |

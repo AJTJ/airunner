@@ -3170,7 +3170,7 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
 
 /// air-75u: the adopter end to end. The coordinator's shell sits in alpha's worktree
 /// when its turn ends, so the Stop hook's `cwd` is alpha's. With the launcher's `AIR_ROLE`
-/// the session is still main: no hand-over check, and the session row is main's. Without it
+/// the session is still the coordinator: no hand-over check, and the session row is its. Without it
 /// (a session Air did not launch) the checkout decides, and the advisory at least says whose
 /// tree it is about.
 #[test]
@@ -3233,12 +3233,12 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     };
 
     // Launched as the coordinator: no hand-over check, whatever the shell's directory, and
-    // the session row is main's.
+    // the session row is the coordinator's (air-jc2p.1; it was `main` in the main checkout).
     let out = stop("coord", &[("AIR_ROLE", "coordinator")]);
     assert!(!out.contains("handover"), "{out}");
     let ev = stop_events();
     let last = ev.last().unwrap();
-    assert_eq!(last["worker"], "main", "{last}");
+    assert_eq!(last["worker"], "coordinator", "{last}");
     assert!(
         last["reason"]
             .as_str()
@@ -3254,7 +3254,7 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(who, "main");
+    assert_eq!(who, "coordinator");
 
     // Launched as a worker: the advisory says whose tree it is.
     let out = stop("w", &[("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")]);
