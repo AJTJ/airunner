@@ -6,8 +6,9 @@ Multi-agent accountability and verification system. Lighter than air.
 
 ## Philosophy
 
-Do less. Most agentic systems try to do too much. The model knows how to do the work and keeps getting better at it, so Air does not plan
-the work or tell agents how to do it.
+Do less. Most agentic systems try to do too much. The model knows how to do the work and keeps
+getting better at it, so Air does not plan the work or tell agents how to do it. What it does
+is practical: a merge queue, a few checks, and help keeping a fleet of sessions running.
 
 ## What Air is
 
@@ -20,11 +21,38 @@ the work or tell agents how to do it.
   worktree and tmux session.
 - **Shared resources.** Leases for anything one agent can use at a time, such as a port or a
   simulator.
+- **Keeping the fleet moving.**
+  - The coordinator is told when a worker goes idle, silent or away while holding a bead, when a
+    branch is ready to land, and when a lease is held by a session that has died.
+  - A worker with nothing claimed is offered the beads that are ready.
+  - Two workers editing the same file are warned.
+  - `air status` shows when a session stopped, for example at an account limit, and what else is
+    running in each worktree.
+  - Sessions set a recurring wake so they pick up again after a pause.
+
+Air supports Claude Code only, for now.
 
 ## How you use it
 
 You talk to the coordinator. It writes the beads, workers do them, and you check the result.
 Every session is a full harness running in a worktree, in tmux that you can interact with.
+
+## The pieces
+
+Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
+
+- **Launchers.** `air coordinator`, `air worker` and `air lane` start sessions in their worktrees.
+- **Ledger.** One SQLite file with claims, verification runs, leases and landings, plus a daily
+  event log.
+- **Hook.** `air hook` runs on every tool call. It keeps a worker's edits in its worktree and
+  refuses a close that has no passing run.
+- **Channel.** `air mcp` tells the coordinator when something needs attention.
+- **Merge queue.** `air record`, `air batch cut` and `air land`.
+- **Diagnostics.**
+  - `air status` shows the whole fleet on one screen.
+  - `air audit` shows how often each rule fired, so rules that never fire can be removed.
+  - `air doctor` checks the install and the pinned beads version.
+  - `air selftest` proves every check can fail and pass.
 
 ## Upcoming
 
