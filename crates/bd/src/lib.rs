@@ -248,12 +248,51 @@ pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
     v
 }
 
+/// The budget for one bd process, and the base of a multi-id call's (air-8lj8).
+///
+/// **Fail direction: CLOSED.** A timeout here is a refused or failed command (a claim, a close,
+/// a landing's acceptance read), so the cost of a budget too short is a real command refused
+/// on a slow bd, and the cost of one too long is only a longer wait on a bd that has hung.
+/// Owner, 2026-09-25: "if anything, our default time budgets should be very generous". It was
+/// 10 s, and an adopter ran with `AIR_BD_TIMEOUT_MS=120000` exported for every call because its
+/// bd (1,346 beads) costs ~2 s per call at the median. Sixty seconds is 30 times that median.
+///
+/// Not derived from a distribution: `air audit`'s `bd` row records every wait against it, and
+/// the figure moves when that row's p99 comes near it.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Added once per id to a multi-id call's budget (air-8lj8, air-fzv). The adopter measured ~2 s
+/// per id in one multi-id `bd` call; here, `bd show` with 14 ids took 21 s against 2 s for one
+/// (2026-09-06). Five seconds is 2.5 times that, generous for the same reason as
+/// [`DEFAULT_TIMEOUT`].
+pub const PER_ID: Duration = Duration::from_secs(5);
+
+/// The ONE budget rule for a bd call naming several ids: `base + per_id x ids`, saturating.
+///
+/// It exists because every multi-id call used to get a flat budget whatever the id count, and
+/// each call site that noticed fixed it for itself: the acceptance read did (air-fzv), `air
+/// close` never did. `show_all` and `close_all` call it, so a new multi-id call inherits it
+/// rather than rediscovering it.
+///
+/// Removal: when bd's cost stops growing with the id count, which `air audit`'s `bd` rows
+/// would show as a flat elapsed time across id counts.
+pub fn budget_for(base: Duration, per_id: Duration, ids: usize) -> Duration {
+    let n = u32::try_from(ids).unwrap_or(u32::MAX);
+    base.saturating_add(per_id.saturating_mul(n))
+}
+
 /// Shell-out implementation.
 #[derive(Debug, Clone)]
 pub struct BdCli {
     pub bin: PathBuf,
     pub cwd: PathBuf,
+    /// The budget for one bd process, and the BASE of a multi-id call's budget.
     pub timeout: Duration,
+    /// Added to [`Self::timeout`] once per id by every multi-id call (`show_all`,
+    /// `close_all`), through [`budget_for`]. Zero makes the budget flat: `AIR_BD_TIMEOUT_MS`
+    /// does that, because it overrides the whole budget, and `air status` does it because the
+    /// 20 s MCP tool limit caps it (air-8lj8).
+    pub per_id: Duration,
     /// Which budget this bd is spending, for the record (air-d75). Five call sites set five
     /// different timeouts on the same struct — the status reconcile derives one from bd's
     /// measured median, the acceptance read grows one with the id count — and a single `bd`
@@ -267,26 +306,38 @@ impl BdCli {
         Self {
             bin: PathBuf::from("bd"),
             cwd: cwd.to_path_buf(),
-            timeout: Duration::from_secs(10),
+            timeout: DEFAULT_TIMEOUT,
+            per_id: PER_ID,
             label: air_ledger::budgets::BD,
         }
     }
 
+    /// What a call naming `ids` ids may wait: [`budget_for`] over this client's figures.
+    pub fn budget(&self, ids: usize) -> Duration {
+        budget_for(self.timeout, self.per_id, ids)
+    }
+
     fn run(&self, args: &[&str]) -> Result<String> {
+        self.run_for(args, self.timeout)
+    }
+
+    /// One bd process under `budget`. Every call goes through here, so the recorded budget is
+    /// the one the wait actually ran against, scaled or not.
+    fn run_for(&self, args: &[&str], budget: Duration) -> Result<String> {
         let t0 = std::time::Instant::now();
-        let out = self.run_inner(args);
+        let out = self.run_inner(args, budget);
         let elapsed = t0.elapsed();
         stats::record(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
         air_ledger::budgets::record(
             self.label,
             elapsed,
-            self.timeout,
+            budget,
             matches!(out, Err(BdError::Timeout(_))),
         );
         out
     }
 
-    fn run_inner(&self, args: &[&str]) -> Result<String> {
+    fn run_inner(&self, args: &[&str], budget: Duration) -> Result<String> {
         let child = Command::new(&self.bin)
             .args(args)
             .current_dir(&self.cwd)
@@ -299,12 +350,12 @@ impl BdCli {
                 source,
             })?;
         let (status, stdout, stderr) =
-            match wait_drained(child, self.timeout).map_err(|source| BdError::Spawn {
+            match wait_drained(child, budget).map_err(|source| BdError::Spawn {
                 bin: self.bin.clone(),
                 source,
             })? {
                 Some(x) => x,
-                None => return Err(BdError::Timeout(self.timeout)),
+                None => return Err(BdError::Timeout(budget)),
             };
         if !status.success() {
             return Err(BdError::Failed {
@@ -408,7 +459,7 @@ impl WorkLedger for BdCli {
     fn dep_list(&self, ids: &[String]) -> Result<Vec<Dep>> {
         let argv = dep_list_argv(ids);
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-        Ok(serde_json::from_str(&self.run(&argv)?).unwrap_or_default())
+        Ok(serde_json::from_str(&self.run_for(&argv, self.budget(ids.len()))?).unwrap_or_default())
     }
 
     fn show(&self, id: &str) -> Result<Option<Issue>> {
@@ -429,7 +480,7 @@ impl WorkLedger for BdCli {
         let mut argv: Vec<&str> = vec!["show"];
         argv.extend(ids.iter().map(String::as_str));
         argv.push("--json");
-        parse_issues(&self.run(&argv)?)
+        parse_issues(&self.run_for(&argv, self.budget(ids.len()))?)
     }
 
     fn claim(&self, id: &str, actor: &str) -> Result<()> {
@@ -454,7 +505,7 @@ impl WorkLedger for BdCli {
     fn close_all(&self, ids: &[String], reason: &str, actor: &str) -> Result<()> {
         let argv = close_argv(ids, reason, actor);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        self.run(&args).map(|_| ())
+        self.run_for(&args, self.budget(ids.len())).map(|_| ())
     }
 }
 

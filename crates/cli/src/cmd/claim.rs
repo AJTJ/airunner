@@ -42,7 +42,9 @@ fn actor_for(worker: &str) -> String {
         .unwrap_or_else(|| worker.to_string())
 }
 
-/// `AIR_BD_BIN` overrides the `bd` binary (tests use a fake).
+/// `AIR_BD_BIN` overrides the `bd` binary (tests use a fake). `AIR_BD_TIMEOUT_MS` overrides
+/// the WHOLE budget, per-id allowance included: a number somebody exported is the number the
+/// wait runs against, whatever the id count.
 pub fn bd_for(repo: &Path) -> BdCli {
     let mut bd = BdCli::new(repo);
     if let Ok(bin) = std::env::var("AIR_BD_BIN")
@@ -50,13 +52,55 @@ pub fn bd_for(repo: &Path) -> BdCli {
     {
         bd.bin = bin.into();
     }
-    if let Some(ms) = std::env::var("AIR_BD_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-    {
+    if let Some(ms) = bd_timeout_override() {
         bd.timeout = std::time::Duration::from_millis(ms);
+        bd.per_id = std::time::Duration::ZERO;
     }
     bd
+}
+
+fn bd_timeout_override() -> Option<u64> {
+    std::env::var("AIR_BD_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+}
+
+/// How a bd timeout names its budget, for every refusal built on one (air-8lj8): the id
+/// count, the budget in force, and how to raise it. Pure over `overridden` so the probe can
+/// read both shapes.
+pub fn budget_words(ids: usize, budget: std::time::Duration, overridden: bool) -> String {
+    use crate::cmd::status::duration_line;
+    let how = if overridden {
+        "AIR_BD_TIMEOUT_MS, set in this environment".to_string()
+    } else {
+        format!(
+            "{} + {} per id; AIR_BD_TIMEOUT_MS overrides it, in milliseconds",
+            duration_line(air_bd::DEFAULT_TIMEOUT),
+            duration_line(air_bd::PER_ID)
+        )
+    };
+    format!(
+        "{ids} id(s) within a budget of {} ({how})",
+        duration_line(budget)
+    )
+}
+
+/// Whether `AIR_BD_TIMEOUT_MS` is in force in this process.
+pub fn bd_overridden() -> bool {
+    bd_timeout_override().is_some()
+}
+
+/// The probe budget's default (air-8lj8: was 5 s). **Fail direction: CLOSED**: a probe that
+/// times out reports the claim as timed out with bd's state unknown, and a triage pass that
+/// cannot verify its ids is refused. Half the client's default, because a read is cheaper than
+/// the write it follows; still capped at the main budget.
+const PROBE_DEFAULT_MS: u64 = 30_000;
+
+fn probe_ms() -> u64 {
+    std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(PROBE_DEFAULT_MS)
 }
 
 /// Put the bead on the worker's tmux window so `tmux ls` and `air status` show the lane and
@@ -80,30 +124,29 @@ fn earliest(bd_time: Option<&str>, now: &str) -> String {
     }
 }
 
-/// A short-budget bd for a read that must not hold a command up: `AIR_BD_PROBE_TIMEOUT_MS`
-/// (default 5000), never longer than the main timeout.
+/// A shorter-budget bd for a read that must not hold a command up: `AIR_BD_PROBE_TIMEOUT_MS`
+/// (default 30000), never longer than the main timeout. The per-id allowance is kept unless
+/// the variable is set, which like `AIR_BD_TIMEOUT_MS` replaces the whole budget.
 pub fn probe_bd(repo: &Path) -> BdCli {
     let bd = bd_for(repo);
-    let ms = std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5000);
+    let per_id = if std::env::var_os("AIR_BD_PROBE_TIMEOUT_MS").is_some() {
+        std::time::Duration::ZERO
+    } else {
+        bd.per_id
+    };
     BdCli {
-        timeout: std::time::Duration::from_millis(ms).min(bd.timeout),
+        timeout: std::time::Duration::from_millis(probe_ms()).min(bd.timeout),
+        per_id,
         label: air_ledger::budgets::BD_PROBE,
         ..bd
     }
 }
 
 /// After a `--claim` timeout: did bd's write land? Probes `bd show` with a short separate
-/// timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 5000, capped at the main timeout), twice.
+/// timeout (`AIR_BD_PROBE_TIMEOUT_MS`, default 30000, capped at the main timeout), twice.
 fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {
     let mut probe = bd.clone();
-    let ms = std::env::var("AIR_BD_PROBE_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5000);
-    probe.timeout = std::time::Duration::from_millis(ms).min(bd.timeout);
+    probe.timeout = std::time::Duration::from_millis(probe_ms()).min(bd.timeout);
     probe.label = air_ledger::budgets::BD_PROBE;
     (0..2).any(|_| {
         matches!(

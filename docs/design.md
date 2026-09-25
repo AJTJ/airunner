@@ -443,9 +443,19 @@ event never arrives.
 ### 6.7 Timing budgets
 
 Every wait Air takes records how long it lasted and whether it hit its limit, and air audit
-prints the distribution. Calls to beads get ten seconds. The status tick, acceptance reads, the
-claim check, and the stop nudge get shorter limits. All of those fail closed, which means the
-caller is told and nothing is assumed.
+prints the distribution. A call to beads gets sixty seconds, plus five seconds for each bead it
+names when it names several (closing, showing, listing dependencies). One function computes that
+for every such call, so air close and the acceptance read in air land share it. These limits
+fail closed, meaning the command is refused and the caller is told, so they are generous on
+purpose (owner, 2026-09-25): an adopter's beads cost about two seconds per call and two per bead.
+Setting AIR_BD_TIMEOUT_MS replaces the whole limit with one flat figure, and a timeout names the
+bead count, the limit and that variable. The check after a timed-out claim gets thirty seconds.
+
+Two beads limits stay short because something above them is shorter. The status tick gets four
+times beads' median cost, between two and eight seconds and flat whatever the bead count,
+because air status serves the coordinator's tools, which are cut off at twenty seconds; a
+timeout there falls back to cached counts. The stop nudge gets three seconds because it runs
+inside a hook that Claude Code kills at five.
 
 Three budgets fail open, because they sit on the hook path: git gets a second and a half, the
 SQLite lock gets one second, and the hook itself gets five seconds. Claude Code enforces the last

@@ -1016,39 +1016,11 @@ pub fn acceptance_for(repo: &Path, beads: &[String]) -> Result<Vec<Vec<String>>,
     }
     let mut bd = super::claim::bd_for(repo);
     // Labelled whether or not the budget is overridden: the label names the SITE, and the
-    // recorded `budget_ms` names whatever budget was actually in force there.
+    // recorded `budget_ms` names whatever budget was actually in force there. The budget is
+    // the client's own, scaled by the id count inside `show_all` (air-fzv, then air-8lj8 moved
+    // the scaling into `air_bd::budget_for` so every multi-id call gets it).
     bd.label = air_ledger::budgets::BD_ACCEPTANCE;
-    let overridden = std::env::var_os("AIR_BD_TIMEOUT_MS").is_some();
-    if !overridden {
-        bd.timeout = acceptance_budget(beads.len());
-    }
-    acceptance_with(&bd, beads, overridden)
-}
-
-/// The bd budget for one acceptance read (air-fzv): a base for the process plus an allowance
-/// per id. It was the client's flat 10 s whatever the id count, which a fourteen-bead batch
-/// under the verify lane exceeded on the adopter (2026-09-06) until they set
-/// `AIR_BD_TIMEOUT_MS=120000` by hand. Batching makes many ids the normal case. Owner ruled:
-/// size by the id count, not by reading in one process (which `show_all` already does).
-///
-/// The per-id figure is air-bp0's measurement of what bd costs per id here (~2 s). Neither
-/// number is tuned yet: air-d75 records every read's elapsed time against its budget, and
-/// the sizes follow from those numbers.
-pub const ACCEPTANCE_BASE: std::time::Duration = std::time::Duration::from_secs(10);
-pub const ACCEPTANCE_PER_ID: std::time::Duration = std::time::Duration::from_secs(2);
-
-pub fn acceptance_budget(ids: usize) -> std::time::Duration {
-    acceptance_budget_with(ids, ACCEPTANCE_BASE, ACCEPTANCE_PER_ID)
-}
-
-/// Pure: `base + per_id × ids`, saturating.
-pub fn acceptance_budget_with(
-    ids: usize,
-    base: std::time::Duration,
-    per_id: std::time::Duration,
-) -> std::time::Duration {
-    let n = u32::try_from(ids).unwrap_or(u32::MAX);
-    base.saturating_add(per_id.saturating_mul(n))
+    acceptance_with(&bd, beads, super::claim::bd_overridden())
 }
 
 /// `38 s`, `0.5 s`: whole seconds where they are whole, one decimal otherwise.
@@ -1060,7 +1032,7 @@ pub fn duration_line(d: std::time::Duration) -> String {
     }
 }
 
-/// The read itself, against a client whose timeout IS the budget. The error names the id
+/// The read itself, against the client's own budget for this many ids. The error names the id
 /// count, the budget and the override, so a refusal built on it says what was hit and how to
 /// raise it.
 pub fn acceptance_with(
@@ -1070,18 +1042,8 @@ pub fn acceptance_with(
 ) -> Result<Vec<Vec<String>>, String> {
     let issues = air_bd::WorkLedger::show_all(bd, beads).map_err(|e| {
         format!(
-            "bd show for {} id(s) within a budget of {}{}: {e}",
-            beads.len(),
-            duration_line(bd.timeout),
-            if overridden {
-                " (AIR_BD_TIMEOUT_MS, set in this environment)".to_string()
-            } else {
-                format!(
-                    " ({} + {} per id; AIR_BD_TIMEOUT_MS overrides it, in milliseconds)",
-                    duration_line(ACCEPTANCE_BASE),
-                    duration_line(ACCEPTANCE_PER_ID)
-                )
-            }
+            "bd show for {}: {e}",
+            super::claim::budget_words(beads.len(), bd.budget(beads.len()), overridden)
         )
     })?;
     Ok(beads
@@ -1858,6 +1820,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     if std::env::var_os("AIR_BD_TIMEOUT_MS").is_none() {
         bd.timeout = super::bd_latency::status_bd_budget(today_latency.map(|l| l.median_ms));
     }
+    // Flat, not scaled by id count (air-8lj8): this reconcile's calls run in sequence under
+    // the 20 s MCP tool limit, and a per-id allowance on the `show_all` below would let one
+    // call alone pass it. A timeout here falls back to the cache, so it costs freshness, not a
+    // refused command.
+    bd.per_id = std::time::Duration::ZERO;
     // `bd_try` skips every later call once this is set, and each call site already falls back
     // to `bd_cache`. Setting it up front is how "do not call bd this tick" is expressed: one
     // decision, no second code path to keep in step with the first.
