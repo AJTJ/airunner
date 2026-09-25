@@ -1,14 +1,13 @@
 ---
 name: decomposition
-description: Use when asked to "break down this feature", "decompose this epic", "create beads from an epic", "how to size beads", "when to decompose", "vertical slices", "task granularity", "cut the next wave", "build the worker queues", or when an epic is about to be opened for claiming and needs children. Guides breaking a feature into epics and epics into claimable beads, in Air's vocabulary, using Metis's decomposition reasoning plus the agile splitting rules behind it (INVEST, story splitting, walking skeleton).
+description: Use when asked to "break down this feature", "decompose this epic", "create beads from an epic", "how to size beads", "when to decompose", "vertical slices", "task granularity", "cut the next wave", or when an epic is about to be opened for claiming and needs children. Guides breaking a feature into epics and epics into claimable beads, in Air's vocabulary, using Metis's decomposition reasoning plus the agile splitting rules behind it (INVEST, story splitting, walking skeleton).
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Work Decomposition
 
-Breaking a feature into epics and an epic into claimable beads, then cutting per-worker queues
-from the result. The reasoning is Metis's (`decomposition` skill, Flight Levels as Kanban) plus
+Breaking a feature into epics and an epic into claimable beads that workers pull. The reasoning is Metis's (`decomposition` skill, Flight Levels as Kanban) plus
 the agile sources it draws on; the vocabulary, the checks, and the `bd` commands are Air's.
 Where the text says "epic" or "bead", Metis says "initiative" or "task". Sources are listed
 under "Additional resources".
@@ -65,7 +64,7 @@ Filing-time signals:
 
 Inputs: the feature paragraph; `main`; `bd list --type=epic`; `bd ready -n 0`; the capture
 inbox; `air status` (lanes held, idle workers). Output: one epic, the skeleton plus one wave of
-triaged children with edges, and per-worker assignments. Never the whole feature.
+triaged children with edges. Never the whole feature.
 
 ### 1. Frame the epic (Metis discovery + design, collapsed into `--design`)
 
@@ -136,7 +135,8 @@ Before filing, every answer is yes:
   closes."
 - **Citations** (`file:line`) open and match now.
 - Description and acceptance agree; a contradiction goes to the coordinator (`air capture`), who files it as a bead labelled `owner` when the decision is the owner's; never a guess.
-- `owner` / `human` / `runtime` labels applied at filing; they are withheld from `next`.
+- `owner` / `human` / `runtime` labels applied at filing; `air claim` refuses an `owner` bead
+  to workers.
 
 #### The two questions, asked of the TEMPLATE before it is applied
 
@@ -235,8 +235,7 @@ frontier thins.
 - A landed sibling already satisfies a child's acceptance → close it with the evidence (six of
   ten beads on one adopter's lane were already fixed on `main`; checking took 20 minutes,
   an adopter's retrospective of its overnight fleet run of 2026-08-15).
-- A landed sibling moved a cited file → `air next` prints "stale since <sha>"; re-verify or
-  re-file with `supersedes`.
+- A landed sibling moved a cited file → re-verify the citation, or re-file with `supersedes`.
 - A capture says the approach is wrong → stop filing; tighten `--design` or close the epic with a
   successor (Metis feature-creep rule, third branch).
 - Small and related discovery → a child under this epic. Significant → capture. Scope change →
@@ -323,3 +322,7 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
 - An adopter's evidence is cited by what it is and its date, not by path (owner, 2026-09-25):
   the notes first cited here by `file:line` (read 2026-08-20, re-checked 2026-08-22, air-xsj)
   were consolidated by the adopter and no longer exist at those paths.
+- Adaptations (v1.2.0, 2026-09-25, air-vuwx): brought into line with `.air/roles.md`, which
+  holds the fleet protocol since the owner's ruling of that day. Per-worker queues and
+  assignments are gone (workers pull; naming a bead reserves nothing), and so is a `next`
+  subcommand that was planned and never built.

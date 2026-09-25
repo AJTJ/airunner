@@ -223,6 +223,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-vuwx: the installed decomposition skill named `air next` for a year of rounds while
+    // no such subcommand existed. The anchor puts that line back, so only the new probe falls.
+    (
+        "install: every `air <subcommand>` an installed skill, roles.md or the init CLAUDE.md names is a real subcommand",
+        Mutation {
+            file: ".claude/skills/decomposition/SKILL.md",
+            from: "- A landed sibling moved a cited file → re-verify the citation, or re-file with `supersedes`.",
+            to: "- A landed sibling moved a cited file → `air next` prints \"stale since <sha>\"; re-verify.",
+            also_red: &[],
+        },
+    ),
     // air-88av. The anchor widens the lookup from "unmerged" to "everything but a deletion" —
     // lowercase in `--diff-filter` EXCLUDES, so `d` matches every modified path. Verified in a
     // fixture rather than reasoned about, after my first comment here claimed the opposite.
@@ -2308,6 +2319,7 @@ fn all_probes() -> Vec<Probe> {
         probe_gate_main(),
         probe_session_identity_is_the_launchers(),
         probe_shipped_advice_names_real_subcommands(),
+        probe_installed_text_names_real_subcommands(),
         probe_status_tests_hold_one_instant(),
         probe_gate_names_the_landing_that_moved_main(),
         probe_handover_ok_names_the_main_it_checked(),
@@ -7058,6 +7070,48 @@ fn probe_shipped_advice_names_real_subcommands() -> Probe {
         name: "hook: every `air <subcommand>` a shipped hook or status string names is a real subcommand",
         red_fires: red,
         green_passes: !real.is_empty() && dangling.is_empty(),
+    }
+}
+
+/// air-vuwx: what `air install` and `air init` write into another repo is Markdown embedded in
+/// the binary, and the probe above reads only `.rs` sources, so it never saw it. The installed
+/// `air-decomposition` and `air-phase-transitions` both told adopters to read `air next`, a
+/// subcommand that was planned and never built. Red: that line is caught. Green: every
+/// `air <word>` in command position in the installed skills, roles.md and the init CLAUDE.md
+/// stub is a subcommand clap knows, read from the binary's own tree, never from a typed list.
+fn probe_installed_text_names_real_subcommands() -> Probe {
+    use clap::CommandFactory;
+
+    let real: Vec<String> = crate::Cli::command()
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    let mut texts: Vec<(&str, &str)> = crate::cmd::install::SKILLS.to_vec();
+    texts.push(("roles.md", crate::cmd::install::ROLES_MD));
+    texts.push(("init CLAUDE.md", crate::cmd::init::CLAUDE_MD_STUB));
+    let dangling: Vec<String> = texts
+        .iter()
+        .flat_map(|(name, text)| {
+            command_mentions(text)
+                .into_iter()
+                .filter(|(_, w)| !real.contains(w))
+                .map(move |(line, w)| format!("{name}:{line} names `air {w}`"))
+        })
+        .collect();
+    if !dangling.is_empty() {
+        eprintln!("selftest: installed text names a subcommand that does not exist:");
+        for d in &dangling {
+            eprintln!("  {d}");
+        }
+    }
+    let pre_fix = "- A landed sibling moved a cited file → `air next` prints \"stale since <sha>\"";
+    let red = command_mentions(pre_fix)
+        .iter()
+        .any(|(_, w)| w == "next" && !real.contains(w));
+    Probe {
+        name: "install: every `air <subcommand>` an installed skill, roles.md or the init CLAUDE.md names is a real subcommand",
+        red_fires: red,
+        green_passes: !real.is_empty() && texts.len() >= 3 && dangling.is_empty(),
     }
 }
 

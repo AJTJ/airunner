@@ -246,7 +246,7 @@ enum Cmd {
     /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
     /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills, and the
     /// empty-but-ready scaffold (a failing Makefile verify target, .worktreeinclude, and a
-    /// CLAUDE.md stub carrying the work flow and the `Bead:` trailer rule), each created only
+    /// CLAUDE.md stub pointing at `.air/roles.md` for the protocol), each created only
     /// when absent and never edited. Dry run by default.
     Init {
         /// Beads issue prefix (default: from the directory name).

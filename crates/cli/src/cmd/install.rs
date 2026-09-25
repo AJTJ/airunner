@@ -81,10 +81,19 @@ pub const SKILLS: &[(&str, &str)] = &[
         "air-decomposition",
         include_str!("../../../../.claude/skills/decomposition/SKILL.md"),
     ),
-    (
-        "air-phase-transitions",
-        include_str!("../../../../.claude/skills/phase-transitions/SKILL.md"),
-    ),
+    //
+    // `phase-transitions` was installed too, until 2026-09-25 (air-vuwx): its bead state
+    // machine (`awaiting_review`, close only after landing, a re-verifying `air land`) was a
+    // second fleet protocol beside `.air/roles.md`, and the owner ruled that day that the
+    // protocol is Air's and lives in roles.md. With the bead half pointing there, what is left
+    // is Metis's epic vocabulary, which `decomposition` already carries. Re-add it only if an
+    // adopter's coordinator is seen needing epic states `decomposition` does not give.
+    //
+    // The sources stay in this repo's `.claude/skills/`, so this repo carries `do-less` and
+    // `air-do-less` side by side. Moving them would rename the skill CLAUDE.md invokes by name
+    // and part each SKILL.md from the `references/` it cites; the price of staying is one
+    // extra line per skill in a session's skill listing. Move them if the duplicate is ever
+    // seen invoked in place of the source.
 ];
 
 /// Rename the frontmatter `name:` so the installed copy does not collide with a repo's own
@@ -1667,6 +1676,21 @@ pub const SURFACE: &[SurfaceChange] = &[
                  lane's branch from main: commits already on it and not in main are carried into \
                  the batch and listed as `carried`.",
     },
+    SurfaceChange {
+        id: "installed-skills-follow-roles",
+        since: "2026-09-25 (air-vuwx)",
+        headline: "The installed skills agree with `.air/roles.md`. `air-phase-transitions` is no \
+                   longer installed: its `awaiting_review` step, close-after-landing and \
+                   re-verifying landing contradicted the protocol. `air-decomposition` drops \
+                   per-worker queues and the `next` subcommand, which never existed. The \
+                   CLAUDE.md that `air init` scaffolds no longer says the hand-over flow is the \
+                   repo's own; it points at roles.md and keeps only what is the repo's.",
+        silent_break: true,
+        action: "Delete `.claude/skills/air-phase-transitions/`; `air install` does not remove \
+                 it. If this repo's CLAUDE.md restates a close or hand-over sequence, cut it to \
+                 what roles.md leaves to the repo: the verify and precheck commands, worktree \
+                 setup, shared resources and domain rules.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2743,7 +2767,7 @@ mod tests {
         assert!(r.contains("name: not frontmatter"));
         // air-ha8: do-less ships with the mechanisms, because it is the discipline for
         // removing them. `beads` deliberately does not: see the SKILLS comment.
-        assert_eq!(SKILLS.len(), 3);
+        assert_eq!(SKILLS.len(), 2);
         assert_eq!(SKILLS[0].0, "air-do-less");
         assert!(SKILLS.iter().all(|(_, text)| text.contains("Provenance")));
     }
