@@ -97,6 +97,9 @@ missing notices, which are fixed or added below.
 
 - A worker's close was refused as behind main when its own batch had just landed, although
   main contained its work.
+- A worker's close was refused as behind main when the bead had landed or had a green, but the
+  worker had already committed its next bead on top. The gate now judges the bead's own
+  commits, not the branch head.
 - A batch of one sent its member no result, because its members were read from merge commits
   and it made none. `air batch cut` now records its members.
 - A branch whose batch went red at its current commit stayed ready, so the lane cut it again.

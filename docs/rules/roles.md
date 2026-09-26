@@ -77,14 +77,17 @@ by one.
     air claim <id> [--files a,b]
     … the work, every commit with a `Bead: <id>` trailer; the digest, if the repo asks for one
     air record precheck -- <the repo's precheck>   # if it names one
-    … your branch is now batch-ready in `air status`; keep working, the lane takes it
-    air close <id> --reason-file <proof>   # after the lane's green; `air handover` says when
+    … your branch is now batch-ready in `air status`; start the next bead now, the lane takes this one
+    air close <id> --reason-file <proof>   # once `air handover --bead <id>` or the batch-green notice says it passes
 
-Three facts about your branch under a lane. You need not merge main to stay batch-ready: the
+Four facts about your branch under a lane. You need not merge main to stay batch-ready: the
 lane merges main at the cut, so merge it only to catch up or to resolve a conflict the lane
 named. Once a sha has left your worktree, commit forward and never amend, because the lane cut
-at that sha and an amend leaves it nothing to merge. A commit you make after the cut waits for
-the next batch, and the close is refused, naming that commit, until a green contains it.
+at that sha and an amend leaves it nothing to merge. A commit for a bead made after the cut
+waits for the next batch, and that bead's close is refused, naming the commit, until a green
+contains it. Commits for your next bead do not hold up the earlier one: the close judges a bead
+by the commits whose `Bead:` trailer names it, so close it once it passes, even with later work
+committed on top.
 
 Proof is a command and its output, a `file:line`, or a passing test. A description of the
 approach is not proof. Use `--reason-file` once the proof is more than a line or two, because

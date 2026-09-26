@@ -80,8 +80,11 @@ pub fn facts(
     let held_beads: Vec<String> = held.iter().map(|c| c.bead.clone()).collect();
     // air-80x.1: with no green at HEAD, a verify lane's batch may still cover the bead. Per
     // bead: the one named, else every bead this worker holds. Only on the slow path, so a
-    // worker who verified at HEAD pays no git spawns here.
-    let batch = if green_at_head {
+    // worker who verified at HEAD pays no git spawns here. D1 (0.4.7 trial): also asked when
+    // main is ahead of a branch main does not contain, because a covered bead is then not
+    // refused as behind main, whatever the head carries after it.
+    let behind = !main_is_ancestor && !work_in_main;
+    let batch = if green_at_head && !behind {
         super::batch::Described::default()
     } else {
         let targets: Vec<String> = match bead {

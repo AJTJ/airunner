@@ -1205,9 +1205,11 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: main-merged",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.main_is_ancestor && !f.work_in_main {",
+            from: "if !f.main_is_ancestor && !f.work_in_main && !bead_covered {",
             to: "if false {",
             also_red: &[
+                // Its red half is this refusal, with the next bead's commit on top.
+                "gate: a bead landed or covered by a green is not refused as behind main when the next bead's commit sits on top; an uncovered one still is",
                 "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
                 // Both assert on the refusal this rule produces (air-75u, air-5wq; declared
                 // by air-8d7).
@@ -1225,8 +1227,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: a branch whose head main already contains is not refused as behind main; one main does not contain still is",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: " && !f.work_in_main {",
-            to: " {",
+            from: " && !f.work_in_main && !bead_covered {",
+            to: " && !bead_covered {",
+            also_red: &[],
+        },
+    ),
+    (
+        // D1, 0.4.7 live trial: the close is judged by the branch head again, so a landed or
+        // green-covered bead is refused as behind main once the next bead's commit is on top.
+        "gate: a bead landed or covered by a green is not refused as behind main when the next bead's commit sits on top; an uncovered one still is",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: "let bead_covered = f.batch_green.is_some();",
+            to: "let bead_covered = false;",
             also_red: &[],
         },
     ),
@@ -1824,7 +1837,11 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/batch.rs",
             from: "            let against = g.main_sha.clone().unwrap_or_else(|| \"main\".to_string());",
             to: "            let against = \"main\".to_string();",
-            also_red: &[],
+            // D1 (0.4.7): its green half is a bead covered by a green recorded over a main
+            // that has since moved, which is this question.
+            also_red: &[
+                "gate: a bead landed or covered by a green is not refused as behind main when the next bead's commit sits on top; an uncovered one still is",
+            ],
         },
     ),
     (
@@ -2761,6 +2778,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_coordinator_only_range_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_a_landed_branch_is_not_behind_main(),
+        probe_a_covered_bead_closes_with_the_next_bead_on_top(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
@@ -9827,6 +9845,126 @@ fn probe_a_landed_branch_is_not_behind_main() -> Probe {
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
         name: "gate: a branch whose head main already contains is not refused as behind main; one main does not contain still is",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// D1 of the 0.4.7 live trial: a worker finished bead A, the lane landed it, the worker
+/// committed bead B on top, and `air close A` was refused as behind main, because the gate
+/// judged the head rather than the bead. Owner, 2026-09-26: a worker keeps working while its
+/// last bead is verified. Red: a bead with no green, and a bead with no `Bead:` trailer (the
+/// head check, unchanged), are still refused as behind main with the next commit on top.
+/// Green: a bead Air landed, and a bead covered by a green recorded over the main of its
+/// moment, both close with the next bead's commit on top and main moved.
+fn probe_a_covered_bead_closes_with_the_next_bead_on_top() -> Probe {
+    use air_ledger::landings::Landing;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            let base = g(&["rev-parse", "HEAD"])?;
+            // v: bead ad-2, verified over base, never landed.
+            g(&["checkout", "-q", "-b", "v", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "a2\n\nBead: ad-2\n"])?;
+            let a2 = g(&["rev-parse", "HEAD"])?;
+            // x: bead ad-3's work with no trailer, verified over base.
+            g(&["checkout", "-q", "-b", "x", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "a3 untrailered"])?;
+            let a3 = g(&["rev-parse", "HEAD"])?;
+            // w: bead ad-1, landed by Air after main moved.
+            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "a1\n\nBead: ad-1\n"])?;
+            g(&["checkout", "-q", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "other work"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
+            let merge = g(&["rev-parse", "HEAD"])?;
+            // Every branch starts its next bead before closing the last.
+            for b in ["v", "x", "w"] {
+                g(&["checkout", "-q", b])?;
+                g(&[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "next\n\nBead: ad-9\n",
+                ])?;
+            }
+
+            let ledger = |greens: &[&str]| -> Result<Ledger, String> {
+                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+                for b in ["ad-1", "ad-2", "ad-3", "ad-9"] {
+                    l.record_claim(b, "w1", &[], "t0")
+                        .map_err(|e| e.to_string())?;
+                }
+                for sha in greens {
+                    l.record_verify(&VerifyRun {
+                        id: new_id(),
+                        worker: "w1".into(),
+                        sha: (*sha).to_string(),
+                        kind: Kind::Verify,
+                        exit_code: 0,
+                        trigger: "selftest".into(),
+                        failing_step: None,
+                        started_at: "t".into(),
+                        finished_at: "t".into(),
+                        log_path: None,
+                        command: None,
+                        duration_ms: None,
+                        output_bytes: None,
+                        dirty: false,
+                        tree: None,
+                        members: vec![],
+                        main_sha: Some(base.clone()),
+                    })
+                    .map_err(|e| e.to_string())?;
+                }
+                l.record_landing(&Landing {
+                    id: new_id(),
+                    worker: "w1".into(),
+                    sha: "wwww".into(),
+                    tip_sha: None,
+                    result: "landed".into(),
+                    failing_step: None,
+                    verify_run_id: None,
+                    attempt_no: 1,
+                    beads: vec!["ad-1".into()],
+                    open_beads: vec![],
+                    merge_commit: Some(merge.clone()),
+                    pid: None,
+                    started_at: "t0".into(),
+                    finished_at: "t1".into(),
+                    despite_inflight: vec![],
+                    members: vec![],
+                })
+                .map_err(|e| e.to_string())?;
+                Ok(l)
+            };
+            let verdict =
+                |l: &Ledger, branch: &str, bead: &str| -> Result<air_hooks::Verdict, String> {
+                    g(&["checkout", "-q", branch])?;
+                    let f = crate::cmd::handover::facts(l, "w1", &dir, Some(bead), false)?;
+                    Ok(handover_verdict(&f))
+                };
+            let behind = |v: &air_hooks::Verdict| {
+                v.block && v.missing.iter().any(|m| m.check == "main-merged")
+            };
+            let none = ledger(&[])?;
+            let greens = ledger(&[&a2, &a3])?;
+            let red =
+                behind(&verdict(&none, "v", "ad-2")?) && behind(&verdict(&greens, "x", "ad-3")?);
+            let green = verdict(&none, "w", "ad-1")?.pass && verdict(&greens, "v", "ad-2")?.pass;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "gate: a bead landed or covered by a green is not refused as behind main when the next bead's commit sits on top; an uncovered one still is",
         red_fires: red,
         green_passes: green,
     }

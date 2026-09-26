@@ -218,7 +218,13 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             flow_dependent: true,
         });
     }
-    if !f.main_is_ancestor && !f.work_in_main {
+    // D1 (0.4.7 trial): judge the bead, not the branch head. When every commit naming the
+    // bead is in main (landed) or in a recorded green that contained the main it ran over, the
+    // worker's later commits for its NEXT bead are no reason to merge main before closing this
+    // one: a worker keeps working while its last bead is verified (owner, 2026-09-26). With no
+    // `Bead:` trailer and no landing row, `batch_green` is None and this is the head check.
+    let bead_covered = f.batch_green.is_some();
+    if !f.main_is_ancestor && !f.work_in_main && !bead_covered {
         // air-4up: the cause is outside the worker's tree, so say so. "main is not an
         // ancestor of HEAD" stays in every form: the adopter's counts refusals by that phrase.
         // The fix is unchanged; this is wording, not behaviour.
@@ -399,17 +405,23 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         // at a glance whether it still applies, and the refusal (which names main too, air-4up)
         // then reads as main having moved rather than as a contradiction.
         // air-80x.1: when the green is a batch's, say whose and what it contains.
+        // D1 (0.4.7): a pass on a covered bead can come from a head main is ahead of, so the
+        // line says where main is rather than claiming the head contains it.
         let batch = f
             .batch_green
             .as_deref()
-            .filter(|_| !f.green_at_head)
+            .filter(|_| !f.green_at_head || !f.main_is_ancestor)
             .map(|b| format!("; {b}"))
             .unwrap_or_default();
+        let main = if f.main_is_ancestor || f.main_sha.is_empty() {
+            containing_main(&f.main_sha)
+        } else {
+            format!(", main at {}", short(&f.main_sha))
+        };
         format!(
-            "handover ok: {} at {}{}{batch}",
+            "handover ok: {} at {}{main}{batch}",
             f.worker,
             short(&f.head),
-            containing_main(&f.main_sha)
         )
     } else {
         // air-kcns: name what was refused. `handover refused` is true of the gate and false
