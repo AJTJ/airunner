@@ -7,8 +7,10 @@ change. The verify is `make verify`; the fleet is the lane and worker-1 to worke
 
 When every bead is closed, write one short report to `.air/trial-report.md` in the main
 checkout, and stop. Per scenario: what happened against what was expected, with the event line
-or sha that shows it. Then every workaround you or a worker had to make, every refusal someone
-had to get around, and anything that confused anyone. Write it from what you and the fleet saw
+or sha that shows it. Then, for you, the lane and every worker (ask each one before you write): every retry,
+every workaround or step done by hand, every refusal someone had to get around, every scenario
+that only passed on a second try, and anything that confused anyone. For each, say why it was
+needed, as far as anyone can tell. Write it from what you and the fleet saw
 during the run. Do not spawn an agent to re-read the whole event log or the transcripts.
 
 ## Setup, before filing any bead

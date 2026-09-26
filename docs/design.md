@@ -812,6 +812,9 @@ Code sessions.
    the log. An independent observer, a background agent started with the fleet, watches the run
    and checks that report against the events, git and bd, because the coordinator can be wrong
    about its own round (owner, 2026-09-26).
+   Both look for retries, workarounds, hand steps, second-try passes and confusion, not only
+   pass or fail, and trace each to its cause in the code before a fix is proposed: a symptom
+   fixed alone comes back in the next trial (the lane's leftover red batch, 0.4.6 and 0.4.8).
 5. File every defect as a bead. Do not fix anything during the trial. Stop every session and
    keep the scratch directory until the report is read.
 
