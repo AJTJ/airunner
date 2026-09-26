@@ -1797,6 +1797,23 @@ pub const SURFACE: &[SurfaceChange] = &[
                  Both directories live on the machine running the fleet and have no git \
                  history.",
     },
+    SurfaceChange {
+        id: "roles-rewritten-per-role",
+        since: "2026-09-25 (owner, air-igcz)",
+        headline: "`.air/roles.md` is rewritten as facts and refusals per role (every role, \
+                   worker, verification lane, coordinator), at about 60% of its old length. \
+                   Incident histories, dates, bead ids and removal conditions moved out \
+                   (removal conditions are in `air audit`). Corrected: a landed bead whose \
+                   acceptance clause names a file the merge did not change is a lookup that did \
+                   not answer, not a wrong close; the lease gate refuses the lane as well as \
+                   workers; journals and opt-in digests live under the main checkout's `.air/`. \
+                   `docs/rules/adopting-air.md` is cut to install, the `.claude/air.json` keys \
+                   and upgrading.",
+        silent_break: false,
+        action: "Nothing to run; `air install --write` refreshes `.air/roles.md`. Restart \
+                 sessions to give them the new text. If the repo's CLAUDE.md quotes a roles.md \
+                 sentence, check it still appears.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2577,127 +2594,92 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(ROLES_MD, on_disk);
-        // air-7q5: run-to-completion is scoped to a session that HAS work; starting one is not
-        // being given any. Both halves are pinned, because dropping either reverses the rule.
-        assert!(ROLES_MD.contains("Once you have work, finishing a bead is not a stop."));
-        assert!(ROLES_MD.contains("Starting a session is not being given work."));
-        assert!(ROLES_MD.contains("Workers are reached with `SendMessage`"));
-        // air-12k: the heartbeat is the failsafe, and roles.md promises no `stuck` condition.
-        assert!(ROLES_MD.contains("the heartbeat is the failsafe"));
-        assert!(!ROLES_MD.contains("the channel (stuck,"));
-        // air-97z kept landing commands out of roles.md so a repo's own lander stayed the
-        // repo's. Reversed 2026-09-25 (owner): the fleet protocol is Air's, so roles.md names
-        // how a lane's batch lands. `--all` is still absent: under a lane the unit is the batch.
-        // air-jc2p.2 (owner, 2026-09-14): the lane lands, and the coordinator no longer does.
-        assert!(ROLES_MD.contains("Landing is the lane's, not a worker's or the coordinator's"));
-        assert!(ROLES_MD.contains("`air land --worker <lane>`"));
-        assert!(!ROLES_MD.contains("`air land --all`"));
-        // air-03w (owner, 2026-08-29): signalling on close is part of the worker role, and
-        // the `landable` condition is the failsafe under it. The binary and the prose are one
-        // file (`include_str!`), so this asserts on ROLES_MD and the equality above carries it
-        // to disk. It names a FACT Air records, never a landing command, so it stands beside
-        // air-97z's absence check above rather than against it.
-        assert!(ROLES_MD.contains("Signal the coordinator when you close a bead"));
-        assert!(ROLES_MD.contains("`landable` condition"));
-        assert!(ROLES_MD.contains("bug `## Steps to Reproduce` + `## Acceptance Criteria`"));
-        assert!(ROLES_MD.contains("epic `## Success"));
-        // air-8zu: the adopter closes with proof and was being told to set awaiting_review by
-        // a file it cannot edit. `awaiting_review` may appear only where the refusal lists
-        // what the gate matches, never as an instruction. Since 2026-09-25 (owner) roles.md
-        // carries the closing procedure itself, both variants, instead of deferring to the
-        // repo's CLAUDE.md: the protocol is Air's, and only the commands are the repo's.
+        // Every pin reads through `flat`, because roles.md is hard-wrapped and a pin that spans
+        // a wrap fails on the wrap rather than on the rule. Each pin is a fact an agent acts
+        // on; the incident behind it is in docs/decisions.md, not here and not in roles.md.
+        let roles = flat(ROLES_MD);
+        let has = |s: &str| roles.contains(&flat(s));
+        // Run-to-completion is scoped to a session that HAS work; starting one is not being
+        // given any. Both halves, because dropping either reverses the rule (air-7q5).
+        assert!(has("Once you have work, finishing a bead is not a stop."));
+        assert!(has("Starting a session is not being given work."));
+        assert!(has("Workers are reached with `SendMessage`"));
+        // The heartbeat is the failsafe, and roles.md promises no `stuck` condition (air-12k).
+        assert!(has("the heartbeat is the failsafe"));
+        assert!(!has("the channel (stuck,"));
+        // The protocol is Air's (owner, 2026-09-25) and the lane lands (air-jc2p.2). `--all` is
+        // absent: under a lane the unit is the batch.
+        assert!(has("the fleet's whole protocol"));
+        assert!(has(
+            "Landing is the lane's, not a worker's or the coordinator's"
+        ));
+        assert!(has("`air land --worker <lane>`"));
+        assert!(!has("`air land --all`"));
+        // Signalling on close is the worker's; the `landable` condition is its failsafe (air-03w).
+        assert!(has("Signal the coordinator when you close a bead"));
+        assert!(has("`landable` condition"));
+        // bd's per-type required sections (air-8zz).
+        assert!(has(
+            "bug `## Steps to Reproduce` + `## Acceptance Criteria`"
+        ));
+        assert!(has("epic `## Success Criteria`"));
+        // A worker closes with proof; `awaiting_review` is never an instruction (air-8zu).
         assert!(
-            !ROLES_MD.contains("`bd update <id> -s awaiting_review`"),
+            !has("`bd update <id> -s awaiting_review`"),
             "roles.md must not prescribe a bead-status step"
         );
-        let protocol = flat(ROLES_MD);
-        assert!(protocol.contains("the fleet's whole protocol"));
-        assert!(protocol.contains("You close your own bead, with proof"));
-        assert!(protocol.contains("You need not merge main to stay batch-ready"));
-        assert!(protocol.contains("commit forward and never amend"));
-        // air-8gj: the worktree fence is Air's, not the harness's. Both halves are pinned,
-        // because dropping either leaves roles.md promising a block that is not there — which
-        // is the direction a rules file must not fail in. The claim that used to stand here
-        // ("Editing the main checkout is blocked natively") is asserted ABSENT: it was true of
-        // `claude --worktree` and is false without it.
-        assert!(ROLES_MD.contains("resolved path leaves your worktree is denied by Air's"));
-        // air-ahl: the tracked requirement and its route, both pinned. The route is the half
-        // that must not go missing: a worker who meets the refusal has already committed, so
-        // advice living only in the refusal arrives after the thing it prevents.
-        //
-        // Through `flat`, because roles.md is hard-wrapped and a pin that spans a wrap fails
-        // on the wrap rather than on the rule. That happened twice this round (air-zth, then
-        // this), so it is a helper now rather than a third carefully shortened substring.
-        let roles = flat(ROLES_MD);
-        assert!(roles.contains("It also has to be tracked by git"));
-        assert!(roles.contains("commit the digest WITHOUT a `Bead:` trailer"));
-        // air-g5o: the coordinator states where a bead came from as a DECLARED field, and
-        // states that the count attached to it refuses nothing. Both halves are pinned: a
-        // rules file that names a count without saying it is not a gate is how a measurement
-        // becomes a rule nobody decided on.
-        assert!(ROLES_MD.contains("initiative: <CODE>"));
-        assert!(ROLES_MD.contains("It is a count and there is no refusal attached to it"));
-        // air-zth: the coordinator's context is the channel, so the reading is delegated by
-        // default. Pinned with its removal condition, because a roles line with no way out is
-        // the throttle the do-less rule exists to prevent (air-s7c).
-        assert!(ROLES_MD.contains("Your context is the channel the owner and every worker reach"));
-        // One line's worth: roles.md is hard-wrapped, so an assertion spanning a wrap fails on
-        // the wrap rather than on the rule.
-        assert!(ROLES_MD.contains(
-            "round shows zero owner or worker messages waiting more than five minutes on the \
-             coordinator."
+        assert!(has("You close your own bead, with proof"));
+        assert!(has("You need not merge main to stay batch-ready"));
+        assert!(has("commit forward and never amend"));
+        // The worktree fence is Air's hook, not the harness's; the harness claim stays absent
+        // because it would promise a block that is not there (air-8gj).
+        assert!(has(
+            "resolved path leaves your worktree is denied by Air's PreToolUse hook"
         ));
-        assert!(
-            !ROLES_MD.contains("Editing\nthe main checkout is blocked natively")
-                && !ROLES_MD.contains("the main checkout is blocked natively"),
-            "roles.md must not promise the harness's block once the flag is gone (air-8gj)"
-        );
-        // air-u3l7: the reserves-nothing line states a consequence; between 2026-09-05 and
-        // 2026-09-07 it was read, agreed with and worked around five times, once by the Stop
-        // hook itself. What it was missing is the alternative, so the alternative is what is
-        // pinned — a consequence with no procedure beside it reads as "be careful".
-        assert!(ROLES_MD.contains("So put the craft notes on the bead, not in the message"));
-        assert!(ROLES_MD.contains("bd comment <id> --file <notes>"));
-        // air-uef: one queue, and it is beads. The owner inbox is not offered anywhere.
-        assert!(ROLES_MD.contains("Every capture is triaged into a bead or dropped with a reason"));
-        assert!(ROLES_MD.contains("labelled `owner` with the coordinator's recommendation"));
-        assert!(
-            !ROLES_MD.contains("inbox --owner"),
-            "the owner inbox is gone (air-uef)"
-        );
-        assert!(
-            !ROLES_MD.contains("--for owner"),
-            "the owner audience is gone (air-uef)"
-        );
-        assert!(!ROLES_MD.contains("owner decision waiting"));
-        // Two facts from the adopter's round, riding on the same file (owner, 2026-09-05).
-        assert!(ROLES_MD.contains("Naming a bead at a worker reserves nothing"));
-        assert!(ROLES_MD.contains("reads the tree alone and not git history"));
-        // air-9ij (owner, 2026-09-06): the coordinator has to know where main still costs
-        // something and where it has stopped costing anything. All three halves are pinned,
-        // because dropping the last one leaves the adopter's freeze-main workaround standing.
-        // air-84u (owner, 2026-09-06): decomposition is a duty in the active voice, and the
-        // old phrasing is asserted ABSENT — it read as a property of a good queue, which is
-        // exactly how air-80x sat undecomposed for hours with nobody having failed at
-        // anything. Both halves, the same shape air-97z uses.
-        assert!(ROLES_MD.contains("Decomposing an\nepic is something you go and do"));
-        assert!(ROLES_MD.contains("the `decomposition` skill"));
-        assert!(ROLES_MD.contains("The reading may be delegated to a background agent"));
-        assert!(
-            !ROLES_MD.contains("(epics decomposed;"),
-            "roles.md must state decomposition as a duty, not as a property of the queue"
-        );
-        // air-kexg: two workers derived "a journal branch can land" from correct premises
-        // and were wrong, so roles.md says it. Both halves pinned: the permission and the
-        // constraint, because a reader who keeps only the first has a bypass.
-        assert!(ROLES_MD.contains("whose only commits are journal entries lands without one"));
-        assert!(ROLES_MD.contains("mixes them\nwith anything else needs a trailer"));
-        assert!(ROLES_MD.contains("What main moving costs, and what it no longer costs"));
-        assert!(ROLES_MD.contains("The coordinator's own commits move main exactly as a landing"));
-        assert!(ROLES_MD.contains("main moving no longer retracts a CLOSE"));
-        // air-80x.6: the verification lane, under Worker, as facts Air records and refusals
-        // Air makes. Two sentences pinned the way air-03w and air-97z pinned theirs; and the
-        // section names no cadence and no worker: the lane cuts when branches are ready.
+        assert!(!has("the main checkout is blocked natively"));
+        // A `digest_dir` digest is tracked, and its route past a cut batch (air-ahl).
+        assert!(has("It also has to be tracked by git there"));
+        assert!(has("commit the digest without a `Bead:` trailer"));
+        // Where a bead came from is a declared field, and the count refuses nothing (air-g5o).
+        assert!(has("initiative: <CODE>"));
+        assert!(has("It is a count and there is no refusal attached to it"));
+        // The coordinator's reading is delegated by default (air-zth).
+        assert!(has(
+            "Your context is the channel the owner and every worker reach"
+        ));
+        // Naming reserves nothing, and the alternative is named beside it (air-u3l7).
+        assert!(has("Naming a bead at a worker reserves nothing"));
+        assert!(has("Put the craft notes on the bead, not in the message"));
+        assert!(has("bd comment <id> --file <notes>"));
+        // One owner queue, and it is beads (air-uef).
+        assert!(has(
+            "Every capture is triaged into a bead or dropped with a reason"
+        ));
+        assert!(has(
+            "labelled `owner` with the coordinator's recommendation"
+        ));
+        assert!(!has("inbox --owner"), "the owner inbox is gone (air-uef)");
+        assert!(!has("--for owner"), "the owner audience is gone (air-uef)");
+        assert!(!has("owner decision waiting"));
+        // Decomposition is a duty, not a property of the queue (air-84u).
+        assert!(has("When an epic has no open child, decompose it"));
+        assert!(has("the `decomposition` skill"));
+        assert!(has("The reading may be delegated to a background agent"));
+        assert!(!has("(epics decomposed;"));
+        // A journal-only branch lands without a trailer; a mixed one does not (air-kexg).
+        assert!(has(
+            "a branch whose only commits are journal entries lands without one"
+        ));
+        assert!(has(
+            "A branch that mixes them with anything else needs a trailer"
+        ));
+        // Main moving costs landability, never a close (air-9ij); landing does not re-verify,
+        // which holds only for a verify that reads the tree (air-odv).
+        assert!(has("main moving no longer retracts a close"));
+        assert!(has("Air's landing does not re-verify"));
+        assert!(has("reads the tree alone and not git history"));
+        // The verification lane, under Worker, as facts and refusals. It names no cadence and
+        // no worker: the lane cuts when branches are ready (air-80x.6).
         let lane = ROLES_MD
             .split("### Verification lane")
             .nth(1)
@@ -2707,22 +2689,20 @@ mod tests {
             "roles.md has a Verification lane section under Worker"
         );
         let lane = lane.unwrap();
-        assert!(lane.contains("A lane is a worker session like any other"));
-        // air-4noi: the permission names the condition it assumes. An adopter's lane resets
-        // hard to main on every cut, so a bead it held between batches would live in a tree
-        // the next cut wipes. Through `flat` because the clause spans a hard wrap, which has
-        // broken this pin twice; and pinned as the CONDITION rather than the whole sentence,
-        // because deleting the permission would be wrong for a lane that merges main forward.
-        assert!(flat(lane).contains("it may hold one **if its worktree survives the cut**"));
-        // 2026-09-25 (owner): the lane's loop is Air's protocol now, and the batch comes from
-        // `air status`, never from a sha relayed in a message (owner, 2026-09-25).
-        assert!(flat(lane).contains("The lane's loop."));
-        assert!(flat(lane).contains("never a sha from a message"));
-        // The cut as a program (2026-09-25): the cut is a program, so the loop names it rather than the merges.
-        assert!(flat(lane).contains("`air batch cut` in your worktree"));
-        assert!(lane.contains(
-            "The close gate accepts a green at a verified commit\nthat contains `main` and every commit carrying the bead's trailer"
+        let flat_lane = flat(lane);
+        assert!(flat_lane.contains("A lane is a worker session like any other"));
+        // The permission names the condition it assumes (air-4noi).
+        assert!(flat_lane.contains("it may hold one **if its worktree survives the cut**"));
+        // The loop is Air's; the batch comes from `air status`, never a relayed sha.
+        assert!(flat_lane.contains("The lane's loop."));
+        assert!(flat_lane.contains("never a sha from a message"));
+        assert!(flat_lane.contains("Run `air batch cut` in your worktree"));
+        assert!(flat_lane.contains(
+            "The close gate accepts a green at a verified commit that contains `main` and every \
+             commit carrying the bead's trailer"
         ));
+        // Batch-ready does not require main (owner, 2026-09-25).
+        assert!(flat_lane.contains("Being behind `main` does not take it out."));
         assert!(
             lane.lines().count() < 40,
             "under 40 lines: {}",
