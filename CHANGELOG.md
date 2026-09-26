@@ -41,12 +41,14 @@ missing notices, which are fixed or added below.
 - `examples/minimal`, a three-file project showing a check and every file Air adds.
 - The decomposition skill asks every bead to end with a `## Context` section naming the skills
   to load and the files to read first.
+- `air reclaim <id> --worker <name> --reason <r>` lets the coordinator take back a gone
+  worker's bead through `bd reclaim`. bd lets go only after the worker's claim lease runs out,
+  five minutes after the claim; until then the command says when and exits non-zero.
 
 ### Changed
 
 - Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).
-  bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; a fix is
-  pending.
+  bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; see Fixed.
 - The fleet's protocol lives in Air's roles text (`.air/roles.md`). An adopting repository keeps
   only its own commands, setup and resources.
 - A branch no longer has to contain main to be ready for the lane; the lane merges main in.
@@ -66,12 +68,16 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- `air release --worker`. The coordinator uses `air reclaim` instead.
 - The `phase-transitions` skill is no longer installed. `air install --write` removes it.
 - Most of the general-purpose skills this repository carried; it keeps Air's own and the few
   used to work on it.
 
 ### Fixed
 
+- `air release` passes the worker's actor to bd, which bd 1.3.0 requires to unassign a bead.
+  Without it a session whose `BEADS_ACTOR` was not its claim's actor could not give its own
+  bead back.
 - In a pinned repository, sessions ran the `air` on PATH instead of the pin.
 - The lane's `air land` was refused by Claude Code's auto mode.
 - `make trial` did not turn on the verification lane.

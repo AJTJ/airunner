@@ -1422,7 +1422,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         worker: w.worker.clone(),
                         kind: kinds::IDLE_WITH_CLAIM,
                         detail: format!(
-                            "idle {age} min holding {}; prompt them, or `air release` if abandoned",
+                            "idle {age} min holding {}; prompt them, or `air reclaim` if abandoned",
                             beads()
                         ),
                         for_minutes: age,
@@ -1515,7 +1515,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         worker: w.worker.clone(),
                         kind: kinds::GONE_WITH_CLAIM,
                         detail: format!(
-                            "no live session but holds {}; restart `air worker {}` or release",
+                            "no live session but holds {}; restart `air worker {}` or `air reclaim`",
                             beads(),
                             w.worker
                         ),

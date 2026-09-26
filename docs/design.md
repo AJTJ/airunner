@@ -182,7 +182,7 @@ Any session may run these.
 | air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. A verify at a batch head tells each member the result and ends with the lane's next step. |
 | air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. |
 | air claim | The only way to claim a bead. It refuses while the fleet is stopped. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
-| air release | Returns a bead in progress to open. It never reopens a closed bead. The coordinator can release a claim held by a worker that has gone. |
+| air release | Returns the caller's own bead in progress to open, passing the caller's bd actor. It never reopens a closed bead. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
@@ -194,7 +194,7 @@ Any session may run these.
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
 
 These belong to the coordinator, the lane, or the owner. Claude Code's deny list keeps workers
-from air land, air close, and the three launchers, and Air refuses land and close again by role.
+from air land, air close, and the three launchers, and Air refuses land and close again by role. Air refuses reclaim to a worker.
 Nothing refuses inbox, triage, install or init to a worker.
 
 | Command | What it does |
@@ -203,6 +203,7 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
 | air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. A range that names no bead is refused unless its commits are all session-journal entries or all the coordinator's (the non-merge commits of the coordinator worktree's branch), and then it lands recording no bead. It closes nothing, and it always updates main in the main checkout, wherever it is run from. It refuses while the fleet is stopped, tells each member that its commits landed, and ends with the branches batch-ready now and the next command. |
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
+| air reclaim | The coordinator takes back a gone worker's bead with `bd reclaim --id`. bd lets go only once the claim's five-minute lease has run out (Air never renews it); until then the command names the expiry and exits non-zero. It never passes `--force`. |
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
 | air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
@@ -667,7 +668,8 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | A green is keyed by commit and counts for any worker; it is keyed by tree only if the repo declares that. | 2026-09-05 | `verify_key` in `.claude/air.json` |
 | A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
 | Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
-| Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release` |
+| Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release`, `air reclaim` |
+| Taking back another worker's bead never forces bd; it waits for bd's lease to run out. | 2026-09-26 | `air reclaim` |
 | A worker cannot claim a bead labelled `owner`. | 2026-08-22 | `OWNER_LABEL` |
 | A default is closed only where a wrong denial is loud; messages are never fenced. | 2026-08-22 | `docs/rules/roles.md` |
 | The ledger keeps only what git and bd cannot rebuild, and nothing in it expires by time. | 2026-08-17 | `crates/ledger` |
@@ -912,9 +914,6 @@ Docs:
       whether bd serve removes enough of the per-process cost to be worth a daemon, and whether
       upstream compare-and-set lets the claims table stop being the authority. The pin moved to
       1.3.0 on 2026-09-26 (owner ruling). (Section 11.)
-- [ ] `air release` on bd 1.3.0: `bd update <id> -s open -a ""` on a bead another actor holds
-      in_progress is refused ("cannot reassign … pass --force"), where 1.2.2 accepted it
-      (throwaway repos, 2026-09-26). `reopen_argv` needs a fix, likely `--force`, not yet tried.
 - [ ] Turn the two findings indexes about the adopter (`private/adopter-corpus/`) into beads.
       No bead names them yet.
 

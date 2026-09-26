@@ -250,6 +250,10 @@ a condition when the set of conditions changes, not while one ages: a worker idl
 gone with a claim, a worker idle without one, a hand-over not green, a branch landable, a bead
 landed and not closed, a lease held by a dead or stale session.
 
+A gone worker's bead comes back with `air reclaim <id> --worker <name> --reason <reason>`. bd
+lets go once the worker's claim lease has run out, which is five minutes after the claim because
+Air does not renew it; before that the command says when and changes nothing.
+
 To stop all work, run `air fleet stop --reason "<why>"`, and `air fleet resume` to end it. Air
 tells every session, and while the stop holds `air claim`, `air batch cut` and `air land` refuse
 naming it, the ready fan-out and the Stop nudge are silent, and `air status` leads with `FLEET
