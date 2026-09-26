@@ -28,8 +28,17 @@ git commit -qm "the project before Air"
 # candidate is on PATH for this one command only.
 PATH="$bin:$PATH" "$bin/air" init --write >/dev/null
 "$bin/air" install --write --pin >/dev/null
+# The fleet always starts a lane, and every scenario in §9.1 but the happy path assumes the
+# with-lane sequence, which `"verify_lane": true` selects (air-h91g: the 0.4.0 trial ran
+# without it, workers verified their own branches, and eight of ten scenarios never started).
+# Keys a scenario sets itself, such as `precheck`, are left to the scenario.
+cfg=.claude/air.json
+[ "$(head -n 1 "$cfg")" = "{" ] || { echo "trial: $cfg does not start with {"; exit 1; }
+awk 'NR == 1 { print; print "  \"verify_lane\": true,"; next } { print }' "$cfg" >"$cfg.new"
+mv "$cfg.new" "$cfg"
+grep -q '"verify_lane": true' "$cfg" || { echo "trial: $cfg has no verify_lane"; exit 1; }
 git add -A
-git commit -qm "Adopt Air, pinned to the candidate"
+git commit -qm "Adopt Air, pinned to the candidate, with the verification lane"
 
 echo "trial copy: $repo"
 echo "pinned:     $("$repo/.air/bin/air" --version)"
