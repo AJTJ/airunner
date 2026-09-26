@@ -38,6 +38,12 @@ missing notices, which are fixed or added below.
   tried without replacing the installed one. Any `air` 0.4.1 or later hands off to the pin.
 - `make trial` prepares a pinned copy of `examples/minimal` for the live trial.
 - `make adoption-check` adopts `examples/minimal` from scratch at every release.
+- `air init --write` sets a new project's bd up in server mode, on a Dolt server of its own
+  with its data in `.air/dolt/`. A project that already has `.beads/` is not changed.
+- `air bd-server up` starts that server when it does not answer, and `air fleet up` and the
+  launchers do the same before starting sessions. `air bd-server status`, `air doctor` and
+  `air status` show bd's mode and whether the server answers.
+- The coordinator's channel restarts a bd server that stopped and tells the coordinator once.
 - `examples/minimal`, a three-file project showing a check and every file Air adds.
 - The decomposition skill asks every bead to end with a `## Context` section naming the skills
   to load and the files to read first.
