@@ -7,8 +7,8 @@ metadata:
 
 # Plain language
 
-This skill owns the voice for everything written in this repo. Other writing skills say where
-a document goes and what shape it has; they do not restate these rules.
+This skill owns the voice for everything written in this repo. The `design-doc` skill says what
+shape the design doc has; it does not restate these rules.
 
 ## The voice
 
@@ -42,14 +42,13 @@ sentences. Say each thing once, in plain words, and then move on.
 ## Length
 
 Keep a bead description under 200 words and a message to the owner under 150. When a text is
-too long, cut content. Do not shorten it by dropping grammar. The README's length is in the
-`writing-readmes` skill, and the design doc's is in `design-doc`.
+too long, cut content. Do not shorten it by dropping grammar. The design doc's length is in
+`design-doc`.
 
 ## Check before you ship
 
 Read it aloud. A sentence that sounds like a slogan, a headline or a closing line gets
-rewritten as a plain statement. For longer pieces, scan the text against the tell catalogue in
-the `writing-style` skill (`references/slop-patterns.md`), tier by tier, and fix what it finds.
+rewritten as a plain statement.
 
 ## Provenance
 
@@ -60,5 +59,5 @@ the `writing-style` skill (`references/slop-patterns.md`), tier by tier, and fix
   sounded strange and asked for normal speech. The 20-word cap, the "Say the thing. Stop." opener and
   the README and skill word budgets were removed because they pushed writing toward fragments
   and compressed prose. Rules 1 and 4 to 8 were added from the patterns the owner objected to.
-- Removed when the owner stops reading prose written here, or when the other writing skills
-  own voice again and this one duplicates them.
+- Removed when the owner stops reading prose written here, or when another skill owns voice
+  and this one duplicates it.

@@ -53,8 +53,7 @@ more of it, that is the moment.
 
 ## What this owns, and what it does not
 
-`check-resources` asks *does this already exist* before you build. `anti-brittleness` asks *what
-will drift under this* while you build. This asks *is what I am about to say true, and where*. It
+This asks *is what I am about to say true, and where*. It
 applies at the moment of speaking or writing, including in a message to another session or
 project, and most of all when the claim is one you already agree with.
 

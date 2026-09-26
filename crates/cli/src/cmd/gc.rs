@@ -247,7 +247,7 @@ mod tests {
     }
 
     /// A clock or span we cannot reason about must keep everything. The failure direction of a
-    /// collector is the whole safety argument (`anti-brittleness`).
+    /// collector is the whole safety argument.
     #[test]
     fn an_unreadable_today_collects_nothing() {
         let p = plan(

@@ -69,8 +69,8 @@ pub struct DatedRule {
     pub expired: bool,
 }
 
-/// The dated rules, read from the constants themselves rather than copied (`anti-brittleness`:
-/// a probe reads a rule's number from the rule).
+/// The dated rules, read from the constants themselves rather than copied (a probe
+/// reads a rule's number from the rule).
 pub fn dated_rules(now: jiff::Timestamp) -> Vec<DatedRule> {
     let mk = |name, date: &'static str, what| DatedRule {
         name,

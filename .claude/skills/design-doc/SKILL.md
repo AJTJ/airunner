@@ -1,6 +1,6 @@
 ---
 name: design-doc
-description: Write or update the one architecture document that describes a system as it is today (for Air, docs/design.md). Use when asked for "the design doc", "the architecture doc", "document the system", "what does the system look like", or whenever a change alters a component, an interface, a flow, an invariant, or the operational topology. Produces a doc in the standard design-doc shape (context, overview, components, interfaces, data, flows, invariants, failure model, operations, open questions) with a Mermaid diagram wherever a structure or a flow is described, every claim traceable to a file or a command, written in plain technical prose. For a proposal about a future shape use the system-design skill; a ruling is one line in its Standing rulings section.
+description: Write or update the one architecture document that describes a system as it is today (for Air, docs/design.md). Use when asked for "the design doc", "the architecture doc", "document the system", "what does the system look like", or whenever a change alters a component, an interface, a flow, an invariant, or the operational topology. Produces a doc in the standard design-doc shape (context, overview, components, interfaces, data, flows, invariants, failure model, operations, open questions) with a Mermaid diagram wherever a structure or a flow is described, every claim traceable to a file or a command, written in plain technical prose. A ruling is one line in its Standing rulings section.
 metadata:
   version: 1.0.0
 ---

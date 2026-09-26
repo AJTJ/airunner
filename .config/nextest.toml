@@ -1,4 +1,4 @@
-# cargo-nextest configuration (rust-toolchain/references/cargo-and-tooling.md §E).
+# cargo-nextest configuration (https://nexte.st/docs/configuration/).
 [profile.default]
 slow-timeout = { period = "2s", terminate-after = 3 }
 final-status-level = "slow"

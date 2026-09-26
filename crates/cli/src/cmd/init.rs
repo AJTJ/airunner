@@ -241,7 +241,7 @@ Domain rules for this codebase go below.
 ///
 /// It only PROPOSES: the result is printed and written into a new CLAUDE.md stub, and nothing
 /// gates on it. A wrong guess costs one line a person reads and corrects, which is why this
-/// reads freely written files at all (`anti-brittleness`). Before air-gn5o every repo was told
+/// reads freely written files at all. Before air-gn5o every repo was told
 /// `make verify`, and a Rust crate or Node project got a Makefile that failed on purpose next
 /// to a test command that already worked.
 pub fn detect_verify(

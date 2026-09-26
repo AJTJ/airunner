@@ -399,7 +399,7 @@ pub fn status(repo: &Path, json: bool) -> i32 {
 //   `air lease needs` is that, over the same patterns the hook reads.
 //
 // The patterns are the harness's own `Bash(...)` deny syntax (`worker_deny`), matched the way
-// the harness documents matching them (.claude/skills/check-resources/references/harness-facts.md §3 row 10): `*` spans
+// the harness documents matching them (https://code.claude.com/docs/en/permissions.md, "Compound commands" and "Wrappers", read 2026-08-20): `*` spans
 // spaces, each `&&`/`||`/`;`/`|` segment is matched on its own, leading `VAR=value`
 // assignments and the `timeout`/`nice`/`nohup` wrappers are stripped, and a trailing ` *`
 // also matches the bare command. Anchored at the segment's start, so `git grep adb` is a grep:

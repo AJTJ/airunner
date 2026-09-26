@@ -11,7 +11,7 @@
 //! coordinator session (days). It must not leak, must not block on a stuck child, and must
 //! keep serving after any single bad line. The surface we need is six methods; owning the
 //! read loop, the write lock, and the poll thread is smaller than auditing an async runtime
-//! for the same guarantees (rust-safety skill; plan 0003 "no async in hooks").
+//! for the same guarantees (plan 0003 "no async in hooks").
 //!
 //! Push design: there is no documented way for an outside process to talk to a channel
 //! server, and every attention condition is a clock condition anyway ("idle for N min").

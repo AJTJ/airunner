@@ -97,8 +97,8 @@ pub fn declares_adopters(repo: &Path) -> bool {
 
 /// Pure: the adopter names declared in `private/adopters.md`.
 ///
-/// A DECLARED field, `name: <x>` on its own line, not every word in the file
-/// (`anti-brittleness`). The file also carries paths, a prefix and prose that mention the same
+/// A DECLARED field, `name: <x>` on its own line, not every word in the file.
+/// The file also carries paths, a prefix and prose that mention the same
 /// name, and a check that grepped its whole text would refuse the file it reads.
 pub fn names(adopters_md: &str) -> Vec<String> {
     adopters_md
