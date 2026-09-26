@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 21;
+pub const CURRENT_VERSION: i64 = 22;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -322,6 +322,25 @@ ALTER TABLE captures ADD COLUMN head_sha TEXT;
 ALTER TABLE captures ADD COLUMN head_absent TEXT;
 "#;
 
+/// v22 (2026-09-26, air-1vri): messages Air delivers into a session through its channel, one
+/// row per recipient. `deliveries` rather than a second use of `messages`, which is what agents
+/// sent each other over `SendMessage` and has no recipient that could read it back.
+/// `delivered_at` NULL is pending; the channel of the named session sets it when it pushes.
+const V22: &str = r#"
+CREATE TABLE IF NOT EXISTS deliveries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    to_worker     TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    key           TEXT NOT NULL,
+    subject       TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    delivered_at  TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS deliveries_change ON deliveries(to_worker, kind, key);
+CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(to_worker, delivered_at);
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -337,6 +356,7 @@ ALTER TABLE captures ADD COLUMN head_absent TEXT;
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
+    V22,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.

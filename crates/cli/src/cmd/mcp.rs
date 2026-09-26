@@ -93,13 +93,30 @@ pub fn run(repo: &Path) -> i32 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| poll_secs.saturating_mul(1000));
-    {
+    // Attention conditions are the coordinator's (and the owner's, in a shell Air did not
+    // start). A worker's or the lane's server used to run the same poll and push into a session
+    // that had no channel, so every push was dropped; now that those sessions have one, the
+    // conditions would reach the wrong reader (air-1vri).
+    if polls_attention(super::caller_role()) {
         let out = out.clone();
         let repo = repo.to_path_buf();
         std::thread::Builder::new()
             .name("air-channel-poll".into())
             .spawn(move || poll_loop(&repo, &out, Duration::from_millis(poll_ms)))
             .map_err(|e| eprintln!("air mcp: poll thread: {e}"))
+            .ok();
+    }
+    if delivers(std::env::var("AIR_CHANNEL").ok().as_deref()) {
+        let out = out.clone();
+        let repo = repo.to_path_buf();
+        let every = std::env::var("AIR_DELIVERY_POLL_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DELIVERY_POLL_MS);
+        std::thread::Builder::new()
+            .name("air-channel-deliver".into())
+            .spawn(move || deliver_loop(&repo, &out, Duration::from_millis(every)))
+            .map_err(|e| eprintln!("air mcp: delivery thread: {e}"))
             .ok();
     }
     let stdin = std::io::stdin();
@@ -209,7 +226,7 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 // rather than against memory. `review-waiting` left with air-okc,
                 // `owner-decision-waiting` with air-uef. A surface describing something
                 // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI; the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise."
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, landed-not-closed, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -599,6 +616,81 @@ pub(crate) fn run_group(
         matches!(&drained, Ok(None)),
     );
     drained.map_err(GroupRun::Spawn)?.ok_or(GroupRun::Timeout)
+}
+
+// ---------- delivery ----------
+
+/// How often a session's channel looks for messages addressed to it. A read of one indexed
+/// table; five seconds keeps a pushed result well inside the minute the loops are measured
+/// against (air-1vri.2).
+const DELIVERY_POLL_MS: u64 = 5_000;
+
+/// Which roles run the attention poll: the coordinator, and the owner's own session.
+pub fn polls_attention(role: &str) -> bool {
+    matches!(role, "coordinator" | "owner")
+}
+
+/// Whether this server delivers Air's messages: only when the launcher attached it as the
+/// session's channel and said so with `AIR_CHANNEL=1`. A server the session did not load as a
+/// channel has its notifications dropped with no error
+/// (https://code.claude.com/docs/en/channels-reference.md "Notification format", accessed
+/// 2026-09-26), so it must not mark anything delivered.
+pub fn delivers(env: Option<&str>) -> bool {
+    env == Some("1")
+}
+
+/// The channel notification for one delivery.
+pub fn delivery_event(d: &air_ledger::deliveries::Delivery) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {
+            "content": d.content,
+            "meta": {"kind": d.kind.replace('-', "_"), "from": "air"}
+        }
+    })
+}
+
+/// Take what is addressed to this session, push it, and write one event line per message.
+/// Returns how many were pushed.
+pub fn deliver_once(repo: &Path, out: &mut dyn FnMut(&Value)) -> Result<usize, String> {
+    let (ledger, me) = crate::cmd::open(repo)?;
+    let at = crate::cmd::now();
+    let taken = ledger
+        .take_deliveries(&me, &at)
+        .map_err(|e| e.to_string())?;
+    for d in &taken {
+        out(&delivery_event(d));
+        crate::cmd::log_event(
+            &ledger,
+            &me,
+            super::decisions::CHANNEL_DELIVERED,
+            &json!({
+                "id": d.id,
+                "kind": d.kind,
+                "subject": d.subject,
+                "queued_at": d.created_at,
+                "waited_s": status::seconds_between(&d.created_at, &at),
+            }),
+            &d.content,
+            "1 message",
+        );
+    }
+    Ok(taken.len())
+}
+
+fn deliver_loop(repo: &Path, out: &Out, every: Duration) {
+    loop {
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Err(e) = deliver_once(repo, &mut |v| out.send(v)) {
+                eprintln!("air mcp: deliver: {e}");
+            }
+        }));
+        if tick.is_err() {
+            eprintln!("air mcp: deliver: tick panicked; continuing");
+        }
+        std::thread::sleep(every);
+    }
 }
 
 // ---------- channel push ----------

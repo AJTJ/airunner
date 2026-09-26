@@ -58,7 +58,7 @@ flowchart LR
   W3 -->|commands| CLI
   L -->|commands| CLI
   harness -->|every hook event| HOOK
-  C <-->|channel| MCP
+  harness <-->|channel| MCP
   CLI --> LEDGER
   HOOK --> LEDGER
   MCP -->|runs the CLI| CLI
@@ -71,8 +71,9 @@ flowchart LR
 The sessions are ordinary interactive Claude Code processes. Air starts each one with a role, a
 list of commands it may not run, and a few environment variables. Sessions reach Air in three
 ways. They run air commands from their shell. Claude Code calls the air hook on every tool call
-and lifecycle event, which is how Air sees edits and session changes. The coordinator also has
-Air attached as a channel, so conditions that need attention arrive without anyone polling.
+and lifecycle event, which is how Air sees edits and session changes. Every session Air starts
+also has Air attached as a channel. Through it the coordinator receives the conditions that need
+attention, and each session receives the messages Air addresses to it, without anyone polling.
 
 All three entry points are the same binary, and they write to the same two stores in the main
 checkout. The ledger holds current state and the event stream holds history. Air reads git and
@@ -104,26 +105,33 @@ Each command lives in its own source file, with a header naming the incident it 
 when it should be removed. Every command writes one event line and can print JSON. The channel
 server runs the CLI with JSON output, so the two can never disagree.
 
-The channel server is a small synchronous JSON-RPC server over standard input. Every 30 seconds
-it re-reads the attention conditions from the ledger and pushes any that are new or worse. It
-lives as long as the coordinator's session, so it limits line length, puts a time limit on every
-child process, catches panics per request, and exits cleanly when its input closes.
+The channel server is a small synchronous JSON-RPC server over standard input. Claude Code
+starts one per session, in the session's directory, so each server knows which worktree it
+serves. In the coordinator's session and the owner's, every 30 seconds it re-reads the attention
+conditions from the ledger and pushes any that are new or worse. In every session a launcher
+attached it to (the launcher sets AIR_CHANNEL=1), every 5 seconds it takes the rows of the
+deliveries table addressed to its worktree, pushes each into the session, and marks it
+delivered. A server the session did not load as a channel delivers nothing, because Claude Code
+drops its notifications without an error. It lives as long as its session, so it limits line
+length, puts a time limit on every child process, catches panics per request, and exits cleanly
+when its input closes.
 
 The worker launcher creates a worktree under .claude/worktrees on its own branch. It copies in
 the ignored files the repository lists, such as environment files. It writes any first task to a
 file rather than the command line, then starts Claude Code in the worktree with the role prose,
 the deny list, and the role's environment. Given a task or the tmux option, it starts a tmux
 session named after the project and the worker, detached when there is no terminal. Given
-neither, it runs Claude Code directly in the caller's terminal. The lane launcher is the worker
-launcher with the lane's role. The coordinator launcher does the same in
-its own worktree, coordinator, always in a tmux session, with the channel attached; run again,
+neither, it runs Claude Code directly in the caller's terminal. Every launch attaches the Air
+channel. The lane launcher is the worker launcher with the lane's role. The coordinator launcher
+does the same in its own worktree, coordinator, always in a tmux session; run again,
 it attaches to the session already running. Nothing is launched in the main checkout. The
 channel server comes from the tracked .mcp.json, so it is present in every worktree, and the
 ledger resolves to the main checkout's .air from any of them. Every launch approves that server
 in its own settings, so no session stops to ask whether to use it. Two start-up prompts
 remain, because Claude Code has no supported way to answer them: the folder-trust question,
-asked until the main checkout is trusted once, and the coordinator's development-channels
-warning. The coordinator launcher and air fleet up say once which to expect and the answer.
+asked until the main checkout is trusted once, and the development-channels warning each
+session shows because it loads the Air channel. The coordinator launcher and air fleet up say
+once which to expect and the answer.
 
 Names carry the role and the project. Worktrees are worker-1, worker-2 and so on, lane, and
 coordinator, each on a branch named worktree- and the worktree's name. The tmux session and the
@@ -284,10 +292,11 @@ This is the worker launch, as the launcher prints it for a worker named worker-9
 repository:
 
 ```
-AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
+AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1 claude
   --append-system-prompt-file .air/roles.md
   --settings '{"env":{...},"enabledMcpjsonServers":["air"]}'
   --name air-worker-9
+  --dangerously-load-development-channels server:air
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
     'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' 'Bash(air fleet *)'
@@ -296,8 +305,8 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
 
 The repository's own worker_deny patterns follow the list. The lane's launch is the same with
 AIR_ROLE lane, without the air land deny, and with `"permissions":{"allow":["Bash(air land
-*)"]}` in its settings. The coordinator launch attaches the channel and denies git push plus the
-repository's coordinator_deny patterns.
+*)"]}` in its settings. The coordinator launch attaches the channel the same way and denies git
+push plus the repository's coordinator_deny patterns.
 
 ## 5. Data
 
@@ -312,6 +321,7 @@ erDiagram
   captures }o--o| claims : "becomes a bead"
   leases ||--o{ lease_wants : "resource"
   conditions }o--|| sessions : "worker"
+  deliveries }o--|| sessions : "worktree"
 ```
 
 | Table | Holds | Written by |
@@ -326,6 +336,7 @@ erDiagram
 | leases and lease wants | Who holds each shared resource and who is waiting. | lease and the hook |
 | hook emissions, conditions, bd cache | What a hook last said in each session, attention conditions with their first and cleared times, and small cached beads answers. | the hook, status, commands that call beads |
 | messages | Every message one agent sent another, with its content. | the hook |
+| deliveries | Every message Air addressed to a session: the worktree it is for, its kind, the change it names (unique per worktree and kind), its text, when it was queued and when the channel pushed it. | the commands and the coordinator's channel that notice the change; the recipient's channel marks it delivered |
 
 On 2026-09-14 this repository's ledger held 214 claims, 157 landings, 145 captures, and 1,176
 conditions. Ledger rows never expire. Event files are removed only when the owner runs air gc
@@ -460,23 +471,33 @@ The target is about a tenth of a second per call, so anything slow lives in the 
 Claude Code kills a hook at the five second limit, the hook writes nothing. That is why air
 audit also counts hook events that have no matching follow-up.
 
-### 6.5 The coordinator's channel
+### 6.5 The channel
 
 ```mermaid
 sequenceDiagram
   participant C as coordinator
-  participant M as air mcp
+  participant M as coordinator's air mcp
   participant L as ledger
+  participant WM as worker's air mcp
+  participant W as worker
   C->>M: connect
   M-->>C: tools, resources, channel
   loop every 30 seconds
     M->>L: compute attention conditions
     M-->>C: push each new or worse condition
   end
+  loop every 5 seconds
+    WM->>L: take the deliveries addressed to this worktree
+    WM-->>W: push each one
+  end
   C->>M: call a tool
   M->>M: run the CLI
   M-->>C: result
 ```
+
+Claude Code queues channel events that arrive while a session is busy and hands them over
+together on its next turn, so a push never interrupts a tool call. Each delivery writes one
+channel.deliver event line with how long the message waited.
 
 ### 6.6 Session states
 
@@ -803,6 +824,7 @@ the decisions log.
 | One git worktree per worker, made by Air, with Air's hook as the edit fence. | Enforced partitions beat declared ones: on PaperBench a single agent scored 57.2, prompt-declared isolation 55.5, worktrees 63.3; four agents on distinct files passed 92.1% against 44.3% for eight on one file. Air makes the worktree itself so it can copy ignored files in and fence edits by role. | https://arxiv.org/abs/2603.21489 (2026-08-21); `air worker --help` |
 | Detached tmux sessions named for the project and the worker. | Every session must stay attachable by the owner. The only launch need with no first-party equivalent was a detached start for a session without a terminal. | CLAUDE.md, "A human is always in the loop"; `.claude/skills/check-resources/references/harness-facts.md` §1.3 (2026-08-24) |
 | One stdio MCP server as the coordinator's channel, polling the ledger every 30 seconds; its tools run the CLI with JSON output. | It lives and dies with the coordinator's session, so there is no daemon, and the channel and the CLI cannot disagree. Agent-facing operations stay CLI-first: MCP and CLI runs failed equally often, but MCP failures wasted 12.9% of spend against 2.2%. | crates/cli/src/cmd/mcp.rs; https://arxiv.org/abs/2608.08654 (2026-08-18) |
+| The same channel on every session Air starts, delivering the ledger's deliveries table addressed to that worktree (air-1vri). | A channel is the documented way to push an event into a running session, including an idle one, and events that arrive during a turn are queued and handed over together on the next. Claude Code starts one channel server per session over stdio, so the server's own directory is the address and no routing is needed. The alternative was a Stop hook with asyncRewake, which "wakes Claude immediately even when the session is idle": it needs a waiting process per stop, killed at the hook timeout (600 seconds by default), and it is documented for reporting background failures, not for messaging. The cost of the channel is one development-channels confirmation per session while channels are in research preview. | https://code.claude.com/docs/en/channels-reference.md "Notification format" and "Test during the research preview"; https://code.claude.com/docs/en/channels.md; https://code.claude.com/docs/en/hooks.md `asyncRewake` and "Run hooks in the background" (all read 2026-09-26, Claude Code 2.1.283) |
 | The verification lane is a merge queue: batch, one verify at a time, main moves only by fast-forward onto a verified tree, a conflict goes back to its author, a red batch is split. No speculation, no rebase. | Every merge queue with a slow verify batches and splits on red, and all but Google's TAP keep main on a tested tree. On one machine the verify is the CPU, so parallel speculation is contention. Greens are keyed by commit, and a rebase gives every commit a new sha. | https://raw.githubusercontent.com/bors-ng/bors-ng/master/README.md, https://zuul-ci.org/docs/zuul/latest/gating.html, the GitHub merge queue documentation (all 2026-09-14); `.claude/skills/system-design/references/verification-lane.md` |
 | git merge-tree --write-tree for the conflict check before a cut; git 2.38 or later. | It merges without touching the index or the working tree, so every conflict with main or between members is known before the lane's branch changes. | https://git-scm.com/docs/git-merge-tree (2026-09-14); crates/cli/src/cmd/batch_cut.rs |
 | A few sessions, not many: three workers, a lane, and the coordinator. | Returns thin beyond three or four agents and turn negative where one agent already succeeds often. Subscription usage pools across every session on the account, with no published concurrency limit, so five sessions is an estimate to measure, not a quota. | https://arxiv.org/abs/2512.08296 (2026-08-18); https://code.claude.com/docs/en/costs.md (2026-08-17) |
