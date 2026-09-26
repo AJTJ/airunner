@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "air hook",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
     "PermissionDenied": [
       {
         "hooks": [
@@ -64,7 +75,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Edit|Write|MultiEdit|Bash|SendMessage"
+        "matcher": "Edit|Write|MultiEdit|Bash|SendMessage|AskUserQuestion"
       }
     ],
     "SessionEnd": [
@@ -90,6 +101,17 @@
       }
     ],
     "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "air hook",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
       {
         "hooks": [
           {
