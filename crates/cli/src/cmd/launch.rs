@@ -820,8 +820,7 @@ fn launch_worker_like(
             return 1;
         }
     };
-    // The worktree is Air's to create and fill (air-fdz); claude is handed the existing one
-    // by name and keeps its isolation.
+    // The worktree is Air's to create and fill (air-fdz); claude starts inside it (air-8gj).
     if !print && ensure_worktree(repo, name, &who).is_err() {
         return 1;
     }
