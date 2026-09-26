@@ -119,7 +119,11 @@ launcher with the lane's role. The coordinator launcher does the same in
 its own worktree, coordinator, always in a tmux session, with the channel attached; run again,
 it attaches to the session already running. Nothing is launched in the main checkout. The
 channel server comes from the tracked .mcp.json, so it is present in every worktree, and the
-ledger resolves to the main checkout's .air from any of them.
+ledger resolves to the main checkout's .air from any of them. Every launch approves that server
+in its own settings, so no session stops to ask whether to use it. Two start-up prompts
+remain, because Claude Code has no supported way to answer them: the folder-trust question,
+asked until the main checkout is trusted once, and the coordinator's development-channels
+warning. The coordinator launcher and air fleet up say once which to expect and the answer.
 
 Names carry the role and the project. Worktrees are worker-1, worker-2 and so on, lane, and
 coordinator, each on a branch named worktree- and the worktree's name. The tmux session and the
@@ -154,6 +158,10 @@ Workers are kept from a small set of commands in two ways. Claude Code's deny li
 from running the commands at all. For air land and air close, Air's own checks refuse again when
 AIR_ROLE is worker or lane, which covers the command being spelled a different way. The lane's
 deny list is the worker's without air land, and a worker's includes air lane and air fleet.
+The lane's settings also carry an allow rule for air land (and for the pinned binary's path
+when the repository is pinned). In auto mode an allow rule resolves before the classifier
+runs, and without it the classifier refused the lane's landing in the 0.4.0 trial. The rule
+is on the lane's command line, not in the repository's settings, so no other role gets it.
 
 ## 4. Interfaces
 
@@ -278,7 +286,7 @@ repository:
 ```
 AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
   --append-system-prompt-file .air/roles.md
-  --settings '{"env":{...}}'
+  --settings '{"env":{...},"enabledMcpjsonServers":["air"]}'
   --name air-worker-9
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
@@ -286,8 +294,10 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
     EnterWorktree ExitWorktree AskUserQuestion
 ```
 
-The repository's own worker_deny patterns follow the list. The coordinator launch attaches the
-channel and denies git push plus the repository's coordinator_deny patterns.
+The repository's own worker_deny patterns follow the list. The lane's launch is the same with
+AIR_ROLE lane, without the air land deny, and with `"permissions":{"allow":["Bash(air land
+*)"]}` in its settings. The coordinator launch attaches the channel and denies git push plus the
+repository's coordinator_deny patterns.
 
 ## 5. Data
 
