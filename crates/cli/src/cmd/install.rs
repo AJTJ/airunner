@@ -2361,6 +2361,19 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "Run `air install --write` to refresh `.air/roles.md`.",
     },
+    SurfaceChange {
+        id: "batch-cut-starts-from-main",
+        since: "2026-09-26 (0.4.8 live trial, workaround 1)",
+        headline: "`air batch cut` resets the lane's branch to main before merging, so a red \
+                   batch's merges no longer carry into the next batch. It refuses, changing \
+                   nothing, while the lane has uncommitted changes or while its head has a \
+                   recorded green that main does not contain (land it first). `--dry-run` names \
+                   the head it would reset from; in `--json`, `reset_from` replaces `carried`. `.air/roles.md` no longer lets the lane hold a \
+                   bead between batches, since its own commits do not survive a cut.",
+        silent_break: true,
+        action: "The lane stops resetting its branch by hand. Run `air install --write` to \
+                 refresh `.air/roles.md`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3539,8 +3552,8 @@ mod tests {
         let lane = lane.unwrap();
         let flat_lane = flat(lane);
         assert!(flat_lane.contains("A lane is a worker session like any other"));
-        // The permission names the condition it assumes (air-4noi).
-        assert!(flat_lane.contains("it may hold one **if its worktree survives the cut**"));
+        // The cut resets the lane's branch (0.4.8 trial), so no bead survives one (air-4noi).
+        assert!(flat_lane.contains("work of the lane's own does not survive a cut"));
         // The loop is Air's; the batch comes from `air status`, never a relayed sha.
         assert!(flat_lane.contains("The lane's loop."));
         assert!(flat_lane.contains("never a sha from a message"));

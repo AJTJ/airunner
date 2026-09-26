@@ -25,8 +25,15 @@
 //!    writes nothing: each member against main, then against each EARLIER member already
 //!    accepted. The first conflict drops the member, naming the other side and the paths
 //!    ([`pre_check`]).
-//! 3. **The cut** (not with `--dry-run`): `git merge --no-edit main`, then
-//!    `git merge --no-edit <sha>` per accepted member at the listed sha. Each merge is judged by
+//! 3. **The start** ([`lane_start`], 0.4.8 live trial): the lane's branch is reset to main's
+//!    tip, so a batch is always main plus its own members. A red batch's merges stayed on the
+//!    branch and the next cut would have carried the red commit into the next batch; the lane
+//!    reset by hand. Decided from git ancestry and the ledger, never from text: a head already in
+//!    main, a recorded red, or no record resets; a recorded green at a head not in main is a
+//!    batch that passed and has not landed, and the cut refuses ("land it first"). A dirty tree
+//!    is refused before anything moves.
+//! 4. **The cut** (not with `--dry-run`): `git merge --no-edit <sha>` per accepted member at
+//!    the listed sha. Each merge is judged by
 //!    git's own exit status, then by the index (`git ls-files -u`) and by leftover conflict
 //!    markers (`git diff --check <pre-merge head>`), never by reading output. A conflict the
 //!    pre-check did not predict (three or more members together) is aborted, dropped and named;
@@ -47,6 +54,9 @@
 use std::path::Path;
 
 use serde::Serialize;
+
+use air_ledger::Ledger;
+use air_ledger::verify::{Kind, Verdict};
 
 use super::status::{self, BatchReady};
 use super::worktree::{GIT_BUDGET, git_status};
@@ -159,9 +169,9 @@ pub struct Cut {
     pub head: Option<String>,
     pub members: Vec<Candidate>,
     pub dropped: Vec<Dropped>,
-    /// Commits already on the lane's branch and not in main before the cut. They are in the
-    /// batch too; a red batch's merges show here until the lane resets to main.
-    pub carried: Vec<String>,
+    /// The lane's head before the cut reset it to main, when that head held commits main does
+    /// not (a red batch's, or nothing recorded); on a dry run, the head it would reset from.
+    pub reset_from: Option<String>,
     pub next: Option<String>,
 }
 
@@ -173,7 +183,7 @@ pub fn render(c: &Cut) -> String {
     let mut out = String::new();
     if c.dry_run {
         out.push_str(&format!(
-            "dry run, nothing changed: {} would merge main at {} and then:\n",
+            "dry run, nothing changed: {} would start from main at {} and merge:\n",
             c.lane,
             short(&c.main)
         ));
@@ -211,11 +221,16 @@ pub fn render(c: &Cut) -> String {
             d.stage
         ));
     }
-    if !c.carried.is_empty() {
+    if let Some(r) = &c.reset_from {
         out.push_str(&format!(
-            "  carried: {} commit(s) were already on the lane's branch and not in main; they are \
-             in this batch (a red batch's merges stay until you reset to main)\n",
-            c.carried.len()
+            "  reset: the lane's branch {} {} to main; its commits not in main are not in this \
+             batch\n",
+            if c.dry_run {
+                "would move from"
+            } else {
+                "moved from"
+            },
+            short(r)
         ));
     }
     if c.members.is_empty() && c.dropped.is_empty() {
@@ -231,6 +246,54 @@ pub fn render(c: &Cut) -> String {
         );
     }
     out.trim_end().to_string()
+}
+
+/// What the cut does with the lane's branch before merging anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaneStart {
+    /// Move the branch to main's tip. `from` is the old head when it held commits main does not.
+    Reset { from: Option<String> },
+    /// The head is a batch that passed (a green recorded there) and has not landed.
+    LandFirst { head: String },
+}
+
+/// THE start rule, pure: refuse only a recorded green at a head main does not contain. A head
+/// in main has nothing to lose; a red or unrecorded head holds nothing the next batch should
+/// carry. A killed run is no verdict and reads as no record.
+pub fn land_first(head_in_main: bool, head_verdict: Option<Verdict>) -> bool {
+    !head_in_main && head_verdict == Some(Verdict::Green)
+}
+
+/// Apply [`land_first`] to the lane at `repo`: read its head's ancestry and verdict, and reset
+/// it to `main` unless refused or `dry_run`. The caller has already refused a dirty tree.
+pub fn lane_start(
+    repo: &Path,
+    ledger: &Ledger,
+    main: &str,
+    dry_run: bool,
+) -> Result<LaneStart, String> {
+    let head = git::head(repo).map_err(|e| e.to_string())?;
+    let in_main = git::is_ancestor(repo, &head, main).map_err(|e| e.to_string())?;
+    let verdict = ledger
+        .latest_run_at_commit(&head, Kind::Verify)
+        .map_err(|e| e.to_string())?
+        .map(|r| r.verdict());
+    if land_first(in_main, verdict) {
+        return Ok(LaneStart::LandFirst { head });
+    }
+    if !dry_run && head != main {
+        let (code, _, err) = git_status(repo, &["reset", "--hard", main], GIT_BUDGET)?;
+        if code != 0 {
+            return Err(format!(
+                "could not reset the lane's branch to main at {}: {}",
+                short(main),
+                err.trim()
+            ));
+        }
+    }
+    Ok(LaneStart::Reset {
+        from: (!in_main).then_some(head),
+    })
 }
 
 /// The conflicting paths of one in-memory merge, or empty when clean.
@@ -455,38 +518,33 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         }
     };
 
-    let carried: Vec<String> = git::run(repo, &["rev-list", &format!("{main}..HEAD")])
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect();
+    // Every batch starts from main (0.4.8 trial): a red batch's merges never carry forward.
+    let reset_from = match lane_start(repo, &ledger, &main, dry_run) {
+        Ok(LaneStart::Reset { from }) => from,
+        Ok(LaneStart::LandFirst { head }) => {
+            return refuse(format!(
+                "air batch cut: refused: {lane}'s head {} is a batch that passed (a green is \
+                 recorded there) and main does not contain it. Land it first: `air land \
+                 --worker {lane}`. Nothing was changed.",
+                short(&head)
+            ));
+        }
+        Err(e) => {
+            eprintln!("air batch cut: {e}");
+            return 1;
+        }
+    };
     let mut cut = Cut {
         dry_run,
         lane: lane.clone(),
         main: main.clone(),
-        carried,
+        reset_from,
         ..Default::default()
     };
     if dry_run {
         cut.members = accepted;
         cut.next = Some("air batch cut".to_string());
     } else if !accepted.is_empty() {
-        // Main first: a member is judged against the main it will land on.
-        match merge(repo, &main) {
-            Ok(Merged::Clean) => {}
-            Ok(Merged::Conflict(paths)) => {
-                return refuse(format!(
-                    "air batch cut: refused: {lane}'s own branch conflicts with main in {}, so \
-                     no member can be judged against main. The lane's branch holds nothing \
-                     worth keeping between batches: `git reset --hard main`, then cut again.",
-                    paths.join(", ")
-                ));
-            }
-            Err(e) => {
-                eprintln!("air batch cut: {e}");
-                return 1;
-            }
-        }
         for m in accepted {
             match merge(repo, &m.head) {
                 Ok(Merged::Clean) => cut.members.push(m),

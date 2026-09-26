@@ -95,6 +95,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- After a red batch, the next `air batch cut` built on the red merges and would have carried
+  them into the next batch. Every cut now resets the lane's branch to main first. It refuses
+  while the lane has uncommitted changes, or while its head is a passing batch not yet landed.
 - A worker's close was refused as behind main when its own batch had just landed, although
   main contained its work.
 - A worker's close was refused as behind main when the bead had landed or had a green, but the

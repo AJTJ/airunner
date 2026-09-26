@@ -166,11 +166,12 @@ PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/dige
 
 A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has
 the worker deny list minus `air land`, and the Stop hook offers it no ready beads. While it
-batches it holds no bead. Between batches it may hold one **if its worktree survives the cut**,
-since a lane that resets hard to main on every cut would wipe the bead's work.
+batches it holds no bead, and between batches none either: `air batch cut` resets the lane's
+branch to main before it merges, so work of the lane's own does not survive a cut.
 
-The lane's loop. Run `air batch cut` in your worktree. It merges `main` and every batch-ready
-branch at the sha `air status` lists, never a sha from a message, and drops and names a branch
+The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
+merges every batch-ready branch at the sha `air status` lists, refusing while your tree has
+uncommitted changes or your head is a passing batch not yet landed, never a sha from a message, and drops and names a branch
 that conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the
 repo's test-state reset if it has one, and `air record verify -- <verify command>`. A dropped
 branch is resolved by its worker, never by the lane. A red batch lands nothing.
