@@ -499,6 +499,14 @@ Claude Code queues channel events that arrive while a session is busy and hands 
 together on its next turn, so a push never interrupts a tool call. Each delivery writes one
 channel.deliver event line with how long the message waited.
 
+Deliveries are queued by whatever notices the change. After each 30-second tick, the
+coordinator's server compares the claimable ready list with the one it saw last (asking beads
+again when the cached list is more than a minute old) and, when a bead was added, queues
+"beads are ready" for every live, idle worker holding no claim. The lane and a worker holding a
+claim are never told. A later list replaces a worker's undelivered one, so a session that was
+away hears the latest. The first tick after the server starts only records the list. One
+fanout event line records each change and who was told.
+
 ### 6.6 Session states
 
 ```mermaid
@@ -755,6 +763,14 @@ built is described in sections 4 and 6.
       fallbacks. Delete them, since both expired on 2026-08-23 (`FALLBACK_BEFORE` in
       attribution.rs, `FRONTMATTER_SINCE` in handover.rs). (Seen running the quick start,
       2026-09-14.)
+
+Messaging, added 2026-09-26 (air-1vri, owner: the coordinator sends one message to Air and Air
+fans it out).
+
+- [x] Deliver Air's messages into every launched session through its own channel, addressed by
+      worktree, from the ledger's deliveries table (crates/cli/src/cmd/mcp.rs, deliver_once).
+- [x] Tell idle workers without a claim when the ready set gains a bead, once per change
+      (crates/cli/src/cmd/fanout.rs, fan_out_ready). (air-dkm1)
 
 Owner rulings still open, each with the recommendation:
 

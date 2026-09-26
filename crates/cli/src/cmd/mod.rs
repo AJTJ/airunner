@@ -13,6 +13,7 @@ pub mod close;
 pub mod decisions;
 pub mod delegate;
 pub mod doctor;
+pub mod fanout;
 pub mod gc;
 pub mod green;
 pub mod handover;

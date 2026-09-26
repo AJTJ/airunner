@@ -178,6 +178,16 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-dkm1: a worker holding a claim is told about new beads too. Seen red 2026-09-26.
+    (
+        "fanout: new ready beads are queued once for each live idle worker without a claim, never for the lane or a worker holding one",
+        Mutation {
+            file: "crates/cli/src/cmd/fanout.rs",
+            from: "                && w.claims.is_empty()\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
     // air-1vri: the channel marks the row delivered and pushes nothing, which is exactly what a
     // session that did not load the server as a channel would see. Seen red 2026-09-26.
     (
@@ -2582,6 +2592,7 @@ fn all_probes() -> Vec<Probe> {
         probe_handover_says_what_the_landing_gate_would_say(),
         probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
         messaging::probe_a_message_reaches_only_its_session(),
+        messaging::probe_new_beads_reach_idle_workers_once(),
     ]
 }
 
@@ -6139,7 +6150,7 @@ fn probe_standstill() -> Probe {
     }
 }
 
-/// air-d10: `idle-without-claim` says "prompt them", so it needs somebody to prompt. Red: a
+/// air-d10: `idle-without-claim` names an idle worker, so it needs a live one. Red: a
 /// live idle worker past the threshold with beads ready still fires. Green: the same row with
 /// the session's process gone is silent — the shape of the two longest-lived rows in this
 /// repo's ledger, open 4 885 minutes each.
