@@ -119,7 +119,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | What Claude Code itself provides and can confine (live inventory, dated; hook events; edge cases) | `.claude/skills/check-resources/references/harness-facts.md` |
 | Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | skill `beads`; `.claude/skills/beads/references/bd-facts.md` |
 | The findings Air's rules rest on: guardrails as throttles, corpus principles, verified numbers and claims not to repeat | `.claude/skills/do-less/references/evidence.md` |
-| Integrating Air into a target repo (install, rules to change, upgrading) | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
+| Integrating Air into a target repo: install, configure (`.claude/air.json`), upgrade | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
 | Decomposing a feature, sizing beads, epic and bead states | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
