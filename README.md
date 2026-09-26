@@ -10,6 +10,21 @@ Do less. Most agentic systems try to do too much. The model knows how to do the 
 getting better at it, so Air does not plan the work or tell agents how to do it. What it does
 is practical: a merge queue, a few checks, and help keeping a fleet of sessions running.
 
+## The roles
+
+A fleet is three kinds of session. Each is a full Claude Code session, and each has one job.
+
+- **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into
+  beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it
+  free of implementation work means it is always available to you.
+- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree,
+  and closes it with proof. Separate worktrees mean workers never edit each other's files. The
+  default is three, because returns from more parallel agents fall off quickly beyond that.
+- **Verification lane** (`air lane`). It merges finished branches into a batch, runs your check
+  once for the whole batch, and lands the batch on `main`. It is the only session that moves
+  `main`. Checking once per batch costs far less than once per branch, and a single owner of
+  `main` means `main` only ever moves to a commit that passed.
+
 ## What Air is
 
 - **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
@@ -36,7 +51,8 @@ Air supports Claude Code only, for now.
 ## How you use it
 
 You talk to the coordinator. It writes the beads, the workers do them, and you check their results.
-Every session is a full harness running in a worktree, in tmux that, you can interact with.
+Every session is a full harness running in its own worktree, in a tmux session you can
+interact with.
 
 ## The pieces
 
