@@ -362,13 +362,14 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         2
     };
     if lane == "main" {
-        let at = super::handover::verify_lane(repo)
-            .map(|l| format!("`.claude/worktrees/{l}`"))
-            .unwrap_or_else(|| "the lane's worktree".to_string());
-        return refuse(format!(
+        // The worktree is named by `air lane`, not by `verify_lane`, which is only the switch
+        // for the closing sequence (air-rr98).
+        return refuse(
             "air batch cut: refused in the main checkout. A cut merges into the branch it runs \
-             on, and main moves only by `air land`. Run it in {at}."
-        ));
+             on, and main moves only by `air land`. Run it in the lane's worktree (`air lane` \
+             starts it in `.claude/worktrees/lane` unless given another name)."
+                .to_string(),
+        );
     }
     let version = git::run(repo, &["version"]).unwrap_or_default();
     if !has_merge_tree(&version) {

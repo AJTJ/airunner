@@ -88,7 +88,25 @@ enum BatchOp {
 }
 
 #[derive(Debug, Subcommand)]
+enum FleetOp {
+    /// Start the verification lane and the repo's workers (`"workers"` in `.claude/air.json`,
+    /// default 3; 0 starts only the lane), each in its worktree and a detached tmux session
+    /// `<project>-<name>`. A session already running is left as it is. Workers start with no
+    /// task; the lane is told to start its loop.
+    Up {
+        /// Print each launch instead of running it; writes nothing.
+        #[arg(long)]
+        print: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum Cmd {
+    /// The fleet the coordinator works with: the lane and the workers.
+    Fleet {
+        #[command(subcommand)]
+        op: FleetOp,
+    },
     /// The verification lane's batch.
     Batch {
         #[command(subcommand)]
@@ -184,8 +202,8 @@ enum Cmd {
         #[arg(long)]
         reason_file: Option<PathBuf>,
     },
-    /// Coordinator: land a green branch on main. The one allowed path onto main; it pushes
-    /// nothing.
+    /// The lane: land a green branch on main. The one allowed path onto main; it pushes
+    /// nothing. Refused to workers and the coordinator; the owner's own shell may land too.
     ///
     /// **Main is never moved to a commit that has not been verified** (air-odv). The landing
     /// commit is built off main with `git commit-tree` and main is fast-forwarded onto it, so
@@ -319,10 +337,19 @@ enum Cmd {
     /// Start the interactive coordinator session in its own worktree, `.claude/worktrees/coordinator`,
     /// in the tmux session `<project>-coordinator`, with the Air channel attached. Run again, it
     /// attaches to the session already running.
+    ///
+    /// Before it starts, it asks on the terminal whether to start the fleet (`air fleet up`).
+    /// `--fleet` or `--no-fleet` answers in advance; with no terminal the answer is no.
     Coordinator {
         /// Model to launch on (air-air); inherited when omitted.
         #[arg(long)]
         model: Option<String>,
+        /// Start the lane and the workers too, without asking.
+        #[arg(long, conflicts_with = "no_fleet")]
+        fleet: bool,
+        /// Start only the coordinator, without asking.
+        #[arg(long)]
+        no_fleet: bool,
         #[arg(long)]
         print: bool,
         #[arg(last = true)]
@@ -558,9 +585,23 @@ fn main() -> ExitCode {
         ),
         Cmd::Coordinator {
             model,
+            fleet,
+            no_fleet,
             print,
             extra,
-        } => cmd::launch::coordinator(&repo, &with_model(model.as_deref(), &extra), print),
+        } => cmd::launch::coordinator(
+            &repo,
+            &with_model(model.as_deref(), &extra),
+            print,
+            match (fleet, no_fleet) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
+        ),
+        Cmd::Fleet {
+            op: FleetOp::Up { print },
+        } => cmd::launch::fleet_up(&repo, print),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),

@@ -7,7 +7,7 @@ metadata:
 
 # Work Decomposition
 
-Breaking a feature into epics and an epic into claimable beads that workers pull. The reasoning is Metis's (`decomposition` skill, Flight Levels as Kanban) plus
+Breaking a feature into epics and an epic into claimable beads that workers pull. The reasoning is Metis's (its decomposition skill, Flight Levels as Kanban) plus
 the agile sources it draws on; the vocabulary, the checks, and the `bd` commands are Air's.
 Where the text says "epic" or "bead", Metis says "initiative" or "task". Sources are listed
 under "Additional resources".
@@ -18,9 +18,9 @@ under "Additional resources".
 |---|---|---|
 | Vision | **feature** | Owner picks it; not tracked (`docs/decisions.md` 2026-08-17). A paragraph in `decisions.md` or a plan. |
 | Initiative | **epic** | `bd create --type=epic` with `--design` as its spec. Non-empty `--design` before any child can be claimed (SYNTHESIS §4.3 check 8; owner 2026-08-18 item 1). |
-| Task | **bead** | One agent, one session, one reviewable diff, one runnable acceptance (`beads` skill). |
+| Task | **bead** | One agent, one session, one reviewable diff, one runnable acceptance. |
 | Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`decisions.md` 2026-08-18 item 3). |
-| Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. See `phase-transitions`. |
+| Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. |
 | "decompose phase is a visible buffer" | same | Ledger metric: time from `--design` to first child claim. |
 | `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | "the missing instrument is a size estimate at filing time" (an adopter's retrospective of its overnight fleet run of 2026-08-15). |
 
@@ -46,7 +46,7 @@ the feedback.
 
 Filing-time signals:
 
-- Acceptance needs "and" → split (`beads` skill).
+- Acceptance needs "and" → split.
 - Checklist in the description → an epic that was not cut (`bd ready` cannot see or claim items;
   an adopter's task-specification research, read 2026-08-20, whose phrase for them is "epics wearing task clothes").
 - Touches two lanes → split by lane, or record the edge and accept serial landing.
@@ -192,7 +192,7 @@ for a night; 42 beads were offered to workers and none was a P1. The tracker ren
 
 **bd will usually stop you, and the case it misses is the one you are most likely to hit.**
 Measured against bd 1.2.2 on nine routes, 2026-09-06 (every command and output is kept in
-Air's `beads` skill, `references/bd-facts.md`). bd's guard is two rules and neither
+Air's own repository, in its bd facts reference). bd's guard is two rules and neither
 is an ancestor walk:
 
 1. **An existing `parent-child` row on the same pair**, so any other edge type between them is
@@ -297,8 +297,6 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   https://www.jpattonassociates.com/wp-content/uploads/2015/03/story_mapping.pdf); "the
   Developers who will be doing the work are responsible for the sizing" (Scrum Guide 2020,
   https://scrumguides.org/scrum-guide.html). Metis paths are at metis `6745810`.
-- `phase-transitions` for when an epic or bead may move; `beads` for `bd` quoting and traps.
-
 ## Provenance
 
 - Source: `metis/plugins/metis/skills/decomposition/SKILL.md` and

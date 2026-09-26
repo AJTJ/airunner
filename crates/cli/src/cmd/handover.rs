@@ -286,20 +286,11 @@ pub fn digest_location_from(
     None
 }
 
-/// `verify_lane` from `.claude/air.json`: which worker is the verification lane.
-///
-/// The repo's declaration that a lane runs, which picks the closing sequence in roles.md (no
-/// verify of your own under a lane). Air reads it in one place: `air batch cut`'s refusal in the
-/// main checkout names the lane's worktree from it. The Stop hook's nudge read it until the lane
-/// had its own launcher and role (air-jc2p.2); it reads `AIR_ROLE=lane` now, which cannot name
-/// the wrong worker. The gate and `air handover` do not branch on it. Removed when the repo
-/// flow can be told from whether a lane session exists rather than from a declaration.
-pub fn verify_lane(repo: &Path) -> Option<String> {
-    air_json(repo)?
-        .get("verify_lane")?
-        .as_str()
-        .map(str::to_string)
-}
+// `verify_lane()` was here until air-rr98 (2026-09-25). `verify_lane` in `.claude/air.json` is
+// now a boolean that only picks the closing sequence in roles.md, and no code reads it: the
+// lane is the session `air lane` started (`AIR_ROLE=lane`), so its name is never declared
+// twice. Its last reader named the lane's worktree in `air batch cut`'s refusal, and nothing
+// checked that name against the worktree `air lane` used.
 
 /// `journal_dir` from `.claude/air.json`: an override for a repo that wants its session
 /// journals tracked in its own tree (air-3xww). Absent, they go to `<main>/.air/journal/`
