@@ -98,6 +98,16 @@ enum FleetOp {
         #[arg(long)]
         print: bool,
     },
+    /// Stop all work (coordinator and owner only): `air claim`, `air batch cut` and `air land`
+    /// refuse, naming the stop, until `air fleet resume`. Every session is told through its
+    /// channel. Sessions are not killed, and a verify already running finishes and is recorded.
+    Stop {
+        /// Why, told to every session with the stop.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// End a stop (coordinator and owner only). Every session is told.
+    Resume,
 }
 
 #[derive(Debug, Subcommand)]
@@ -638,6 +648,12 @@ fn main() -> ExitCode {
         Cmd::Fleet {
             op: FleetOp::Up { print },
         } => cmd::launch::fleet_up(&repo, print),
+        Cmd::Fleet {
+            op: FleetOp::Stop { reason },
+        } => cmd::fleet::stop(&repo, reason.as_deref(), cli.json),
+        Cmd::Fleet {
+            op: FleetOp::Resume,
+        } => cmd::fleet::resume(&repo, cli.json),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),

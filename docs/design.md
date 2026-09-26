@@ -179,15 +179,15 @@ Any session may run these.
 
 | Command | What it does |
 |---|---|
-| air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. |
+| air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. A verify at a batch head tells each member the result and ends with the lane's next step. |
 | air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. |
-| air claim | The only way to claim a bead. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
+| air claim | The only way to claim a bead. It refuses while the fleet is stopped. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
 | air release | Returns a bead in progress to open. It never reopens a closed bead. The coordinator can release a claim held by a worker that has gone. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
-| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It neither verifies nor lands; it prints the next command. |
+| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It tells each dropped worker its conflict, and it refuses while the fleet is stopped. It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
 | air selftest | Runs a red and a green probe for every check. There were 162 probes on 2026-09-25. |
@@ -201,12 +201,13 @@ Nothing refuses inbox, triage, install or init to a worker.
 |---|---|
 | air inbox | Lists open captures, oldest first. |
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
-| air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. |
+| air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. It refuses while the fleet is stopped, tells each member that its commits landed, and ends with the branches batch-ready now and the next command. |
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
 | air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
 | air fleet up | Starts the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
+| air fleet stop, air fleet resume | The coordinator's and the owner's only; a worker or the lane is refused. Stop sets a fleet-wide stop in the ledger with its time, author and reason, and tells every other worktree's session. While it holds, air claim, air batch cut and air land refuse naming it, the ready fan-out and the stop nudge are silent, and air status leads with it. No session is killed, and a verify already running finishes and is recorded. Resume removes it and tells every session. |
 | air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. With --pin it copies itself to .air/bin/air, points the hooks and the channel at the copy, and the launchers put .air/bin first on the path of every session they start; the path check does not apply then. In a pinned repository any other air hands every command but install to the pin before running it (air-qyrm). --unpin goes back to the path. |
 | air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
@@ -336,6 +337,7 @@ erDiagram
 | leases and lease wants | Who holds each shared resource and who is waiting. | lease and the hook |
 | hook emissions, conditions, bd cache | What a hook last said in each session, attention conditions with their first and cleared times, and small cached beads answers. | the hook, status, commands that call beads |
 | messages | Every message one agent sent another, with its content. | the hook |
+| fleet stop | One row while the fleet is stopped: when, by whom, and why. | fleet stop, fleet resume |
 | deliveries | Every message Air addressed to a session: the worktree it is for, its kind, the change it names (unique per worktree and kind), its text, when it was queued and when the channel pushed it. | the commands and the coordinator's channel that notice the change; the recipient's channel marks it delivered |
 
 On 2026-09-14 this repository's ledger held 214 claims, 157 landings, 145 captures, and 1,176
@@ -785,8 +787,13 @@ fans it out).
 - [x] Tell the lane when a branch becomes batch-ready and each member its batch's result or
       drop; air land and a batch's air record end with the next cut; air status prints the
       two loop times (crates/cli/src/cmd/fanout.rs, crates/cli/src/cmd/loops.rs). (air-1vri.2)
+- [x] The coordinator stops and resumes all work with one command to Air, and every role's
+      section of the roles text says what a stop means for it (crates/cli/src/cmd/fleet.rs).
+      (air-1vri.1)
 - [ ] The next live trial shows batch-ready to its batch and batch green to close each under a
       minute plus the verify's own duration (the loops line in air status). (air-1vri.2)
+- [ ] The next live trial shows a bead fan-out and a fleet stop each reaching every intended
+      session and no other (air-1vri success criteria).
 
 Owner rulings still open, each with the recommendation:
 

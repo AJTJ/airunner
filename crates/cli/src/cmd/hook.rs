@@ -421,12 +421,18 @@ fn dispatch(
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
             let would_speak =
                 !has_work && !stop_hook_active && !cached.is_empty() && role == "worker";
-            let ready = if would_speak {
+            // air-1vri.1: a stopped fleet starts nothing, so the nudge says nothing.
+            let fleet_stopped = crate::cmd::fleet::stopped(ledger);
+            let ready = if would_speak && !fleet_stopped {
                 ready_cache::confirm(cwd).unwrap_or_default()
             } else {
                 Vec::new()
             };
-            let nudge = stop_nudge(role, has_work, &ready, stop_hook_active);
+            let nudge = if fleet_stopped {
+                None
+            } else {
+                stop_nudge(role, has_work, &ready, stop_hook_active)
+            };
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
                 .last_emission(&input.session_id, "nudge")

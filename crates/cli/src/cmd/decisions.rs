@@ -77,6 +77,12 @@ traces! {
     FANOUT_BEADS_READY = "fanout" / "beads-ready";
     FANOUT_BATCH_READY = "fanout" / "batch-ready";
     FANOUT_BATCH_RESULT = "fanout" / "batch-result";
+    FLEET_STOP = "fleet" / "stop";
+    FLEET_RESUME = "fleet" / "resume";
+    FLEET_REFUSE_ROLE = "fleet" / "refuse-role";
+    CLAIM_FLEET_STOPPED = "claim" / "fleet-stopped";
+    BATCH_CUT_FLEET_STOPPED = "batch-cut" / "fleet-stopped";
+    LAND_FLEET_STOPPED = "land" / "fleet-stopped";
     MCP_TOOL_TIMEOUT = "mcp.tool" / "timeout";
 
     CLAIM_REFUSE = "claim" / "refuse";

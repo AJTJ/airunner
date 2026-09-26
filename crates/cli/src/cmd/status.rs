@@ -241,6 +241,8 @@ pub struct Snapshot {
     /// The install record is older than this binary (air-d61); the same line `air doctor`
     /// prints, so the coordinator sees it without asking.
     pub install_lag: Option<super::install::InstallLag>,
+    /// The fleet-wide stop, while one is set (air-1vri.1).
+    pub fleet_stop: Option<air_ledger::fleet::FleetStop>,
     /// The binary this repo is pinned to, when it is (air-4usc).
     pub pin: Option<super::install::PinState>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
@@ -2237,6 +2239,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
+        fleet_stop: ledger.fleet_stop().ok().flatten(),
         pin: super::install::pin_state(ledger.dir()),
         // air-i6fd, third site: the parameter is named `main_head` and was fed the running
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
@@ -2494,6 +2497,13 @@ pub fn stopped_phrase(kind: &str, at: &str) -> String {
 
 fn render(s: &Snapshot, att: &[Attention]) -> String {
     let mut out = String::new();
+    // First, because it changes what every other line means (air-1vri.1).
+    if let Some(f) = &s.fleet_stop {
+        out.push_str(&format!(
+            "FLEET STOPPED: {}; `air fleet resume` ends it\n",
+            f.line()
+        ));
+    }
     for w in &s.workers {
         let sess = w
             .session

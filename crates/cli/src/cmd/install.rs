@@ -2080,6 +2080,20 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "fleet-stop",
+        since: "2026-09-26 (air-1vri.1)",
+        headline: "`air fleet stop [--reason <why>]` and `air fleet resume` (coordinator and \
+                   owner only; a worker or the lane is refused) stop and resume all work with \
+                   one command. Every other session is told through its channel. While \
+                   stopped, `air claim`, `air batch cut` and `air land` refuse naming the stop \
+                   and who set it, the ready fan-out and the Stop nudge are silent, and `air \
+                   status` leads with `FLEET STOPPED`. Sessions are not killed, and a verify \
+                   already running finishes and is recorded. New ledger table `fleet_stop`. \
+                   `.air/roles.md` says what a stop means for each role.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3122,6 +3136,18 @@ mod tests {
         assert!(has(
             "Your context is the channel the owner and every worker reach"
         ));
+        // Air's messages and the fleet stop (air-1vri): each role hears them and knows what to
+        // do, and the coordinator reaches the fleet with one command to Air.
+        assert!(has("`beads are ready: <ids>` arrives when"));
+        assert!(has("`batch-ready: <worker> at <sha> (<beads>)`"));
+        assert!(has(
+            "`fleet stop from the coordinator` means all work stops"
+        ));
+        assert!(has("run `air fleet stop --reason \"<why>\"`"));
+        assert!(has(
+            "one command to Air, not a `SendMessage` to each session"
+        ));
+        assert!(has("On `fleet stop`, let a verify already running finish"));
         // Naming reserves nothing, and the alternative is named beside it (air-u3l7).
         assert!(has("Naming a bead at a worker reserves nothing"));
         assert!(has("Put the craft notes on the bead, not in the message"));

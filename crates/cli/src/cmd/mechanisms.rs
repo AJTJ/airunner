@@ -838,4 +838,39 @@ pub const MECHANISMS: &[Mechanism] = &[
             "the lane is removed, or a round's `loops` line shows batch green to close no shorter with the push than the wake gave",
         ),
     },
+    Mechanism {
+        id: "fleet-stop",
+        class: "refusal",
+        what: "`air fleet stop` sets a fleet-wide stop and tells every other session; while it \
+               holds, `air claim`, `air batch cut` and `air land` refuse naming the stop and \
+               who set it, and the fan-out and the Stop nudge are silent. `air fleet resume` \
+               ends it and tells every session.",
+        added: "2026-09-26 (air-1vri.1)",
+        source: "crates/cli/src/cmd/fleet.rs; docs/rules/roles.md, each role's stop paragraph",
+        // Owner, 2026-09-26: "the coordinator should be able to stop all work as well with one
+        // message to air." Before this a stop was one SendMessage per session.
+        fires: Fires::Decisions(&[
+            ("fleet", "stop"),
+            ("fleet", "resume"),
+            ("claim", "fleet-stopped"),
+            ("batch-cut", "fleet-stopped"),
+            ("land", "fleet-stopped"),
+        ]),
+        removal: Removal::Judgement(
+            "the harness offers a fleet-wide pause Air can read, or the owner stops the fleet by other means every time a stop is needed",
+        ),
+    },
+    Mechanism {
+        id: "fleet-role-refusal",
+        class: "refusal",
+        what: "`air fleet stop` and `air fleet resume` refused to a worker or the lane.",
+        added: "2026-09-26 (air-1vri.1)",
+        source: "crates/cli/src/cmd/fleet.rs, may_steer",
+        // The deny rule `Bash(air fleet *)` already stops a launched worker; this answers the
+        // path the deny list cannot see (an MCP tool, a script).
+        fires: Fires::Decisions(&[("fleet", "refuse-role")]),
+        removal: Removal::ZeroFirings(
+            "a round in which a worker or the lane tried `air fleet` (a PreToolUse event naming it) and the deny rule stopped every attempt before this refusal could",
+        ),
+    },
 ];

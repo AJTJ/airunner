@@ -178,6 +178,16 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-1vri.1: any role may stop the fleet. Seen red 2026-09-26.
+    (
+        "fleet: a stop refuses new work naming the stop and who set it; only the coordinator and the owner stop or resume",
+        Mutation {
+            file: "crates/cli/src/cmd/fleet.rs",
+            from: "        \"coordinator\" | \"owner\" => Ok(()),",
+            to: "        \"coordinator\" | \"owner\" | \"worker\" | \"lane\" => Ok(()),",
+            also_red: &[],
+        },
+    ),
     // air-1vri.2: a killed batch is reported to its members as if it were a verdict.
     (
         "lane: the lane hears each newly batch-ready branch once and members hear a green, red or drop at once; land and a batch record end with the next cut",
@@ -2615,6 +2625,7 @@ fn all_probes() -> Vec<Probe> {
         messaging::probe_new_beads_reach_idle_workers_once(),
         messaging::probe_the_lane_and_members_hear_batch_events_at_once(),
         messaging::probe_loop_times_are_measured_from_rows(),
+        messaging::probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_it(),
     ]
 }
 

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 22;
+pub const CURRENT_VERSION: i64 = 23;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -341,6 +341,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS deliveries_change ON deliveries(to_worker, kin
 CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(to_worker, delivered_at);
 "#;
 
+/// v23 (2026-09-26, air-1vri.1): the fleet-wide stop. One row while the fleet is stopped and
+/// none while it runs, so "is the fleet stopped" is a lookup on every claim, cut and landing.
+const V23: &str = r#"
+CREATE TABLE IF NOT EXISTS fleet_stop (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    stopped_at  TEXT NOT NULL,
+    by_worker   TEXT NOT NULL,
+    by_role     TEXT NOT NULL,
+    reason      TEXT NOT NULL
+);
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -356,7 +368,7 @@ CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(to_worker, delivered
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22,
+    V22, V23,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
