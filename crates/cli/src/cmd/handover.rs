@@ -157,6 +157,7 @@ pub fn facts(
         digest_untracked,
         digest_dir: digest_at.map(|d| d.shown),
         advisory,
+        under_lane: under_lane(ledger, repo),
     })
 }
 
@@ -293,11 +294,22 @@ pub fn digest_location_from(
     None
 }
 
-// `verify_lane()` was here until air-rr98 (2026-09-25). `verify_lane` in `.claude/air.json` is
-// now a boolean that only picks the closing sequence in roles.md, and no code reads it: the
-// lane is the session `air lane` started (`AIR_ROLE=lane`), so its name is never declared
-// twice. Its last reader named the lane's worktree in `air batch cut`'s refusal, and nothing
-// checked that name against the worktree `air lane` used.
+// `verify_lane()` (a name) was here until air-rr98 (2026-09-25); `verify_lane` in
+// `.claude/air.json` is now a boolean. Since the 0.4.8 trial [`under_lane`] reads it, with a
+// lane session row as the other sign, so the gate stops telling a worker under a lane to merge
+// main before the lane has run.
+
+/// The repo runs a verify lane: `verify_lane: true`, or a session row with role `lane`.
+pub fn under_lane(ledger: &Ledger, repo: &Path) -> bool {
+    air_json(repo).and_then(|c| c.get("verify_lane").and_then(serde_json::Value::as_bool))
+        == Some(true)
+        || ledger
+            .conn()
+            .query_row("SELECT count(*) FROM sessions WHERE role='lane'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .is_ok_and(|n| n > 0)
+}
 
 /// `journal_dir` from `.claude/air.json`: an override for a repo that wants its session
 /// journals tracked in its own tree (air-3xww). Absent, they go to `<main>/.air/journal/`

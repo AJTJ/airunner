@@ -1220,18 +1220,20 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
         .map(|s| format!("{s}s ago"))
         .unwrap_or_else(|| "at an unreadable time".into());
     let state = match f.alive {
+        // air-odv: `air land` runs no verify and arms no rollback; the fast-forward is the
+        // only step that moves main, so a gone process either moved it or did not.
         Some(false) => format!(
-            "the `air land` process (pid {}) is GONE: it was killed mid-verify, main still \
-             holds the merge and the rollback never ran. Check main, then `git reset --hard {}` \
-             to undo it or re-run `air land`",
+            "the `air land` process (pid {}) is GONE before it reported. If main is at {merge}, \
+             the landing happened; if main is still at {}, nothing moved and `air land` may \
+             run again",
             l.pid.unwrap_or(0),
             l.tip_sha.as_deref().unwrap_or("<tip>")
         ),
-        Some(true) => format!("verifying now (pid {})", l.pid.unwrap_or(0)),
+        Some(true) => format!("landing now (pid {})", l.pid.unwrap_or(0)),
         None => "no pid recorded, so nothing can say whether it is still running".into(),
     };
     format!(
-        "{} ({}) merged at {} {elapsed}, rollback armed to {}: {state}",
+        "{} ({}) merged at {} {elapsed}, main was {}: {state}",
         l.worker,
         l.beads.join(" "),
         merge.get(..8).unwrap_or(merge),
@@ -1655,7 +1657,15 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         // air-y3v: `landable` carries blocked branches too, so the surfaces can show them with
         // the command that unblocks them. Only an unblocked one is landABLE, and announcing
         // otherwise is the defect this condition would otherwise reintroduce.
-        for l in s.landable.iter().filter(|l| l.blocked.is_none()) {
+        // 0.4.8 trial: the lane's own branch is the lane's next step, not an attention matter;
+        // both of that trial's `landable` rows were for it and cleared in 32 s with nothing
+        // for the coordinator to do.
+        let lanes = super::fanout::lanes(s);
+        for l in s
+            .landable
+            .iter()
+            .filter(|l| l.blocked.is_none() && !lanes.contains(&l.worker))
+        {
             let e = by_worker
                 .entry(&l.worker)
                 .or_insert((&l.head, Vec::new(), 0));
@@ -1670,7 +1680,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 worker: worker.to_string(),
                 kind: kinds::LANDABLE,
                 detail: format!(
-                    "{worker} is green at {} with main merged, carrying {}; `air land --all`",
+                    "{worker} is green at {} with main merged, carrying {}; landing is the \
+                     lane's or the owner's (`air land --worker {worker}`)",
                     head.get(..8).unwrap_or(head),
                     beads.join(" ")
                 ),

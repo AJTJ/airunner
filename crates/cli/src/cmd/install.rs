@@ -2374,6 +2374,52 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "The lane stops resetting its branch by hand. Run `air install --write` to \
                  refresh `.air/roles.md`.",
     },
+    SurfaceChange {
+        id: "batch-held-told",
+        since: "2026-09-26 (0.4.8 live trial)",
+        headline: "When `air batch cut` leaves a branch out for a missing precheck, its worker \
+                   is told so through the channel (kind `batch-held`), once per head.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "lane-gate-no-merge-main",
+        since: "2026-09-26 (0.4.8 live trial)",
+        headline: "Under a lane (`\"verify_lane\": true`, or a session started by `air lane`), \
+                   `air close` and `air handover` name `main-merged` only when a green at the \
+                   head exists and lacks main, and the Stop hook says nothing when every missing \
+                   check is one the lane's batch will satisfy. Without a lane, unchanged.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "land-readers-skip-ignored",
+        since: "2026-09-26 (0.4.8 live trial)",
+        headline: "`air land`'s warning about processes in the main checkout leaves out any \
+                   whose working directory git ignores there, such as Air's own bd server \
+                   under `.air/`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "landable-not-for-lane",
+        since: "2026-09-26 (0.4.8 live trial)",
+        headline: "The `landable` attention condition is no longer raised for the lane's own \
+                   branch, and its text now says landing is the lane's or the owner's \
+                   (`air land --worker <name>`) instead of offering `air land --all`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "landing-commit-green",
+        since: "2026-09-26 (0.4.8 live trial)",
+        headline: "`air land` records the landing commit it builds as green when its tree is \
+                   byte-identical to the verified commit's, so main no longer reads `not green` \
+                   after a landing. A landing that carries no bead is titled `Land <branch>` \
+                   with no trailing colon.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

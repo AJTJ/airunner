@@ -242,7 +242,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     match ledger.open_claim(bead) {
         Ok(Some(c)) if c.worker != worker => {
             let msg = format!(
-                "refused: {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air release {bead} --worker {} --reason reassigned`)",
+                "refused: {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
                 c.worker, c.claimed_at, c.worker
             );
             return fail(
@@ -353,15 +353,11 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 .as_deref()
                 .filter(|a| !a.is_empty() && *a != actor)
             {
-                // air-6wv2: say that nobody is actually holding it, which is a FACT here
-                // rather than a guess, because step 1 above already refused if Air had an open
-                // claim on this bead by anyone else. Reaching this line means bd has an
-                // assignee and Air has no claim behind it.
-                //
-                // I wrote this as a conditional first — live assignee versus leftover — and
-                // running it showed the live branch is unreachable: with a claim recorded, the
-                // ledger check fires and names the holder and `air release`. Dead code stating
-                // a distinction the function had already made.
+                // air-6wv2: reaching this line means bd has an assignee and Air has no claim
+                // behind it, because step 1 above already refused if Air had an open claim on
+                // this bead by anyone else. That does NOT mean nobody holds it: a winning
+                // `air claim` writes bd first and its ledger row after, so a claim racing it
+                // lands here (0.4.7 trial). Both causes are named, the race first.
                 //
                 // bd exposes nothing that marks a reopen: no `reopened_at`, and `closed_at`
                 // cannot be observed on an open bead without creating and reopening one, which
@@ -371,7 +367,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 // a REOPEN is the observed instance that filed this bead (air-vsvt came back
                 // carrying `alerts`), not a property anyone has tested in isolation.
                 let msg = format!(
-                    "refused by bd's rule: {bead} has assignee `{a}`, and in bd 1.2.x a pencilled assignee blocks every other worker's --claim. Air has no open claim behind that assignee, so it may be left over rather than live work: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. Either `{a}` claims it, or the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
+                    "refused by bd's rule: {bead} has assignee `{a}`, and in bd 1.2.x a pencilled assignee blocks every other worker's --claim. Take another ready bead. Most likely another worker just took this one: `air claim` writes bd first and records its claim a moment later. Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. If `air status` still shows no claim on it later, the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
                 );
                 return fail(
                     &ledger,
@@ -431,7 +427,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         match ledger.open_claim(bead) {
             Ok(Some(c)) if c.worker != worker => {
                 let msg = format!(
-                    "refused: you typed {typed}, which bd resolves to {bead}, and {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air release {bead} --worker {} --reason reassigned`)",
+                    "refused: you typed {typed}, which bd resolves to {bead}, and {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
                     c.worker, c.claimed_at, c.worker
                 );
                 return fail(

@@ -133,3 +133,21 @@ missing notices, which are fixed or added below.
 - `air land` refused a lane batch of only the coordinator's commits because they named no
   bead, after the lane had cut and verified it. It now lands carrying no bead. The lane is no
   longer told to `git commit --amend` a refused batch, which would discard its green.
+- A branch `air batch cut` left out for a missing precheck was never told so. Its worker now
+  hears it once per head.
+- Under a lane, `air close`, `air handover` and the Stop hook told a worker waiting on its
+  batch to `git merge main`. They now name `main-merged` only beside a green at the head that
+  lacks main, and the Stop hook says nothing while only the lane's checks are missing.
+- `air land` warned on every landing about Air's own bd server. Processes whose working
+  directory git ignores are left out.
+- The `landable` condition was raised for the lane's own branch and offered the coordinator
+  `air land --all`, which it may not run. It skips the lane's branch and names who lands.
+- Main read `not green` after every landing. `air land` records the landing commit green when
+  its tree is the verified one, and a landing with no bead has no trailing colon in its title.
+- A lease refusal for `air lease take X && <cmd>` now says to take the lease in its own call.
+- A claim that lost a race was described as a left-over assignee. It now says another worker
+  most likely just took the bead and to take another.
+- Messages that described the old setup were corrected: the fence refusal no longer calls the
+  main checkout the coordinator's, the claim refusal names `air reclaim` instead of the removed
+  `air release --worker`, and an in-flight landing no longer reads as verifying with a rollback
+  armed.

@@ -73,6 +73,9 @@ pub struct Reader {
     pub command: String,
     /// Part of a Claude Code session (module doc), not work running beside it.
     pub session: bool,
+    /// Its working directory, for [`drop_ignored`]. Not shown.
+    #[serde(skip)]
+    pub cwd: String,
 }
 
 /// The readers of one tree.
@@ -289,6 +292,7 @@ pub fn group(
             elapsed_secs: p.and_then(|p| p.elapsed_secs),
             command: p.map(|p| p.command.clone()).unwrap_or_else(|| "?".into()),
             session: side.contains(pid),
+            cwd: cwd.clone(),
         });
     }
     TreeReaders {
@@ -379,6 +383,62 @@ pub fn main_checkout_sessions(r: &TreeReaders, sessions: &[(String, String, i64)
             )
         })
         .collect()
+}
+
+/// Drop from the main checkout's non-session readers every process whose working directory git
+/// ignores there: a landing moves only tracked files, so it moves nothing under them. Every
+/// trial from 0.4.5 to 0.4.8 warned on every landing about Air's own bd server, which runs in
+/// `<main>/.air/dolt/data`. One `git check-ignore --stdin` over the candidates; if git cannot
+/// answer, nothing is dropped.
+pub fn drop_ignored(r: &mut TreeReaders, main: &str) {
+    let Some(t) = r.trees.iter_mut().find(|t| t.path == main) else {
+        return;
+    };
+    let rel = |x: &Reader| -> Option<String> {
+        x.cwd
+            .strip_prefix(main)?
+            .strip_prefix('/')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let candidates: Vec<String> = t
+        .readers
+        .iter()
+        .filter(|x| !x.session)
+        .filter_map(rel)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let ignored = check_ignore(Path::new(main), &candidates);
+    t.readers
+        .retain(|x| x.session || !rel(x).is_some_and(|p| ignored.contains(&p)));
+}
+
+/// The paths among `paths` (relative to `repo`) that git ignores. Empty when git cannot answer.
+fn check_ignore(repo: &Path, paths: &[String]) -> BTreeSet<String> {
+    use std::io::Write;
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["check-ignore", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return BTreeSet::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(format!("{}\n", paths.join("\n")).as_bytes());
+    }
+    match crate::git::wait_drained(child, BUDGET) {
+        Ok(Some((_, out, _))) => String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
 }
 
 /// `air land`'s warning about the main checkout, or None when nothing but sessions is there.
@@ -641,6 +701,54 @@ mod tests {
         let warn = main_warning(&r, "/r").unwrap();
         assert!(warn.contains("pid 20 node (18h)"), "{warn}");
         assert!(main_warning(&r, "/nowhere").is_none());
+    }
+
+    /// 0.4.5 to 0.4.8 trials: Air's own bd server under `<main>/.air/` was named at every
+    /// landing. A process in a directory git ignores is dropped; one at the checkout is kept.
+    #[test]
+    fn a_reader_in_an_ignored_directory_is_not_warned_about() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = resolved(tmp.path());
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(&main)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        std::fs::write(tmp.path().join(".gitignore"), ".air/\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".air/dolt/data")).unwrap();
+        let reader = |pid: i64, cwd: String| Reader {
+            pid,
+            elapsed_secs: Some(60),
+            command: format!("p{pid}"),
+            session: false,
+            cwd,
+        };
+        let mut r = TreeReaders {
+            examined: 2,
+            trees: vec![Tree {
+                worker: "main".into(),
+                path: main.clone(),
+                readers: vec![
+                    reader(1, format!("{main}/.air/dolt/data")),
+                    reader(2, main.clone()),
+                ],
+            }],
+            unknown: None,
+        };
+        drop_ignored(&mut r, &main);
+        let warn = main_warning(&r, &main).unwrap();
+        assert!(
+            warn.contains("pid 2 p2") && !warn.contains("pid 1 "),
+            "{warn}"
+        );
     }
 
     #[test]
