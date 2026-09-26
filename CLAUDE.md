@@ -46,7 +46,8 @@ Index items are 1–3 lines; detail lives behind the link.
   non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
-  as expected (owner, 2026-09-25).
+  as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,
+  and are fixed only after the owner says go (owner, 2026-09-26).
   **Releases are cut per round, not per notice** (owner, 2026-09-06, air-mir): a lane appends
   its surface notice and no row; the coordinator appends one row at round end covering every
   notice since the last, and `air release-check` refuses the release until the count and the
