@@ -343,7 +343,8 @@ pub fn land_command(worker: &str) -> String {
 /// it, this drops to a count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Landing {
-    /// The bead this landing carries, or `None` for a JOURNAL-ONLY branch (air-kexg).
+    /// The bead this landing carries, or `None` for a JOURNAL-ONLY branch (air-kexg) or a range
+    /// of only the coordinator's commits ([`coordinator_only`]).
     ///
     /// A session journal (air-3xww) is per session, ungated, and explicitly not work on a
     /// bead, so a journal commit is the only commit a worker legitimately writes that names
@@ -429,6 +430,31 @@ pub fn journal_only(changed: &[String], journal_dir: Option<&str>) -> bool {
     changed
         .iter()
         .all(|p| p.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))
+}
+
+/// Pure: is every commit in this range one of the coordinator's?
+///
+/// `commits` is the range's non-merge commits and `coordinator` is the non-merge commits of
+/// the coordinator's branch since main. The batch-ready rule takes the coordinator's branch
+/// with no bead, so a lane batch whose only non-merge commits came from it lands with none
+/// too. A range with any other commit still needs a bead, and an empty range is not the
+/// coordinator's.
+pub fn coordinator_only(commits: &[String], coordinator: &[String]) -> bool {
+    !commits.is_empty() && commits.iter().all(|c| coordinator.contains(c))
+}
+
+/// The fix for a range that names no bead. A worker amends its own commit. The lane cannot,
+/// because amending moves its head off the sha its green is at and the commit is a member's,
+/// so the member adds the trailer on its own branch and the lane cuts again.
+pub fn no_bead_fix(worker: &str) -> String {
+    if super::hook::role_for(worker) == "lane" {
+        "the member whose commit names no bead adds a commit with a `Bead: <id>` trailer on its \
+         own branch, then the lane runs `air batch cut` again (the coordinator's commits need none)"
+            .to_string()
+    } else {
+        "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend)"
+            .to_string()
+    }
 }
 
 /// A bead that can never become ready: it is blocked by one of its own ancestors (air-btz).
@@ -894,6 +920,17 @@ pub fn select(repo: &Path) -> Selection {
             return out;
         }
     };
+    // The coordinator's own worktree head, found the way `batch_ready_for` finds the
+    // coordinator's branch as a batch member: the worktree whose name has the coordinator's
+    // role, other than the main checkout. Used only for a range that names no bead.
+    let coordinator_head = worktrees.iter().find_map(|(p, _)| {
+        let w = air_ledger::paths::worker_name_for(p).ok()?;
+        if w != "main" && super::hook::role_for(&w) == "coordinator" {
+            git::head(p).ok()
+        } else {
+            None
+        }
+    });
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // The coordinator's checkout (`main`, or its own worktree) is not a candidate, and
@@ -975,6 +1012,23 @@ pub fn select(repo: &Path) -> Selection {
         let changed = git::changed_since(&path, "main").unwrap_or_default();
         let journal = super::handover::journal_dir(repo);
         let journal_branch = ids.is_empty() && journal_only(&changed, journal.as_deref());
+        // A range of only the coordinator's commits carries no bead either. The batch-ready
+        // rule takes the coordinator's branch with none, so the lane cuts it and records a
+        // green, and refusing it here stranded that green (the 0.4.4 live trial).
+        let coordinator_branch = ids.is_empty()
+            && !journal_branch
+            && coordinator_head.as_deref().is_some_and(|c| {
+                let revs = |range: String| -> Vec<String> {
+                    git::run(repo, &["rev-list", "--no-merges", &range])
+                        .map(|o| o.lines().map(str::to_string).collect())
+                        .unwrap_or_default()
+                };
+                coordinator_only(
+                    &revs(format!("{main_tip}..{head}")),
+                    &revs(format!("{main_tip}..{c}")),
+                )
+            });
+        let journal_branch = journal_branch || coordinator_branch;
         if ids.is_empty() && !journal_branch {
             let hint = journal
                 .as_deref()
@@ -993,9 +1047,9 @@ pub fn select(repo: &Path) -> Selection {
                     head.get(..8).unwrap_or(&head)
                 ),
                 // The "or land it by name" this used to offer never worked: a bead absent
-                // from the range is refused as "no green branch names it" (air-09b).
-                fix: "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend)"
-                    .to_string(),
+                // from the range is refused as "no green branch names it" (air-09b). The lane
+                // is not told to amend: that moves its head off the sha its green is at.
+                fix: no_bead_fix(&worker),
                 worker: worker.clone(),
             });
             continue;
@@ -2653,7 +2707,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         out.push_str(&format!(
             "waiting, not landable: {} ({}) at {} — {}; `{}`\n",
             l.worker,
-            l.bead.as_deref().unwrap_or("journal only, no bead"),
+            l.bead.as_deref().unwrap_or("no bead"),
             l.head.get(..8).unwrap_or(&l.head),
             l.blocked
                 .as_deref()

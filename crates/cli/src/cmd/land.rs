@@ -199,8 +199,9 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
             acceptance: Vec::new(),
             oldest_minutes: 0,
         });
-        // air-kexg: a journal-only landing carries no bead, so it adds none here and the
-        // batch lands with an empty list, which is what the row should record.
+        // air-kexg: a journal-only landing, or one of only the coordinator's commits, carries
+        // no bead, so it adds none here and the batch lands with an empty list, which is what
+        // the row should record.
         if let Some(id) = l.bead.clone() {
             b.beads.push(id);
         }
@@ -404,7 +405,7 @@ fn blocked_line(l: &super::status::Landing) -> String {
     format!(
         "\n  {} [{}]: {}\n    fix: {}",
         l.worker,
-        l.bead.as_deref().unwrap_or("no bead (journal only)"),
+        l.bead.as_deref().unwrap_or("no bead"),
         l.blocked.as_deref().unwrap_or(""),
         l.command
     )

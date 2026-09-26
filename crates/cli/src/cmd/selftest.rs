@@ -2565,6 +2565,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_members_are_the_shas_the_batch_took(),
         probe_a_discharged_clause_names_its_lookup(),
         probe_a_journal_only_branch_needs_no_bead(),
+        probe_a_coordinator_only_range_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
@@ -13674,6 +13675,44 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
         name: "status: --json says why each branch cannot land and distinguishes an error from an empty queue",
         red_fires: carried,
         green_passes: names_what_it_compared && error_is_not_absence && quiet,
+    }
+}
+
+/// The 0.4.4 live trial: the lane cut the coordinator's branch (batch-ready with no bead) and
+/// recorded a green, then `air land --worker lane` refused it for naming no bead and told the
+/// lane to `git commit --amend`, which discards the sha the green is at.
+///
+/// Red: the trial's range, every non-merge commit the coordinator's, is accepted with no bead
+/// (before this, nothing accepted it).
+///
+/// Green is the constraint: a range with any commit that is not the coordinator's still needs
+/// a bead, an empty range is not the coordinator's, and the lane's refusal names `air batch
+/// cut` instead of an amend while a worker is still told to amend its own commit. The
+/// end-to-end case is `a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead`.
+fn probe_a_coordinator_only_range_needs_no_bead() -> Probe {
+    use crate::cmd::status::{coordinator_only, no_bead_fix};
+
+    let c1 = "c1".to_string();
+    let c2 = "c2".to_string();
+    let w1 = "w1".to_string();
+    let coordinator = [c1.clone(), c2.clone()];
+
+    let red = coordinator_only(std::slice::from_ref(&c1), &coordinator)
+        && coordinator_only(&coordinator, &coordinator);
+
+    let mixed = !coordinator_only(&[c1.clone(), w1.clone()], &coordinator)
+        && !coordinator_only(std::slice::from_ref(&w1), &coordinator)
+        && !coordinator_only(std::slice::from_ref(&w1), &[]);
+    let empty = !coordinator_only(&[], &coordinator);
+    let lane = no_bead_fix("lane");
+    let worker = no_bead_fix("alpha");
+    let fixes =
+        !lane.contains("--amend") && lane.contains("air batch cut") && worker.contains("--amend");
+
+    Probe {
+        name: "land: a lane batch of only the coordinator's commits lands with no bead, any other commit still needs one, and the lane is never told to amend",
+        red_fires: red,
+        green_passes: mixed && empty && fixes,
     }
 }
 
