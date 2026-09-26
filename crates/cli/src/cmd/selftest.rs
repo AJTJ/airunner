@@ -7424,7 +7424,12 @@ fn probe_installed_text_names_real_subcommands() -> Probe {
         .collect();
     let known: Vec<String> = env!("AIR_SKILL_NAMES")
         .split(',')
-        .chain(crate::cmd::install::RETIRED_SKILLS.iter().copied())
+        // Retired names are listed installed (`air-<name>`); the bare name is what a text cites.
+        .chain(
+            crate::cmd::install::RETIRED_SKILLS
+                .iter()
+                .map(|s| s.strip_prefix("air-").unwrap_or(s)),
+        )
         .filter(|s| !s.is_empty())
         .flat_map(|s| [s.to_string(), format!("air-{s}")])
         .collect();
