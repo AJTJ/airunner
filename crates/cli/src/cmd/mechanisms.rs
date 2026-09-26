@@ -554,6 +554,46 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "launch-install-refusal",
+        class: "refusal",
+        what: "`air worker`, `air lane` and `air fleet up` refuse, naming the files, while \
+               `air install`'s output is uncommitted in the main checkout.",
+        added: "2026-09-25 (owner, air-rr98)",
+        source: "crates/cli/src/cmd/launch.rs, install_output_refusal",
+        fires: Fires::Decisions(&[("launch", "refuse-install-uncommitted")]),
+        // A new worktree gets only committed files, so a session started while the hooks,
+        // channel entry or skills were uncommitted ran without them (an adopter's re-audit).
+        removal: Removal::Judgement(
+            "air install commits its own output, or the launcher copies it into the worktree",
+        ),
+    },
+    Mechanism {
+        id: "fleet-startup",
+        class: "action",
+        what: "`air fleet up` (and a yes to `air coordinator`'s question) starts the lane and the \
+               configured workers, each in its worktree and tmux session.",
+        added: "2026-09-25 (owner, air-jc2p.5)",
+        source: "crates/cli/src/cmd/launch.rs, fleet_up",
+        fires: Fires::Decisions(&[("fleet", "up")]),
+        // Owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator; before this
+        // nothing started the lane and workers started only when the coordinator decided to.
+        removal: Removal::Judgement(
+            "the harness starts role sessions itself, or the owner stops starting fleets through the coordinator",
+        ),
+    },
+    Mechanism {
+        id: "retired-skill-removal",
+        class: "action",
+        what: "`air install --write` removes each `air-*` skill Air once shipped and no longer \
+               does, naming it.",
+        added: "2026-09-25 (an adopter's re-audit, air-rr98)",
+        source: "crates/cli/src/cmd/install.rs, RETIRED_SKILLS",
+        fires: Fires::Decisions(&[("install", "retire-skill")]),
+        // An adopter kept air-phase-transitions, which contradicted the roles text, because
+        // install never removed what it had stopped shipping.
+        removal: Removal::Judgement("RETIRED_SKILLS is empty and every adopter has installed since"),
+    },
+    Mechanism {
         id: "land-role-refusal",
         class: "refusal",
         what: "`air land` from any role but the lane and the owner is refused before anything \

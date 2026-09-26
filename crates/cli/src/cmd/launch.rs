@@ -916,6 +916,7 @@ pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
 pub fn fleet_up(repo: &Path, print: bool) -> i32 {
     if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
         eprintln!("{refusal}");
+        log_install_refusal(repo, "air fleet up", &refusal, print);
         return 1;
     }
     let mut failed = Vec::new();
@@ -930,11 +931,39 @@ pub fn fleet_up(repo: &Path, print: bool) -> i32 {
             failed.push(name);
         }
     }
+    if !print && let Ok((ledger, me)) = super::open(repo) {
+        super::log_event(
+            &ledger,
+            &me,
+            super::decisions::FLEET_UP,
+            &serde_json::json!({"workers": fleet_workers(repo), "failed": failed}),
+            "started the lane and the workers that were not already running",
+            "1 fleet",
+        );
+    }
     if failed.is_empty() {
         0
     } else {
         eprintln!("air fleet up: did not start {}", failed.join(", "));
         1
+    }
+}
+
+/// One event line per refused launch (air-hqj8), so `launch-install-refusal` is counted. Not
+/// under `--print`, which writes nothing (air-rr98).
+fn log_install_refusal(repo: &Path, who: &str, refusal: &str, print: bool) {
+    if print {
+        return;
+    }
+    if let Ok((ledger, me)) = super::open(repo) {
+        super::log_event(
+            &ledger,
+            &me,
+            super::decisions::LAUNCH_REFUSE_INSTALL_UNCOMMITTED,
+            &serde_json::json!({"launcher": who}),
+            refusal,
+            "1 launch",
+        );
     }
 }
 
@@ -988,6 +1017,7 @@ fn launch_role(
     let who = format!("air {role}");
     if let Some(refusal) = install_output_refusal(repo, &who) {
         eprintln!("{refusal}");
+        log_install_refusal(repo, &who, &refusal, print);
         return 1;
     }
     let roles = match roles_file(repo, !print) {
