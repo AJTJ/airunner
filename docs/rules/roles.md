@@ -118,9 +118,9 @@ it. Two conflicts merge cleanly as text and are still wrong: both sides adding t
 and both sides changing the same count or list. Check a merge by `git ls-files -u` being empty
 and no conflict markers remaining, not by reading command output.
 
-Signal the coordinator when you close a bead: one `SendMessage` with the bead, the proof and
-whether your branch is now ready to land. Air's `landable` condition also tells the coordinator
-when a branch first goes green with `main` merged, but later than your message would.
+A close needs no message. The proof is on the bead, and `air status` and the channel tell the
+coordinator what is batch-ready and landable. Message the coordinator only when you are
+blocked, need a decision, or find work outside your bead, and then use `air capture`.
 
 A closed bead stays closed. Unfinished work is a new bead that references it, which you ask
 for with `air capture`. If part of a bead needs the owner, close what you did and capture the
@@ -304,9 +304,10 @@ Before filing, ask what it changes tomorrow: if someone will edit a file because
 bead; if it only helps a reader understand, it belongs in a journal. A bead the owner must
 decide is labelled `owner` with the coordinator's recommendation in its description.
 
-Give an idle worker its work with `SendMessage`. To add a worker beyond the fleet, `air worker
---tmux --task "<a complete task>"` picks the next free `worker-<N>` and opens a tmux session
-the owner can attach to.
+You file and prioritise beads, and workers pull them. Do not message a worker to hand it a bead
+unless the owner asks you to. To add a worker beyond the fleet, `air worker --tmux --task "<a
+complete task>"` picks the next free `worker-<N>` and opens a tmux session the owner can attach
+to.
 
 Denied to the coordinator: `git push` by deny rule, and `air land` by role. Air pushes nothing;
 a landing reaches main and stops there.

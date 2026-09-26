@@ -229,6 +229,12 @@ that as a defect. A self-test probe fails when a decision that is not bookkeepin
 has no row, so a new mechanism cannot ship uncounted. The audit prints every row, zeros
 included, with what it counts (air-hqj8).
 
+air audit also prints worker-to-coordinator messages per closed bead, from the `messages` and
+`claims` tables. The baseline is the 2026-09-26 trial, where workers messaged the coordinator on
+every close: 5 messages to the coordinator by name and 11 to an unnamed `uds:` socket over 6
+closed beads, so 0.83 to 2.67 per close. The next round runs under roles.md without the
+signal-on-close rule and is compared against that number (air-uzh2).
+
 ### 4.2 Channel tools, resources, and conditions
 
 The channel server lists 10 tools and 5 resources. The tools cover status, attention, holdings,

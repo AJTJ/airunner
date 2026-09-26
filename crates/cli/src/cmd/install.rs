@@ -2104,6 +2104,18 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "no-chatter",
+        since: "2026-09-26 (air-uzh2)",
+        headline: "roles.md no longer tells a worker to message the coordinator when it closes a \
+                   bead; it messages only when blocked, needing a decision or finding work \
+                   outside its bead, and then through `air capture`. The coordinator files and \
+                   prioritises beads and does not message a worker to hand one out unless the \
+                   owner asks. `air audit` prints worker-to-coordinator messages per closed bead.",
+        silent_break: true,
+        action: "If the repo's own prose tells workers to report each close, or the coordinator \
+                 to assign beads by message, remove it.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3114,9 +3126,15 @@ mod tests {
         ));
         assert!(has("`air land --worker <lane>`"));
         assert!(!has("`air land --all`"));
-        // Signalling on close is the worker's; the `landable` condition is its failsafe (air-03w).
-        assert!(has("Signal the coordinator when you close a bead"));
-        assert!(has("`landable` condition"));
+        // A close needs no message, and the coordinator hands out no beads by message; the
+        // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
+        assert!(!has("Signal the coordinator when you close a bead"));
+        assert!(has("A close needs no message."));
+        assert!(has("then use `air capture`"));
+        assert!(has(
+            "Do not message a worker to hand it a bead unless the owner asks you to."
+        ));
+        assert!(!has("Give an idle worker its work with `SendMessage`"));
         // bd's per-type required sections (air-8zz).
         assert!(has(
             "bug `## Steps to Reproduce` + `## Acceptance Criteria`"
