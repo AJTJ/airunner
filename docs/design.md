@@ -191,7 +191,7 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. |
 | air coordinator | Starts the coordinator session. |
 | air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
-| air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads, writes the ignore file and Air's config, then installs. |
+| air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
 itself starts air mcp and air hook.
@@ -593,9 +593,17 @@ session reads uptime before it diagnoses a slow test. (From the worktree protoco
 The verify target checks formatting, runs clippy and the tests, runs the adopter check, and runs
 the self-test against the binary it just built. Record a run with air record. A release adds one
 row to the release list and sets the same version in the Cargo manifest. Then the release target
-refuses a dirty tree or any branch but main, runs the release check and the verify target, and
-tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
+refuses a dirty tree or any branch but main, runs the release check, the verify target and the
+adoption check, and tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
 were waiting for the next one.
+
+The adoption check (make adoption-check, scripts/adoption-check.sh) copies examples/minimal to a
+temporary directory, deletes the files air init writes, and adopts it with this tree's binary
+first on the path: init as a dry run and with --write, a commit, install, the first recorded
+verify, status, and each launcher with --print. It fails on a non-zero exit, on output naming a
+warning, error, refusal or suspicious run, or on any difference between what init wrote and
+examples/minimal. It needs beads and Claude Code, and took 18 to 22 seconds on 2026-09-26, so it
+runs in the release target and on demand, not in the verify target.
 
 ### 9.1 The live trial
 
@@ -711,10 +719,6 @@ Owner rulings still open, each with the recommendation:
       code lets it today and refuses workers and the lane (crates/cli/src/cmd/close.rs).
 - [ ] Red batches: drop by the failing step, or always bisect? Drop by step, and bisect when the
       step names nothing. With three members a bisect costs at most two extra verifies.
-- [ ] On a fresh repository, air init writes `"metis": true` and the coordinator launch then
-      warns that Metis is not installed. Should the default follow whether Metis is found? No:
-      the 2026-09-06 ruling makes Metis part of the coordinator's required process, and the
-      warning already says how to install it or turn it off. If the owner agrees, drop this.
 
 Surface, added 2026-09-14 and 2026-09-25:
 
