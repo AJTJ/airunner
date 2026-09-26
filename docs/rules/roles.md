@@ -329,6 +329,5 @@ a landing reaches main and stops there.
 ## Provenance
 
 This file is embedded in the `air` binary (`ROLES_MD`, `include_str!`) and written to
-`.air/roles.md` by `air install` and `air init`, so the two cannot differ. The incidents and
-rulings behind each line are in `docs/decisions.md`, and the removal conditions are in `air
-audit`.
+`.air/roles.md` by `air install` and `air init`, so the two cannot differ. The removal conditions
+are in `air audit`.

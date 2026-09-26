@@ -83,7 +83,7 @@ pub struct GateFacts {
     pub digest_untracked: bool,
     /// Where digests live (for the fixing message).
     pub digest_dir: Option<String>,
-    /// Advisory mode: report what would be refused but allow (first round; decisions.md).
+    /// Advisory mode: report what would be refused but allow (first round).
     pub advisory: bool,
 }
 

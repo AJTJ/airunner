@@ -3,7 +3,7 @@
 //! Design (docs/design.md): one SQLite file at the *main* checkout
 //! (`<git-common-dir>/../.air/ledger.db`), WAL mode, shared by every worktree; an append-only
 //! NDJSON events log next to it. Rows live until their state condition is false — no
-//! time-based expiry (docs/decisions.md 2026-08-18).
+//! time-based expiry.
 //!
 //! Everything here is synchronous and cheap: the hook binary opens the ledger, runs one or two
 //! statements, and exits. Anything slow (`bd`, cross-worktree `git status`) lives in the CLI,

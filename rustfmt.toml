@@ -1,1 +1,1 @@
-# Default rustfmt (docs/decisions.md 2026-08-18). Edition follows Cargo.toml.
+# Default rustfmt, owner ruling 2026-08-18. Edition follows Cargo.toml.

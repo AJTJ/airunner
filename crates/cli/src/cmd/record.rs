@@ -291,7 +291,7 @@ fn after_batch(
 /// Is this green suspicious? It printed nothing, or it ran in under a fifth of the time this
 /// worker's last green of the same command took.
 ///
-/// The incident is the adopter's capture 38b0c1 (decisions.md, 2026-08-21): `make verify`
+/// The incident is the adopter's capture 38b0c1 (2026-08-21): `make verify`
 /// silently skipped its jest suite and still exited 0, so a check that had taken minutes took
 /// seconds. That was first encoded as "under 2 s", which is that adopter's suite speaking: a
 /// tiny project's whole check runs in 50 ms, and every green it recorded, the first one

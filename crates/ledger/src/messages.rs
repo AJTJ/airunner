@@ -1,4 +1,4 @@
-//! Every `SendMessage`, content included (air-srv; owner ruling 2026-09-05, decisions.md).
+//! Every `SendMessage`, content included (air-srv; owner ruling 2026-09-05).
 //!
 //! Agents solve problems together over `SendMessage`, and nothing of that reached the ledger
 //! unless someone captured it by hand. The event line stays as air-q07 left it: recipient and

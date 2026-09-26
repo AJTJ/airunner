@@ -37,7 +37,7 @@ insta = { version = "1", features = ["json"] }
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 
-# The small deny-list (docs/decisions.md 2026-08-18; plan 0003 §2). Warn first; deny in CI once green.
+# The small deny-list, owner ruling 2026-08-18. Warn first; deny in CI once green.
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"

@@ -141,7 +141,7 @@ set changed between cards, so 51% is a property of an eval version (§3, part 2)
 (May 2026): "while every frontier agent saturates the visible suite, reward hacking
 persists", and the gap "grows by 28 percentage points for every tenfold increase in code
 size" (https://arxiv.org/abs/2605.21384). An adopter, 2026-08-21: `make verify` silently
-skipped a test suite, and a backgrounded verify reported exit 0 (`docs/decisions.md`, incidents mined
+skipped a test suite, and a backgrounded verify reported exit 0 (incidents mined
 from the adopter's round). This is the strongest evidence for keeping one class of
 constraint: the model's own report of success is not evidence at any capability level
 measured, and the prompt-level fix is the part that decays. What holds is an external check
@@ -202,7 +202,7 @@ deny and the capture/triage relay; the peer-on-file warning; `silent-with-claim`
 a removal condition, because the failure they address is flat across capability: the
 hand-over gate's fact checks, `air record`'s integrity flags and backgrounded refusal, the
 `git push`, `git commit`-on-main and `bd sync` denies, leases, the event log, pid liveness,
-env-by-flag. What has happened to each since is in `docs/decisions.md` and `air audit`.
+env-by-flag. What has happened to each since is in `air audit`.
 
 
 ## 2. Corpus principles (from `SYNTHESIS.md` §1b, 2026-08-18)

@@ -41,7 +41,7 @@ use crate::git;
 /// the lane's landing. The failures behind it (docs/design.md §10): a coordinator's commit on
 /// main invalidated four workers' landability at an adopter on 2026-09-06, and landing order
 /// was the round's throughput limit while the coordinator landed by hand. Removed when the
-/// lane goes (docs/decisions.md, 2026-09-25, roles.md rewrite); landing then returns to whoever lands a
+/// lane goes; landing then returns to whoever lands a
 /// worker's branch.
 pub fn may_land(role: &str) -> Result<(), String> {
     match role {
@@ -77,7 +77,7 @@ pub fn may_land(role: &str) -> Result<(), String> {
 /// 1,199 s of completed verify destroyed in two incidents, six more runs invalidated, and an
 /// operational rule ("check first, land later") tried three times and broken the fourth. w2's
 /// framing is the fix: the gate and the action in one call are one artefact, and one artefact
-/// cannot check another. Coordinator's ruling, 2026-09-05 (`docs/decisions.md`): refuse, with
+/// cannot check another. Coordinator's ruling, 2026-09-05: refuse, with
 /// an explicit `--despite-inflight` that lands anyway and is RECORDED on the landings row —
 /// with four workers and a twelve-minute verify there is almost always a run in flight, so a
 /// refusal with no way past starves landings (the adopter's round note, item 1). The override is

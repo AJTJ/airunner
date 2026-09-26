@@ -20,8 +20,8 @@ its own worktree on its own branch, and nobody works in the main checkout. All f
 task store, called beads, and one main branch.
 
 Without a shared record, agents relay facts from memory. One says its branch is green, another
-says nobody is in a file. Those relays drift, and most of the incidents in the decisions log
-trace back to that drift. Air holds the facts where every session can read them. It answers
+says nobody is in a file. Those relays drift, and most of the incidents
+Air has recorded trace back to that drift. Air holds the facts where every session can read them. It answers
 questions about them quickly enough to run inside an editor hook. Everything it produces is a
 fact or an answer, apart from the one refusal. The owner can watch and type into every session,
 and nothing Air launches runs headless.
@@ -640,7 +640,7 @@ which bead to take and which resources count as shared. They judge whether a dif
 whether a verification covers enough. They decide how to split a file, what to do about a
 condition, and when to land. The owner makes the owner's decisions.
 
-Some things were considered and deliberately left out, with the rulings in the decisions log:
+Some things were considered and deliberately left out:
 
 - a cap on work in progress, which is measured but never enforced
 - a stored phase for epics
@@ -655,6 +655,55 @@ Some commands were specified and never built, because no recorded problem called
 next, air peer, merge advice, round metrics, a re-injection before compaction, and a topology
 file. The outside projects considered and not adopted, and the choices of language, stores, and
 harness, are in section 11.
+
+### 8.1 Standing rulings
+
+The owner's rulings still in force, one line each. The date is when the rule was made, or last
+changed. Section 10 holds what is still to build and section 11 the technology choices.
+
+| Rule | Date | Carried by |
+|---|---|---|
+| Closing a bead needs a green at a commit containing main, and a tracked digest only where `digest_dir` is set. | 2026-09-25 | hand-over gate, `AIR_ENFORCE=1` |
+| A green is keyed by commit and counts for any worker; it is keyed by tree only if the repo declares that. | 2026-09-05 | `verify_key` in `.claude/air.json` |
+| A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
+| Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
+| Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release` |
+| A worker cannot claim a bead labelled `owner`. | 2026-08-22 | `OWNER_LABEL` |
+| A default is closed only where a wrong denial is loud; messages are never fenced. | 2026-08-22 | `docs/rules/roles.md` |
+| The ledger keeps only what git and bd cannot rebuild, and nothing in it expires by time. | 2026-08-17 | `crates/ledger` |
+| Each hook call appends one event line, and nothing is overwritten. | 2026-08-20 | `air hook` |
+| Every `SendMessage` is recorded in the ledger with its content. | 2026-09-05 | `messages` table |
+| Attention is pushed when the set of conditions changes; age alone is not a change. | 2026-08-22 | fingerprint in `air status` |
+| A worker idle without a claim is a condition; queue depth is only measured. | 2026-08-22 | `idle-without-claim` |
+| Every mechanism has a removal condition. | 2026-08-22 | mechanism registry |
+| A count of zero is evidence only if the subject occurred, and a deletion's numbers are checked against the raw record. | 2026-08-29 | `do-less` skill |
+| A check that finds nothing prints what it examined. | 2026-09-06 | every check |
+| Every session is an interactive terminal the owner can watch and type into. | 2026-09-06 | `air worker`, `air coordinator` |
+| Workers capture; they never file, claim through bd, push, land, close with `air close` or launch sessions. | 2026-08-21 | `WORKER_DENY` in `launch.rs` |
+| The coordinator may commit and launch workers; it may not push. | 2026-08-29 | `COORDINATOR_DENY` |
+| Deny rules and role text ride launcher flags; a repo's own denies are tracked patterns. | 2026-09-05 | `--disallowed-tools`, `worker_deny` |
+| The coordinator triages, files and decides; queues live in beads fields. | 2026-08-20 | `roles.md` |
+| While a round is active every idle worker is fed; long reads go to background agents. | 2026-09-06 | `roles.md` |
+| Metis is attached to the coordinator at launch. | 2026-09-06 | `metis` in `.claude/air.json` |
+| `owner` is the authority label and `human` means presence; the owner's queue is those beads, with no separate inbox. | 2026-09-05 | `OWNER_LABEL`, `ready:` in `air status` |
+| A session acts on its own project only; reading and messaging another project is fine. | 2026-09-05 | `roles.md` |
+| Air makes each session's worktree and fences edits to it; the verification lane is a role. | 2026-09-14 | `edit-outside-worktree`, `air lane` |
+| The merge-queue protocol is Air's and ships in `.air/roles.md`; a repo keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
+| A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate matches `bd close` |
+| Proof is a command's output, a `file:line` or a test; a remainder only the owner can do becomes a successor bead. | 2026-08-22 | `roles.md` |
+| Landing attributes beads by the `Bead:` trailers in the merged range; workers pull work, nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
+| An acceptance clause names what settles it and what changes; no regex checks it. | 2026-08-29 | `decomposition` skill |
+| bd is the task store, pinned at 1.2.2; Air wraps it and never watches it. | 2026-08-20 | `air claim`, `air doctor` |
+| Beads are created with `bd create --validate`, so bd checks that acceptance exists. | 2026-08-18 | bd |
+| An epic's end-to-end check comes before its children. | 2026-09-06 | `decomposition` skill |
+| One release row per round. | 2026-09-06 | `air release-check` |
+| Apache 2.0; adopters are cited as "an adopter" and their names stay in `private/`. | 2026-09-06 | `LICENSE`, `air adopter-check` |
+| A claim from another project is checked by the receiver, and a probe is seen failing before it counts. | 2026-08-29 | `project-diligence` skill |
+| `air lease` stays, and an adopter keeps one lease store. | 2026-08-29 | `air lease` |
+| No Claude memory; CLAUDE.md holds rules and indexes; there is one design doc. | 2026-09-25 | CLAUDE.md, this document |
+| Do less, prefer machinery over Markdown, and measure before enforcing. | 2026-08-21 | `do-less` skill |
+| The owner's projects come first; during a round Air only records. | 2026-08-21 | CLAUDE.md |
+| Green is `make verify`, tests stay fast, and there is no quick and full split while verify runs under a minute. | 2026-08-22 | Makefile |
 
 ## 9. Operations
 
@@ -736,7 +785,7 @@ code.
 ## 10. TODO
 
 One line per item, with the date it was added and where the detail lives. An item gets a bead id
-when it is filed and is deleted when it lands. Rulings go in the decisions log. Every item was
+when it is filed and is deleted when it lands. Rulings go in section 8.1. Every item was
 checked against the code on 2026-09-25; a ticked item names where it was built.
 
 Fleet shape, added 2026-09-14. This is the target the owner ruled on 2026-09-14 (every role in
@@ -763,7 +812,7 @@ built is described in sections 4 and 6.
       scope was not built: nothing asked for it yet. (air-jc2p.2)
 - [x] The verification lane key in the config is a boolean that picks the closing sequence,
       and no code reads it. The stop nudge reads the role, and air batch cut's refusal names
-      air lane's worktree (air-rr98; decisions 2026-09-25).
+      air lane's worktree (air-rr98; section 8.1).
 - [x] Prove with a test that a bead can close after its commits land on main, then drop the
       adopter's rule to wait for every close before landing. Settled 2026-09-25:
       `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the
@@ -848,7 +897,7 @@ Surface, added 2026-09-14 and 2026-09-25:
 - [x] The help line for air land said it was the coordinator's. It now says the lane lands
       (crates/cli/src/main.rs, air-rr98).
 - [ ] Cut the source comments down to what a maintainer needs: what a piece is responsible for,
-      its invariants, and its contract. Incident stories move to the decisions log. Go crate by
+      its invariants, and its contract. Incident stories are dropped. Go crate by
       crate and run verify after each. The self-test file alone is 13,670 lines.
 - [x] Settle the digest directory. CLAUDE.md no longer says the digest check is enforced here:
       this repository sets neither `digests` nor `digest_dir`, and the `digests` key puts
@@ -860,7 +909,7 @@ Surface, added 2026-09-14 and 2026-09-25:
 Docs:
 
 - [ ] A plain-language pass over the system design skill. Its output already goes to this
-      section and the decisions log, not a plan file (`.claude/skills/system-design/SKILL.md`).
+      section and section 8.1, not a plan file (`.claude/skills/system-design/SKILL.md`).
 - [ ] Refresh the Claude Code facts. The inventory is from version 2.1.241, and 2.1.283 is
       installed (`claude --version`, 2026-09-25).
       (`.claude/skills/check-resources/references/harness-facts.md`.)
@@ -880,18 +929,18 @@ The research documents these lines came from were retired on 2026-09-25; what an
 work time moved into skill references (`.claude/skills/check-resources/references/`,
 `.claude/skills/beads/references/bd-facts.md`, `.claude/skills/do-less/references/evidence.md`,
 `.claude/skills/system-design/references/verification-lane.md`). Rulings and their dates are in
-the decisions log.
+section 8.1.
 
 | Decision | Why | Source |
 |---|---|---|
-| Rust, one binary, no async runtime. Edition 2024 on stable, one error enum per crate, no anyhow in libraries, tests on in-memory SQLite and temporary git repositories with no sleeps and no network. | Air is installed into other repositories, so it ships as a binary and a target repo never depends on Air's build. The hook starts on every tool call and has a tenth of a second to answer. | CLAUDE.md, "Rust" and "Tests"; decisions log, 2026-08-18; section 6.7 |
-| One SQLite file in WAL mode for current state, beside one NDJSON event file per day for history, both in the main checkout's .air and shared by every worktree. No daemon, no server. | One machine and many short-lived writer processes. With six writers the lock waited at most 131 ms (2026-09-06). Rows hold only what git and beads cannot rebuild, and nothing expires on a timer. | crates/ledger; section 6.7; decisions log, 2026-08-17 |
+| Rust, one binary, no async runtime. Edition 2024 on stable, one error enum per crate, no anyhow in libraries, tests on in-memory SQLite and temporary git repositories with no sleeps and no network. | Air is installed into other repositories, so it ships as a binary and a target repo never depends on Air's build. The hook starts on every tool call and has a tenth of a second to answer. | CLAUDE.md, "Rust" and "Tests"; section 6.7 |
+| One SQLite file in WAL mode for current state, beside one NDJSON event file per day for history, both in the main checkout's .air and shared by every worktree. No daemon, no server. | One machine and many short-lived writer processes. With six writers the lock waited at most 131 ms (2026-09-06). Rows hold only what git and beads cannot rebuild, and nothing expires on a timer. | crates/ledger; section 6.7; section 8.1 |
 | beads (bd) is the task store, pinned at 1.2.2 and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so the pin is the only line upstream stands behind; Air's ledger does the compare-and-set that 1.2.2 lacks. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
 | Stay on bd rather than switch to beads_rust or a table of Air's own. Watch bd 1.3.0. | beads_rust is store-incompatible with bd and ships no library, so Air would still pay per process. A table of Air's own means building a work tracker, and the ledger records no failure caused by bd. bd 1.3.0-rc.1 (2026-08-31) adds leases, compare-and-set, and bd serve. 1.3.0 was released on 2026-09-15, and the re-ask is a TODO in section 10. | https://github.com/Dicklesworthstone/beads_rust (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/tags/v1.3.0-rc.1 (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/latest (2026-09-25) |
 | Gas Town is prior art, not a runtime. | It supervises with LLM agents, costs about $100 an hour, and was seen merging a pull request over failing integration tests. Air copied its batch-then-bisect queue and its rule to cross-check a heartbeat against the real process before calling anything stuck. | https://www.dolthub.com/blog/2026-01-15-a-day-in-gas-town/ (2026-08-17); https://github.com/steveyegge/gastown (2026-08-17) |
 | Claude Code is the harness. | Its deny rules hold in every permission mode, including bypass. Its PreToolUse hook sees a close before it runs, and exit 2 is the one outcome nothing overrides. Sessions stay interactive terminals the owner can watch. The gate itself ports to any harness with a pre-tool hook, such as OpenCode's tool.execute.before; Codex was not checked. | https://code.claude.com/docs/en/permission-modes (2026-09-05); https://code.claude.com/docs/en/hooks.md (2026-08-17); https://opencode.ai/docs/plugins/ (2026-08-24) |
-| Keep Air rather than adopt an orchestrator. | Of 186 rostered orchestrators read one by one, eleven overlap part of Air, and none refuses to close a tracked work item without a recorded green at a commit containing main, in a session a person is watching. The closest (tutti, orc, loki-mode) had one to six contributors or a BUSL licence. herdr, scion, tutti and loki-mode were declined on 2026-08-29. Spawning, isolating and watching sessions are commodity. | https://github.com/andyrewlee/awesome-agent-orchestrators (snapshot 2026-08-24); decisions log, 2026-08-29; `.claude/skills/check-resources/references/field.md` |
-| Not adopted on 2026-08-17: the agent client protocol, Symphony's dispatcher, Vibe Kanban's executors, pueue, Codex's app server, and an Air daemon. | Air drives no agent process and runs no daemon. Workers are interactive Claude Code sessions, and the gate needs a hook and a bead id, not a wire protocol or a job queue. | decisions log, 2026-08-17 and 2026-08-20 |
+| Keep Air rather than adopt an orchestrator. | Of 186 rostered orchestrators read one by one, eleven overlap part of Air, and none refuses to close a tracked work item without a recorded green at a commit containing main, in a session a person is watching. The closest (tutti, orc, loki-mode) had one to six contributors or a BUSL licence. herdr, scion, tutti and loki-mode were declined on 2026-08-29. Spawning, isolating and watching sessions are commodity. | https://github.com/andyrewlee/awesome-agent-orchestrators (snapshot 2026-08-24); `.claude/skills/check-resources/references/field.md` |
+| Not adopted on 2026-08-17: the agent client protocol, Symphony's dispatcher, Vibe Kanban's executors, pueue, Codex's app server, and an Air daemon. | Air drives no agent process and runs no daemon. Workers are interactive Claude Code sessions, and the gate needs a hook and a bead id, not a wire protocol or a job queue. | section 8 |
 | One git worktree per worker, made by Air, with Air's hook as the edit fence. | Enforced partitions beat declared ones: on PaperBench a single agent scored 57.2, prompt-declared isolation 55.5, worktrees 63.3; four agents on distinct files passed 92.1% against 44.3% for eight on one file. Air makes the worktree itself so it can copy ignored files in and fence edits by role. | https://arxiv.org/abs/2603.21489 (2026-08-21); `air worker --help` |
 | Detached tmux sessions named for the project and the worker. | Every session must stay attachable by the owner. The only launch need with no first-party equivalent was a detached start for a session without a terminal. | CLAUDE.md, "A human is always in the loop"; `.claude/skills/check-resources/references/harness-facts.md` §1.3 (2026-08-24) |
 | One stdio MCP server as the coordinator's channel, polling the ledger every 30 seconds; its tools run the CLI with JSON output. | It lives and dies with the coordinator's session, so there is no daemon, and the channel and the CLI cannot disagree. Agent-facing operations stay CLI-first: MCP and CLI runs failed equally often, but MCP failures wasted 12.9% of spend against 2.2%. | crates/cli/src/cmd/mcp.rs; https://arxiv.org/abs/2608.08654 (2026-08-18) |
@@ -901,7 +950,7 @@ the decisions log.
 | A few sessions, not many: three workers, a lane, and the coordinator. | Returns thin beyond three or four agents and turn negative where one agent already succeeds often. Subscription usage pools across every session on the account, with no published concurrency limit, so five sessions is an estimate to measure, not a quota. | https://arxiv.org/abs/2512.08296 (2026-08-18); https://code.claude.com/docs/en/costs.md (2026-08-17) |
 | The one refusal is an external recorded check, not the agent's report. | Models still claim success they did not achieve at every capability measured; an anti-cheating prompt lowers the rate and leaves it high (Opus 4.5, 55% to 35%). | https://assets.anthropic.com/m/64823ba7485345a7/Claude-Opus-4-5-System-Card.pdf (2026-08-18); https://arxiv.org/abs/2605.21384 (2026-08-21) |
 | Facts and refusals over procedure prose, each mechanism with a removal condition. | Context files do not raise task success and cost over 20% more inference. Harness pieces that encode what a model cannot do get removed on the next model; the piece that survived was verification. | https://arxiv.org/abs/2602.11988, https://www.anthropic.com/engineering/harness-design-long-running-apps (both 2026-08-21); `.claude/skills/do-less/references/evidence.md` |
-| Metis is attached to the coordinator for planning; Air stores no phase. | Metis enforces only forward-only phase moves on its own documents; its exit-criteria check returns a hard-coded false, and nothing reads its complexity estimate. Air borrows the decomposition reasoning into the decomposition skills and derives an epic's state instead of storing it. | metis at 6745810, `crates/metis-docs-core/src/domain/documents/types.rs:188-238` and `vision/mod.rs:303-308` (2026-08-17); decisions log, 2026-09-05 |
+| Metis is attached to the coordinator for planning; Air stores no phase. | Metis enforces only forward-only phase moves on its own documents; its exit-criteria check returns a hard-coded false, and nothing reads its complexity estimate. Air borrows the decomposition reasoning into the decomposition skills and derives an epic's state instead of storing it. | metis at 6745810, `crates/metis-docs-core/src/domain/documents/types.rs:188-238` and `vision/mod.rs:303-308` (2026-08-17) |
 
 ## 12. Glossary
 

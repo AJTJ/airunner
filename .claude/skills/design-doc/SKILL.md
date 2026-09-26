@@ -1,6 +1,6 @@
 ---
 name: design-doc
-description: Write or update the one architecture document that describes a system as it is today (for Air, docs/design.md). Use when asked for "the design doc", "the architecture doc", "document the system", "what does the system look like", or whenever a change alters a component, an interface, a flow, an invariant, or the operational topology. Produces a doc in the standard design-doc shape (context, overview, components, interfaces, data, flows, invariants, failure model, operations, open questions) with a Mermaid diagram wherever a structure or a flow is described, every claim traceable to a file or a command, written in plain technical prose. For a proposal about a future shape use the system-design skill; for the why behind a decision use docs/decisions.md.
+description: Write or update the one architecture document that describes a system as it is today (for Air, docs/design.md). Use when asked for "the design doc", "the architecture doc", "document the system", "what does the system look like", or whenever a change alters a component, an interface, a flow, an invariant, or the operational topology. Produces a doc in the standard design-doc shape (context, overview, components, interfaces, data, flows, invariants, failure model, operations, open questions) with a Mermaid diagram wherever a structure or a flow is described, every claim traceable to a file or a command, written in plain technical prose. For a proposal about a future shape use the system-design skill; a ruling is one line in its Standing rulings section.
 metadata:
   version: 1.0.0
 ---
@@ -29,7 +29,7 @@ only make sense for a proposal). This skill adds three rules.
    ownership, guarantees, and why. `references/diagrams.md` says which Mermaid form fits
    which subject and how to keep one readable.
 3. **Write normally.** The voice is the `plain-language` skill. Aim for four to six thousand
-   words. Cut by moving history to `docs/decisions.md`, evidence to the references of the
+   words. Cut by moving history to the private decisions log if the repo keeps one (see `CLAUDE.md`), evidence to the references of the
    skill that uses it, and proposals to one or two lines each in the TODO section, never by
    compressing sentences.
 
@@ -72,8 +72,8 @@ leaving a gap.
 - Name each thing exactly one way, and use that name everywhere (a "worktree" is never a
   "checkout"). Put the names in the glossary.
 - Describe rather than argue. The doc says what is true ("main only moves by fast-forward
-  onto a verified commit"); the reason belongs in `docs/decisions.md` with its date, and the
-  doc links to it.
+  onto a verified commit"); a standing ruling gets one line with its date in the Standing rulings
+  section (§8.1), and the detailed reason goes in the private decisions log if the repo keeps one (see `CLAUDE.md`).
 - Prefer a table for anything with more than three parallel items. Prefer prose for a line
   of reasoning. Never a bold-label bullet wall.
 - Diagrams show the mechanism, not the org chart: an arrow means a call, a write, or a

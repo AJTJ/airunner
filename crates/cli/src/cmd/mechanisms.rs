@@ -413,7 +413,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         added: "2026-08-20 (decisions: wrap beads, never watch it)",
         source: "crates/cli/src/cmd/claim.rs",
         fires: Fires::Decisions(&[("claim", "refuse")]),
-        // Recorded by the do-less pass that kept it (air-s7c, docs/decisions.md 2026-08-22).
+        // Recorded by the do-less pass that kept it (air-s7c, 2026-08-22).
         // Both firings on 2026-08-22 were real collisions between two workers on one bead.
         removal: Removal::ZeroFirings(
             "a full round passes with zero claim refusals, meaning lane assignment alone keeps workers off each other's beads",

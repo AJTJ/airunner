@@ -15,7 +15,7 @@ molecules, convoys, merge slots) are the cautionary case: mechanisms ahead of me
 ## Before adding anything, answer in writing
 
 1. **Which recorded failure does this remove?** Cite the incident (capture id, retro line,
-   decisions entry). "It might happen" is not a failure. No incident, no mechanism.
+   ruling). "It might happen" is not a failure. No incident, no mechanism.
 2. **Is it the model's judgement or a fact the model lacks?** Air supplies facts (green at
    sha, who holds a file, who is stuck). It does not supply judgement (what to work on, how to
    split, when to ask). If the proposal encodes judgement, stop: make it a measurement or a
@@ -47,7 +47,7 @@ Quarterly, or after any round: for each hook, deny rule, attention condition, an
 paragraph, ask 1 and 5 again with the ledger open. Anything whose failure has not recurred in
 the record is a candidate for removal — a candidate, not a verdict; see the next section, because
 most of a round's deletion candidates turn out to be zeros that mean nothing. Log removals in
-`docs/decisions.md` like additions.
+`docs/design.md` §8.1 like additions.
 
 ### A zero is only evidence when the subject occurred
 
@@ -145,7 +145,7 @@ holds the one refusal.
 ## Provenance
 
 Owner rule 2026-08-21 (`CLAUDE.md` Rules, "Do less"); Gas Town cautionary note
-(`docs/decisions.md` 2026-08-18); corpus principle "no LLM middle-manager"
+(owner, 2026-08-18); corpus principle "no LLM middle-manager"
 (`references/evidence.md` beside the source of this skill in Air's repository); research commissioned the same day, the
 guardrails-as-throttles findings F1 to F10 in that file. The raw-record check under
 "Reviewing what exists" is air-21c (owner, 2026-08-22), from two cases in one round; removed

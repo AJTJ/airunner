@@ -85,7 +85,7 @@ pub struct Tree {
 
 /// The whole answer. `unknown` set means the lookup did not run or did not finish, and then
 /// `trees` is empty and says nothing. `examined` is how many processes had a cwd to compare,
-/// so "none" is distinguishable from "not looked" (decisions.md, 2026-09-06).
+/// so "none" is distinguishable from "not looked".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct TreeReaders {
     pub examined: usize,
