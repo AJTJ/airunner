@@ -133,6 +133,11 @@ pub struct Issue {
     /// entirely. Never used as the answer — which edges they are is what `dep_list` says.
     #[serde(default)]
     pub dependency_count: i64,
+    /// When bd's claim lease runs out (bd 1.3). `bd update --claim` takes a five-minute lease
+    /// (`lease_expires_at` minus `heartbeat_at` on a fresh claim, bd 1.3.0, 2026-09-26) and Air
+    /// never runs `bd heartbeat`, so it runs out five minutes after the claim. Read only to
+    /// tell the coordinator when `air reclaim` can take a bead back.
+    pub lease_expires_at: Option<String>,
 }
 
 /// One dependency edge as `bd dep list --json` reports it: `issue_id` depends on
@@ -188,7 +193,10 @@ pub trait WorkLedger {
     /// `bd update <id> -s open -a ""`: back to open AND unassigned, in one process (air-0kk).
     /// In bd 1.2.x a pencilled assignee blocks every other worker's `--claim`, so a release
     /// that only reopened left the bead claimable by nobody but the worker that released it.
-    fn reopen_unassigned(&self, id: &str) -> Result<()>;
+    fn reopen_unassigned(&self, id: &str, actor: &str) -> Result<()>;
+    /// `bd reclaim --id <id> --older-than 0s`: take back a claim whose lease has run out, and
+    /// answer how many beads bd reverted (0 when the lease is still live).
+    fn reclaim(&self, id: &str, actor: &str) -> Result<u64>;
     fn comment(&self, id: &str, text: &str) -> Result<()>;
     /// `bd close <id> <id> … --reason <r>`: every id in ONE bd process. bd 1.2.2 documents
     /// `bd close [id...]` with "one --reason for all IDs" (`bd close --help`, read
@@ -202,11 +210,38 @@ pub trait WorkLedger {
 /// The one bd process a release makes (air-0kk): status back to open and the assignee
 /// cleared together, so the two cannot be left half-applied and a released bead is claimable
 /// by anyone. Pure, so `air selftest` can read it.
-pub fn reopen_argv(id: &str) -> Vec<String> {
-    ["update", id, "-s", "open", "-a", ""]
+///
+/// `--actor` is the holder's. bd 1.3.0 refuses `-a ""` on a bead another actor holds
+/// in_progress ("cannot reassign … held by …"), and bd's default actor is `$BEADS_ACTOR`, then
+/// git's user name, then `$USER`, none of which has to be the actor Air claimed with.
+pub fn reopen_argv(id: &str, actor: &str) -> Vec<String> {
+    ["update", id, "-s", "open", "-a", "", "--actor", actor]
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+/// The one bd process `air reclaim` makes. It never passes `--force`: the owner ruled on
+/// 2026-09-26 that the coordinator takes a bead back only when bd agrees the claim is
+/// abandoned, and an expired lease is how bd says so. `bd reclaim` with no `--older-than`
+/// waits a ten-minute grace past expiry; `0s` drops the grace, because the coordinator has
+/// already judged the worker gone. Checked on bd 1.3.0 in a throwaway repo: before expiry it
+/// exits 0 with `"count": 0` and changes nothing; after expiry it reopens the bead and clears
+/// the assignee.
+pub fn reclaim_argv(id: &str, actor: &str) -> Vec<String> {
+    [
+        "reclaim",
+        "--id",
+        id,
+        "--older-than",
+        "0s",
+        "--actor",
+        actor,
+        "--json",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// argv for [`WorkLedger::by_statuses`], pure so the ONE-ARGUMENT comma-separated form is
@@ -492,10 +527,20 @@ impl WorkLedger for BdCli {
         self.run(&["update", id, "-s", status]).map(|_| ())
     }
 
-    fn reopen_unassigned(&self, id: &str) -> Result<()> {
-        let argv = reopen_argv(id);
+    fn reopen_unassigned(&self, id: &str, actor: &str) -> Result<()> {
+        let argv = reopen_argv(id, actor);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
         self.run(&args).map(|_| ())
+    }
+
+    fn reclaim(&self, id: &str, actor: &str) -> Result<u64> {
+        let argv = reclaim_argv(id, actor);
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let out = self.run(&args)?;
+        let v: serde_json::Value = serde_json::from_str(&out)?;
+        Ok(v.get("count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0))
     }
 
     fn comment(&self, id: &str, text: &str) -> Result<()> {

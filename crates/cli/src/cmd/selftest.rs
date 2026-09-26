@@ -244,7 +244,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         Mutation {
             // Take one row's trace away: the line is still written and nothing counts it.
             file: "crates/cli/src/cmd/mechanisms.rs",
-            from: "fires: Fires::Decisions(&[(\"release\", \"refuse\")]),",
+            from: "fires: Fires::Decisions(&[(\"reclaim\", \"lease-live\")]),",
             to: "fires: Fires::Decisions(&[]),",
             also_red: &[],
         },
@@ -1295,8 +1295,19 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Back to reopening alone: the exact write that left and air-an9
             // unclaimable.
             file: "crates/bd/src/lib.rs",
-            from: "    [\"update\", id, \"-s\", \"open\", \"-a\", \"\"]",
-            to: "    [\"update\", id, \"-s\", \"open\"]",
+            from: "    [\"update\", id, \"-s\", \"open\", \"-a\", \"\", ",
+            to: "    [\"update\", id, \"-s\", \"open\", ",
+            also_red: &[],
+        },
+    ),
+    (
+        "release: the reopen names the holder's actor, which bd 1.3 requires; reclaim takes back one bead and never forces",
+        Mutation {
+            // Back to bd's default actor: the reopen bd 1.3.0 refused in a throwaway repo
+            // whenever `$BEADS_ACTOR` was not the holder (2026-09-26).
+            file: "crates/bd/src/lib.rs",
+            from: "\"-a\", \"\", \"--actor\", actor]",
+            to: "\"-a\", \"\"]",
             also_red: &[],
         },
     ),
@@ -2552,6 +2563,7 @@ fn all_probes() -> Vec<Probe> {
         probe_acceptance_unread_refuses(),
         probe_claim_retries_a_timeout_once(),
         probe_release_unassigns(),
+        probe_release_names_the_holder(),
         probe_every_air_spawn_pins_identity(),
         probe_worker_cannot_ask_the_owner_directly(),
         probe_batch_green_closes_the_bead_it_covers(),
@@ -4217,7 +4229,7 @@ fn probe_land_names_a_branch() -> Probe {
 fn probe_release_unassigns() -> Probe {
     use air_bd::reopen_argv;
 
-    let argv = reopen_argv("zz-1");
+    let argv = reopen_argv("zz-1", "w1");
     let has = |a: &str, b: &str| {
         argv.windows(2)
             .any(|w| matches!(w, [x, y] if x == a && y == b))
@@ -4226,9 +4238,37 @@ fn probe_release_unassigns() -> Probe {
         && argv.get(1).is_some_and(|id| id == "zz-1")
         && has("-s", "open")
         && has("-a", "");
-    let green = argv.len() == 6 && argv.iter().filter(|a| *a == "-a").count() == 1;
+    let green = argv.iter().filter(|a| *a == "-a").count() == 1;
     Probe {
         name: "release: reopening a bead clears its assignee in the same bd process, so anyone can claim it",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// bd 1.3.0 refuses `bd update <id> -s open -a ""` to any actor but the holder, and bd's
+/// default actor (`$BEADS_ACTOR`, git's user name, `$USER`) need not be the one Air claimed
+/// with. Checked in a throwaway repo on 2026-09-26: exit 1 without the holder's actor, exit 0
+/// with it. The owner ruled the same day that `air reclaim` never passes `--force`.
+///
+/// Red: the reopen names the holder's actor. Green: neither the reopen nor the reclaim passes
+/// `--force`, and the reclaim is scoped to the one bead with no grace window.
+fn probe_release_names_the_holder() -> Probe {
+    use air_bd::{reclaim_argv, reopen_argv};
+
+    let pair = |v: &[String], a: &str, b: &str| {
+        v.windows(2)
+            .any(|w| matches!(w, [x, y] if x == a && y == b))
+    };
+    let reopen = reopen_argv("zz-1", "w1");
+    let reclaim = reclaim_argv("zz-1", "coordinator");
+    let red = pair(&reopen, "--actor", "w1");
+    let green = !reopen.iter().chain(&reclaim).any(|a| a == "--force")
+        && reclaim.first().is_some_and(|c| c == "reclaim")
+        && pair(&reclaim, "--id", "zz-1")
+        && pair(&reclaim, "--older-than", "0s");
+    Probe {
+        name: "release: the reopen names the holder's actor, which bd 1.3 requires; reclaim takes back one bead and never forces",
         red_fires: red,
         green_passes: green,
     }

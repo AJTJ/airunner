@@ -153,15 +153,24 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         files: Vec<String>,
     },
-    /// Give a bead back: bd in_progress → open (never a closed bead), ledger claim closed with a reason.
+    /// Give your own bead back: bd in_progress → open (never a closed bead), ledger claim closed with a reason.
     Release {
         bead: String,
         /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
         #[arg(long)]
         reason: String,
-        /// Coordinator only: release a peer's claim (a gone worker's bead).
+    },
+    /// Coordinator: take back a gone worker's bead with `bd reclaim`. bd lets go only once the
+    /// worker's claim lease has run out (five minutes after the claim); until then this exits
+    /// non-zero and says when.
+    Reclaim {
+        bead: String,
+        /// The worker that holds it.
         #[arg(long)]
-        worker: Option<String>,
+        worker: String,
+        /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
+        #[arg(long)]
+        reason: String,
     },
     /// One line into the inbox, or a whole finding with --file. Workers capture; the
     /// coordinator triages. Never blocks you.
@@ -539,11 +548,12 @@ fn main() -> ExitCode {
         }
         Cmd::Holdings { file } => cmd::holdings::run(&repo, file.as_deref(), cli.json),
         Cmd::Claim { bead, files } => cmd::claim::claim(&repo, &bead, &files, cli.json),
-        Cmd::Release {
+        Cmd::Release { bead, reason } => cmd::claim::release(&repo, &bead, &reason, cli.json),
+        Cmd::Reclaim {
             bead,
-            reason,
             worker,
-        } => cmd::claim::release(&repo, &bead, &reason, worker.as_deref(), cli.json),
+            reason,
+        } => cmd::claim::reclaim(&repo, &bead, &worker, &reason, cli.json),
         Cmd::Capture {
             text,
             file,

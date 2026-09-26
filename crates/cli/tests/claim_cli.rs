@@ -88,8 +88,22 @@ case "$1" in
   update) [ -e "$d/bd.fail" ] && exit 1
           # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
           # issue `show` answers from, so a later claim by another actor sees what bd would.
-          case "$*" in *"-s open -a"*) printf '%s' "{\"id\":\"$2\",\"status\":\"open\",\"assignee\":\"\",\"labels\":[]}" > "$d/bd.issue.json";; esac
+          case "$*" in *"-s open -a"*)
+            # bd 1.3.0: unassigning a bead another actor holds in_progress is refused without
+            # --force. The actor is --actor, else $BEADS_ACTOR, as in bd.
+            actor="$BEADS_ACTOR"; prev=""
+            for a in "$@"; do [ "$prev" = "--actor" ] && actor="$a"; prev="$a"; done
+            if [ -f "$d/bd.issue.json" ] && grep -q '"status":"in_progress"' "$d/bd.issue.json" \
+               && ! grep -q "\"assignee\":\"$actor\"" "$d/bd.issue.json"; then
+              case "$*" in *--force*) ;; *) echo "cannot reassign $2: held by another actor (in_progress)" >&2; exit 1;; esac
+            fi
+            printf '%s' "{\"id\":\"$2\",\"status\":\"open\",\"assignee\":\"\",\"labels\":[]}" > "$d/bd.issue.json";;
+          esac
           exit 0;;
+  reclaim) # bd 1.3.0: exit 0 either way; count 0 while the lease is live (bd.lease_live).
+          if [ -f "$d/bd.lease_live" ]; then echo '{"count":0,"reclaimed":null,"scoped":true}'; exit 0; fi
+          printf '%s' "{\"id\":\"$3\",\"status\":\"open\",\"labels\":[]}" > "$d/bd.issue.json"
+          echo '{"count":1,"scoped":true}'; exit 0;;
   *) exit 0;;
 esac
 "#,
@@ -214,12 +228,111 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     let (code, out, _) = air(&repo, &bd, &["release", "zz-1", "--reason", "abandoned"]);
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
-    // air-0kk: one process, status and assignee together (the trailing `-a ""` logs as `-a`).
+    // air-0kk: one process, status and assignee together (the empty `-a ""` logs as two
+    // spaces), and the holder's actor, which bd 1.3 requires.
     assert!(
-        log.lines().any(|l| l.trim() == "update zz-1 -s open -a"),
+        log.lines()
+            .any(|l| l.trim() == "update zz-1 -s open -a  --actor tester"),
         "{log}"
     );
     assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+}
+
+/// bd 1.3.0 refuses `bd update -s open -a ""` to anyone but the holder, and bd's default actor
+/// is `$BEADS_ACTOR`. A session with no `BEADS_ACTOR` claims as its worker name, so before the
+/// fix its own release was refused. The fake bd refuses the same way.
+#[test]
+fn release_passes_the_holder_actor_that_bd_1_3_requires() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .env("AIR_BD_BIN", &bd)
+            .env("FAKE_BD_DIR", &repo)
+            .env_remove("BEADS_ACTOR")
+            .env_remove("AIR_ROLE")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (code, text) = run(&["claim", "zz-1"]);
+    assert_eq!(code, 0, "{text}");
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert!(log.contains("update zz-1 --claim --actor main"), "{log}");
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"zz-1","status":"in_progress","assignee":"main","labels":[]}"#,
+    )
+    .unwrap();
+    let (code, text) = run(&["release", "zz-1", "--reason", "abandoned"]);
+    assert_eq!(code, 0, "{text}");
+    let issue = std::fs::read_to_string(repo.join("bd.issue.json")).unwrap();
+    assert!(issue.contains(r#""status":"open""#), "{issue}");
+    assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+}
+
+/// `air reclaim`: the coordinator takes back another actor's bead through `bd reclaim`, never
+/// `--force` (owner, 2026-09-26). While the holder's lease is live bd reverts nothing and
+/// exits 0, so Air says when the lease expires and exits non-zero with nothing recorded.
+#[test]
+fn reclaim_takes_back_another_actors_bead_only_when_bd_lets_go() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let (code, out, _) = air(&repo, &bd, &["claim", "zz-1"]);
+    assert_eq!(code, 0, "{out}");
+    std::fs::write(
+        repo.join("bd.issue.json"),
+        r#"{"id":"zz-1","status":"in_progress","assignee":"tester","labels":[],"lease_expires_at":"2026-09-26T08:08:19Z"}"#,
+    )
+    .unwrap();
+    let coord = [("AIR_ROLE", "coordinator"), ("BEADS_ACTOR", "coordinator")];
+    let args = [
+        "reclaim",
+        "zz-1",
+        "--worker",
+        "main",
+        "--reason",
+        "abandoned",
+    ];
+
+    // A worker may not take back a peer's bead.
+    let (code, _, err) = air_env(&repo, &bd, &args, &[("AIR_ROLE", "worker")]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("air release"), "{err}");
+
+    // Lease live: refused, the expiry named, the claim still open, bd not forced.
+    std::fs::write(repo.join("bd.lease_live"), "").unwrap();
+    let (code, out, err) = air_env(&repo, &bd, &args, &coord);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("2026-09-26T08:08:19Z"), "{out}");
+    assert!(out.contains("5 minutes"), "{out}");
+    assert_eq!(claims(&repo)[0].2, None);
+
+    // Lease expired: bd reverts it and the ledger claim closes with the reason.
+    std::fs::remove_file(repo.join("bd.lease_live")).unwrap();
+    let (code, out, err) = air_env(&repo, &bd, &args, &coord);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
+    assert!(
+        log.contains("reclaim --id zz-1 --older-than 0s --actor coordinator --json"),
+        "{log}"
+    );
+    assert!(!log.contains("--force"), "{log}");
+    assert!(!log.contains("update zz-1 -s open"), "{log}");
 }
 
 /// air-p61: the other branch of the same timeout. bd hangs and the write did NOT land, so
