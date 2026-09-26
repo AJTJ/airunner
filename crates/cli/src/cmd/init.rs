@@ -923,7 +923,7 @@ mod tests {
         let stub = claude_md_stub("make verify", true);
         assert!(stub.contains(".air/roles.md"), "{stub}");
         assert!(stub.contains("air record verify -- make verify"));
-        for gone in ["work flow", "bd close", "git merge main"] {
+        for gone in ["work flow", "bd close", "air close", "git merge main"] {
             assert!(!stub.contains(gone), "restates the protocol: {gone}");
         }
         // air-gn5o: the placeholder sentence only where there is a placeholder.

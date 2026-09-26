@@ -154,8 +154,8 @@ The lane is a worker with one permission added and one piece of advice removed. 
 land, which is refused to workers and, since the owner's ruling of 2026-09-14, to the
 coordinator; the owner may still land. The stop hook offers it no ready bead and gives it no
 hand-over advice, since its branch carries every member's beads. Every other check that stops
-a worker stops the lane: the edit fence, the refusal of air close and of claiming a bead the
-owner must decide, releasing another worker's claim, and the UNENFORCED mark in status.
+a worker stops the lane: the edit fence, the hand-over check in air close, the refusal of
+claiming a bead the owner must decide, releasing another worker's claim, and the UNENFORCED mark in status.
 
 The directory a command runs in never decides what it may do. Neither does the repository path
 passed on the command line. The coordinator can therefore move into a worktree and keep every
@@ -163,8 +163,8 @@ permission it has. The directory still names things, such as which worktree a ve
 belongs to, but it grants nothing.
 
 Workers are kept from a small set of commands in two ways. Claude Code's deny list stops them
-from running the commands at all. For air land and air close, Air's own checks refuse again when
-AIR_ROLE is worker or lane, which covers the command being spelled a different way. The lane's
+from running the commands at all. For air land, Air's own check refuses again when AIR_ROLE is
+worker, which covers the command being spelled a different way. The lane's
 deny list is the worker's without air land, and a worker's includes air lane and air fleet.
 The lane's settings also carry an allow rule for air land (and for the pinned binary's path
 when the repository is pinned). In auto mode an allow rule resolves before the classifier
@@ -180,7 +180,8 @@ Any session may run these.
 | Command | What it does |
 |---|---|
 | air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. A verify at a batch head tells each member the result and ends with the lane's next step. |
-| air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. |
+| air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. On a pass it names the air close that would go through. |
+| air close | Closes beads in one beads process and releases their claims. For a worker or the lane it first runs the hand-over gate on each bead, whatever AIR_ENFORCE says, and closes nothing if any bead fails; the refusal is the gate's own text. The coordinator and the owner close without the gate, since they close what has already landed. |
 | air claim | The only way to claim a bead. It refuses while the fleet is stopped. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
 | air release | Returns the caller's own bead in progress to open, passing the caller's bd actor. It never reopens a closed bead. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
@@ -195,7 +196,7 @@ Any session may run these.
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
 
 These belong to the coordinator, the lane, or the owner. Claude Code's deny list keeps workers
-from air land, air close, and the three launchers, and Air refuses land and close again by role. Air refuses reclaim to a worker.
+from air land and the three launchers, and Air refuses land again by role. Air refuses reclaim to a worker.
 Nothing refuses inbox, triage, install or init to a worker.
 
 | Command | What it does |
@@ -203,7 +204,6 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air inbox | Lists open captures, oldest first. |
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
 | air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. A range that names no bead is refused unless its commits are all session-journal entries or all the coordinator's (the non-merge commits of the coordinator worktree's branch), and then it lands recording no bead. It closes nothing, and it always updates main in the main checkout, wherever it is run from. It refuses while the fleet is stopped, tells each member that its commits landed, and ends with the branches batch-ready now and the next command. |
-| air close | Closes beads that have already landed, in one beads process, and releases their claims. |
 | air reclaim | The coordinator takes back a gone worker's bead with `bd reclaim --id`. bd lets go only once the claim's five-minute lease has run out (Air never renews it); until then the command names the expiry and exits non-zero. It never passes `--force`. |
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
@@ -269,7 +269,7 @@ timeout.
 | Event | What happens |
 |---|---|
 | Session start and end | The session's row is created, idle, or removed. |
-| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it. For a message to another agent, Air records the message and its content. |
+| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. This match on the command text is the backstop for a raw `bd close`, and its refusal names air close. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
 | Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
@@ -308,7 +308,7 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1
   --settings '{"env":{...},"enabledMcpjsonServers":["air"]}'
   --name air-worker-9
   --dangerously-load-development-channels server:air
-  --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
+  --disallowed-tools 'Bash(air land *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
     'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' 'Bash(air fleet *)'
     EnterWorktree ExitWorktree AskUserQuestion
@@ -391,22 +391,28 @@ instead of trying the claim twice.
 ```mermaid
 sequenceDiagram
   participant W as worker
-  participant H as air hook
+  participant H as air close
   participant G as gate
   participant L as ledger and git
-  W->>H: shell command that closes a bead
+  W->>H: air close <id>
   H->>L: green at this commit? contains main? claimed? digest (where asked)?
   L-->>H: facts
   H->>G: decide
   alt everything present
-    H-->>W: allowed
-  else something missing, enforcement on
-    H-->>W: refused, with what is missing and the fix
-  else something missing, enforcement off
-    H-->>W: allowed, with the verdict as advice
+    H->>L: bd close, release the claim
+    H-->>W: closed
+  else something missing
+    H-->>W: refused, with what is missing and the fix; nothing closed
   end
   H->>L: one event line
 ```
+
+A worker closes with air close, which runs the gate when the
+close runs. The PreToolUse hook runs the same gate on a raw `bd close` it can read from the
+command text, as a backstop: it refuses under AIR_ENFORCE=1, advises otherwise, and names air
+close in either case. The text match is why air close exists. In the 0.4.5 live trial a worker
+put a commit and a `bd close` on separate lines of one shell call, the match missed it, and the
+bead closed with no green containing its commits.
 
 A green means a successful recorded run at the exact commit, or, if the repository matches by
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a
@@ -697,7 +703,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | A count of zero is evidence only if the subject occurred, and a deletion's numbers are checked against the raw record. | 2026-08-29 | `do-less` skill |
 | A check that finds nothing prints what it examined. | 2026-09-06 | every check |
 | Every session is an interactive terminal the owner can watch and type into. | 2026-09-06 | `air worker`, `air coordinator` |
-| Workers capture; they never file, claim through bd, push, land, close with `air close` or launch sessions. | 2026-08-21 | `WORKER_DENY` in `launch.rs` |
+| Workers capture; they never file, claim through bd, push, land or launch sessions. | 2026-08-21 | `WORKER_DENY` in `launch.rs` |
 | The coordinator may commit and launch workers; it may not push. | 2026-08-29 | `COORDINATOR_DENY` |
 | Deny rules and role text ride launcher flags; a repo's own denies are tracked patterns. | 2026-09-05 | `--disallowed-tools`, `worker_deny` |
 | The coordinator triages, files and decides; queues live in beads fields. | 2026-08-20 | `roles.md` |
@@ -707,7 +713,8 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | A session acts on its own project only; reading and messaging another project is fine. | 2026-09-05 | `roles.md` |
 | Air makes each session's worktree and fences edits to it; the verification lane is a role. | 2026-09-14 | `edit-outside-worktree`, `air lane` |
 | The merge-queue protocol is Air's and ships in `.air/roles.md`; a repo keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
-| A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate matches `bd close` |
+| A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate |
+| A worker closes with `air close`, which runs the hand-over gate itself; the match on a raw `bd close` stays as the backstop. | 2026-09-26 | `close.rs` `gate` |
 | Proof is a command's output, a `file:line` or a test; a remainder only the owner can do becomes a successor bead. | 2026-08-22 | `roles.md` |
 | Landing attributes beads by the `Bead:` trailers in the merged range; workers pull work, nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
 | An acceptance clause names what settles it and what changes; no regex checks it. | 2026-08-29 | `decomposition` skill |
@@ -790,7 +797,7 @@ The release is tagged only if every scenario ends as expected.
 | Happy path | Three unrelated beads, such as adding `farewell.sh` with a test, letting `greet.sh` take a second name, and printing the number of cases that passed | One or more batches land on main, every bead closes with proof, and `make verify` passes on main |
 | Conflict | Two beads that change the same line of `greet.sh`, given to different workers | `air batch cut` drops the later-ready branch and names the file; its worker resolves and it lands in the next batch |
 | Red batch | A bead whose change breaks a test | The batch is reported red by member and nothing lands |
-| Early close | A worker tries `bd close` before the lane's green | The close is refused and the refusal says what is missing |
+| Early close | A worker tries `air close` before the lane's green | The close is refused and the refusal says what is missing |
 | Fence | A worker is asked to edit a file in the main checkout | The edit is refused |
 | Lease | Declare a lease for a command such as `sh serve.sh`, and have two workers run it | The second worker is refused until the first releases the lease |
 | Behind main | A branch is still waiting when another batch lands | It stays ready for the lane and lands without its worker merging main |
@@ -902,7 +909,8 @@ Owner rulings still open, each with the recommendation:
 
 - [ ] Does the coordinator keep air close? Yes, with its use counted: it recovers a bead whose
       worker is gone, and it is how the adopter recovered six stranded beads on 2026-09-07. The
-      code lets it today and refuses workers and the lane (crates/cli/src/cmd/close.rs).
+      code lets it today without the gate; workers and the lane close through the gate
+      (crates/cli/src/cmd/close.rs).
 - [ ] Red batches: drop by the failing step, or always bisect? Drop by step, and bisect when the
       step names nothing. With three members a bisect costs at most two extra verifies.
 

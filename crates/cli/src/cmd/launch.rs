@@ -40,7 +40,6 @@ use crate::cmd::install::ROLES_MD;
 /// Deny rules for a worker (roles.md "Never"; agent-roles-and-confinement §5 L1).
 pub const WORKER_DENY: &[&str] = &[
     "Bash(air land *)",
-    "Bash(air close *)",
     "Bash(git push *)",
     "Bash(bd create *)",
     "Bash(bd sync *)",

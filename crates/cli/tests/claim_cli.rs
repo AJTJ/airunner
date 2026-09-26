@@ -794,8 +794,8 @@ fn capture_inbox_triage_round_trip() {
 
 /// air-869: the incident was ten closes as ten `bd` processes at ~1.4 s each. Ten closes
 /// through Air are ONE bd process and one ledger transaction; the event line carries what
-/// bd cost, and `air status` reads it back. A worker is refused: the one refusal
-/// (hand-over needs green) lives on the worker's path and closing would walk around it.
+/// bd cost, and `air status` reads it back. A worker's close runs the hand-over gate
+/// (owner, 2026-09-26): refused with no green, naming what is missing, and closed with one.
 #[test]
 fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     let dir = scratch_repo();
@@ -855,7 +855,7 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("bd: median"), "{out}");
 
-    // A worker may not close.
+    // A worker's close runs the hand-over gate.
     let wt = repo.join("wt-w");
     let g = Command::new("git")
         .args([
@@ -871,16 +871,29 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
         .output()
         .unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
-    std::fs::write(repo.join("bd.log"), "").unwrap();
-    let (code, out, _) = air_env(
-        &wt,
-        &bd,
-        &["close", "zz-1", "--reason", "x"],
-        &[("AIR_ROLE", "worker")],
-    );
+    let worker = [("AIR_ROLE", "worker")];
+    let (code, out, err) = air_env(&wt, &bd, &["claim", "zz-11"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    std::fs::write(wt.join("bd.log"), "").unwrap();
+    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("coordinator's landing pass"), "{out}");
-    assert_eq!(std::fs::read_to_string(repo.join("bd.log")).unwrap(), "");
+    assert!(out.contains("air close refused for"), "{out}");
+    assert!(out.contains("verify-green-at-head"), "{out}");
+    assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
+
+    let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
+    assert!(log.contains("close zz-11 --reason x"), "{log}");
+    assert!(
+        claims(&repo)
+            .iter()
+            .any(|c| c.0 == "zz-11" && c.2.as_deref() == Some("closed")),
+        "{:?}",
+        claims(&repo)
+    );
 }
 
 /// air-zlq: `air triage` takes ONE capture. The batch it used to take could not finish

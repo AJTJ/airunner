@@ -293,7 +293,9 @@ fn launchers_print_the_exact_command() {
         "{out}"
     );
     assert!(
-        !out.contains("'Bash(air land *)'") && out.contains("'Bash(air close *)'"),
+        !out.contains("'Bash(air land *)'")
+            && !out.contains("'Bash(air close *)'")
+            && out.contains("'Bash(git push *)'"),
         "{out}"
     );
 

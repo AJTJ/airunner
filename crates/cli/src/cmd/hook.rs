@@ -6,7 +6,8 @@
 //! - PostToolUse(Edit|Write): journal the touched file.
 //! - PreToolUse(Edit|Write): warn (additionalContext) if a peer is journaled on that file.
 //! - PreToolUse(Bash `bd close`/`bd update … -s awaiting_review|closed`): run the hand-over gate,
-//!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason).
+//!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason). The backstop for a
+//!   raw `bd close`: workers close with `air close`, which runs the same gate itself.
 //! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
 //!   missing; quiet on the ok path and for the coordinator. One block: a worker with no claim
 //!   while beads are ready is nudged once with the ids (air-09i; `stop_hook_active` is the
@@ -967,18 +968,30 @@ pub fn handover_gate(
     } else {
         dec::PRE_TOOL_USE_WOULD_REFUSE
     };
+    // Owner ruling, 2026-09-26: workers close with `air close`, which runs this check when the
+    // close runs. This matcher is the backstop for a raw `bd close`, so its refusal names the
+    // command that does not depend on how the line is written.
+    let message = if v.pass {
+        v.message.clone()
+    } else {
+        format!(
+            "{}. Close with `air close {} --reason-file <proof>`, which runs this check itself.",
+            v.message,
+            bead.as_deref().unwrap_or("<id>")
+        )
+    };
     let outcome = if v.block {
         HookOutcome::Block {
-            reason: format!("air: {}", v.message),
+            reason: format!("air: {message}"),
         }
     } else if !v.pass {
         HookOutcome::Allow {
-            context: Some(format!("air: {}", v.message)),
+            context: Some(format!("air: {message}")),
         }
     } else {
         HookOutcome::Allow { context: None }
     };
-    Ok(Dispatched::new(outcome, decision, v.message.clone())
+    Ok(Dispatched::new(outcome, decision, message)
         .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
         .denominator("4 checks"))
 }

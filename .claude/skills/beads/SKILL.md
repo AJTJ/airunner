@@ -84,11 +84,12 @@ echo "Why this exists and what needs to be done" \
       --deps discovered-from:<parent-id>
 ```
 
-5. Close completed work with evidence in the reason:
+5. Close completed work with evidence in the reason. In a repo that runs Air, close with
+   `air close`, which runs the hand-over check before it calls bd; a raw `bd close` is checked
+   only when Air can read it from the command line.
 
 ```bash
-echo "make verify exit 0 at <sha>; acceptance met: <file:line or output>" \
-  | bd close <id> --reason=-
+air close <id> --reason-file <proof>   # the proof: "make verify exit 0 at <sha>; acceptance met: ..."
 ```
 
 ## Worktree pinning
@@ -123,7 +124,6 @@ worse, can apply part of a flag set and silently drop the rest.
 
 ```bash
 echo "description text" | bd create "Title" -p 1 --description=-
-echo "reason text" | bd close <id> --reason=-
 echo "handoff note" | bd comment <id> -
 ```
 
@@ -148,9 +148,10 @@ See the `decomposition` skill for how to cut an epic.
 Built-in: `open`, `in_progress`, `blocked`, `deferred`, `closed`, `pinned`, `hooked`. Repos
 may configure custom statuses; Air relies on none.
 
-- There is no `done` or `completed` status. Finish work with `bd close <id>`, never
-  `bd update --status closed` or `--status done`.
-- There is no `--resolution` flag on `bd update`. Close reasons go through `bd close --reason`.
+- There is no `done` or `completed` status. Finish work with `air close <id>` (which calls
+  bd's own close), never `bd update --status closed` or `--status done`.
+- There is no `--resolution` flag on `bd update`. Close reasons go through `--reason` or
+  `--reason-file` on the close.
 - Release a claim you cannot progress (`air release <id> --reason <why>`). A stuck claimed bead is
   worse than an unclaimed one: `bd ready` withholds it from everyone.
 - Use `bd set-state` for orthogonal state (for example `review=pending`) instead of overloading
@@ -272,3 +273,5 @@ Each one was measured on a live fleet.
   hand-over gate) added with plan citations; version trap section added; the adopter's
   project-specific label list reduced to the `owner`/`runtime`/`human` semantics Air depends on;
   the adopter's dates kept only where they are the measurement.
+- 2026-09-26: closing moved from `bd close` to `air close`, which runs the hand-over gate itself
+  (owner ruling after the 0.4.5 live trial, where a raw `bd close` on its own line escaped it).
