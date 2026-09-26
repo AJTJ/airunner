@@ -27,7 +27,7 @@ pass before shipping, such as a linter or a build.
 | File | What it is |
 |---|---|
 | `CLAUDE.md` | A short stub. The fleet's rules live in `.air/roles.md`, so this only names the check and the project's own rules. |
-| `.claude/air.json` | Air's settings for this project. Empty lists are fine; `leases` and `precheck` are added only if needed. |
+| `.claude/air.json` | Air's settings for this project. `project` is the directory name, used in tmux session names. `metis` is false because Metis was not installed. Empty lists are fine; `leases` and `precheck` are added only if needed. |
 | `.claude/settings.json` | Claude Code hooks that call `air hook` on every tool call. |
 | `.mcp.json` | The channel that tells the coordinator when something needs attention. |
 | `.worktreeinclude` | Untracked files a new worktree needs, such as `.env`. Empty here. |
@@ -47,3 +47,7 @@ air init --write
 git add -A && git commit -m "adopt Air"
 air coordinator
 ```
+
+`make adoption-check` in Air's repository takes a copy of this folder, deletes the files Air
+added, and runs `air init --write`, the first verify and each launcher on it. It fails if a step
+fails or if `air init` writes anything different from what is here.

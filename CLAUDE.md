@@ -155,3 +155,6 @@ lives in [`docs/rules/roles.md`](docs/rules/roles.md), shipped as `.air/roles.md
 - **Verify** is `make verify` (fmt, clippy, tests, `air selftest` on this tree's build),
   recorded as `air record verify -- make verify` (owner, 2026-08-22). There is no precheck and
   no test-state reset. This repo sets no `verify_lane` and no `digest_dir`.
+- **`make release` also runs `make adoption-check`**, which adopts `examples/minimal` with this
+  tree's binary and fails if `air init` would write something the example does not show. A
+  change to what `air init` writes updates the example in the same commit (air-livz).
