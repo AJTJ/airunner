@@ -1014,6 +1014,9 @@ fn launch_worker_like(
     task: Option<&str>,
     print: bool,
 ) -> i32 {
+    if !print {
+        super::bd_server::ensure_for_launch(repo, &format!("air {role}"));
+    }
     let start = Start {
         tmux,
         task,
@@ -1068,6 +1071,10 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     if note && !print {
         let main = super::worktree::main_checkout(repo);
         eprintln!("air fleet up: {}", startup_prompts_note(&main));
+    }
+    // bd's server before any session that will call bd.
+    if !print {
+        super::bd_server::ensure_for_launch(repo, "air fleet up");
     }
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
@@ -1227,6 +1234,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
     if !print {
         let main = super::worktree::main_checkout(repo);
         eprintln!("air coordinator: {}", startup_prompts_note(&main));
+        super::bd_server::ensure_for_launch(repo, "air coordinator");
     }
     // Before the coordinator: on a terminal its launch replaces this process.
     if start_fleet && fleet_up_noting(repo, print, false) != 0 {

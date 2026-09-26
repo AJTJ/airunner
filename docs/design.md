@@ -188,7 +188,8 @@ Any session may run these.
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
 | air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It tells each dropped worker its conflict, and it refuses while the fleet is stopped. It neither verifies nor lands; it prints the next command. |
-| air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
+| air doctor | Reports where the ledger is, its size and schema version, whether beads is the pinned version, and beads' mode (embedded, or server with its port and whether it answers). |
+| air bd-server up, air bd-server status | For a project whose beads runs in server mode, up starts the Dolt server when its port does not answer and waits up to 10 seconds for it; status prints the mode and whether the port answers. Neither touches a project whose beads is embedded. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
 | air selftest | Runs a red and a green probe for every check. There were 162 probes on 2026-09-25. |
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
@@ -206,10 +207,10 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
 | air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
-| air fleet up | Starts the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
+| air fleet up | Starts beads' server if it is down (as air bd-server up), then the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
 | air fleet stop, air fleet resume | The coordinator's and the owner's only; a worker or the lane is refused. Stop sets a fleet-wide stop in the ledger with its time, author and reason, and tells every other worktree's session. While it holds, air claim, air batch cut and air land refuse naming it, the ready fan-out and the stop nudge are silent, and air status leads with it. No session is killed, and a verify already running finishes and is recorded. Resume removes it and tells every session. |
 | air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. With --pin it copies itself to .air/bin/air, points the hooks and the channel at the copy, and the launchers put .air/bin first on the path of every session they start; the path check does not apply then. In a pinned repository any other air hands every command but install to the pin before running it (air-qyrm). --unpin goes back to the path. |
-| air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
+| air init | Sets up a new repository: checks for beads and Claude Code (and Dolt and tmux when there is no .beads yet), initialises git, starts a Dolt server on a free port and initialises beads in server mode against it, moving the port from the tracked metadata.json into .beads/dolt-server.port (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
 itself starts air mcp and air hook.
@@ -288,6 +289,8 @@ Every hook call, including the silent ones, writes one event line.
 | .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, whether a close needs a digest (`"digests": true` for `.air/digests/`, or a tracked `digest_dir`; neither means none), an optional tracked `journal_dir`, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per session: each worker, the lane, and the coordinator. |
+| .air/dolt | beads' Dolt server when beads runs in server mode: the data in `data/`, the server's output in `server.log`. The server runs in the tmux session `<project>-dolt`. |
+| .beads/metadata.json, .beads/dolt-server.port | beads' own files, which Air reads: `dolt_mode` says server or embedded, and the port file (gitignored by beads) holds the server's port. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
 
 The launchers set four variables on each session. AIR_ROLE is the role. BEADS_ACTOR is the
@@ -536,6 +539,12 @@ for the last 24 hours: from batch-ready to the start of the batch verify that to
 and from "batch green" to the member's close. The 5-minute wakes stay as the backstop for a
 push that is missed.
 
+The coordinator's tick first checks beads' server when beads runs in server mode: a TCP connect
+to its port. When nothing answers it starts the server as air bd-server up does, waiting up to
+10 seconds, and queues one notice for the coordinator: "bd server was down; restarted it", or
+"could not restart it: <why>". A bd cache row makes the second kind once per outage; Air keeps
+trying on each tick and says nothing more until the server answers (bd_server.rs, keep_alive).
+
 air lease release and air lease break queue "<lease> is free" for each worker the lease_wants
 table records as waiting, oldest first. Delivering it removes that worker's want, and taking
 the lease removes it too.
@@ -616,6 +625,12 @@ second kill, because it must never block the editor. The kill is silent, so it i
 unmatched events. A beads timeout during a claim is treated as unknown and the bead is read
 again. A killed verification is recorded as no verdict.
 
+When beads runs in server mode and its Dolt server is down, every beads command fails, and Air's
+reads of beads fail the way they do when beads is absent. The launchers and air fleet up start
+the server before any session, and the coordinator's poll restarts it within one tick and tells
+the coordinator. Air never starts a server over a data directory that lacks the project's
+database, because beads would then create an empty one.
+
 Everything else fails closed and says why. Landing refuses while a verification runs, unless
 the owner overrides it, and the override is counted. A worker is refused landing and closing
 wherever it runs. A repository path outside this project is refused. Install refuses a downgrade, a .air directory that git does not
@@ -668,6 +683,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
 | Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
 | Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release` |
+| A new project's beads runs in server mode, on one Dolt server per project with its data in `.air/dolt`, kept up by Air. Air never moves an existing project's beads; an embedded project stays embedded and is only reported. | 2026-09-26 | `air init`, `air bd-server` |
 | A worker cannot claim a bead labelled `owner`. | 2026-08-22 | `OWNER_LABEL` |
 | A default is closed only where a wrong denial is loud; messages are never fenced. | 2026-08-22 | `docs/rules/roles.md` |
 | The ledger keeps only what git and bd cannot rebuild, and nothing in it expires by time. | 2026-08-17 | `crates/ledger` |
@@ -710,6 +726,10 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 Install Air with cargo from this repository. In a new repository, run air init. In one that
 already uses beads, run air install. Both show their changes first and write only when told to.
 Air doctor exits cleanly when the ledger, the schema, and the beads version are right.
+
+In a project whose beads runs in server mode, its Dolt server runs in the tmux session
+`<project>-dolt` with its data in .air/dolt. The launchers start it when it is down, and
+`air bd-server up` does the same by hand.
 
 Start the coordinator with air coordinator, which opens it in its own worktree and tmux
 session. It first asks whether to start the fleet; a yes, or air fleet up later, starts the
@@ -930,7 +950,7 @@ section 8.1.
 |---|---|---|
 | Rust, one binary, no async runtime. Edition 2024 on stable, one error enum per crate, no anyhow in libraries, tests on in-memory SQLite and temporary git repositories with no sleeps and no network. | Air is installed into other repositories, so it ships as a binary and a target repo never depends on Air's build. The hook starts on every tool call and has a tenth of a second to answer. | CLAUDE.md, "Rust" and "Tests"; section 6.7 |
 | One SQLite file in WAL mode for current state, beside one NDJSON event file per day for history, both in the main checkout's .air and shared by every worktree. No daemon, no server. | One machine and many short-lived writer processes. With six writers the lock waited at most 131 ms (2026-09-06). Rows hold only what git and beads cannot rebuild, and nothing expires on a timer. | crates/ledger; section 6.7; section 8.1 |
-| beads (bd) is the task store, pinned at 1.3.0 (from 1.2.2 by owner ruling 2026-09-26, when Homebrew stable became 1.3.0) and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so 1.2.2 was the only line upstream stood behind until 1.3.0, the first tested release off main (released 2026-09-15); Air's ledger does the compare-and-set. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
+| beads (bd) is the task store, pinned at 1.3.0 (from 1.2.2 by owner ruling 2026-09-26, when Homebrew stable became 1.3.0) and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. A new project runs it in server mode against a Dolt server per project that Air starts and keeps up (owner ruling 2026-09-26); an existing embedded project is left embedded. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so 1.2.2 was the only line upstream stood behind until 1.3.0, the first tested release off main (released 2026-09-15); Air's ledger does the compare-and-set. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
 | Stay on bd rather than switch to beads_rust or a table of Air's own. Watch bd 1.3.0. | beads_rust is store-incompatible with bd and ships no library, so Air would still pay per process. A table of Air's own means building a work tracker, and the ledger records no failure caused by bd. bd 1.3.0-rc.1 (2026-08-31) adds leases, compare-and-set, and bd serve. 1.3.0 was released on 2026-09-15, and the re-ask is a TODO in section 10. | https://github.com/Dicklesworthstone/beads_rust (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/tags/v1.3.0-rc.1 (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/latest (2026-09-25) |
 | Gas Town is prior art, not a runtime. | It supervises with LLM agents, costs about $100 an hour, and was seen merging a pull request over failing integration tests. Air copied its batch-then-bisect queue and its rule to cross-check a heartbeat against the real process before calling anything stuck. | https://www.dolthub.com/blog/2026-01-15-a-day-in-gas-town/ (2026-08-17); https://github.com/steveyegge/gastown (2026-08-17) |
 | Claude Code is the harness. | Its deny rules hold in every permission mode, including bypass. Its PreToolUse hook sees a close before it runs, and exit 2 is the one outcome nothing overrides. Sessions stay interactive terminals the owner can watch. The gate itself ports to any harness with a pre-tool hook, such as OpenCode's tool.execute.before; Codex was not checked. | https://code.claude.com/docs/en/permission-modes (2026-09-05); https://code.claude.com/docs/en/hooks.md (2026-08-17); https://opencode.ai/docs/plugins/ (2026-08-24) |
