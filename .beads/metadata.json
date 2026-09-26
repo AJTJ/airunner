@@ -1,7 +1,8 @@
 {
   "database": "dolt",
   "backend": "dolt",
-  "dolt_mode": "embedded",
+  "dolt_mode": "server",
   "dolt_database": "air",
-  "project_id": "8747f3b0-0d81-47ed-9677-89631eb65975"
+  "project_id": "8747f3b0-0d81-47ed-9677-89631eb65975",
+  "dolt_server_host": "127.0.0.1"
 }
