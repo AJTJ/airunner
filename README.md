@@ -59,6 +59,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
 - Messaging between agents, managed by Air.
+- Fleets spread across several machines, with every agent still working through Air.
 
 ## How to install it
 
