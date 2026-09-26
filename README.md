@@ -7,8 +7,9 @@ Multi-agent accountability and verification system. Lighter than air.
 ## Philosophy
 
 Do less. Most agentic systems try to do too much. The model knows how to do the work and keeps
-getting better at it, so Air does not plan the work or tell agents how to do it. What it does
-is practical: a merge queue, a few checks, and help keeping a fleet of sessions running.
+getting better at it, so Air does not tell agents how to write the code. It holds one opinion,
+on how to break work into beads, because a fleet goes wrong fastest when the work is badly cut.
+The rest is practical: a merge queue, a few checks, and help keeping a fleet of sessions running.
 
 ## The roles
 
@@ -35,6 +36,8 @@ A fleet is three kinds of session. Each is a full Claude Code session, and each 
   - A bead closes only on a passing run.
 - **Sessions.** Air starts the coordinator, the workers and the lane, each in its own git
   worktree and tmux session.
+- **Decomposition.** A skill, installed into every project, for breaking work into epics and
+  beads a worker can finish on its own.
 - **Shared resources.** Leases for anything one agent can use at a time, such as a port or a
   simulator.
 - **Keeping the fleet moving.**
