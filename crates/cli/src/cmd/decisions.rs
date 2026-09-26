@@ -74,6 +74,7 @@ traces! {
 
     CHANNEL_PUSHED = "channel.push" / "pushed";
     CHANNEL_DELIVERED = "channel.deliver" / "delivered";
+    FANOUT_BEADS_READY = "fanout" / "beads-ready";
     MCP_TOOL_TIMEOUT = "mcp.tool" / "timeout";
 
     CLAIM_REFUSE = "claim" / "refuse";

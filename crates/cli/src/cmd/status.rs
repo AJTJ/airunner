@@ -1408,7 +1408,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             worker: w.worker.clone(),
                             kind: kinds::IDLE_WITHOUT_CLAIM,
                             detail: format!(
-                                "idle {age} min, {} bead(s) they can claim; prompt them",
+                                "idle {age} min, {} bead(s) they can claim",
                                 s.claimable_depth.unwrap_or(0)
                             ),
                             for_minutes: age,
@@ -3209,7 +3209,7 @@ mod tests {
         assert_eq!(
             att[0].detail,
             format!(
-                "idle {} min, 5 bead(s) they can claim; prompt them",
+                "idle {} min, 5 bead(s) they can claim",
                 past_every_line_min()
             )
         );

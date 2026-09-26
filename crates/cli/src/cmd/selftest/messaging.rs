@@ -105,3 +105,95 @@ pub(super) fn probe_a_message_reaches_only_its_session() -> Probe {
         green_passes: green,
     }
 }
+
+fn session(state: &str) -> crate::cmd::status::Session {
+    crate::cmd::status::Session {
+        session_id: format!("s-{state}"),
+        state: state.into(),
+        changed_at: "2026-09-26T00:00:00Z".into(),
+        pid: Some(1),
+        pid_alive: Some(true),
+        has_transcript: true,
+        ..Default::default()
+    }
+}
+
+pub(super) fn view(
+    name: &str,
+    role: &str,
+    state: &str,
+    claim: Option<&str>,
+) -> crate::cmd::status::WorkerView {
+    crate::cmd::status::WorkerView {
+        worker: name.into(),
+        role: role.into(),
+        session: Some(session(state)),
+        claims: claim
+            .map(|b| air_ledger::claims::Claim {
+                bead: b.into(),
+                worker: name.into(),
+                claimed_at: "t".into(),
+                declared_files: Vec::new(),
+                first_handover_at: None,
+                last_handover_at: None,
+                handover_attempts: 0,
+                released_at: None,
+                release_reason: None,
+            })
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// air-dkm1: when the claimable ready set gains a bead, "beads are ready" is queued once for
+/// each live idle worker holding no claim, and for nobody else.
+///
+/// Red: after a seeding tick, a tick where `zz-2` joins the set queues one row for `idle`
+/// naming both beads. Green: the worker holding a claim, the lane and the working worker get
+/// nothing; the seeding tick, a repeat of the same set, and a set that only shrank queue
+/// nothing more.
+pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
+    use crate::cmd::fanout::fan_out_ready;
+    use crate::cmd::status::Snapshot;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let s = Snapshot {
+            workers: vec![
+                view("idle", "worker", "idle", None),
+                view("holding", "worker", "idle", Some("zz-9")),
+                view("lane", "lane", "idle", None),
+                view("busy", "worker", "working", None),
+            ],
+            ..Default::default()
+        };
+        let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        let tick = |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), at);
+        let seeded = tick(&["zz-1"], "2026-09-26T00:00:00Z");
+        let grew = tick(&["zz-1", "zz-2"], "2026-09-26T00:00:30Z");
+        let same = tick(&["zz-1", "zz-2"], "2026-09-26T00:01:00Z");
+        let shrank = tick(&["zz-2"], "2026-09-26T00:01:30Z");
+        let rows = l
+            .deliveries_since("2026-09-26T00:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = grew == ["idle"]
+            && rows.len() == 1
+            && rows.first().is_some_and(|d| {
+                d.to_worker == "idle" && d.content.starts_with("beads are ready: zz-1 zz-2")
+            });
+        let green = seeded.is_empty()
+            && same.is_empty()
+            && shrank.is_empty()
+            && !rows
+                .iter()
+                .any(|d| matches!(d.to_worker.as_str(), "holding" | "lane" | "busy"));
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "fanout: new ready beads are queued once for each live idle worker without a claim, never for the lane or a worker holding one",
+        red_fires: red,
+        green_passes: green,
+    }
+}

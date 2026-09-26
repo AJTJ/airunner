@@ -123,6 +123,16 @@ rest. For a genuine blocker, or a question only the owner can answer, run `air c
 "<blocker>"`, then either `air release <id> --reason <reason>` or take unrelated work. The
 coordinator files owner questions as beads labelled `owner`.
 
+Air delivers these messages into your session through its channel, each once, marked as coming
+from `air`:
+
+- `beads are ready: <ids>` arrives when new beads became claimable while you were idle with no
+  claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
+  refused claim means someone else took it; take another.
+
+You do not need to ask anyone for work: Air tells you when beads are ready, and your own wake
+and the Stop hook cover the rest.
+
 What you can look up: `air holdings` (who is in which file), `air status`, `air lease status`
 and `air handover`. When a peer holds a file you open, Air warns you once per session.
 
@@ -207,6 +217,10 @@ run recorded" does not mean idle. `air holdings` shows who is in which file. The
 a condition when the set of conditions changes, not while one ages: a worker idle, silent or
 gone with a claim, a worker idle without one, a hand-over not green, a branch landable, a bead
 landed and not closed, a lease held by a dead or stale session.
+
+What Air carries for you, so you do not send it: when the claimable ready set gains a bead,
+Air tells every idle worker without a claim which beads are ready. The `idle-without-claim`
+condition still names a worker that stays idle after that.
 
 When a session stops, `air status` prints `STOPPED at <t>` with the kind. Read the kind before
 acting. A `quota_auto_resume_fired` session is being resumed by the harness, and typing at it

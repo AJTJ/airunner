@@ -855,6 +855,8 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
                     let opened = crate::cmd::open(repo).ok();
                     if let Some((ledger, worker)) = opened.as_ref() {
                         status::record_and_log(ledger, worker, &snap, &att, true);
+                        // What other sessions should hear about this tick (air-1vri).
+                        crate::cmd::fanout::tick(repo, ledger, worker, &snap);
                     }
                     for a in select_new(&mut pushed, &att) {
                         record_push(opened.as_ref(), &snap.at, &a);

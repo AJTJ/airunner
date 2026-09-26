@@ -793,4 +793,20 @@ pub const MECHANISMS: &[Mechanism] = &[
             "Claude Code offers a supported push into an idle session that needs no development-channels confirmation (drop the channel flag for it), or a round's deliveries are all read only after the session's own 5-minute wake (the push bought nothing)",
         ),
     },
+    Mechanism {
+        id: "beads-ready-fanout",
+        class: "nudge",
+        what: "When the claimable ready set gains a bead, Air queues \"beads are ready: <ids>\" \
+               for every live, idle worker holding no claim, once per change of the set; never \
+               for the lane or a worker holding a claim.",
+        added: "2026-09-26 (air-dkm1)",
+        source: "crates/cli/src/cmd/fanout.rs, fan_out_ready",
+        // Owner, 2026-09-26: the coordinator should send one message to Air and Air fan it
+        // out. An idle worker learned of new beads from its 5-minute wake, its Stop nudge, or
+        // the coordinator's message.
+        fires: Fires::Decisions(&[("fanout", "beads-ready")]),
+        removal: Removal::Judgement(
+            "bd or Claude Code offers a ready-work subscription a worker reads itself, or a round shows idle workers claiming no sooner after a fan-out than after their own wake",
+        ),
+    },
 ];
