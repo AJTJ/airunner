@@ -7,9 +7,9 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
-The next release is 0.4.3. It is tagged once a live trial of it passes (see
-`docs/design.md` §9.1). 0.4.0, 0.4.1 and 0.4.2 were never tagged: their trials found defects,
-which are fixed below.
+The next release is 0.4.4. It is tagged once a live trial of it passes (see
+`docs/design.md` §9.1). 0.4.0 to 0.4.3 were never tagged: their trials found defects or
+missing notices, which are fixed or added below.
 
 ### Added
 
@@ -62,6 +62,8 @@ which are fixed below.
 ### Removed
 
 - The `phase-transitions` skill is no longer installed. `air install --write` removes it.
+- Most of the general-purpose skills this repository carried; it keeps Air's own and the few
+  used to work on it.
 
 ### Fixed
 

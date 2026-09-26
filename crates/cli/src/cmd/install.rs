@@ -2366,6 +2366,10 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-26: 0.4.2's trial stalled: a freshly launched worker was never idle, so the ready
     // fan-out reached no one (air-ludo). One notice: fresh-session-idle.
     ("0.4.3", 33, 121),
+    // 2026-09-26: "main moved" to every session, and the coordinator told of captures and of
+    // an empty ready queue (air-1vri.4, air-1vri.5). 0.4.3's trial was stopped by the owner to
+    // add them.
+    ("0.4.4", 34, 123),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
