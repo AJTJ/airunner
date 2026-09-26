@@ -19,13 +19,10 @@
 //!   as the harness does (its messages: "Skipping symlink in .worktreeinclude", "destination
 //!   escapes worktree via committed symlink"). Negated patterns are not supported and are
 //!   reported rather than silently dropped.
-//! - **Isolation stays the harness's.** The worktree is still handed to claude by name
-//!   (`--worktree <name>` adopts an existing `.claude/worktrees/<name>`, which is how every
-//!   relaunch has worked), because the refusal of out-of-worktree git and of edits to the main
-//!   checkout is keyed on the harness's own record of the session's worktree
-//!   (`La()?.worktreePath` in 2.1.261) and exists only with the flag. Dropping the flag would
-//!   remove a working enforcement that roles.md promises, for a coupling argument with no
-//!   incident behind it (do-less). What changes is who creates and who removes.
+//! - **Isolation is Air's, not the harness's.** claude is started with its working directory
+//!   in the worktree and no `--worktree` flag (air-8gj, owner ruling 2026-09-06), so the
+//!   harness's own worktree isolation is off. The edit fence in the hook
+//!   (`air_hooks::fence`) and the deny list hold the line instead; see `launch::worker_argv`.
 //! - **WorktreeCreate hook.** The adopter's file says configuring one "replaces git's worktree
 //!   logic entirely and this file stops being processed". Checked against 2.1.261's messages
 //!   rather than exercised: the harness uses the hook's returned path in place of its own git

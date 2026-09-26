@@ -6,11 +6,12 @@ otherwise pass around in chat. It knows which commit passed verification, who is
 file, who holds which task, and who holds a shared resource. It refuses exactly one thing:
 closing a task without a recorded green verification run at a commit that contains main.
 
-This document describes the tree on 2026-09-14: commit aba00d8, version 0.3.5, plus the
-change that day that moved every permission decision to the launcher's role. The numbers came
-from commands run against that tree. On 2026-09-25 this became the one design record: the
-proposals that were in docs/plans became TODO lines in section 10, and the research in
-docs/research became the technology decisions in section 11.
+This document describes branch fleet-protocol-in-air on 2026-09-25, version 0.3.5 with 19
+notices not yet released. The crate sizes, command and tool lists, probe count and notice count
+were re-derived from that tree the same day; figures carrying an earlier date are from that
+date. On 2026-09-25 this also became the one design record: the proposals that were in
+docs/plans became TODO lines in section 10, and the research in docs/research became the
+technology decisions in section 11.
 
 ## 1. Context and goals
 
@@ -35,9 +36,9 @@ or Claude Code, and it never pushes, deploys, or publishes.
 flowchart LR
   subgraph harness [Claude Code sessions]
     C[coordinator]
-    W1[worker w1]
-    W2[worker w2]
-    W3[worker w3]
+    W1[worker-1]
+    W2[worker-2]
+    W3[worker-3]
     L[verification lane]
   end
   subgraph air [Air, one binary]
@@ -80,14 +81,14 @@ reconstruct.
 
 ## 3. Components
 
-The workspace has four crates. Line counts are from 2026-09-14.
+The workspace has four crates. Line counts are from 2026-09-25.
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 3,547 | The SQLite schema, one row type per table, and the event writer. It makes no network calls and never calls beads. |
-| hooks | 1,342 | The hook input and output types, the hand-over gate, the edit journal, the worktree fence, and the nudge a claimless worker gets when it stops. The gate is a pure function of a set of facts, so it can be tested without git or a clock. |
-| bd | 493 | A wrapper over the beads command line: list ready work, show, claim, set status, comment, close. It also counts time spent waiting on beads. |
-| cli | 34,620 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. The self-test file alone is 12,899 lines. |
+| ledger | 3,559 | The SQLite schema, one row type per table, and the event writer. It makes no network calls and never calls beads. |
+| hooks | 1,361 | The hook input and output types, the hand-over gate, the edit journal, the worktree fence, and the nudge a claimless worker gets when it stops. The gate is a pure function of a set of facts, so it can be tested without git or a clock. |
+| bd | 544 | A wrapper over the beads command line: list ready work, show, claim, set status, comment, close. It also counts time spent waiting on beads. |
+| cli | 38,243 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. The self-test file alone is 13,670 lines. |
 
 The ledger is one SQLite file under .air in the main checkout, shared by every worktree. A row
 stays until the thing it describes stops being true, and nothing expires on a timer. Beside it,
@@ -111,9 +112,10 @@ child process, catches panics per request, and exits cleanly when its input clos
 The worker launcher creates a worktree under .claude/worktrees on its own branch. It copies in
 the ignored files the repository lists, such as environment files. It writes any first task to a
 file rather than the command line, then starts Claude Code in the worktree with the role prose,
-the deny list, and the role's environment. When asked, or when run from a session without a
-terminal, it starts a detached tmux session named after the project and the worker. The lane
-launcher is the worker launcher with the lane's role. The coordinator launcher does the same in
+the deny list, and the role's environment. Given a task or the tmux option, it starts a tmux
+session named after the project and the worker, detached when there is no terminal. Given
+neither, it runs Claude Code directly in the caller's terminal. The lane launcher is the worker
+launcher with the lane's role. The coordinator launcher does the same in
 its own worktree, coordinator, always in a tmux session, with the channel attached; run again,
 it attaches to the session already running. Nothing is launched in the main checkout. The
 channel server comes from the tracked .mcp.json, so it is present in every worktree, and the
@@ -149,9 +151,9 @@ permission it has. The directory still names things, such as which worktree a ve
 belongs to, but it grants nothing.
 
 Workers are kept from a small set of commands in two ways. Claude Code's deny list stops them
-from running the commands at all. Air's own checks refuse the same commands again when AIR_ROLE
-is worker or lane, which covers the command being spelled a different way. The lane's deny list
-is the worker's without air land, and a worker's includes air lane.
+from running the commands at all. For air land and air close, Air's own checks refuse again when
+AIR_ROLE is worker or lane, which covers the command being spelled a different way. The lane's
+deny list is the worker's without air land, and a worker's includes air lane.
 
 ## 4. Interfaces
 
@@ -169,13 +171,15 @@ Any session may run these.
 | air holdings | Shows who has edits in which files across all worktrees. |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
-| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It neither verifies nor lands; it prints the next command. |
+| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, and whether beads is the pinned version. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
-| air selftest | Runs a red and a green probe for every check. There are 157 probes today. |
+| air selftest | Runs a red and a green probe for every check. There were 162 probes on 2026-09-25. |
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
 
-Workers may not run these. Air refuses them when AIR_ROLE is worker, wherever they are run.
+These belong to the coordinator, the lane, or the owner. Claude Code's deny list keeps workers
+from air land, air close, and the three launchers, and Air refuses land and close again by role.
+Nothing refuses inbox, triage, install or init to a worker.
 
 | Command | What it does |
 |---|---|
@@ -201,13 +205,13 @@ signal for the audit in section 10, not the verdict.
 
 ### 4.2 Channel tools, resources, and conditions
 
-The channel server offers 13 tools and 5 resources. The tools cover status, attention, holdings,
-hand-over, claim, release, capture, inbox, triage, close, and taking, releasing, and reporting
-leases. The resources cover status, attention, inbox, holdings, and leases. Every one of them
-runs the CLI.
+The channel server lists 10 tools and 5 resources. The tools cover status, attention, holdings,
+hand-over, claim, release, capture, inbox, triage, and close. The resources cover status,
+attention, inbox, holdings, and leases. Every one of them runs the CLI. The server also answers
+three lease tools (take, release, status) that it does not list, so no client discovers them.
 
-The channel pushes nine attention conditions. Each is computed from the ledger, the clock, and a
-set of thresholds, with no git involved.
+The channel pushes eleven attention conditions. Each is computed by air status from the ledger,
+git, the clock, and a set of thresholds.
 
 | Condition | Meaning |
 |---|---|
@@ -217,21 +221,24 @@ set of thresholds, with no git involved.
 | idle without claim | A worker is idle with nothing claimed while beads are ready, no check of its own (verify or precheck) is running, and no process other than its session is running in its worktree. |
 | handover not green | Someone tried to close a bead without the green the gate wants. |
 | landed not closed | A bead's commits are on main but the bead is still open. |
+| closed not landed | A bead is closed but its commits are only in one worktree's branch. |
+| rewound and carried | A merge that was rewound off main is still carried by a worker's branch. This is history only; no new rewind can happen. |
 | landable | A branch is green and contains main. |
 | lease held by dead session | A shared resource is held by a process that has gone. |
 | lease stale | A shared resource's holder has not refreshed it in time. |
 
 ### 4.3 Hook events
 
-Installing Air registers the hook on ten Claude Code events, each with a five second timeout.
+Installing Air registers the hook on eleven Claude Code events, each with a five second
+timeout.
 
 | Event | What happens |
 |---|---|
 | Session start and end | The session's row is created or removed. |
-| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker launcher turns on. For a message to another agent, Air records the message and its content. |
+| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
-| Tool failure, permission request, permission denied, notification | The session's state is updated and an event line is written. |
-| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The verification lane named in the config is not nudged, since it claims no bead. Other roles get nothing. |
+| Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
+| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
 
 Every hook call, including the silent ones, writes one event line.
 
@@ -253,7 +260,7 @@ Every hook call, including the silent ones, writes one event line.
 
 The launchers set four variables on each session. AIR_ROLE is the role. BEADS_ACTOR is the
 worker's name, AIR_PROJECT is the project, and AIR_ENFORCE turns the gate from advice into a
-refusal for workers. Other variables override where Air finds Claude Code, beads, and tmux, and
+refusal for workers and the lane. Other variables override where Air finds Claude Code, beads, and tmux, and
 change its timeouts and polling interval.
 
 This is the worker launch, as the launcher prints it for a worker named worker-9 in this
@@ -270,7 +277,8 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
     AskUserQuestion
 ```
 
-The coordinator launch attaches the channel and denies only git push.
+The repository's own worker_deny patterns follow the list. The coordinator launch attaches the
+channel and denies git push plus the repository's coordinator_deny patterns.
 
 ## 5. Data
 
@@ -437,7 +445,7 @@ audit also counts hook events that have no matching follow-up.
 
 ```mermaid
 sequenceDiagram
-  participant C as lane
+  participant C as coordinator
   participant M as air mcp
   participant L as ledger
   C->>M: connect
@@ -586,8 +594,8 @@ The verify target checks formatting, runs clippy and the tests, runs the adopter
 the self-test against the binary it just built. Record a run with air record. A release adds one
 row to the release list and sets the same version in the Cargo manifest. Then the release target
 refuses a dirty tree or any branch but main, runs the release check and the verify target, and
-tags. Rows are only ever added. The last release row is 0.3.5, and fifteen notices are waiting for
-the next one.
+tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
+were waiting for the next one.
 
 In a repository, Air writes three tracked files: the Claude Code settings, the channel server
 entry, and the role prose. Everything else it writes is ignored by git. That includes the full
@@ -598,110 +606,121 @@ code.
 ## 10. TODO
 
 One line per item, with the date it was added and where the detail lives. An item gets a bead id
-when it is filed and is deleted when it lands. Rulings go in the decisions log.
+when it is filed and is deleted when it lands. Rulings go in the decisions log. Every item was
+checked against the code on 2026-09-25; a ticked item names where it was built.
 
 Fleet shape, added 2026-09-14. This is the target the owner ruled on 2026-09-14 (every role in
 a worktree, the verification lane first-class) and revised 2026-09-25 against an adopter's fleet
 protocol. It replaces plan 0009, retired 2026-09-25; what that plan proposed and is already
 built is described in sections 4 and 6.
 
-- [ ] Describe the fleet everywhere as three workers, a verification lane, and the coordinator,
-      in every document, prompt, and status line.
+- [ ] Describe the fleet everywhere as three workers, a verification lane, and the coordinator.
+      The roles text still introduces the lane as a worker named by the `verify_lane` key, and
+      CLAUDE.md still says "the workers and the coordinator".
 - [x] Air creates every tmux session, including the coordinator's. `claude --tmux` still
       needs `--worktree` (2.1.272, 2026-09-14), so Air's detached start stays. (air-jc2p.1)
 - [x] The coordinator works in its own worktree on its own branch, and nobody works in the main
-      checkout. Its prose and its fixes reach main through the lane like a worker's branch: its
-      branch is batch-ready with no claimed bead once it has a commit main lacks. (air-jc2p.1)
-      Air status warns, without refusing, when a launched session's process runs in the main
-      checkout. (air-jc2p.3)
-- [ ] The worktree module's header still says Claude Code's worktree isolation is used, and it
-      is not.
+      checkout. Its branch is batch-ready with no claimed bead once it has a commit main lacks
+      (`batch_ready_rule`, crates/cli/src/cmd/status.rs). (air-jc2p.1) Air status warns,
+      without refusing, when a launched session's process runs in the main checkout.
+      (air-jc2p.3)
+- [x] The worktree module's header said Claude Code's worktree isolation is used. It now says
+      Air's fence replaces it (crates/cli/src/cmd/worktree.rs, 2026-09-25).
 - [x] The verification lane lands, and landing is refused to every other role, the coordinator
       included. The coordinator keeps filing beads, triage, and launching. (air-jc2p.2)
-- [x] A launch command for the verification lane, air lane, alongside the worker and
-      coordinator launchers. It sets AIR_ROLE to lane and the lane's deny list, so the lane can
-      land and nothing else can; the stop nudge reads the role, not `verify_lane`. The
-      repository's verify scope was not built: nothing asked for it yet. (air-jc2p.2)
-- [ ] Record the failing step on every red run. An adopter's ledger has 142 reds with none, so
-      the ledger cannot say why a batch went red.
+- [x] A launch command for the verification lane, air lane. It sets AIR_ROLE to lane and the
+      lane's deny list, so the lane can land and nothing else can. The repository's verify
+      scope was not built: nothing asked for it yet. (air-jc2p.2)
+- [x] The verification lane key in the config was read by no code. The stop nudge now reads
+      the role instead, and only air batch cut reads the key, to name the lane's worktree
+      (crates/cli/src/cmd/batch_cut.rs).
+- [x] Prove with a test that a bead can close after its commits land on main, then drop the
+      adopter's rule to wait for every close before landing. Settled 2026-09-25:
+      `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the
+      adopter removed its rule the same day.
+- [ ] Record the failing step on every red run. The column exists, but air record always writes
+      it empty (crates/cli/src/cmd/record.rs), and an adopter's ledger has 142 reds with none.
 - [ ] Measure how long branches wait to be batched, and show the count and the oldest wait in
-      status. At an adopter's mean verify of 1,131 seconds (2026-09-07) the lane cuts about
-      three batches an hour. Removed when a round shows a median wait under one verify.
+      status. Batch-ready lines carry no age today. At an adopter's mean verify of 1,131
+      seconds (2026-09-07) the lane cuts about three batches an hour. Removed when a round shows
+      a median wait under one verify.
 - [ ] Red-batch policy. A red batch lands nothing. The lane drops the member whose changed paths
       the failing step names, and otherwise halves the batch, oldest half first; a suspected
       flake gets one re-run of the same head, never more. Record "retried once at this commit"
       so a second red reads as a second red. Recommended shape: a program the lane calls
       (air batch next) for the split, with the lane reading the log and making the flake call.
+      air batch has only cut today.
 - [ ] Record batch drops in the ledger once something reads them back. Today air batch cut
       writes each drop as an event line.
-- [x] The verification lane key in the config is read by no code. Either read it or remove it.
-      The stop nudge read it, to leave the lane alone (2026-09-25), until the lane had its own
-      role; now only air batch cut's refusal reads it, to name the lane's worktree.
-- [x] Prove with a test that a bead can close after its commits land on main, then drop the
-      adopter's rule to wait for every close before landing. Settled 2026-09-25:
-      `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the
-      adopter removed its rule the same day.
-
-Owner rulings still open on the fleet shape, each with the recommendation:
-
-- [ ] Does the coordinator keep air close? Yes, with its use counted: it recovers a bead whose
-      worker is gone, and it is how the adopter recovered six stranded beads on 2026-09-07.
-- [ ] Red batches: drop by the failing step, or always bisect? Drop by step, and bisect when the
-      step names nothing. With three members a bisect costs at most two extra verifies.
-- [ ] Does Air own session respawn, which an adopter runs as a keepalive loop? Not yet: it needs
-      its own check-resources pass, and the harness gives no exit signal to hook.
-
-- [ ] Rewrite the roles text for the five-session fleet, along with the launcher change. It
-      ships to adopters, so it needs a notice. Partly done 2026-09-25: the roles text now
-      carries the whole protocol (closing, the lane's loop, landing), with notices; the
-      coordinator-in-a-worktree and lane-lands parts landed with air-jc2p.1 and air-jc2p.2.
+- [ ] A verify whose tracked tree or HEAD changed between start and exit records a green for a
+      tree that never existed, because air record reads the tree only at the start. Flag it
+      the way a dirty start is flagged, as a measurement, not a refusal. An adopter's worker
+      edited a tracked file during its own precheck an hour after citing the rule
+      (2026-09-07).
+- [ ] Rewrite the roles text for the five-session fleet. Partly done 2026-09-25: it carries the
+      whole protocol, the coordinator's worktree and the lane's landing. Another rewrite is in
+      progress the same day.
 - [ ] Keep the adopting guide current and condense it lightly.
 - [ ] The fleet starts from the coordinator. The owner starts only the coordinator and asks it to
       set up the fleet, which by default starts three workers and a verification lane, each in
       its own worktree and tmux session. The same launches stay available as air commands the
-      owner can run by hand. (Owner, 2026-09-14.)
-- [x] A launch command for the verification lane, alongside the worker and coordinator
-      launchers. It sets the lane's role, so the lane can land and nothing else can. (air-jc2p.2)
+      owner can run by hand. The roles text still has the coordinator launch workers one by
+      one. (Owner, 2026-09-14.)
 - [ ] Update the README's quick start once the coordinator sets up the default fleet on request.
-- [ ] On a fresh repository, air init proposes Metis as on and then warns that Metis is not
-      installed. Default it to off unless Metis is found. (Seen running the quick start,
-      2026-09-14.)
 - [ ] On a fresh repository, air doctor reports two expired dated rules and says to delete their
-      fallbacks. Delete them, since both expired on 2026-08-23. (Same run.)
+      fallbacks. Delete them, since both expired on 2026-08-23 (`FALLBACK_BEFORE` in
+      attribution.rs, `FRONTMATTER_SINCE` in handover.rs). (Seen running the quick start,
+      2026-09-14.)
 
-- [ ] A verify whose tracked tree or HEAD changed between start and exit records a green for a
-      tree that never existed; `air record` checks the tree only at the start. Flag it the way
-      a dirty start is flagged, as a measurement, not a refusal. An adopter's worker edited a
-      tracked file during its own precheck an hour after citing the rule (2026-09-07).
+Owner rulings still open, each with the recommendation:
 
-Surface audit, added 2026-09-14:
+- [ ] Does the coordinator keep air close? Yes, with its use counted: it recovers a bead whose
+      worker is gone, and it is how the adopter recovered six stranded beads on 2026-09-07. The
+      code lets it today and refuses workers and the lane (crates/cli/src/cmd/close.rs).
+- [ ] Red batches: drop by the failing step, or always bisect? Drop by step, and bisect when the
+      step names nothing. With three members a bisect costs at most two extra verifies.
+- [ ] On a fresh repository, air init writes `"metis": true` and the coordinator launch then
+      warns that Metis is not installed. Should the default follow whether Metis is found? No:
+      the 2026-09-06 ruling makes Metis part of the coordinator's required process, and the
+      warning already says how to install it or turn it off. If the owner agrees, drop this.
+
+Surface, added 2026-09-14 and 2026-09-25:
 
 - [ ] Audit every command and channel tool. For each, record what it is for, the incident it
       answers, whether something else already does it, and whether it stays. Usage is a signal,
       not the verdict. Use the adopter's counts in section 4.1, never this repository's.
       Leases are unused here and used by the adopter every round, which is the kind of thing a
       count alone gets wrong.
+- [ ] The channel server answers three lease tools it does not list (crates/cli/src/cmd/mcp.rs).
+      List them or remove them. Its instructions string names eight of the eleven conditions.
+      (2026-09-25.)
+- [ ] The help line for air land still calls it the coordinator's (crates/cli/src/main.rs).
+      Landing is the lane's. (2026-09-25.)
 - [ ] Cut the source comments down to what a maintainer needs: what a piece is responsible for,
       its invariants, and its contract. Incident stories move to the decisions log. Go crate by
-      crate and run verify after each. The self-test file alone is 12,899 lines.
-- [ ] Settle the digest directory. This repository does not set it, so the digest check is off
-      here, while CLAUDE.md says it is enforced.
+      crate and run verify after each. The self-test file alone is 13,670 lines.
+- [x] Settle the digest directory. CLAUDE.md no longer says the digest check is enforced here:
+      this repository sets neither `digests` nor `digest_dir`, and the `digests` key puts
+      digests in the main checkout's .air when a repository wants them (a904290, air-1qnp).
 - [ ] Still owed from 2026-08-29: the do-less questions answered for each mechanism, the
       failure-direction question for each place Air parses text, a sentence-level pass over
       the roles text, and the multi-agent question once coordination traffic is measured.
 
 Docs:
 
-- [ ] Rewrite the system design skill in this document's voice. Its output is now lines in this
-      section and rulings in the decisions log, not a plan file.
-- [ ] Refresh the Claude Code facts. The inventory is from version 2.1.241, and 2.1.272 is
-      installed. (`.claude/skills/check-resources/references/harness-facts.md`, 2026-09-14.)
-- [ ] Refresh the orchestrator roster; it was due 2026-09-24.
-      (`.claude/skills/check-resources/references/field.md`, 2026-09-25.)
-- [ ] When bd 1.3.0 leaves release candidate, ask whether bd serve removes enough of the
-      per-process cost to be worth a daemon, and whether upstream compare-and-set lets the
-      claims table stop being the authority. (Section 11, 2026-09-25.)
-- [ ] Turn the two findings indexes about the adopter into beads.
+- [ ] A plain-language pass over the system design skill. Its output already goes to this
+      section and the decisions log, not a plan file (`.claude/skills/system-design/SKILL.md`).
+- [ ] Refresh the Claude Code facts. The inventory is from version 2.1.241, and 2.1.283 is
+      installed (`claude --version`, 2026-09-25).
+      (`.claude/skills/check-resources/references/harness-facts.md`.)
+- [ ] Refresh the orchestrator roster; it was due 2026-09-24 and its last refresh is 2026-08-25.
+      (`.claude/skills/check-resources/references/field.md`.)
+- [ ] bd 1.3.0 left release candidate on 2026-09-15 (GitHub releases API, read 2026-09-25). Ask
+      whether bd serve removes enough of the per-process cost to be worth a daemon, and whether
+      upstream compare-and-set lets the claims table stop being the authority. The pin is still
+      1.2.2. (Section 11.)
+- [ ] Turn the two findings indexes about the adopter (`private/adopter-corpus/`) into beads.
+      No bead names them yet.
 
 ## 11. Technology decisions
 
@@ -717,7 +736,7 @@ the decisions log.
 | Rust, one binary, no async runtime. Edition 2024 on stable, one error enum per crate, no anyhow in libraries, tests on in-memory SQLite and temporary git repositories with no sleeps and no network. | Air is installed into other repositories, so it ships as a binary and a target repo never depends on Air's build. The hook starts on every tool call and has a tenth of a second to answer. | CLAUDE.md, "Rust" and "Tests"; decisions log, 2026-08-18; section 6.7 |
 | One SQLite file in WAL mode for current state, beside one NDJSON event file per day for history, both in the main checkout's .air and shared by every worktree. No daemon, no server. | One machine and many short-lived writer processes. With six writers the lock waited at most 131 ms (2026-09-06). Rows hold only what git and beads cannot rebuild, and nothing expires on a timer. | crates/ledger; section 6.7; decisions log, 2026-08-17 |
 | beads (bd) is the task store, pinned at 1.2.2 and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so the pin is the only line upstream stands behind; Air's ledger does the compare-and-set that 1.2.2 lacks. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
-| Stay on bd rather than switch to beads_rust or a table of Air's own. Watch bd 1.3.0. | beads_rust is store-incompatible with bd and ships no library, so Air would still pay per process. A table of Air's own means building a work tracker, and the ledger records no failure caused by bd. bd 1.3.0-rc.1 (2026-08-31) adds leases, compare-and-set, and bd serve; re-ask when it is stable. | https://github.com/Dicklesworthstone/beads_rust (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/tags/v1.3.0-rc.1 (2026-09-06) |
+| Stay on bd rather than switch to beads_rust or a table of Air's own. Watch bd 1.3.0. | beads_rust is store-incompatible with bd and ships no library, so Air would still pay per process. A table of Air's own means building a work tracker, and the ledger records no failure caused by bd. bd 1.3.0-rc.1 (2026-08-31) adds leases, compare-and-set, and bd serve. 1.3.0 was released on 2026-09-15, and the re-ask is a TODO in section 10. | https://github.com/Dicklesworthstone/beads_rust (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/tags/v1.3.0-rc.1 (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/latest (2026-09-25) |
 | Gas Town is prior art, not a runtime. | It supervises with LLM agents, costs about $100 an hour, and was seen merging a pull request over failing integration tests. Air copied its batch-then-bisect queue and its rule to cross-check a heartbeat against the real process before calling anything stuck. | https://www.dolthub.com/blog/2026-01-15-a-day-in-gas-town/ (2026-08-17); https://github.com/steveyegge/gastown (2026-08-17) |
 | Claude Code is the harness. | Its deny rules hold in every permission mode, including bypass. Its PreToolUse hook sees a close before it runs, and exit 2 is the one outcome nothing overrides. Sessions stay interactive terminals the owner can watch. The gate itself ports to any harness with a pre-tool hook, such as OpenCode's tool.execute.before; Codex was not checked. | https://code.claude.com/docs/en/permission-modes (2026-09-05); https://code.claude.com/docs/en/hooks.md (2026-08-17); https://opencode.ai/docs/plugins/ (2026-08-24) |
 | Keep Air rather than adopt an orchestrator. | Of 186 rostered orchestrators read one by one, eleven overlap part of Air, and none refuses to close a tracked work item without a recorded green at a commit containing main, in a session a person is watching. The closest (tutti, orc, loki-mode) had one to six contributors or a BUSL licence. herdr, scion, tutti and loki-mode were declined on 2026-08-29. Spawning, isolating and watching sessions are commodity. | https://github.com/andyrewlee/awesome-agent-orchestrators (snapshot 2026-08-24); decisions log, 2026-08-29; `.claude/skills/check-resources/references/field.md` |
@@ -740,16 +759,16 @@ the decisions log.
 | claim | The ledger's record that a worker holds a bead. |
 | coordinator | The session that triages, files, prioritises, and launches, in its own worktree. The lane lands. |
 | worker | A session in its own worktree that claims, implements, and closes beads. |
-| verification lane | The session that verifies batches of the workers' branches. |
+| verification lane | The session that cuts, verifies and lands batches of the other branches, started by air lane with AIR_ROLE lane. |
 | owner | The person running the fleet, and any shell Air did not start. |
 | role | The value of AIR_ROLE, set by the launcher. It decides what a session may do. |
-| worktree | A separate checkout of the repository on its own branch, one per worker. |
+| worktree | A separate checkout of the repository on its own branch, one per session: each worker, the lane, and the coordinator. |
 | main checkout | The repository's own directory, on main, where the ledger lives. |
 | green | A successful recorded verification run at a commit, a tree, or a batch. |
-| batch ready | A branch that names a bead its worker holds and is not landable on its own; where the repo declares `precheck`, it also has a green precheck at its head. |
+| batch ready | A branch that is not landable on its own and names a bead its worker holds, or, for the coordinator's branch, has a commit main lacks. It need not contain main. Where the repo declares `precheck`, it also has a green precheck at its head. |
 | landing | Moving main forward onto a verified tree. |
 | digest | A worker's note for a bead, naming the bead: in `.air/digests/`, or committed under `digest_dir`. |
 | capture | One item in the coordinator's inbox. |
 | lease | Exclusive use of a named shared resource. |
-| condition | One of the nine attention conditions. |
+| condition | One of the eleven attention conditions. |
 | notice | An entry telling adopting repositories what changed. |
