@@ -122,9 +122,8 @@ pub fn take(repo: &Path, resource: &str, reason: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.take",
+                super::decisions::LEASE_TAKEN,
                 &serde_json::json!({"resource": resource, "reason": reason, "pid": pid}),
-                "taken",
                 &msg,
                 "1 lease row",
             );
@@ -140,9 +139,8 @@ pub fn take(repo: &Path, resource: &str, reason: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.take",
+                super::decisions::LEASE_ALREADY_MINE,
                 &serde_json::json!({"resource": resource}),
-                "already-mine",
                 &msg,
                 "1 lease row",
             );
@@ -158,9 +156,8 @@ pub fn take(repo: &Path, resource: &str, reason: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.take",
+                super::decisions::LEASE_TAKEN_AFTER_BREAK,
                 &serde_json::json!({"resource": resource, "reason": reason, "broke": why}),
-                "taken-after-break",
                 &msg,
                 "1 lease row",
             );
@@ -180,9 +177,8 @@ pub fn take(repo: &Path, resource: &str, reason: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.take",
+                super::decisions::LEASE_DENIED,
                 &serde_json::json!({"resource": resource, "reason": reason, "holder": l.worker}),
-                "denied",
                 &msg,
                 "1 lease row",
             );
@@ -214,9 +210,8 @@ pub fn release(repo: &Path, resource: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.release",
+                super::decisions::LEASE_RELEASED,
                 &serde_json::json!({"resource": resource}),
-                "released",
                 &msg,
                 "1 lease row",
             );
@@ -228,9 +223,8 @@ pub fn release(repo: &Path, resource: &str, json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "lease.release",
+                super::decisions::LEASE_NOT_HELD,
                 &serde_json::json!({"resource": resource}),
-                "not-held",
                 &msg,
                 "0 lease rows",
             );
@@ -292,9 +286,8 @@ pub fn break_lease(repo: &Path, resource: &str, force: bool, json: bool) -> i32 
     log_event(
         &ledger,
         &worker,
-        "lease.break",
+        super::decisions::LEASE_BROKEN,
         &serde_json::json!({"resource": resource, "was": cur.worker, "force": force}),
-        "broken",
         &msg,
         "1 lease row",
     );

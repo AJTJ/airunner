@@ -175,6 +175,16 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    (
+        "audit: every decision Air can write and every budget it can hit has a registry row, or is bookkeeping",
+        Mutation {
+            // Take one row's trace away: the line is still written and nothing counts it.
+            file: "crates/cli/src/cmd/mechanisms.rs",
+            from: "fires: Fires::Decisions(&[(\"release\", \"refuse\")]),",
+            to: "fires: Fires::Decisions(&[]),",
+            also_red: &[],
+        },
+    ),
     // air-jc2p.3. The anchor looks for the main checkout under a name no tree has, so the
     // warning never finds a session there; the owner and worker cases stay silent as before.
     (
@@ -1029,8 +1039,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Bring the deleted arm back: a PermissionRequest writes `stuck` again. The probe's
             // real hook run sees the state change; nothing else in the suite drives that event.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
-            to: "        HookEvent::PermissionRequest => {\n            let prev = set_session(ledger, input, worker, role, \"stuck\", None)?;\n            Dispatched::new(HookOutcome::Allow { context: None }, \"stuck\", transition(&prev, \"stuck\"))\n        }\n        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            \"ignored\",\n            \"no handler\",\n        ),",
+            from: "        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            dec::HOOK_IGNORED,\n            \"no handler\",\n        ),",
+            to: "        HookEvent::PermissionRequest => {\n            let prev = set_session(ledger, input, worker, role, \"stuck\", None)?;\n            Dispatched::new(HookOutcome::Allow { context: None }, dec::HOOK_IGNORED, transition(&prev, \"stuck\"))\n        }\n        _ => Dispatched::new(\n            HookOutcome::Allow { context: None },\n            dec::HOOK_IGNORED,\n            \"no handler\",\n        ),",
             also_red: &[],
         },
     ),
@@ -2331,7 +2341,7 @@ fn probe_every_condition_kind_is_registered() -> Probe {
         .iter()
         .filter_map(|m| match m.fires {
             Fires::Condition(k) => Some(k),
-            Fires::Decisions(_) => None,
+            Fires::Decisions(_) | Fires::Budget(_) => None,
         })
         .collect();
     let unregistered: Vec<&&str> = kinds::ALL
@@ -2353,8 +2363,48 @@ fn probe_every_condition_kind_is_registered() -> Probe {
     }
 }
 
+/// air-hqj8: every decision Air can write, and every budget it can hit, is counted by `air
+/// audit`.
+///
+/// Owner, 2026-09-25: "ensure that everything air is doing is also being measured." Six
+/// mechanisms shipped that day with no registry row, and `hook.Stop / would-refuse` had been
+/// written 30 times here with none. The set of lines is `decisions::ALL`, which the compiler
+/// keeps complete: `log_event` and the hook's `Dispatched` take a `Trace`, and a `Trace` exists
+/// only as a constant in that file. So a new decision cannot ship without appearing here.
+///
+/// Red: `audit::unmeasured` over the registry with one row taken away (the lane's landing
+/// refusal) names exactly that row's trace, and over one with a budget row taken away names
+/// the budget. Green: over the real registry it names nothing.
+fn probe_every_decision_is_measured() -> Probe {
+    use crate::cmd::audit::unmeasured;
+    use crate::cmd::mechanisms::MECHANISMS;
+
+    let without = |id: &str| -> Vec<crate::cmd::mechanisms::Mechanism> {
+        MECHANISMS.iter().filter(|m| m.id != id).copied().collect()
+    };
+    let missing = unmeasured(MECHANISMS);
+    // What taking the row away ADDS, so the red half does not depend on the green half.
+    let added = |id: &str| -> Vec<String> {
+        unmeasured(&without(id))
+            .into_iter()
+            .filter(|t| !missing.contains(t))
+            .collect()
+    };
+    let red = added("land-role-refusal") == ["land / refuse-role"]
+        && added("mcp-tool-budget-kill") == ["budget mcp-tool"];
+    if !missing.is_empty() {
+        eprintln!("air selftest: unmeasured: {}", missing.join(", "));
+    }
+    Probe {
+        name: "audit: every decision Air can write and every budget it can hit has a registry row, or is bookkeeping",
+        red_fires: red,
+        green_passes: missing.is_empty() && !crate::cmd::decisions::ALL.is_empty(),
+    }
+}
+
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_every_decision_is_measured(),
         probe_every_condition_kind_is_registered(),
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
@@ -3085,14 +3135,17 @@ fn probe_audit_registry() -> Probe {
     // classifier rather than against a registry row that happens to lack a condition — this
     // probe pointed at `review-waiting` until air-s7c gave that one a condition, then at
     // `stuck` until air-byw gave `stuck` one (air-dqw's deletion was reverted on that finding).
-    // Each time, the probe went silent on a registry change that was not a regression. There is
-    // now no `Removal::Unstated` row left, which is the goal, so a probe that needs one would be
-    // a probe that needs a defect to exist.
+    // Each time, the probe went silent on a registry change that was not a regression, so a
+    // probe that needs an `Unstated` row would be a probe that needs a defect to exist. The
+    // real rows are held to the classifier instead: a row is a defect exactly when nothing was
+    // recorded for it (air-hqj8 registered six such rows and says so).
     //
     // Two lanes reached this same fix independently within the hour; this is main's version,
     // which asserts the whole verdict tuple rather than only the defect string.
     let red = removal_verdict(Removal::Unstated, 0) == ("none", None, Some(NO_CONDITION))
-        && a.rows.iter().all(|r| r.defect.is_none());
+        && a.rows
+            .iter()
+            .all(|r| r.defect.is_some() == (r.removal_kind == "none"));
     // Green: a mechanism that does carry one is not a defect, and the counter works.
     let green = a
         .rows

@@ -177,9 +177,12 @@ pub fn run(repo: &Path, keep_days: Option<i64>, apply: bool, json: bool) -> i32 
     super::log_event(
         &ledger,
         &worker,
-        "gc",
+        if apply {
+            super::decisions::GC_COLLECTED
+        } else {
+            super::decisions::GC_REPORTED
+        },
         &serde_json::json!({"keep_days": keep_days, "cutoff": plan.cutoff, "apply": apply}),
-        if apply { "collected" } else { "reported" },
         &format!(
             "{} day(s), {} byte(s) collectable; {}",
             plan.days.iter().filter(|d| d.kept.is_none()).count(),

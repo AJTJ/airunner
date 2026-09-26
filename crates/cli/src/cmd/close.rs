@@ -126,9 +126,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "close",
+            super::decisions::CLOSE_REFUSE,
             &inputs,
-            "refuse",
             &msg,
             &format!("{} bead(s)", beads.len()),
         );
@@ -148,9 +147,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "close",
+            super::decisions::CLOSE_BD_REFUSED,
             &inputs,
-            "bd-refused",
             &msg,
             "1 bd process",
         );
@@ -192,9 +190,8 @@ pub fn run(
     log_event(
         &ledger,
         &worker,
-        "close",
+        super::decisions::CLOSE_CLOSED,
         &inputs,
-        "closed",
         &msg,
         &format!("{} bead(s), 1 bd process", beads.len()),
     );

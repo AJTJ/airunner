@@ -2601,9 +2601,7 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
         .collect();
     let drops: Vec<&str> = events
         .lines()
-        .filter(|l| {
-            l.contains("\"command\":\"batch-cut\"") && l.contains("\"decision\":\"dropped\"")
-        })
+        .filter(|l| l.contains("\"command\":\"batch-cut\"") && l.contains("\"decision\":\"drop\""))
         .collect();
     // Two from the dry run's pre-check, two from the cut.
     assert_eq!(drops.len(), 4, "{events}");

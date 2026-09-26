@@ -10,6 +10,7 @@ pub mod budgets;
 pub mod capture;
 pub mod claim;
 pub mod close;
+pub mod decisions;
 pub mod doctor;
 pub mod gc;
 pub mod green;
@@ -95,15 +96,44 @@ pub fn emit<T: serde::Serialize>(json: bool, value: &T, text: impl FnOnce() -> S
 /// Append an event line; errors are reported to stderr, never fatal. Commands that shelled
 /// out to `bd` carry `bd_ms`/`bd_calls` (air-869): bd costs ~1.4 s per process on this
 /// machine and the cost was invisible in the record.
+///
+/// The decision is a [`decisions::Trace`], never a free string, so every line Air can write is
+/// one `decisions::ALL` names and the registry probe can hold each to a row (air-hqj8).
 pub fn log_event<T: serde::Serialize>(
     ledger: &Ledger,
     worker: &str,
-    command: &str,
+    trace: decisions::Trace,
     inputs: &T,
-    decision: &str,
     reason: &str,
     denominator: &str,
 ) {
+    log_event_as(
+        ledger,
+        worker,
+        trace.command,
+        trace,
+        inputs,
+        reason,
+        denominator,
+    );
+}
+
+/// `log_event` for a trace whose command is a pattern (`hook.*`): the line records `command`,
+/// the event that actually arrived, and a debug build checks it is one the trace allows.
+pub fn log_event_as<T: serde::Serialize>(
+    ledger: &Ledger,
+    worker: &str,
+    command: &str,
+    trace: decisions::Trace,
+    inputs: &T,
+    reason: &str,
+    denominator: &str,
+) {
+    debug_assert!(
+        trace.matches_command(command),
+        "{command} written with {trace:?}"
+    );
+    let decision = trace.decision;
     let at = now();
     // This event's own share, not the process's running total: `air mcp` emits one line per
     // poll tick for the life of the server, and the total restamped on each of them summed
