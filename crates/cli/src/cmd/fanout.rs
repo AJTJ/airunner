@@ -140,6 +140,10 @@ fn ready_now(repo: &Path, at: &str) -> Vec<String> {
 
 /// One pass of every producer, after the coordinator's channel gathered `s`.
 pub fn tick(repo: &Path, ledger: &Ledger, worker: &str, s: &Snapshot) {
+    // A stopped fleet starts nothing, so nothing invites it to (air-1vri.1).
+    if super::fleet::stopped(ledger) {
+        return;
+    }
     let at = super::now();
     let ready = ready_now(repo, &at);
     fan_out_ready(ledger, worker, s, &ready, &at);

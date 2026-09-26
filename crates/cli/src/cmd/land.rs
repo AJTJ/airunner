@@ -596,6 +596,23 @@ pub fn run(
         );
         return 2;
     }
+    // A stopped fleet lands nothing (air-1vri.1): a green recorded during the stop waits.
+    if let Some(msg) = super::fleet::refusal(&ledger, "air land") {
+        log_event(
+            &ledger,
+            &worker,
+            super::decisions::LAND_FLEET_STOPPED,
+            &inputs,
+            &msg,
+            "1 ledger row",
+        );
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     // Landing moves main in the main checkout, wherever the command was run from.
     let main = super::worktree::main_checkout(repo);
     let repo = main.as_path();

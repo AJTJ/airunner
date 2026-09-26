@@ -14,6 +14,7 @@ pub mod captures;
 pub mod claims;
 pub mod deliveries;
 pub mod events;
+pub mod fleet;
 pub mod landings;
 pub mod leases;
 pub mod messages;

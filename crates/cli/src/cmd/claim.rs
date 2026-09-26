@@ -225,6 +225,19 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         }
         v
     };
+    // 0. A stopped fleet starts nothing (air-1vri.1).
+    if let Some(msg) = super::fleet::refusal(&ledger, "air claim") {
+        return fail(
+            &ledger,
+            &worker,
+            super::decisions::CLAIM_FLEET_STOPPED,
+            inputs(serde_json::json!({})),
+            msg,
+            "1 ledger row",
+            json,
+            2,
+        );
+    }
     // 1. Ledger: is it already held here by someone else?
     match ledger.open_claim(bead) {
         Ok(Some(c)) if c.worker != worker => {

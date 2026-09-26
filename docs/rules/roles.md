@@ -24,6 +24,11 @@ show their sessions next to yours. Their worktrees, tmux sessions and workers ar
 to kill, restart or tidy. Reading them and messaging them is fine. Air refuses `air --repo`
 pointed outside this checkout.
 
+Air delivers messages into your session through the Air channel, each once, marked as coming
+from `air`. Your role's section lists every one and what to do about it. The coordinator stops
+and resumes the whole fleet with one command to Air, and each section says what a stop means
+for that role.
+
 Create one recurring wake when you start: `CronCreate` every 5 minutes, with the prompt "if you
 owe work, continue it; otherwise say nothing". An account limit stops a session without any
 hook firing, and the wake's first firing after the limit resets is what brings the session
@@ -137,6 +142,10 @@ from `air`:
 - `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
   branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
   again.
+- `fleet stop from the coordinator` means all work stops. Finish the step you are on, commit
+  your work in progress, and claim nothing new; `air claim` refuses until the resume. Keep your
+  claim and your session, and wait.
+- `fleet resumed` means continue: take up your claim, or claim a ready bead.
 
 You do not need to ask anyone for work: Air tells you when beads are ready, and your own wake
 and the Stop hook cover the rest.
@@ -169,6 +178,9 @@ batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a b
 record` end with your next step: the branches batch-ready now and `next: air batch cut`, or
 `nothing is batch-ready`. You need not tell members a result or a dropped worker its conflict,
 because Air tells them.
+
+On `fleet stop`, let a verify already running finish; it is recorded. Then cut and land nothing:
+`air batch cut` and `air land` refuse until `fleet resumed`, and then you cut the next batch.
 
 A branch is batch-ready when it is not already landable on its own (green at a head that
 contains `main`), its commits carry a `Bead:` trailer for a bead its worker holds, and, where
@@ -230,6 +242,13 @@ run recorded" does not mean idle. `air holdings` shows who is in which file. The
 a condition when the set of conditions changes, not while one ages: a worker idle, silent or
 gone with a claim, a worker idle without one, a hand-over not green, a branch landable, a bead
 landed and not closed, a lease held by a dead or stale session.
+
+To stop all work, run `air fleet stop --reason "<why>"`, and `air fleet resume` to end it. Air
+tells every session, and while the stop holds `air claim`, `air batch cut` and `air land` refuse
+naming it, the ready fan-out and the Stop nudge are silent, and `air status` leads with `FLEET
+STOPPED`. No session is killed, and a verify already running finishes and is recorded. This is
+one command to Air, not a `SendMessage` to each session. Only you and the owner may run it. A
+stop does not stop you: triage and file as usual, and nothing new starts until you resume.
 
 What Air carries for you, so you do not send it: when the claimable ready set gains a bead,
 Air tells every idle worker without a claim which beads are ready. The `idle-without-claim`

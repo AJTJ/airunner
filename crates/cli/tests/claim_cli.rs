@@ -4172,3 +4172,63 @@ fn a_journal_only_branch_lands_with_no_bead_and_a_mixed_one_still_needs_a_traile
         "and says why this range is not it: {refusal}"
     );
 }
+
+/// air-1vri.1: one command stops the fleet and one resumes it. A worker and the lane may not;
+/// while stopped, `air claim`, `air batch cut` and `air land` refuse naming the stop and who
+/// set it, every other worktree is told, and `air status` leads with it.
+#[test]
+fn a_fleet_stop_refuses_new_work_until_resumed() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+
+    for role in ["worker", "lane"] {
+        let (code, out, err) = air_env(&alpha, &bd, &["fleet", "stop"], &[("AIR_ROLE", role)]);
+        assert_eq!(code, 2, "{role}: {out}{err}");
+        assert!(out.contains("coordinator's and the owner's"), "{out}");
+    }
+    let (code, out, err) = air(&main, &bd, &["fleet", "stop", "--reason", "demo"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("told: alpha"), "{out}");
+
+    let (code, out, err) = air(&alpha, &bd, &["claim", "zz-1"]);
+    assert_eq!(code, 2, "{out}{err}");
+    let said = format!("{out}{err}");
+    assert!(said.contains("the fleet is stopped since"), "{said}");
+    assert!(said.contains("by the owner (main): demo"), "{said}");
+    let (code, out, err) = air(&alpha, &bd, &["batch", "cut"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("the fleet is stopped"), "{out}");
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["land", "--worker", "alpha"],
+        &[("AIR_ROLE", "lane")],
+    );
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("the fleet is stopped"), "{out}");
+    let (_, out, _) = air(&main, &bd, &["status"]);
+    assert!(out.starts_with("FLEET STOPPED:"), "{out}");
+
+    let (code, out, err) = air(&main, &bd, &["fleet", "resume"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = air(&alpha, &bd, &["claim", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // alpha was told twice, stop then resume, and nobody else was.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let told: Vec<(String, String)> = conn
+        .prepare("SELECT to_worker, content FROM deliveries WHERE kind='fleet' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    // The resume superseded the stop alpha had not yet read.
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0].0, "alpha");
+    assert!(
+        told[0].1.starts_with("fleet resumed by the owner"),
+        "{told:?}"
+    );
+}

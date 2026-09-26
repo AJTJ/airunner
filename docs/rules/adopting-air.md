@@ -54,8 +54,9 @@ Each session can stop at start-up, and the launcher prints once which prompts to
 - "Is this a project you created or one you trust?" until Claude Code has been trusted in the
   main checkout. Answer yes; the default exits. One yes covers every worktree, so running
   `claude` once in the main checkout before the first fleet avoids it.
-- "Loading development channels", on the coordinator only, because the Air channel is a local
-  server. Choose "I am using this for local development".
+- "Loading development channels", on every session, because each loads the Air channel, a
+  local server, which is how Air's messages reach it. Choose "I am using this for local
+  development".
 
 The "New MCP server found in this project: air" question no longer appears: every launch
 approves the `air` server in its own settings. The lane is allowed `air land` in its own

@@ -360,6 +360,23 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         );
         2
     };
+    // A stopped fleet cuts no batch (air-1vri.1). A dry run changes nothing and still answers.
+    if !dry_run && let Some(msg) = super::fleet::refusal(&ledger, "air batch cut") {
+        super::log_event(
+            &ledger,
+            &lane,
+            super::decisions::BATCH_CUT_FLEET_STOPPED,
+            &serde_json::json!({"dry_run": dry_run}),
+            &msg,
+            "1 ledger row",
+        );
+        super::emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     if lane == "main" {
         // The worktree is named by `air lane`, not by `verify_lane`, which is only the switch
         // for the closing sequence (air-rr98).

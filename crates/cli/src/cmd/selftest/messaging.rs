@@ -399,3 +399,46 @@ pub(super) fn probe_loop_times_are_measured_from_rows() -> Probe {
         green_passes: green,
     }
 }
+
+/// air-1vri.1: a fleet stop refuses new work naming the stop and its author, and only the
+/// coordinator and the owner may set or end it.
+///
+/// Red: with a stop set, the refusal names "the fleet is stopped since" and who set it, the
+/// message every session gets says to commit and start nothing, and a worker and the lane are
+/// refused `air fleet`. Green: with no stop, and after a resume, nothing is refused, and the
+/// coordinator and the owner may steer.
+pub(super) fn probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_it() -> Probe {
+    use crate::cmd::fleet::{may_steer, refusal, stop_text};
+    use air_ledger::fleet::FleetStop;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let before = refusal(&l, "air claim");
+        let s = FleetStop {
+            stopped_at: "2026-09-26T00:00:00Z".into(),
+            by_worker: "coordinator".into(),
+            by_role: "coordinator".into(),
+            reason: "owner demo".into(),
+        };
+        l.set_fleet_stop(&s).map_err(|e| e.to_string())?;
+        let during = refusal(&l, "air claim").unwrap_or_default();
+        l.clear_fleet_stop().map_err(|e| e.to_string())?;
+        let after = refusal(&l, "air batch cut");
+        let red = during.starts_with("air claim: refused: the fleet is stopped since")
+            && during.contains("by the coordinator (coordinator): owner demo")
+            && stop_text(&s).contains("commit your work in progress")
+            && may_steer("worker").is_err()
+            && may_steer("lane").is_err();
+        let green = before.is_none()
+            && after.is_none()
+            && may_steer("coordinator").is_ok()
+            && may_steer("owner").is_ok();
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "fleet: a stop refuses new work naming the stop and who set it; only the coordinator and the owner stop or resume",
+        red_fires: red,
+        green_passes: green,
+    }
+}
