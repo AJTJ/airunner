@@ -44,6 +44,8 @@ Index items are 1–3 lines; detail lives behind the link.
   release = one appended row in `install::RELEASES` (crate version, surface version, notice
   count) + the same version in `Cargo.toml` + `make release`, which refuses a dirty tree or a
   non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
+  **Each release also gets a `CHANGELOG.md` entry** (owner, 2026-09-26): plain lines under
+  Added, Changed, Removed and Fixed, written as the round's work lands.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
   as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,
