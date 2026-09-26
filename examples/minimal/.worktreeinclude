@@ -1,0 +1,4 @@
+# Files git does not track that a fresh worktree still needs in order to build: .env files,
+# keys, local config. `air worker` copies everything named here out of the main checkout and
+# into the new worktree. gitignore syntax, one pattern per line; `!` negations are not
+# supported. Leaving this empty is fine and means a worktree gets only what git tracks.

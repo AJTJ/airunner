@@ -14,7 +14,8 @@ is practical: a merge queue, a few checks, and help keeping a fleet of sessions 
 
 - **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
   and lands it on `main`.
-  - Your project decides what passes, for example `make verify`.
+  - Your project defines the check: one command that exits 0 when the project is good, usually
+    your tests. For example `make verify`.
   - The lane runs it once per batch, and Air records which commit passed.
   - A bead closes only on a passing run.
 - **Sessions.** Air starts the coordinator, the workers and the lane, each in its own git
@@ -34,8 +35,8 @@ Air supports Claude Code only, for now.
 
 ## How you use it
 
-You talk to the coordinator. It writes the beads, workers do them, and you check the result.
-Every session is a full harness running in a worktree, in tmux that you can interact with.
+You talk to the coordinator. It writes the beads, the workers do them, and you check their results.
+Every session is a full harness running in a worktree, in tmux that, you can interact with.
 
 ## The pieces
 
@@ -59,7 +60,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
 - Messaging between agents, managed by Air.
 
-## Adopt it
+## How to install it
 
 Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.2.2).
 
@@ -69,8 +70,11 @@ cd /path/to/your/repo
 air init --write
 ```
 
-Put your real check in `make verify`, commit, and run `air coordinator`. If agents share a port or
-a device, list the commands that use it under `leases` in `.claude/air.json`.
+Make `make verify` run your check, commit, and run `air coordinator`. If agents share a port or a
+device, list the commands that use it under `leases` in `.claude/air.json`.
+
+[examples/minimal](examples/minimal) is a three-file project after `air init`. It shows a check
+and every file Air adds.
 
 ## Inspired by
 

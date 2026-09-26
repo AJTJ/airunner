@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "air": {
+      "args": [
+        "mcp"
+      ],
+      "command": "air"
+    }
+  }
+}
