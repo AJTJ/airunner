@@ -2387,6 +2387,19 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     std::fs::write(delta.join("delta.txt"), "delta\n").unwrap();
     git(&delta, &["add", "delta.txt"]);
     git(&delta, &["commit", "-q", "-m", &bead_trailer("zz-4")]);
+    // air-1vri.4: the coordinator's own worktree, so the landing has one to tell.
+    let coordinator = root.join("coordinator");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-coordinator",
+            coordinator.to_str().unwrap(),
+        ],
+    );
 
     let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
     assert_eq!(code, 0, "{out}{err}");
@@ -2409,15 +2422,40 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     for (name, _) in &workers {
-        for kind in ["batch-green", "batch-landed"] {
-            assert!(
-                told.contains(&(name.clone(), kind.to_string())),
-                "{name} {kind}: {told:?}"
-            );
-        }
+        assert!(
+            told.contains(&(name.clone(), "batch-green".to_string())),
+            "{name} batch-green: {told:?}"
+        );
     }
     assert!(!told.iter().any(|(_, k)| k == "batch-ready"), "{told:?}");
-    assert!(!told.iter().any(|(w, _)| w == "delta"), "{told:?}");
+    // air-1vri.4: exactly one "main moved" to the coordinator and to every worker, members
+    // and the bystander delta alike, and none to the lane. A member's close line rides in it,
+    // so no second "landed" notice.
+    let moved = |w: &str| {
+        told.iter()
+            .filter(|(to, k)| to == w && k == "main-moved")
+            .count()
+    };
+    for name in ["coordinator", "alpha", "beta", "gamma", "delta"] {
+        assert_eq!(moved(name), 1, "{name}: {told:?}");
+    }
+    assert_eq!(moved("lane"), 0, "{told:?}");
+    assert!(!told.iter().any(|(_, k)| k == "batch-landed"), "{told:?}");
+    assert!(
+        !told.iter().any(|(w, k)| w == "delta" && k != "main-moved"),
+        "{told:?}"
+    );
+    let text: String = conn
+        .query_row(
+            "SELECT content FROM deliveries WHERE to_worker='alpha' AND kind='main-moved'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(text.starts_with("main moved to "), "{text}");
+    assert!(text.contains("files changed: "), "{text}");
+    assert!(text.contains("close any of those beads"), "{text}");
+    assert!(text.contains("No reply needed."), "{text}");
 
     // One landing row, every bead once, every member head recorded.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();

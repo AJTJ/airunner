@@ -793,6 +793,13 @@ pub fn run(
             readers.examined
         ));
     }
+    // air-1vri.4: main before the first landing, main after the last, and every member head,
+    // so one "main moved" notice covers this whole invocation.
+    let mut moved: (
+        Option<String>,
+        Option<String>,
+        Vec<super::fanout::LandedMember>,
+    ) = (None, None, Vec::new());
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, &despite, json) {
             Outcome::Landed {
@@ -801,7 +808,11 @@ pub fn run(
                 tip,
                 members,
             } => {
-                super::fanout::batch_landed(repo, &ledger, &worker, &merge, &tip, &members);
+                moved.0.get_or_insert(tip.clone());
+                moved.1 = Some(merge.clone());
+                moved
+                    .2
+                    .extend(members.into_iter().map(|m| (m, tip.clone())));
                 lines.push(format!(
                     "landed {} ({}) at {}",
                     batch.worker,
@@ -834,6 +845,12 @@ pub fn run(
     let refuted = held_open.iter().filter(|o| o.refuted).count();
     if refuted > 0 {
         lines.push(format!("{refuted} {REFUTED_SUMMARY}"));
+    }
+    // air-1vri.4: every other session hears that main moved, once per landing.
+    if let (Some(before), Some(merge)) = (&moved.0, &moved.1) {
+        super::fanout::main_moved(
+            repo, &ledger, &worker, role, before, merge, &landed, &moved.2,
+        );
     }
     // air-1vri.2: the lane's next step, as of this landing. It ran the command, so it learns
     // here and the channel does not tell it again.
