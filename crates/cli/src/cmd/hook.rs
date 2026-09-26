@@ -222,10 +222,13 @@ impl Dispatched {
 /// Air cannot install this: `CronCreate` is a tool, there is no settings key and no launcher
 /// flag, and the launcher's task prompt is not an option because a worker launched with no task
 /// gets no prompt at all (`probe_no_task_no_prompt`). So it is said, once, here.
-const WAKE_CONTEXT: &str = "air: create your recovery wake now if you have none \
-    (`CronCreate`, every 5 minutes, prompt: \"if you owe work, continue it; otherwise say \
-    nothing\"). It is what brings this session back after an account limit resets, and it \
-    stays silent when there is nothing to do. See .air/roles.md.";
+///
+/// Owner, 2026-09-26: only the coordinator is told. Air's channel notices reach workers and
+/// the lane, and the coordinator's heartbeat notices a session that did not come back.
+const WAKE_CONTEXT: &str = "air: create your 5-minute heartbeat now if you have none \
+    (`CronCreate`, every 5 minutes, prompt: \"run `air status`; if you owe work, continue it; \
+    otherwise say nothing\"). It is what brings this session back after an account limit \
+    resets, and it stays silent when there is nothing to do. See .air/roles.md.";
 
 fn dispatch(
     ledger: &Ledger,
@@ -249,7 +252,8 @@ fn dispatch(
             // resumed session already has its unexpired tasks back.
             Dispatched::new(
                 HookOutcome::Allow {
-                    context: (prev.is_none()).then(|| WAKE_CONTEXT.to_string()),
+                    context: (prev.is_none() && role == "coordinator")
+                        .then(|| WAKE_CONTEXT.to_string()),
                 },
                 dec::SESSION_START_REGISTERED,
                 transition(&prev, &state),
@@ -1726,6 +1730,33 @@ mod tests {
         assert!(!is_handover_command("git commit -am wip"));
         assert!(!is_handover_command("git merge worktree-x"));
         assert!(!is_handover_command("echo bd close"));
+    }
+
+    /// Owner, 2026-09-26: the wake instruction goes to the coordinator only.
+    #[test]
+    fn only_the_coordinator_is_told_to_create_a_wake() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let start = |id: &str, role: &str, actor: &str| {
+            let mut v = serde_json::json!({"hook_event_name": "SessionStart", "source": "startup"});
+            v["session_id"] = id.into();
+            v["cwd"] = repo.to_string_lossy().to_string().into();
+            let (_, out) = inner_env(
+                &repo,
+                &v.to_string(),
+                Some(role),
+                Some(actor),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+            match out {
+                air_hooks::HookOutcome::Allow { context } => context,
+                _ => None,
+            }
+        };
+        assert!(start("c", "coordinator", "coordinator").is_some_and(|c| c.contains("CronCreate")));
+        assert_eq!(start("w", "worker", "w1"), None);
+        assert_eq!(start("l", "lane", "lane"), None);
     }
 
     /// air-ludo: a worker `air fleet up` launched with no task has had SessionStart and nothing

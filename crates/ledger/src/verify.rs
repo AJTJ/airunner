@@ -305,6 +305,24 @@ impl Ledger {
         Ok(v)
     }
 
+    /// Every red batch of `kind` (recorded with members, not killed), newest first. Read by
+    /// the batch-ready rule, which leaves out a branch still at a head a red batch took (0.4.6
+    /// trial D3).
+    pub fn red_batches(&self, kind: Kind) -> Result<Vec<VerifyRun>> {
+        let sql = format!(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND exit_code != 0 AND {NOT_KILLED} \
+             AND members IS NOT NULL AND members != '' AND members != '[]' \
+             ORDER BY finished_at DESC"
+        );
+        let mut st = self.conn().prepare(&sql)?;
+        let v = st
+            .query_map(params![kind.as_str()], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// The newest run of `kind` that was a BATCH — recorded with members — and went red
     /// (air-cyf). Killed runs are excluded here rather than by the caller: a signalled run is
     /// no verdict, so it must not be mistaken for a standing red.

@@ -76,6 +76,13 @@ missing notices, which are fixed or added below.
   workers, and the roles text no longer tells anyone to run `bd close`.
 - The hook's check on a raw `bd close` stays as a backstop, and its refusal now names
   `air close`. `air handover` names the `air close` that would pass.
+- Workers and the lane read beads and use `bd comment`; every bd command that changes a bead
+  or the store is on their deny list.
+- Only the coordinator is told at session start to create its 5-minute wake.
+- `air install --write` adds `"project"` to a `.claude/air.json` that has none, set to the main
+  checkout's directory name.
+- `make trial` stops the previous trial copy's `<project>-dolt` tmux session and removes that
+  copy before making a new one.
 
 ### Removed
 
@@ -86,6 +93,19 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A worker's close was refused as behind main when its own batch had just landed, although
+  main contained its work.
+- A batch of one sent its member no result, because its members were read from merge commits
+  and it made none. `air batch cut` now records its members.
+- A branch whose batch went red at its current commit stayed ready, so the lane cut it again.
+- The lease check missed a leased command followed by a redirection such as `2>&1`.
+- `air record precheck` flagged a correct precheck `suspicious` when it printed nothing.
+- `air init --write` sets `dolt.auto-start: false` in `.beads/config.yaml`, so bd no longer
+  starts its own empty Dolt server on the project's port while Air's is down.
+- `air bd-server up` and `air bd-server status` check that the process on the port serves this
+  project's data. When a different process answers, they name it and start nothing.
+- `air bd-server up` picks and writes a port when `.beads/dolt-server.port` is missing, instead
+  of failing.
 - `air release` passes the worker's actor to bd, which bd 1.3.0 requires to unassign a bead.
   Without it a session whose `BEADS_ACTOR` was not its claim's actor could not give its own
   bead back.

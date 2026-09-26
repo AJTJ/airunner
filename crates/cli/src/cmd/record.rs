@@ -3,7 +3,7 @@
 //! The exit is the fact. Around it Air records what the adopter's captures 4d1e52/9de453/38b0c1
 //! showed a human cannot see in a log: the exact command, how long it took, how much it
 //! printed, and whether the tree was dirty. A run is flagged `suspicious` when it printed
-//! nothing or ran far faster than this worker's last green of the same command (see
+//! nothing (a precheck excepted) or ran far faster than this worker's last green of the same command (see
 //! [`suspicious`]), and `command-changed` when this worker's previous run of the same kind used
 //! a different command line. Backgrounded commands (`&`) are refused: Air spawns
 //! the check itself and must see it finish.
@@ -51,10 +51,15 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     // somebody asks later. That is what makes "the green contains main" a recorded fact
     // instead of one that expires the next time anyone writes to main.
     let main_sha = git::run(repo, &["rev-parse", "main"]).ok();
-    let members = main_sha
-        .as_deref()
-        .map(|tip| super::batch::members_of(repo, &worker, &head, tip))
-        .unwrap_or_default();
+    // D2 (0.4.6 trial): the members `air batch cut` recorded at this head come first. A batch
+    // of one fast-forwards, so its merge commits name nobody and the member heard nothing.
+    let members = match ledger.batch_cut_members(&head, &worker) {
+        Ok(Some(m)) => m,
+        _ => main_sha
+            .as_deref()
+            .map(|tip| super::batch::members_of(repo, &worker, &head, tip))
+            .unwrap_or_default(),
+    };
     // air-88av: an unresolved merge is not a verdict about the code. The suite fails on
     // conflict markers, `air record` writes a RED at this sha, and that red is then read as
     // evidence by everything downstream — `flaky-at-head`, the close gate, the landing gate,
@@ -175,7 +180,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         air_ledger::verify::Verdict::Killed => super::decisions::RECORD_KILLED,
     };
     let mut flags: Vec<&str> = Vec::new();
-    if run.is_green() && suspicious(duration_ms, output_bytes, previous_green_ms) {
+    if run.is_green() && suspicious(kind, duration_ms, output_bytes, previous_green_ms) {
         flags.push("suspicious");
     }
     if previous.as_deref().is_some_and(|p| p != command_line) {
@@ -299,8 +304,17 @@ fn after_batch(
 /// command's own history is the thing the capture actually saw, and a first run has no history
 /// to drop from, so it is never flagged on speed. Removed when a verify reports what it ran
 /// (a test count) and Air can compare that instead.
-pub fn suspicious(duration_ms: i64, output_bytes: i64, previous_green_ms: Option<i64>) -> bool {
-    output_bytes == 0 || previous_green_ms.is_some_and(|prev| duration_ms.saturating_mul(5) < prev)
+///
+/// A precheck that printed nothing is not flagged: a syntax check such as `sh -n` prints
+/// nothing when it passes, and the 0.4.6 live trial flagged every correct precheck (D5).
+pub fn suspicious(
+    kind: Kind,
+    duration_ms: i64,
+    output_bytes: i64,
+    previous_green_ms: Option<i64>,
+) -> bool {
+    (output_bytes == 0 && kind != Kind::Precheck)
+        || previous_green_ms.is_some_and(|prev| duration_ms.saturating_mul(5) < prev)
 }
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).
@@ -413,17 +427,38 @@ pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::suspicious;
+    use air_ledger::verify::Kind;
 
     /// air-gn5o. Red under the old 2 s floor: a tiny project's first green, 40 ms with output,
     /// was flagged. Green: it is not, while the two cases the flag exists for still are.
     #[test]
     fn a_fast_green_is_suspicious_only_against_its_own_history() {
-        assert!(!suspicious(40, 17, None), "a first fast green with output");
-        assert!(!suspicious(40, 17, Some(60)), "as fast as it always was");
-        assert!(suspicious(40, 0, None), "printed nothing");
+        let v = Kind::Verify;
         assert!(
-            suspicious(3_000, 900, Some(240_000)),
+            !suspicious(v, 40, 17, None),
+            "a first fast green with output"
+        );
+        assert!(!suspicious(v, 40, 17, Some(60)), "as fast as it always was");
+        assert!(suspicious(v, 40, 0, None), "printed nothing");
+        assert!(
+            suspicious(v, 3_000, 900, Some(240_000)),
             "a suite that dropped from minutes to seconds (capture 38b0c1)"
+        );
+    }
+
+    /// D5, 0.4.6 live trial: every correct `sh -n` precheck was flagged, because it prints
+    /// nothing. Red before: a silent precheck green was suspicious. Green: it is not, a silent
+    /// verify still is, and a precheck that dropped far below its own history still is.
+    #[test]
+    fn a_precheck_that_prints_nothing_is_not_suspicious() {
+        assert!(
+            !suspicious(Kind::Precheck, 40, 0, None),
+            "sh -n, silent and green"
+        );
+        assert!(suspicious(Kind::Verify, 40, 0, None), "a silent verify");
+        assert!(
+            suspicious(Kind::Precheck, 40, 0, Some(10_000)),
+            "far faster than before"
         );
     }
 }

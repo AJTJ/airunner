@@ -46,6 +46,11 @@ pub struct GateFacts {
     /// command to name — there the subject really is the gate.
     pub refused_command: Option<String>,
     pub main_is_ancestor: bool,
+    /// `git merge-base --is-ancestor HEAD main`: nothing on this branch is outside main. Main
+    /// being ahead is then no reason to refuse, because a merge would bring in only work that
+    /// has already landed. The 0.4.6 live trial refused five correct closes in eleven minutes,
+    /// each seconds after the worker's own batch landed (D1). The green is still required.
+    pub work_in_main: bool,
     /// `git rev-parse main` at the moment the facts were read (air-5wq). Empty when unknown.
     pub main_sha: String,
     /// When main is not an ancestor: the landing that moved it past this branch, if the
@@ -213,7 +218,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             flow_dependent: true,
         });
     }
-    if !f.main_is_ancestor {
+    if !f.main_is_ancestor && !f.work_in_main {
         // air-4up: the cause is outside the worker's tree, so say so. "main is not an
         // ancestor of HEAD" stays in every form: the adopter's counts refusals by that phrase.
         // The fix is unchanged; this is wording, not behaviour.
@@ -565,6 +570,7 @@ mod tests {
             batch_absent_fix: None,
             last_green_sha: Some("f854145abcdef".into()),
             main_is_ancestor: true,
+            work_in_main: false,
             main_sha: "0a1b2c3d4e5f".into(),
             main_moved: None,
             bead_claimed_or_carried: true,

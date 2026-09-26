@@ -39,6 +39,9 @@ pub fn facts(
     // rather than as a contradiction. air-4up: when it is not an ancestor, the landing that
     // moved it, so the first refusal names the external cause instead of the third.
     let main_sha = git::run(repo, &["rev-parse", "main"]).unwrap_or_default();
+    // D1 (0.4.6 trial): a branch main already contains is not behind in any way a merge would
+    // fix. Asked only when main is ahead, so the common path spawns nothing more.
+    let work_in_main = !main_is_ancestor && git::is_ancestor(repo, "HEAD", "main").unwrap_or(false);
     let main_moved = if main_is_ancestor {
         None
     } else {
@@ -139,6 +142,7 @@ pub fn facts(
         batch_absent_fix: batch.absent_fix,
         last_green_sha,
         main_is_ancestor,
+        work_in_main,
         main_sha,
         main_moved,
         bead_claimed_or_carried,

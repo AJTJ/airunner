@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 23;
+pub const CURRENT_VERSION: i64 = 24;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -353,6 +353,21 @@ CREATE TABLE IF NOT EXISTS fleet_stop (
 );
 "#;
 
+/// v24 (2026-09-26, 0.4.6 live trial D2): the members `air batch cut` merged, keyed by the
+/// batch head it left. A batch of one fast-forwards and makes no merge commit, so the members
+/// could not be read back from the commit and the member heard no batch result. `air record`
+/// reads this row first and falls back to the merge commits.
+const V24: &str = r#"
+CREATE TABLE IF NOT EXISTS batch_cuts (
+    head     TEXT NOT NULL,
+    lane     TEXT NOT NULL,
+    main_sha TEXT NOT NULL,
+    members  TEXT NOT NULL,
+    cut_at   TEXT NOT NULL,
+    PRIMARY KEY (head, lane)
+);
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -368,7 +383,7 @@ CREATE TABLE IF NOT EXISTS fleet_stop (
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23,
+    V22, V23, V24,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
