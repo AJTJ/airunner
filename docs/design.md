@@ -809,7 +809,9 @@ Code sessions.
 4. Wait until every bead is closed. The coordinator then writes one short report,
    `.air/trial-report.md`: each scenario's outcome, and every workaround, refusal someone had to
    get around, and anything confusing, from what the fleet saw. It spawns no agent to re-read
-   the log. Whoever runs the trial reads that report rather than re-deriving each outcome.
+   the log. An independent observer, a background agent started with the fleet, watches the run
+   and checks that report against the events, git and bd, because the coordinator can be wrong
+   about its own round (owner, 2026-09-26).
 5. File every defect as a bead. Do not fix anything during the trial. Stop every session and
    keep the scratch directory until the report is read.
 
