@@ -7,9 +7,9 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
-The next release is 0.4.2. It is tagged once a live trial of it passes (see
-`docs/design.md` §9.1). 0.4.0 and 0.4.1 were never tagged: their trials found defects, which
-are fixed below.
+The next release is 0.4.3. It is tagged once a live trial of it passes (see
+`docs/design.md` §9.1). 0.4.0, 0.4.1 and 0.4.2 were never tagged: their trials found defects,
+which are fixed below.
 
 ### Added
 
@@ -65,3 +65,5 @@ are fixed below.
 - The lane's `air land` was refused by Claude Code's auto mode.
 - `make trial` did not turn on the verification lane.
 - Every session stopped at the MCP server approval prompt.
+- A freshly started worker was never counted as idle, so it was never told that beads were
+  ready and the fleet stalled.
