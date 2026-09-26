@@ -140,8 +140,8 @@ pub struct Missing {
     /// contradicts it. A fix that failed outright would have been found in one use.
     ///
     /// So a `flow_dependent` fix now states **what must become true**, not which command a
-    /// particular flow uses to make it true. The gate still does not read `verify_lane`
-    /// (only the Stop nudge does, to know who the lane is): Air names the condition either way.
+    /// particular flow uses to make it true. The gate does not read `verify_lane`, and since
+    /// air-rr98 no code does: Air names the condition either way.
     pub flow_dependent: bool,
 }
 

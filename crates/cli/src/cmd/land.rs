@@ -221,8 +221,12 @@ fn batches(landings: &[super::status::Landing]) -> Vec<Batch> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Site {
     pub on_main: bool,
-    pub main_checkout: bool,
 }
+
+// A `main_checkout` field was here until air-rr98, refusing "`air land` runs in the main
+// checkout; this is a worktree". It could not fire: `run` resolves the main checkout from git's
+// common dir before building a `Site`, so the directory checked was always the main checkout,
+// and a repo git cannot resolve fails earlier, opening the ledger.
 
 // A `dirty` field was here until air-odv, refusing a landing when main had uncommitted tracked
 // changes. Its only reason was that the rollback was `git reset --hard`, which would have eaten
@@ -249,14 +253,9 @@ pub struct Facts<'a> {
 ///
 /// The site gates first, then [`branch_check`]. Split at air-y3v so `air status` can apply
 /// exactly the branch half without inventing site facts it has no business asserting: it may
-/// be running from a worktree, where `main_checkout` is false and every branch would read as
+/// be running from a worktree, where main is not checked out and every branch would read as
 /// unlandable.
 pub fn check(site: &Site, f: &Facts<'_>) -> Result<bool, String> {
-    if !site.main_checkout {
-        return Err(
-            "refused: `air land` runs in the main checkout; this is a worktree.".to_string(),
-        );
-    }
     if !site.on_main {
         return Err("refused: main is not checked out here (fix: `git checkout main`)".to_string());
     }
@@ -861,7 +860,6 @@ fn land_one(
     });
     let site = Site {
         on_main: git::run(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).is_ok_and(|b| b == "main"),
-        main_checkout: !repo.join(".git").is_file(),
     };
     let facts = Facts {
         worker: &batch.worker,
@@ -1127,10 +1125,7 @@ mod tests {
     use super::*;
 
     fn here() -> Site {
-        Site {
-            on_main: true,
-            main_checkout: true,
-        }
+        Site { on_main: true }
     }
 
     fn ok_facts<'a>(head: &'a str, green: Option<&'a str>) -> Facts<'a> {
@@ -1147,14 +1142,6 @@ mod tests {
     #[test]
     fn every_refusal_names_the_command_that_fixes_it() {
         assert_eq!(check(&here(), &ok_facts("abc", Some("abc"))), Ok(true));
-
-        let mut s = here();
-        s.main_checkout = false;
-        assert!(
-            check(&s, &ok_facts("abc", Some("abc")))
-                .unwrap_err()
-                .contains("main checkout")
-        );
 
         let mut s = here();
         s.on_main = false;

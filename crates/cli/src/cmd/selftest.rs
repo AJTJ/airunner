@@ -4400,10 +4400,7 @@ fn probe_land_refusals() -> Probe {
     use crate::cmd::land::{Facts, Site, check, may_land};
 
     fn here() -> Site {
-        Site {
-            on_main: true,
-            main_checkout: true,
-        }
+        Site { on_main: true }
     }
     let ok = || Facts {
         worker: "alpha",
@@ -4413,16 +4410,7 @@ fn probe_land_refusals() -> Probe {
         branch_head: "abcdef99",
         green_at: Some("abcdef99"),
     };
-    let sites = [
-        Site {
-            on_main: false,
-            ..here()
-        },
-        Site {
-            main_checkout: false,
-            ..here()
-        },
-    ];
+    let sites = [Site { on_main: false }];
     let refusals = [
         Facts {
             branch_exists: false,
@@ -5165,10 +5153,7 @@ fn probe_nothing_unverified_reaches_main() -> Probe {
     });
     // Only the conjunction lands, and `check` from a clean site agrees with it — the same
     // predicate `air status` uses, so the two cannot drift (air-y3v).
-    let site = Site {
-        on_main: true,
-        main_checkout: true,
-    };
+    let site = Site { on_main: true };
     let green = branch_check(&both()) == Ok(true)
         && crate::cmd::land::check(&site, &both()) == Ok(true)
         // Already in main is the one non-refusal that also does not move main.
@@ -7305,11 +7290,57 @@ fn probe_installed_text_names_real_subcommands() -> Probe {
     let red = command_mentions(pre_fix)
         .iter()
         .any(|(_, w)| w == "next" && !real.contains(w));
-    Probe {
-        name: "install: every `air <subcommand>` an installed skill, roles.md or the init CLAUDE.md names is a real subcommand",
-        red_fires: red,
-        green_passes: !real.is_empty() && texts.len() >= 3 && dangling.is_empty(),
+    // air-rr98: the same texts must not name a skill Air does not install. The installed
+    // `air-decomposition` pointed at `phase-transitions`, retired the day before, in every
+    // adopter. Known names are this repo's skill directories (read by build.rs) plus the
+    // retired ones; a known name in backticks is dangling unless `air install` writes it.
+    let installed: Vec<&str> = crate::cmd::install::SKILLS
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    let known: Vec<String> = env!("AIR_SKILL_NAMES")
+        .split(',')
+        .chain(crate::cmd::install::RETIRED_SKILLS.iter().copied())
+        .filter(|s| !s.is_empty())
+        .flat_map(|s| [s.to_string(), format!("air-{s}")])
+        .collect();
+    let skill_dangling: Vec<String> = texts
+        .iter()
+        .flat_map(|(name, text)| {
+            skill_mentions(text, &known)
+                .into_iter()
+                .filter(|s| !installed.contains(&s.as_str()))
+                .map(move |s| format!("{name} names the skill `{s}`, which Air does not install"))
+        })
+        .collect();
+    for d in &skill_dangling {
+        eprintln!("selftest: {d}");
     }
+    let skill_red = skill_mentions(
+        "- `phase-transitions` for when an epic or bead may move",
+        &known,
+    )
+    .iter()
+    .any(|s| !installed.contains(&s.as_str()));
+    Probe {
+        name: "install: every `air <subcommand>` and every skill an installed skill, roles.md or the init CLAUDE.md names exists in what Air installs",
+        red_fires: red && skill_red,
+        green_passes: !real.is_empty()
+            && texts.len() >= 3
+            && dangling.is_empty()
+            && known.len() > installed.len()
+            && skill_dangling.is_empty(),
+    }
+}
+
+/// Pure: every backticked token in `text` that is one of `known` skill names.
+fn skill_mentions(text: &str, known: &[String]) -> Vec<String> {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|t| known.iter().any(|k| k == t))
+        .map(str::to_string)
+        .collect()
 }
 
 /// air-an9: `status.rs`'s unit tests carried three literal timestamps chosen to sit either

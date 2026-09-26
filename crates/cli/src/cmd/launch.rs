@@ -127,10 +127,20 @@ pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
 
 /// Write the task to `<main>/.air/tasks/<name>.md` and return the path. Overwritten on every
 /// launch of the same name: a worker outlives its bead, and the file is the CURRENT task.
-fn task_file(repo: &Path, name: &str, task: &str) -> Result<std::path::PathBuf, String> {
+/// With `write` false (`--print`) only the path is returned: a printed launch writes nothing
+/// (air-rr98).
+fn task_file(
+    repo: &Path,
+    name: &str,
+    task: &str,
+    write: bool,
+) -> Result<std::path::PathBuf, String> {
     let dir = air_ledger::paths::air_dir_for(repo)
         .map_err(|e| e.to_string())?
         .join("tasks");
+    if !write {
+        return Ok(dir.join(format!("{name}.md")));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(format!("{name}.md"));
     let mut body = task.trim_end().to_string();
@@ -161,11 +171,18 @@ pub fn task_prompt(path: &Path) -> String {
 /// of record and forbids plans outside it, which contradicts this repo (analysis 2026-09-05,
 /// air-ate). Injecting a plugin's prose unchanged is how a tool's opinion becomes a rule
 /// nobody chose.
-fn coordinator_roles_file(repo: &Path, metis: bool) -> Result<std::path::PathBuf, String> {
+fn coordinator_roles_file(
+    repo: &Path,
+    metis: bool,
+    write: bool,
+) -> Result<std::path::PathBuf, String> {
     if !metis {
-        return roles_file(repo);
+        return roles_file(repo, write);
     }
     let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
+    if !write {
+        return Ok(dir.join("coordinator.md"));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("coordinator.md");
     let text = format!("{ROLES_MD}\n{}", super::install::METIS_SPLIT);
@@ -173,8 +190,14 @@ fn coordinator_roles_file(repo: &Path, metis: bool) -> Result<std::path::PathBuf
     Ok(path)
 }
 
-fn roles_file(repo: &Path) -> Result<std::path::PathBuf, String> {
+/// `.air/roles.md`, refreshed from the embedded copy unless `write` is false (`--print`).
+/// A printed launch used to rewrite it, which put a newer roles text into a repo without
+/// `.air/installed.json` recording an install (an adopter's re-audit, 2026-09-25, air-rr98).
+fn roles_file(repo: &Path, write: bool) -> Result<std::path::PathBuf, String> {
     let dir = air_ledger::paths::air_dir_for(repo).map_err(|e| e.to_string())?;
+    if !write {
+        return Ok(dir.join("roles.md"));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("roles.md");
     // Always refresh: the embedded copy is the source of truth for this binary's version.
@@ -777,6 +800,42 @@ pub fn lane(
     launch_worker_like(repo, "lane", name, extra, tmux, task, print)
 }
 
+/// Pure: which of the main checkout's uncommitted paths are `air install`'s output: the hooks
+/// in `.claude/settings.json`, the channel server in `.mcp.json`, and the skills it installs.
+///
+/// A new worktree gets only committed files, so a worker started while these are uncommitted
+/// runs with no hooks, no channel and no skills, and nothing says so (the roles audit and the
+/// owner, 2026-09-25, air-rr98). Removed when a worktree carries the main checkout's
+/// uncommitted config by some other route, such as `.worktreeinclude` copying it.
+pub fn install_output_uncommitted(dirty: &[String]) -> Vec<String> {
+    dirty
+        .iter()
+        .filter(|p| {
+            p.as_str() == ".claude/settings.json"
+                || p.as_str() == ".mcp.json"
+                || super::install::SKILLS
+                    .iter()
+                    .any(|(n, _)| p.starts_with(&format!(".claude/skills/{n}/")))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The refusal for [`install_output_uncommitted`], or None when there is nothing to refuse.
+/// A git failure refuses nothing: this guards a convenience, and the launch goes on.
+fn install_output_refusal(repo: &Path, who: &str) -> Option<String> {
+    let main = super::worktree::main_checkout(repo);
+    let files = install_output_uncommitted(&crate::git::dirty_files(&main).unwrap_or_default());
+    if files.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{who}: refused: `air install`'s output is not committed in the main checkout, and a new \
+         worktree gets only committed files: {}. Commit them on main, then launch again.",
+        files.join(", ")
+    ))
+}
+
 /// Create or reuse `.claude/worktrees/<name>` (air-fdz). Not under `--print`, which runs
 /// nothing. `who` prefixes every line.
 fn ensure_worktree(repo: &Path, name: &str, who: &str) -> Result<(), ()> {
@@ -813,7 +872,11 @@ fn launch_worker_like(
     print: bool,
 ) -> i32 {
     let who = format!("air {role}");
-    let roles = match roles_file(repo) {
+    if let Some(refusal) = install_output_refusal(repo, &who) {
+        eprintln!("{refusal}");
+        return 1;
+    }
+    let roles = match roles_file(repo, !print) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{who}: {e}");
@@ -837,10 +900,10 @@ fn launch_worker_like(
     if !(tmux || task.is_some()) {
         return exec_claude(&wt, &env, &argv, print);
     }
-    // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Written under
-    // `--print` too, so the printed command is one that runs.
+    // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Not written
+    // under `--print`, which writes nothing (air-rr98); the printed line names the path.
     let prompt = match task.filter(|t| !t.trim().is_empty()) {
-        Some(t) => match task_file(repo, name, t) {
+        Some(t) => match task_file(repo, name, t, !print) {
             Ok(p) => Some(task_prompt(&p)),
             Err(e) => {
                 eprintln!("{who}: {e}");
@@ -866,7 +929,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
     }
     // Keyed on what was ATTACHED, not on what the config asked for: the split opens "Metis is
     // attached to this session", and a session that got nothing must not be told it did.
-    let roles = match coordinator_roles_file(repo, !metis_argv.is_empty()) {
+    let roles = match coordinator_roles_file(repo, !metis_argv.is_empty(), !print) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("air coordinator: {e}");
