@@ -104,6 +104,13 @@ traces! {
     RELEASE_BD_REFUSED = "release" / "bd-refused";
     RELEASE_RELEASED = "release" / "released";
     RELEASE_NO_CLAIM = "release" / "no-claim";
+    RECLAIM_NO_SUCH_BEAD = "reclaim" / "no-such-bead";
+    RECLAIM_TIMEOUT = "reclaim" / "timeout";
+    RECLAIM_REFUSE = "reclaim" / "refuse";
+    RECLAIM_LEASE_LIVE = "reclaim" / "lease-live";
+    RECLAIM_BD_REFUSED = "reclaim" / "bd-refused";
+    RECLAIM_RECLAIMED = "reclaim" / "reclaimed";
+    RECLAIM_NO_CLAIM = "reclaim" / "no-claim";
 
     CLOSE_REFUSE = "close" / "refuse";
     CLOSE_BD_REFUSED = "close" / "bd-refused";

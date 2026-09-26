@@ -277,7 +277,7 @@ bd dep tree <epic> --json                         # what each landing unblocks
 4. **No depth cap** ("there is no cap; we set our goals and finish them").
 5. **Starvation** (fewer ready tasks than workers): decompose next; the reading may be
    delegated to any agent with a file deliverable, the filing and deciding stay here.
-6. **Stuck or gone worker** (`air status`, the channel): `air release <id> --worker <name>
+6. **Stuck or gone worker** (`air status`, the channel): `air reclaim <id> --worker <name>
    --reason reassigned`; never edit assignee.
 
 ## Quality checklist and smells (Metis, with Air's additions)

@@ -699,14 +699,28 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "release-refusal",
         class: "refusal",
-        what: "`air release` of a closed bead is refused: closed is closed, and unfinished work \
-               is a new bead.",
+        what: "`air release` or `air reclaim` of a closed bead is refused: closed is closed, \
+               and unfinished work is a new bead.",
         added: "2026-08-21 (plan 0006, owner rulings 2026-08-21)",
-        source: "crates/cli/src/cmd/claim.rs, release",
-        fires: Fires::Decisions(&[("release", "refuse")]),
+        source: "crates/cli/src/cmd/claim.rs, release and reclaim",
+        fires: Fires::Decisions(&[("release", "refuse"), ("reclaim", "refuse")]),
         // Written since 2026-08-21 and registered by nobody until `decisions::ALL` made the
         // set enumerable (air-hqj8). No removal condition was recorded with it.
         removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "reclaim-lease-live",
+        class: "refusal",
+        what: "`air reclaim` of a bead whose holder's bd lease has not run out exits non-zero, \
+               naming the time bd's `lease_expires_at` gives. bd declined; nothing is forced.",
+        added: "2026-09-26 (owner ruling: no --force)",
+        source: "crates/cli/src/cmd/claim.rs, reclaim",
+        // bd 1.3.0's `bd reclaim --id` exits 0 with a count of 0 while the lease is live, so
+        // without this line the refusal would read as success.
+        fires: Fires::Decisions(&[("reclaim", "lease-live")]),
+        removal: Removal::Judgement(
+            "when `bd reclaim --id` exits non-zero on a live lease itself, so Air has nothing to add",
+        ),
     },
     Mechanism {
         id: "bd-budget-timeout",

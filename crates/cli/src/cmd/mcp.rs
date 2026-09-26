@@ -294,7 +294,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_release",
-            description: "Give a bead back: bd status → open and the claim closed with a reason.",
+            description: "Give your own bead back: bd status → open and the claim closed with a reason. A gone worker's bead is the coordinator's `air reclaim`.",
             schema: json!({"type":"object","required":["bead","reason"],"properties":{"bead":{"type":"string"},"reason":{"type":"string","enum":["landed","abandoned","reassigned","superseded","false-premise","owner-gated","unknown"]}}}),
         },
         Tool {
