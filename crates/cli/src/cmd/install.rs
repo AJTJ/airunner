@@ -2572,6 +2572,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-26: workers close with `air close`, which runs the hand-over gate itself. 0.4.5's
     // trial found a close the text-matching gate missed (a `bd close` on its own line).
     ("0.4.6", 36, 129),
+    // 2026-09-26: 0.4.6's trial fixes; the text-matching close gate deleted (workers close with
+    // `air close` and are denied bd writes); bd's own server start off; port ownership checked.
+    ("0.4.7", 37, 141),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
