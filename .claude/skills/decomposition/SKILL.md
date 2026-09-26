@@ -121,6 +121,21 @@ conflicted across 63 merges; an adopter's retrospective of its overnight fleet r
 
 Before filing, every answer is yes:
 
+- **Carries its context**: the description ends with a `## Context` section, so what the worker
+  needs does not depend on it remembering to look:
+
+  ```
+  ## Context
+  Skills: the project skills the worker invokes before starting
+  Read: the files and design-doc sections to read first
+  Update: any doc the work must also change, or "none"
+  ```
+
+  The worker that claims the bead invokes the named skills first. An adopter added this on
+  2026-09-25 after finding its frontend skill rarely loaded: agents hand-built controls the
+  shared component library already had, about 17 buttons and two switches that still carried a
+  bug the shared one had fixed. Removed when a round shows workers loading the right skills
+  without it.
 - **Independent**: lands in any order within its wave, or the order is a `blocks` edge.
 - **Valuable**: moves "Done when" closer or retires a named risk.
 - **Small**: one session, one diff (table above).

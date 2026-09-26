@@ -56,6 +56,8 @@ Once you have work, finishing a bead is not a stop. Take the next ready bead and
 afterwards. Stop only when `bd ready` is empty or on a blocker you captured.
 
 Claiming a bead commits you to finishing it now: `air claim <id> [--files a,b]`, then the work.
+If the bead ends with a `## Context` section, invoke the skills it names and read what it lists
+before you start.
 You close your own bead, with proof. There is no review step and no `awaiting_review`. Which of
 the two sequences below applies is set by `"verify_lane": true` in `.claude/air.json`: with it
 the lane sequence applies, and without it the other one does. An older value that is a
