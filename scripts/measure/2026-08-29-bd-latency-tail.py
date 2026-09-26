@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """bd's per-process latency distribution from the event log. The median is not the question;
 the tail is, because a timeout budget is a bet against the tail."""
-import glob, json, sys, statistics
+import glob, json, os, sys, statistics
 
-files = sorted(glob.glob("~/projects/ai_runner/.air/events/*.ndjson"))
+# Run from the main checkout, or pass it as the first argument.
+REPO = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+files = sorted(glob.glob(os.path.join(REPO, ".air/events/*.ndjson")))
 per_day = {}
 for f in files:
     day = f.split("/")[-1][:-7]

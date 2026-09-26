@@ -56,8 +56,8 @@ the `writing-style` skill.
 - Written 2026-08-22 for Air at the owner's request ("the README is way too verbose"). Rules
   follow plainlanguage.gov and the Plain English Campaign (short sentences, common words,
   reader-first order), from memory.
-- 2026-09-25, v2.0.0 (air-k8bj): made the one owner of voice after the owner said "Your language
-  is weird. Just speak normally". The 20-word cap, the "Say the thing. Stop." opener and
+- 2026-09-25, v2.0.0 (air-k8bj): made the one owner of voice after the owner said the writing
+  sounded strange and asked for normal speech. The 20-word cap, the "Say the thing. Stop." opener and
   the README and skill word budgets were removed because they pushed writing toward fragments
   and compressed prose. Rules 1 and 4 to 8 were added from the patterns the owner objected to.
 - Removed when the owner stops reading prose written here, or when the other writing skills

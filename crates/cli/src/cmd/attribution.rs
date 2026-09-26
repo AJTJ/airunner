@@ -166,7 +166,7 @@ pub fn prose_ids(text: &str) -> Vec<String> {
             continue;
         };
         // No length or digit rule, deliberately: real ids here include `air-zyo` and
-        // `air-ouw` with no digit at all, and test ids are as short as `fd-1`. Anything
+        // `air-ouw` with no digit at all, and test ids are as short as `ad-1`. Anything
         // narrower drops real beads, and a false positive costs one more argument to a single
         // lookup. Restored after the move out of status.rs — this comment is what stops the
         // next person tightening a parser that is meant to be frozen.

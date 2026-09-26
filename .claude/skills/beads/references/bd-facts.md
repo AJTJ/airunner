@@ -32,7 +32,7 @@ The claim is `bd update <id> --claim`: "Atomically claim the issue (sets assigne
 
 ## bd 1.2.x facts
 
-The rows from tick 0300 (2026-08-18) that Air's design still leans on. Sources for the table: the GitHub releases, tags and commits API for `gastownhall/beads`; `CHANGELOG.md` and `docs/RECOVERY-1.2.1.md` fetched raw; the local clone `~/projects/beads` at `d1e725d9f` with tag `v1.1.2` (the code released as v1.2.2); the installed binary. "Observed" means a command was run or a file read at a named commit; "documented" means an upstream doc or changelog says so and it was not exercised.
+The rows from tick 0300 (2026-08-18) that Air's design still leans on. Sources for the table: the GitHub releases, tags and commits API for `gastownhall/beads`; `CHANGELOG.md` and `docs/RECOVERY-1.2.1.md` fetched raw; a local clone of `gastownhall/beads` at `d1e725d9f` with tag `v1.1.2` (the code released as v1.2.2); the installed binary. "Observed" means a command was run or a file read at a named commit; "documented" means an upstream doc or changelog says so and it was not exercised.
 
 | Question | Answer on the pinned bd 1.2.2 | Source | Verified |
 |---|---|---|---|
@@ -213,4 +213,4 @@ Removal condition for this section: when bd 1.3.0 is stable and those two questi
 
 ## Sources
 
-Every URL and path is cited inline where it is used. The local material behind them, all read-only: `bd --version` (2026-09-14: `bd version 1.2.2 (Homebrew)`); `bd help`, `bd schema` and `bd <cmd> --help` on the installed binary (2026-08-17/18); the local clone `~/projects/beads` at `d1e725d9f` with tag `v1.1.2` (2026-08-18); a scratch `bd init` project on 1.2.2 (2026-09-06); `air audit` on this repo (2026-09-06); `crates/bd/src/lib.rs` and `crates/cli/src/cmd/` at the lines cited (2026-09-14). Upstream paths under `docs/` without a URL are files in the `gastownhall/beads` repository at the commit or tag named beside them.
+Every URL and path is cited inline where it is used. The local material behind them, all read-only: `bd --version` (2026-09-14: `bd version 1.2.2 (Homebrew)`); `bd help`, `bd schema` and `bd <cmd> --help` on the installed binary (2026-08-17/18); a local clone of `gastownhall/beads` at `d1e725d9f` with tag `v1.1.2` (2026-08-18); a scratch `bd init` project on 1.2.2 (2026-09-06); `air audit` on this repo (2026-09-06); `crates/bd/src/lib.rs` and `crates/cli/src/cmd/` at the lines cited (2026-09-14). Upstream paths under `docs/` without a URL are files in the `gastownhall/beads` repository at the commit or tag named beside them.

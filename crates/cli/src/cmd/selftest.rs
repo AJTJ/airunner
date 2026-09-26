@@ -4163,7 +4163,7 @@ fn probe_land_names_a_branch() -> Probe {
     let fd1 = vec!["zz-1".to_string()];
     let fd2 = vec!["zz-2".to_string()];
 
-    // Case 1: alpha did fd-1 and has waited longest; lane batched it and carries fd-2 too.
+    // Case 1: alpha did ad-1 and has waited longest; lane batched it and carries ad-2 too.
     let both_ready = vec![
         landing("alpha", "zz-1", 30, None),
         landing("lane", "zz-1", 5, None),
@@ -4193,7 +4193,7 @@ fn probe_land_names_a_branch() -> Probe {
         resolve(&fd1, &none, &[], &blocked, &[]),
         Err(m) if m.contains("not landable yet") && m.contains("does not contain main")
     );
-    // air-dnr: naming fd-2 selects lane's branch, which carries fd-1 too. This used to assert
+    // air-dnr: naming ad-2 selects lane's branch, which carries ad-1 too. This used to assert
     // `v.len() == 1`, which was the defect written down as the expectation.
     let single_ready = matches!(
         resolve(&fd2, &none, &lane_ready, &blocked, &[]),
@@ -5108,7 +5108,7 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
 /// hand-over.
 ///
 /// The gate said `handover refused for w3 at <sha>` whatever it had matched. An adopter's
-/// worker met that on `bd close ad-c17zy` having just run its hand-over successfully, and the
+/// worker met that on `bd close <bead>` having just run its hand-over successfully, and the
 /// reading it invites — the hand-over failed, run it again — costs 350 to 700 seconds there and
 /// fixes nothing. The sentence was a **true statement about the gate and a false one about what
 /// the reader had just done**: it named the thing that succeeded and reported it as failing.
@@ -6327,7 +6327,7 @@ fn probe_close_releases_the_claim() -> Probe {
             .release_claim(&bead, "w", "closed", "t2")
             .map_err(|e| e.to_string())?;
         let after = fires(&l)?;
-        // Threshold-independent on both sides: the claim on fd-1 is what speaks and what goes
+        // Threshold-independent on both sides: the claim on ad-1 is what speaks and what goes
         // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
         let still_held = l
             .open_claims()
@@ -7278,7 +7278,7 @@ fn probe_session_identity_is_the_launchers() -> Probe {
 
 /// `air <word>` mentions in COMMAND position in one source file's non-comment lines: after a
 /// backtick, an opening paren, or a colon-space, which is how every shipped advice string
-/// names a command ("run `air status`", "(air claim fd-1)", "fix: air record verify"). Prose
+/// names a command ("run `air status`", "(air claim ad-1)", "fix: air record verify"). Prose
 /// about Air in a string ("the newer air and re-run", "will add air hooks") is preceded by a
 /// plain space or opens the literal, and is not a command. Returns (line, word).
 fn command_mentions(source: &str) -> Vec<(usize, String)> {
@@ -9528,14 +9528,14 @@ fn probe_batch_green_survives_main_moving_under_it() -> Probe {
             g(&["init", "-q", "-b", "main"])?;
             g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
             let base = g(&["rev-parse", "HEAD"])?;
-            // The worker's commit for fd-1, then a lane batch over main plus that commit.
+            // The worker's commit for ad-1, then a lane batch over main plus that commit.
             g(&["checkout", "-q", "-b", "w"])?;
             g(&[
                 "commit",
                 "-q",
                 "--allow-empty",
                 "-m",
-                "work\n\nBead: fd-1\n",
+                "work\n\nBead: ad-1\n",
             ])?;
             g(&["checkout", "-q", "-b", "lane", "main"])?;
             g(&["merge", "-q", "--no-ff", "w", "-m", "batch: w"])?;
@@ -9569,7 +9569,7 @@ fn probe_batch_green_survives_main_moving_under_it() -> Probe {
                     main_sha: main_sha.map(str::to_string),
                 })
                 .map_err(|e| e.to_string())?;
-                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "ad-1")?
                     .covering
                     .is_some())
             };
@@ -9620,7 +9620,7 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
                 "-q",
                 "--allow-empty",
                 "-m",
-                "work\n\nBead: fd-1\n",
+                "work\n\nBead: ad-1\n",
             ])?;
             g(&["checkout", "-q", "main"])?;
             g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
@@ -9628,7 +9628,7 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
             // The worker's next `git merge main` fast-forwards: main..HEAD is now empty.
             g(&["checkout", "-q", "w"])?;
             g(&["merge", "-q", "--ff-only", "main"])?;
-            let empty = crate::cmd::batch::bead_commits(&dir, "fd-1").is_empty();
+            let empty = crate::cmd::batch::bead_commits(&dir, "ad-1").is_empty();
 
             let landed = |result: &str, beads: &[&str], at: &str| -> Result<bool, String> {
                 let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -9651,15 +9651,15 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
                     members: vec![],
                 })
                 .map_err(|e| e.to_string())?;
-                Ok(crate::cmd::batch::for_bead(&l, &dir, "fd-1")?
+                Ok(crate::cmd::batch::for_bead(&l, &dir, "ad-1")?
                     .landed
                     .is_some())
             };
-            let red = empty && !landed("refused", &["fd-1"], &merge)?;
-            let green = landed("landed", &["fd-1"], &merge)?
-                && landed("landed-refuted", &["fd-1"], &merge)?
-                && !landed("landed", &["fd-2"], &merge)?
-                && !landed("landed", &["fd-1"], &stray)?;
+            let red = empty && !landed("refused", &["ad-1"], &merge)?;
+            let green = landed("landed", &["ad-1"], &merge)?
+                && landed("landed-refuted", &["ad-1"], &merge)?
+                && !landed("landed", &["ad-2"], &merge)?
+                && !landed("landed", &["ad-1"], &stray)?;
             Ok((red, green))
         })();
         std::fs::remove_dir_all(&dir).ok();
@@ -12466,7 +12466,7 @@ fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
     // trailer is the trailer whatever the flow is.
     let mut g = base_facts();
     g.bead_claimed_or_carried = false;
-    g.bead = Some("fd-1".into());
+    g.bead = Some("ad-1".into());
     let cv = handover_verdict(&g);
     let cs = stop_message(&cv, &g.worker, &g.head);
     let flow_free_fix_kept = cv
@@ -13254,7 +13254,7 @@ fn probe_batch_members_are_the_shas_the_batch_took() -> Probe {
     }
 }
 
-/// air-zqmi: the channel told an adopter's coordinator that w3 had handed over `ad-gjw8x`
+/// air-zqmi: the channel told an adopter's coordinator that w3 had handed over a bead
 /// without a green at HEAD. w3's first and only attempt on that bead SUCCEEDED, as did its
 /// other two; there was no refusal and so no refusal text. The coordinator acted on a reported
 /// refusal that never happened and a worker spent a message establishing it.

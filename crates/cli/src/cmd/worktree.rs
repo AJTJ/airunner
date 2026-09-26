@@ -10,7 +10,7 @@
 //! - **`.worktreeinclude`.** `--worktree` copies gitignored files matching the repo's
 //!   `.worktreeinclude` (gitignore syntax) into the new worktree. The adopter's workers do not
 //!   function without it: `backend/.env`, `app/.env`, and `backend/keys/*.pem`, which
-//!   `authn.rs:233` reads with `include_str!` at COMPILE TIME, so a naive `git worktree add`
+//!   an auth module reads with `include_str!` at COMPILE TIME, so a naive `git worktree add`
 //!   gives a fleet whose backend test crate does not build, with an error that does not say
 //!   why (their own note, an agent lost time to it on 2026-08-13). [`copy_included`] does the
 //!   same copy, with git's own glob engine: each pattern becomes a `:(glob)` pathspec and

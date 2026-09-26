@@ -21,13 +21,20 @@ the alarm, which is the nudge working rather than the alarm being wrong. It repo
 
 import datetime as dt
 import glob
+import os
 import sqlite3
 import sys
 
-DB = sys.argv[1] if len(sys.argv) > 1 else "~/projects/ai_runner/.air/ledger.db"
+# Run from the main checkout, or pass the ledger path as the first argument.
+DB = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.getcwd(), ".air/ledger.db")
 # The default in status::Thresholds::idle_noclaim_min. Override to match a tuned fleet.
 THRESHOLD_MIN = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-TRANSCRIPTS = "~/.claude/projects/-Users-owner-projects-ai-runner--claude-worktrees-{}"
+# Claude Code names a project's transcript directory after its path, with "/" and "_" as "-".
+_MAIN = os.path.dirname(os.path.dirname(os.path.abspath(DB)))
+TRANSCRIPTS = os.path.join(
+    os.path.expanduser("~/.claude/projects"),
+    _MAIN.replace("/", "-").replace("_", "-") + "--claude-worktrees-{}",
+)
 
 
 def stamps(worker):

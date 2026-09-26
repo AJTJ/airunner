@@ -479,7 +479,7 @@ mod tests {
         assert!(landed.landed());
 
         // A NEWER refusal of the same branch (main moved under it) is not the newest word on
-        // fd-1: the refutation stands.
+        // ad-1: the refutation stands.
         let mut later = row("3", "refused");
         later.merge_commit = None;
         later.finished_at = "t3".into();

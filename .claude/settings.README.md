@@ -17,8 +17,7 @@ directory tree to the nearest `Cargo.toml` and runs `cargo fmt --all` there, the
 have to remember `cargo fmt`, and the pre-commit/CI check stays green. Requires `jq` and a Rust
 toolchain with `rustfmt` on `PATH`.
 
-**Provenance.** Copied verbatim from
-`~/projects/another-project/.claude/settings.json` (another-project),
+**Provenance.** Copied verbatim from a `.claude/settings.json` in the owner's earlier work,
 2026-08-18; identified in `.claude/skills/PROVENANCE.md` as the most directly relevant
 hook config found across the source repos.
 
@@ -31,6 +30,6 @@ the event, fails open, and writes one event line per invocation (`CLAUDE.md`, sy
 
 ## Deliberately not ported
 
-- **`SessionStart` / `PreCompact` → `bd prime`** (in another-project' settings, and an adopter's
+- **`SessionStart` / `PreCompact` → `bd prime`** (in that earlier project's settings, and an adopter's
   uses `bd prime --hook-json`). Not wired; add it on a named pain.
 - **Any `permissions.allow` list.** None needed for the current work; add per named pain.

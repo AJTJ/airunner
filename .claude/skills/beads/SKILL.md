@@ -188,70 +188,64 @@ also forbids Claude memory; `CLAUDE.md` Rules).
   `bd comment`. An adopter lost six close reasons this way on 2026-08-15, and built a false
   account of the tracker on the apparent success.
 
-Ported from the adopter's field notes (its `CLAUDE.md:785-949` at `f2ca891`, "Beads Issue
-Tracker" rules; each item cites the line range it came from). That file is **not** copied into
-this repo, so those line numbers do not resolve here. Every one was
-measured on a live fleet.
+These are ported from an adopter's field notes on `bd`, which are not copied into this repo.
+Each one was measured on a live fleet.
 
 - **`--notes` and `--description` OVERWRITE; they do not append.** Use `bd comment <id> "..."`
   (append-only, timestamped) or `bd update <id> --append-notes "..."`. Reach for `--notes` /
   `--description` only after reading the current value and intending to replace all of it, and
-  then pass the merged text through stdin. (`CLAUDE.md:849-854`)
+  then pass the merged text through stdin.
 - **`--design=-` does not read stdin; it stores a literal `-`.** `--description=-` works.
   Pass design text inline, or use `--design-file -` (reads stdin; verified in
-  `bd create --help`, bd 1.2.1, 2026-08-18). (`CLAUDE.md:855-856`)
+  `bd create --help`, bd 1.2.1, 2026-08-18).
 - **`bd update` takes `--add-label`, not `-l`.** Passing `-l` errors and silently applies
   nothing else on that line, including the `-t` you thought you set. `bd create` does take
-  `-l`. (`CLAUDE.md:847-848`)
+  `-l`.
 - **`bd ready --label '!owner'` does not work and does not say so.** `bd` reads `!` as part of
   the label name, matches nothing, and prints an empty list that reads as "no work". The native
   flag is `--exclude-label owner,runtime`. Multiple `--label` flags AND together.
-  (`CLAUDE.md:888-892`)
 - **Never pipe a `bd` write through `head` or `tail`.** The pipe reports the tail's status and
   eats the warning that told you what you broke. Let writes print in full; pipe reads freely.
-  (`CLAUDE.md:866-869`)
 - **Parse with `--json`, never `grep -c`.** Titles wrap across lines and counts come out wrong.
-  (`CLAUDE.md:846`)
 - **Every bead needs `--acceptance` written as an observable condition** ("opening a session
   detail issues one request", not "fix the N+1"). An unattended agent cannot ask what done
   means, so it invents one. If you cannot write the acceptance line, the bead is not ready to
   file. `validation.on-create: warn` warns and creates anyway; `bd create --validate` genuinely
-  refuses. (`CLAUDE.md:820-823`, `843-845`)
+  refuses.
 - **Never invent "Steps to Reproduce".** Keep the literal heading `## Steps to Reproduce` and
   write the truth under it: `Not reproduced — found by reading path:line.` The check greps for
   the heading; replacing it with your own wording fails the check and looks identical to the
   sanctioned warning. A fabricated repro is worse than a missing one; the next agent builds
-  against it. (`CLAUDE.md:824-845`)
+  against it.
 - **Re-read the bead immediately before you ask, not only before you write.** A queue read at
   session start is stale before you reach the bottom. `bd show` at the moment you ask a human,
   never at triage. And close answered beads: a closed bead is unmistakable even on a stale
-  list. (`CLAUDE.md:857-865`)
+  list.
 - **Recovery when text is lost:** `.beads/issues.jsonl` is committed, so
   `git log -p -- .beads/issues.jsonl` holds prior versions; `.beads/backup/*.darc` is a second
-  copy. Do not re-type from memory. (`CLAUDE.md:870-872`)
+  copy. Do not re-type from memory.
 - **A launch gate is not a P0.** Blocking a public release is not blocking today. Reserve P0
-  for broken-now. (`CLAUDE.md:875-876`)
+  for broken-now.
 - **Label `owner` at filing, not when someone hits the wall.** If the acceptance requires a new
   dependency, a deploy, a hosted write, a native rebuild, a device, or a ruling only the owner
   can make, label it `owner` before moving on. An unlabelled `owner` bead at the
   top of the queue costs a whole session. `runtime` means it needs a port, a device, or Docker.
-  (`CLAUDE.md:880-905`)
 - **Flag an owner decision, do not make it.** When the design and the code disagree or
   acceptance is unclear, say so (`air capture`, roles.md), then take other work. Never decide
-  alone. (`CLAUDE.md:910-911`)
+  alone.
 - **Verify a bead's citations before you work it.** Open the `file:line` it names and confirm
   the described code is still there. If the citation is stale, close the bead with that finding
   instead of doing the work. Checking takes a minute; re-fixing something that already works
-  takes a session. (`CLAUDE.md:912-917`)
+  takes a session.
 - **If it is done, close it; finding that out is the work.** A bead whose acceptance is already
   met and stays open gets claimed again and re-derived. Close in the same breath as the finding,
   with the evidence in `--reason`. Only the acceptance decides, never whose branch landed it.
-  If acceptance is unclear, capture it; do not close on a guess. (`CLAUDE.md:918-934`)
+  If acceptance is unclear, capture it; do not close on a guess.
 - **A decision bead closes when its work moves on.** An `owner` bead whose acceptance
   spans ruling and implementation can never close if read literally. The test is what the bead
   still represents: a recorded decision, or work that lives in a successor, is nothing; close it
   naming the successor. File the successor before you close, and only when work actually carries
-  forward. Stripping the label is not closing. (`CLAUDE.md:935-946`)
+  forward. Stripping the label is not closing.
 
 ## Rules
 
@@ -265,20 +259,16 @@ measured on a live fleet.
 
 - Sources: `beads/internal/templates/skills/beads/SKILL.md` (structure,
   first step, core workflow, what belongs in beads, rules; beads `d1e725d`);
-  `another-project/.claude/skills/beads/SKILL.md`
-  (shell-quoting rules, task sizing, statuses, closing, dependency guidance;
-  another-project) with the env-clearing recipe from
-  `another-project/justfile:14` and
-  `another-project/.claude/skills/beads/SKILL.md:17-19` (another-project);
-  The adopter's `CLAUDE.md:785-949` "Beads Issue Tracker" rules (the adopter `f2ca891`, not copied
-  into this repo) for the Known traps section; version-trap facts from
+  a `beads` skill from the owner's earlier work (shell-quoting rules, task sizing, statuses,
+  closing, dependency guidance, and the env-clearing recipe); an adopter's field notes on `bd`
+  (not copied into this repo) for the Known traps section; version-trap facts from
   `references/bd-facts.md` (formerly `docs/research/beads.md`). Read for context, not copied:
-  `beads_rust/.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
+  `Dicklesworthstone/beads_rust` `.claude/skills/br/SKILL.md` (beads_rust `d1fb0d3`),
   `beads/docs/integrations/claude-code.md`.
 - Ported 2026-08-18.
-- Adaptations: Asana section and `just bd` / `just beads-*` wrappers removed (Air is the
-  wrapper); env clearing shown as a raw `env -u` recipe; Dolt/molecule/formula/swarm/gate
-  content dropped; `bd remember` family forbidden per this project's no-memory rule; Air
-  boundary (`air claim`, hand-over gate) added with plan citations; version trap section added;
-  The adopter's project-specific label list reduced to the `owner`/`runtime`/`human` semantics
-  Air depends on; the adopter's bead IDs and dates kept only where they are the measurement.
+- Adaptations: task-tracker integration and `just` wrappers removed (Air is the wrapper); env
+  clearing shown as a raw `env -u` recipe; Dolt/molecule/formula/swarm/gate content dropped;
+  `bd remember` family forbidden per this project's no-memory rule; Air boundary (`air claim`,
+  hand-over gate) added with plan citations; version trap section added; the adopter's
+  project-specific label list reduced to the `owner`/`runtime`/`human` semantics Air depends on;
+  the adopter's dates kept only where they are the measurement.
