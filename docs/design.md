@@ -623,8 +623,10 @@ Code sessions.
 
 1. Pin the candidate into the trial copy (`make trial`). It builds the release binary, copies
    `examples/minimal` to a scratch directory outside this repository, runs `air init --write`
-   and `air install --write --pin` with that binary, and commits. The `air` on PATH, which the
-   fleet building Air runs, is not touched.
+   and `air install --write --pin` with that binary, sets `"verify_lane": true` in
+   `.claude/air.json` (the fleet starts a lane, and the scenarios below assume the with-lane
+   sequence), and commits. The `air` on PATH, which the fleet building Air runs, is not touched;
+   an `air` on PATH released after 0.4.0 hands every command in the copy to the pin (air-qyrm).
 2. In the scratch directory, check that `air status` names the pin.
 3. Start `air coordinator` and say yes to starting the fleet: the lane and three workers.
 4. Ask the coordinator to file the beads each scenario below needs, and let the fleet work. The
