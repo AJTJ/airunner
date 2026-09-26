@@ -2967,6 +2967,100 @@ fn a_batch_of_one_tells_its_member_and_a_red_head_is_not_cut_again() {
     assert_eq!(members(&out), ["alpha"], "{out}");
 }
 
+/// Workaround 1 of the 0.4.8 live trial: after a red batch the red merges stayed on the lane's
+/// branch, so the next cut would have carried them; the lane reset by hand. Now every cut starts
+/// from main: a red head is reset away, an unlanded green head and a dirty tree are refused with
+/// nothing moved, and a landed head resets and cuts normally.
+#[test]
+fn a_cut_starts_from_main_and_refuses_an_unlanded_green() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    for name in ["beta", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+    }
+    let beta = root.join("beta").canonicalize().unwrap();
+    let lane = root.join("lane").canonicalize().unwrap();
+    let is_anc = |sha: &str| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&lane)
+            .args(["merge-base", "--is-ancestor", sha, "HEAD"])
+            .status()
+            .unwrap()
+            .success()
+    };
+    let json = |out: &str| -> serde_json::Value { serde_json::from_str(out).unwrap() };
+
+    // A red batch of alpha.
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
+    std::fs::write(alpha.join("a.txt"), "a\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(&alpha, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
+    let red = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_eq!(air(&lane, &bd, &["batch", "cut"]).0, 0);
+    assert_eq!(git(&lane, &["rev-parse", "HEAD"]), red);
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "false"]).0, 1);
+
+    // The next cut starts from main: beta is in, the red commit is not.
+    std::fs::write(main.join("bd.in_progress"), "zz-1\nzz-2\n").unwrap();
+    assert_eq!(air(&beta, &bd, &["claim", "zz-2"]).0, 0);
+    std::fs::write(beta.join("b.txt"), "b\n").unwrap();
+    git(&beta, &["add", "b.txt"]);
+    git(&beta, &["commit", "-q", "-m", &bead_trailer("zz-2")]);
+    let b = git(&beta, &["rev-parse", "HEAD"]);
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(json(&out)["reset_from"], red.as_str(), "{out}");
+    assert_eq!(git(&lane, &["rev-parse", "HEAD"]), red, "dry run moved");
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(json(&out)["reset_from"], red.as_str(), "{out}");
+    assert!(is_anc(&b) && !is_anc(&red), "{out}");
+
+    // A green batch not yet landed is refused, and nothing moves.
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let green = git(&lane, &["rev-parse", "HEAD"]);
+    for args in [&["batch", "cut"][..], &["batch", "cut", "--dry-run"][..]] {
+        let (code, out, err) = air(&lane, &bd, args);
+        assert_eq!(code, 2, "{out}{err}");
+        assert!(out.contains("Land it first"), "{out}");
+        assert_eq!(git(&lane, &["rev-parse", "HEAD"]), green);
+    }
+
+    // A dirty lane is refused, and nothing moves.
+    std::fs::write(lane.join("README"), "dirty\n").unwrap();
+    let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("uncommitted changes"), "{out}");
+    assert_eq!(git(&lane, &["rev-parse", "HEAD"]), green);
+    git(&lane, &["checkout", "README"]);
+
+    // Landed: the head is in main, so the cut resets and runs.
+    git(&main, &["merge", "-q", "--ff-only", &green]);
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(json(&out)["reset_from"].is_null(), "{out}");
+    assert_eq!(
+        git(&lane, &["rev-parse", "HEAD"]),
+        git(&main, &["rev-parse", "HEAD"])
+    );
+}
+
 fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");
