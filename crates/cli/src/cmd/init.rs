@@ -667,6 +667,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             }
             run_in(&dir, &bdbin.to_string_lossy(), &args)?;
             crate::cmd::bd_server::move_port_out_of_metadata(&dir, *port)?;
+            crate::cmd::bd_server::disable_bd_auto_start(&dir)?;
         }
         if !air_json_exists {
             std::fs::create_dir_all(dir.join(".claude")).map_err(|e| format!(".claude: {e}"))?;
