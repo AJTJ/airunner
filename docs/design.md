@@ -507,6 +507,17 @@ claim are never told. A later list replaces a worker's undelivered one, so a ses
 away hears the latest. The first tick after the server starts only records the list. One
 fanout event line records each change and who was told.
 
+The lane and its members are told the same way. The coordinator's tick queues "batch-ready"
+for the lane once per branch head. air batch cut queues "dropped from batch" for each worker it
+drops, air record queues each member's result when the lane records a batch verify (close on a
+green, the exit and the kept output on a red, nothing on a kill), and air land queues "landed
+in main" for each member. air land and a red batch's air record end with the branches
+batch-ready now and the next command, or with "nothing is batch-ready", and when the lane ran
+the command that output counts as telling it. air status prints two loop times from these rows
+for the last 24 hours: from batch-ready to the start of the batch verify that took the branch,
+and from "batch green" to the member's close. The 5-minute wakes stay as the backstop for a
+push that is missed.
+
 ### 6.6 Session states
 
 ```mermaid
@@ -771,6 +782,11 @@ fans it out).
       worktree, from the ledger's deliveries table (crates/cli/src/cmd/mcp.rs, deliver_once).
 - [x] Tell idle workers without a claim when the ready set gains a bead, once per change
       (crates/cli/src/cmd/fanout.rs, fan_out_ready). (air-dkm1)
+- [x] Tell the lane when a branch becomes batch-ready and each member its batch's result or
+      drop; air land and a batch's air record end with the next cut; air status prints the
+      two loop times (crates/cli/src/cmd/fanout.rs, crates/cli/src/cmd/loops.rs). (air-1vri.2)
+- [ ] The next live trial shows batch-ready to its batch and batch green to close each under a
+      minute plus the verify's own duration (the loops line in air status). (air-1vri.2)
 
 Owner rulings still open, each with the recommendation:
 

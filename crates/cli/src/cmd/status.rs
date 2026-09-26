@@ -233,6 +233,8 @@ pub struct Snapshot {
     pub batch_ready: Vec<BatchReady>,
     /// Every worker branch that is NOT batch-ready, with the fact it lacks (`--json`).
     pub not_batch_ready: Vec<NotBatchReady>,
+    /// How long the lane's loop waited on messages in the last 24 hours (air-1vri.2).
+    pub loops: super::loops::LoopTimes,
     /// The newest red verify at a batch head that no later green has superseded (air-80x.4),
     /// with the members it was recorded with. The lane splits by hand; nothing lands on it.
     pub red_batch: Option<super::batch::RedBatch>,
@@ -1317,6 +1319,15 @@ pub fn tree_busy(s: &Snapshot, worker: &str) -> bool {
     s.tree_readers.busy(worker)
 }
 
+/// 24 hours before an RFC 3339 timestamp, in the same format; the epoch when it does not
+/// parse, which widens the window rather than hiding rows.
+pub fn day_before(at: &str) -> String {
+    at.parse::<jiff::Timestamp>()
+        .ok()
+        .and_then(|t| t.checked_sub(jiff::SignedDuration::from_hours(24)).ok())
+        .map_or_else(|| "1970-01-01T00:00:00Z".to_string(), |t| t.to_string())
+}
+
 /// Seconds between two RFC 3339 timestamps; None when either does not parse.
 pub fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
@@ -2196,6 +2207,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         .filter_map(|(w, role, x)| x.pid.map(|p| (w.clone(), role.clone(), p)))
         .collect();
     let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
+    let loops = super::loops::measure(&ledger, &day_before(&at));
     Ok(Snapshot {
         main_checkout_sessions,
         at,
@@ -2242,6 +2254,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         ancestor_deadlocks,
         batch_ready: batch.0,
         not_batch_ready: batch.1,
+        loops,
         overlaps,
         errors,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -2663,6 +2676,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             b.head.get(..8).unwrap_or(&b.head),
             b.beads.join(" ")
         ));
+    }
+    if let Some(l) = super::loops::line(&s.loops) {
+        out.push_str(&format!("{l}\n"));
     }
     // air-ob0: a rewind un-lands from main and cannot un-merge from whoever took it.
     for r in &s.rewound_carried {

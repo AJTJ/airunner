@@ -384,6 +384,10 @@ pub fn after_fast_forward(err: &str, landed: Option<bool>) -> FfVerdict {
 enum Outcome {
     Landed {
         merge: String,
+        /// Main before the landing, and the worker branch heads the landed branch carried
+        /// (air-80x.2), so each member can be told (air-1vri.2).
+        tip: String,
+        members: Vec<air_ledger::landings::Member>,
         /// Beads whose acceptance the merge could not fully discharge, with the clauses. A
         /// record of what the print said; nothing here closes or blocks anything (air-ayp).
         noted: Vec<air_ledger::landings::OpenBead>,
@@ -774,7 +778,13 @@ pub fn run(
     }
     for batch in batches(&wanted) {
         match land_one(repo, &ledger, &batch, &despite, json) {
-            Outcome::Landed { merge, noted } => {
+            Outcome::Landed {
+                merge,
+                noted,
+                tip,
+                members,
+            } => {
+                super::fanout::batch_landed(repo, &ledger, &worker, &merge, &tip, &members);
                 lines.push(format!(
                     "landed {} ({}) at {}",
                     batch.worker,
@@ -808,6 +818,17 @@ pub fn run(
     if refuted > 0 {
         lines.push(format!("{refuted} {REFUTED_SUMMARY}"));
     }
+    // air-1vri.2: the lane's next step, as of this landing. It ran the command, so it learns
+    // here and the channel does not tell it again.
+    let mut next_ready = Vec::new();
+    if !landed.is_empty() {
+        let (ready, _, _) = super::status::batch_ready_for(&ledger, repo);
+        next_ready = ready.into_iter().filter(|b| b.worker != worker).collect();
+        if role == "lane" {
+            super::fanout::told_lane(&ledger, &worker, &next_ready, &now());
+        }
+        lines.extend(super::fanout::next_cut_lines(&next_ready));
+    }
     let msg = lines.join("\n");
     log_event(
         &ledger,
@@ -831,6 +852,7 @@ pub fn run(
             "ok": code == 0,
             "landed": landed,
             "not_discharged": held_open,
+            "batch_ready": next_ready,
             "log": lines,
         }),
         || msg.clone(),
@@ -1120,7 +1142,12 @@ fn land_one(
         None,
         &noted,
     );
-    Outcome::Landed { merge, noted }
+    Outcome::Landed {
+        merge,
+        noted,
+        tip,
+        members,
+    }
 }
 
 #[cfg(test)]

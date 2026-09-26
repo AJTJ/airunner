@@ -178,6 +178,26 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-1vri.2: a killed batch is reported to its members as if it were a verdict.
+    (
+        "lane: the lane hears each newly batch-ready branch once and members hear a green, red or drop at once; land and a batch record end with the next cut",
+        Mutation {
+            file: "crates/cli/src/cmd/fanout.rs",
+            from: "    if verdict == Verdict::Killed {\n        return Vec::new();\n    }\n",
+            to: "",
+            also_red: &[],
+        },
+    ),
+    // air-1vri.2: a close after a batch green is never counted.
+    (
+        "loops: batch-ready to its batch and batch green to close are measured from ledger rows; a wait that has not ended is no sample",
+        Mutation {
+            file: "crates/cli/src/cmd/loops.rs",
+            from: "                out.green_to_close.push(s);",
+            to: "                let _ = s;",
+            also_red: &[],
+        },
+    ),
     // air-dkm1: a worker holding a claim is told about new beads too. Seen red 2026-09-26.
     (
         "fanout: new ready beads are queued once for each live idle worker without a claim, never for the lane or a worker holding one",
@@ -2593,6 +2613,8 @@ fn all_probes() -> Vec<Probe> {
         probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
         messaging::probe_a_message_reaches_only_its_session(),
         messaging::probe_new_beads_reach_idle_workers_once(),
+        messaging::probe_the_lane_and_members_hear_batch_events_at_once(),
+        messaging::probe_loop_times_are_measured_from_rows(),
     ]
 }
 

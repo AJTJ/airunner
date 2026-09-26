@@ -24,6 +24,7 @@ pub mod install;
 pub mod land;
 pub mod launch;
 pub mod lease;
+pub mod loops;
 pub mod mcp;
 pub mod mechanisms;
 pub mod metis;

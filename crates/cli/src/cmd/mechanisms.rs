@@ -809,4 +809,33 @@ pub const MECHANISMS: &[Mechanism] = &[
             "bd or Claude Code offers a ready-work subscription a worker reads itself, or a round shows idle workers claiming no sooner after a fan-out than after their own wake",
         ),
     },
+    Mechanism {
+        id: "batch-ready-to-lane",
+        class: "nudge",
+        what: "Air queues \"batch-ready: <worker> at <sha>\" for the lane once per branch head \
+               that becomes batch-ready, unless a command's own output already told the lane \
+               (`air land`, a red batch's `air record`).",
+        added: "2026-09-26 (air-1vri.2)",
+        source: "crates/cli/src/cmd/fanout.rs, batch_ready_to_lane and told_lane",
+        // Owner, second live trial, 2026-09-26: the lane learned a branch was batch-ready only
+        // on its 5-minute wake, and one bead waited minutes between done and closed.
+        fires: Fires::Decisions(&[("fanout", "batch-ready")]),
+        removal: Removal::Judgement(
+            "the lane is removed, or a round's `loops` line shows batch-ready to its batch no shorter with the push than the wake gave",
+        ),
+    },
+    Mechanism {
+        id: "batch-result-to-members",
+        class: "nudge",
+        what: "Each member worker hears its batch's result at once: close on a green or a \
+               landing, the exit and the kept output on a red, the other side and the paths \
+               when `air batch cut` drops it. A killed run says nothing.",
+        added: "2026-09-26 (air-1vri.2)",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_landed, batch_dropped",
+        // Same trial: a worker learned the lane's green, and could close, only on its own wake.
+        fires: Fires::Decisions(&[("fanout", "batch-result")]),
+        removal: Removal::Judgement(
+            "the lane is removed, or a round's `loops` line shows batch green to close no shorter with the push than the wake gave",
+        ),
+    },
 ];

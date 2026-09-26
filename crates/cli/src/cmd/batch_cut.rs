@@ -499,6 +499,10 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     let considered = cut.members.len().saturating_add(cut.dropped.len());
 
     for d in &cut.dropped {
+        // air-1vri.2: the dropped worker hears it now. A dry run drops nothing.
+        if !dry_run {
+            super::fanout::batch_dropped(&ledger, &lane, d);
+        }
         super::log_event(
             &ledger,
             &lane,

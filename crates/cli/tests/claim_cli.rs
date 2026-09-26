@@ -2367,6 +2367,26 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     );
     acceptance(&main, "- Verify recorded green at HEAD.\n");
     let before = git(&main, &["rev-parse", "HEAD"]);
+    // air-1vri.2: a fourth branch becomes batch-ready while the batch waits to land.
+    let delta = root.join("delta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-delta",
+            delta.to_str().unwrap(),
+        ],
+    );
+    let delta = delta.canonicalize().unwrap();
+    std::fs::write(main.join("bd.in_progress"), "zz-4\n").unwrap();
+    assert_eq!(air_env(&delta, &bd, &["claim", "zz-4"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(delta.join("delta.txt"), "delta\n").unwrap();
+    git(&delta, &["add", "delta.txt"]);
+    git(&delta, &["commit", "-q", "-m", &bead_trailer("zz-4")]);
 
     let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
     assert_eq!(code, 0, "{out}{err}");
@@ -2374,6 +2394,30 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         assert!(out.contains(bead), "{out}");
     }
     assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
+    // The landing ends with what the lane does next.
+    assert!(out.contains("batch-ready: delta at"), "{out}");
+    assert!(out.trim_end().ends_with("next: air batch cut"), "{out}");
+
+    // Each member heard the green and the landing. The owner ran this landing, so the lane
+    // was not told delta by its output and the channel still will.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let told: Vec<(String, String)> = conn
+        .prepare("SELECT to_worker, kind FROM deliveries ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for (name, _) in &workers {
+        for kind in ["batch-green", "batch-landed"] {
+            assert!(
+                told.contains(&(name.clone(), kind.to_string())),
+                "{name} {kind}: {told:?}"
+            );
+        }
+    }
+    assert!(!told.iter().any(|(_, k)| k == "batch-ready"), "{told:?}");
+    assert!(!told.iter().any(|(w, _)| w == "delta"), "{told:?}");
 
     // One landing row, every bead once, every member head recorded.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
@@ -2609,6 +2653,23 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
         drops
             .iter()
             .any(|l| l.contains("beta") && l.contains("conflicts with gamma"))
+    );
+    // air-1vri.2: each dropped worker is told once, by the cut and not by the dry run.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let told: Vec<(String, String)> = conn
+        .prepare("SELECT to_worker, content FROM deliveries WHERE kind='batch-dropped'")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut to: Vec<&str> = told.iter().map(|(w, _)| w.as_str()).collect();
+    to.sort_unstable();
+    assert_eq!(to, ["beta", "delta"], "{told:?}");
+    assert!(
+        told.iter()
+            .any(|(w, c)| w == "beta" && c.contains("conflicts with gamma")),
+        "{told:?}"
     );
 }
 
