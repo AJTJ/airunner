@@ -48,8 +48,8 @@ too long, cut content. Do not shorten it by dropping grammar. The README's lengt
 ## Check before you ship
 
 Read it aloud. A sentence that sounds like a slogan, a headline or a closing line gets
-rewritten as a plain statement. Run `/deslopify` on longer pieces; it uses the tell catalogue in
-the `writing-style` skill.
+rewritten as a plain statement. For longer pieces, scan the text against the tell catalogue in
+the `writing-style` skill (`references/slop-patterns.md`), tier by tier, and fix what it finds.
 
 ## Provenance
 
