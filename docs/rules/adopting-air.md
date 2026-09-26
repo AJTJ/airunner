@@ -12,11 +12,23 @@ beads`). Build Air from its checkout with `cargo install --path crates/cli` and 
 checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.
 
 In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs
-`git init` if needed and `bd init --skip-agents --skip-hooks`, adds `.air/` to `.gitignore`, and
-writes `.claude/air.json` with deny patterns proposed from a scan of the repo. It also writes
-the hooks, `.mcp.json`, `.air/roles.md`, the `air-*` skills, a `Makefile` with a `verify`
-target, a `.worktreeinclude`, and a `CLAUDE.md` stub. It creates each only when absent and
-never edits one, so re-running it is safe.
+`git init` if needed and `bd init --skip-agents --skip-hooks`, which names the bead prefix after
+the directory unless you pass `--prefix`. It adds `.air/` to `.gitignore` and writes
+`.claude/air.json` with the directory name as `project`, `metis` set to whether Metis is
+installed, and deny patterns proposed from a scan of the repo. It also writes the hooks,
+`.mcp.json`, `.air/roles.md`, the `air-*` skills, a `.worktreeinclude`, and a `CLAUDE.md` stub.
+It creates each only when absent and never edits one, so re-running it is safe.
+
+`air init` prints the verify command it proposes. It uses the first of these it finds: a
+Makefile `verify` target, a Makefile `test` target, `cargo test` for a `Cargo.toml` at the root,
+and `npm test` when `package.json` has a real test script. When it finds none, it writes a
+`Makefile` whose `verify` target fails until you replace it with your check. The `CLAUDE.md`
+stub names the command, and so does the last thing `air init --write` prints:
+
+    next:
+      git add -A && git commit -m "Adopt Air"
+      air record verify -- <the proposed command>   # the first green
+      air coordinator                               # its own worktree and tmux session
 
 In a repo that already has its own setup, run `air install` to read what it would do and `air
 install --write` to apply it. It merges `air hook` into every hook event in
@@ -28,9 +40,9 @@ Air does not install bd's agent setup, because `bd prime` tells agents to run co
 denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, delete that
 entry from `.claude/settings.json`.
 
-Then record the first green and start the fleet:
+Then commit, record the first green and start the fleet:
 
-    air record verify -- make verify
+    air record verify -- <your verify command>
     air coordinator                                   # tmux session <project>-coordinator
     air lane --tmux                                   # the verification lane; only it lands
     air worker --tmux --task "<a complete task>"      # worker-1, worker-2, …
@@ -40,9 +52,11 @@ launchers.
 
 ## What the repo provides
 
-A verify command. Air records its exit code, and the close gate reads that record. The
-`verify` target `air init` writes exits 1 until you replace it with the repo's real check, so
-a placeholder can never record a green. Run the verify three times at one commit before you
+A verify command. Air records its exit code, and the close gate reads that record. When
+`air init` writes a `verify` target, it exits 1 until you replace it with the repo's real check,
+so a placeholder can never record a green. `air record` flags a green as `suspicious` when it
+printed nothing, or when it ran in under a fifth of the time the same command's last green took.
+Run the verify three times at one commit before you
 rely on it: `air record` flags runs that disagree at one sha, and a flaky test will hold closes.
 
 Claude Code's Bash tool stops a command after 10 minutes by default, and a verify killed that
@@ -69,7 +83,7 @@ key is optional.
 |---|---|---|
 | `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
 | `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
-| `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix |
+| `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix; `air init` writes the directory name |
 | `verify_lane` | Names the lane. It puts the with-lane closing sequence in force, and when `air batch cut` is refused in the main checkout, the refusal names the lane's worktree from it. | absent: no lane sequence |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
@@ -77,7 +91,7 @@ key is optional.
 | `digests` | `true`: the close gate needs a digest naming the bead in the main checkout's `.air/digests/`. | `false` |
 | `digest_dir` | A repo path: the close gate needs a digest naming the bead there, tracked by git. Wins over `digests`. | none |
 | `journal_dir` | A repo path for session journals, tracked in the repo instead of `.air/journal/`. | none |
-| `metis` | `true`: `air coordinator` attaches Metis's MCP server. Workers never get it. If `metis` is not on `PATH` the launch prints one line and goes on. | `false`; `air init` writes `true` |
+| `metis` | `true`: `air coordinator` attaches Metis's MCP server. Workers never get it. If `metis` is not on `PATH` the launch prints one line and goes on. | `false`; `air init` writes `true` when Metis is installed |
 | `metis_plugin_dir` | The `plugins/metis` directory of a Metis checkout, attached as a plugin as well. | none |
 | `adopters` | `true`: `air adopter-check` refuses when `private/adopters.md` is missing instead of skipping. | `false` |
 

@@ -2,9 +2,10 @@
 //!
 //! The exit is the fact. Around it Air records what the adopter's captures 4d1e52/9de453/38b0c1
 //! showed a human cannot see in a log: the exact command, how long it took, how much it
-//! printed, and whether the tree was dirty. A run is flagged `suspicious` when it was too
-//! fast or printed nothing, and `command-changed` when this worker's previous run of the same
-//! kind used a different command line. Backgrounded commands (`&`) are refused: Air spawns
+//! printed, and whether the tree was dirty. A run is flagged `suspicious` when it printed
+//! nothing or ran far faster than this worker's last green of the same command (see
+//! [`suspicious`]), and `command-changed` when this worker's previous run of the same kind used
+//! a different command line. Backgrounded commands (`&`) are refused: Air spawns
 //! the check itself and must see it finish.
 //!
 //! Every kind goes through this one path. `precheck` is a worker's cheap check under a
@@ -95,11 +96,13 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         return 1;
     }
     let command_line = command.join(" ");
-    let previous = ledger
-        .latest_run_any(&worker, kind)
-        .ok()
-        .flatten()
-        .and_then(|r| r.command);
+    let previous_run = ledger.latest_run_any(&worker, kind).ok().flatten();
+    let previous = previous_run.as_ref().and_then(|r| r.command.clone());
+    // The last GREEN of this same command, for the too-fast half of `suspicious`.
+    let previous_green_ms = previous_run
+        .as_ref()
+        .filter(|r| r.is_green() && r.command.as_deref() == Some(command_line.as_str()))
+        .and_then(|r| r.duration_ms);
     // Air's own directory never counts as dirt (it is gitignored in a configured repo).
     let dirty = git::dirty_files(repo)
         .map(|v| v.iter().any(|p| !p.starts_with(".air/")))
@@ -172,7 +175,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         air_ledger::verify::Verdict::Killed => "killed",
     };
     let mut flags: Vec<&str> = Vec::new();
-    if run.is_green() && (duration_ms < SUSPICIOUS_MS || output_bytes == 0) {
+    if run.is_green() && suspicious(duration_ms, output_bytes, previous_green_ms) {
         flags.push("suspicious");
     }
     if previous.as_deref().is_some_and(|p| p != command_line) {
@@ -252,8 +255,20 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     if exit_code == 0 { 0 } else { 1 }
 }
 
-/// A green faster than this, or with no output, is flagged (the adopter's capture 38b0c1).
-const SUSPICIOUS_MS: i64 = 2_000;
+/// Is this green suspicious? It printed nothing, or it ran in under a fifth of the time this
+/// worker's last green of the same command took.
+///
+/// The incident is the adopter's capture 38b0c1 (decisions.md, 2026-08-21): `make verify`
+/// silently skipped its jest suite and still exited 0, so a check that had taken minutes took
+/// seconds. That was first encoded as "under 2 s", which is that adopter's suite speaking: a
+/// tiny project's whole check runs in 50 ms, and every green it recorded, the first one
+/// included, was flagged (air-gn5o, found building examples/minimal). A drop against the same
+/// command's own history is the thing the capture actually saw, and a first run has no history
+/// to drop from, so it is never flagged on speed. Removed when a verify reports what it ran
+/// (a test count) and Air can compare that instead.
+pub fn suspicious(duration_ms: i64, output_bytes: i64, previous_green_ms: Option<i64>) -> bool {
+    output_bytes == 0 || previous_green_ms.is_some_and(|prev| duration_ms.saturating_mul(5) < prev)
+}
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).
 /// Run the check, mirroring its output, and answer `(exit, bytes, tail)`.
@@ -360,4 +375,22 @@ pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
 #[cfg(not(unix))]
 pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suspicious;
+
+    /// air-gn5o. Red under the old 2 s floor: a tiny project's first green, 40 ms with output,
+    /// was flagged. Green: it is not, while the two cases the flag exists for still are.
+    #[test]
+    fn a_fast_green_is_suspicious_only_against_its_own_history() {
+        assert!(!suspicious(40, 17, None), "a first fast green with output");
+        assert!(!suspicious(40, 17, Some(60)), "as fast as it always was");
+        assert!(suspicious(40, 0, None), "printed nothing");
+        assert!(
+            suspicious(3_000, 900, Some(240_000)),
+            "a suite that dropped from minutes to seconds (capture 38b0c1)"
+        );
+    }
 }

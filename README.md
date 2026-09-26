@@ -70,8 +70,11 @@ cd /path/to/your/repo
 air init --write
 ```
 
-Make `make verify` run your check, commit, and run `air coordinator`. If agents share a port or a
-device, list the commands that use it under `leases` in `.claude/air.json`.
+`air init` finds your check (a Makefile `verify` or `test` target, `cargo test`, or `npm test`)
+and prints the next steps: commit, run `air record verify --` with that check, and run `air
+coordinator`. If it finds no check, it writes a `make verify` that fails until you fill it in. If
+agents share a port or a device, list the commands that use it under `leases` in
+`.claude/air.json`.
 
 [examples/minimal](examples/minimal) is a three-file project after `air init`. It shows a check
 and every file Air adds.

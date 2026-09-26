@@ -6,14 +6,19 @@
 //! not. Then, in the target directory: `git init -b main` and a first commit if needed;
 //! `.air/` in `.gitignore`; `bd init --prefix <p> --non-interactive --init-if-missing
 //! --skip-agents --skip-hooks` (no AGENTS.md, no `bd prime`: its command reference conflicts
-//! with Air's roles; owner 2026-08-21); `bd config set status.custom awaiting_review` (the
-//! hand-over state is not a bd default);
-//! `.claude/air.json` with deny patterns proposed from a scan of the repo's publish targets
+//! with Air's roles; owner 2026-08-21); `.claude/air.json` with deny patterns proposed from a scan of the repo's publish targets
 //! (the adopter: a new publish target shipped outside an enumerated list; deny the verb, not the
 //! tool); then `air install --write` (hooks, `.mcp.json`, roles, skills); a minimal CLAUDE.md
 //! only when none exists; `air selftest`; and the next steps, which start with
 //! `air record verify -- <cmd>` as the first proof (it is what made bd's corruption visible).
 //! Dry run by default, like `install`.
+//!
+//! air-gn5o (owner, 2026-09-25: "a very good, effective adoption process for any sort of new
+//! project"). Run for real on an empty directory, a Rust crate, a Node project and a repo with
+//! its own `CLAUDE.md`, init assumed one adopter's shape: `make verify` everywhere, a four-letter
+//! bead prefix, `"metis": true` with no Metis installed, and a custom bd status nothing uses. It
+//! now proposes the verify command the repo already has ([`detect_verify`]), lets bd name the
+//! prefix after the directory, and writes the project name as the directory name.
 //!
 //! air-ej4 adds the empty-but-ready scaffold: the four things Air ASSUMES a repo has and used
 //! to leave the adopter to discover at their first hand-over. A `Makefile` whose `verify`
@@ -172,15 +177,24 @@ struct Plan {
     bd: doctor::BdCheck,
     gate_ok: bool,
     beads: &'static str,
+    /// The bead prefix: `--prefix` when given, else the directory name, which is bd's own
+    /// default when init passes none (air-gn5o: init used to cut it to four letters).
     prefix: String,
+    /// The `"project"` init writes into a new `.claude/air.json`: the directory name, so
+    /// session names read as the project rather than as a bead id (air-gn5o).
+    project: String,
+    /// The verify command init proposes, and whether it was found in the repo (false: the
+    /// failing Makefile placeholder).
+    verify: String,
+    verify_found: bool,
     gitignore: &'static str,
-    air_json: &'static str,
+    air_json: String,
     /// What `air init` will do about Metis (air-g5o): initialise it, leave an existing
     /// workspace alone, or name the install step. Printed in the dry run, like every other
     /// step, so nothing is done that was not shown first.
     metis: String,
     proposed_deny: Vec<String>,
-    claude_md: &'static str,
+    claude_md: String,
     scaffold: Vec<ScaffoldItem>,
     written: bool,
 }
@@ -189,7 +203,18 @@ struct Plan {
 /// in `.air/roles.md` (owner, 2026-09-25); this stub used to say the opposite, that the
 /// hand-over flow was the repo's own, and carried a second copy of the close sequence
 /// (air-vuwx). It now names only what roles.md leaves to the repo.
-pub(crate) const CLAUDE_MD_STUB: &str = r#"# CLAUDE.md
+///
+/// `verify` is the command init proposed; `placeholder` is true only when init is also writing
+/// the failing Makefile target, the one case where there is a placeholder to replace (air-gn5o:
+/// the stub told a repo with a real `verify` target to replace a placeholder it did not have).
+pub(crate) fn claude_md_stub(verify: &str, placeholder: bool) -> String {
+    let edit = if placeholder {
+        " Replace the\n  placeholder in the Makefile with this repo's real check."
+    } else {
+        ""
+    };
+    format!(
+        r#"# CLAUDE.md
 
 This repo runs a small fleet with Air. The fleet's protocol (roles, how a bead goes from a claim
 to main, proof, landing, and what Air refuses) is Air's and lives in `.air/roles.md`, appended
@@ -198,15 +223,53 @@ in beads (`bd ready`, `air claim`, `air capture`).
 
 ## What is this repo's own
 
-- **Verify** is `make verify`, recorded as `air record verify -- make verify`. Replace the
-  placeholder in the Makefile with this repo's real check.
+- **Verify** is `{verify}`, recorded as `air record verify -- {verify}`.{edit}
 - **Precheck**: none yet. If workers under a verification lane should run one, name it here
   and set `"precheck": true` in `.claude/air.json`.
 - **Worktree setup**: untracked files a new worktree needs are listed in `.worktreeinclude`.
 - **Shared resources** (a port, a simulator, Docker) are `"leases"` in `.claude/air.json`.
 
 Domain rules for this codebase go below.
-"#;
+"#
+    )
+}
+
+/// The verify command a repo already has, in the order a person would reach for one: a
+/// Makefile's `verify`, then its `test`, then `cargo test` for a crate at the root, then
+/// `npm test` when `package.json` declares a test script that is not npm's own placeholder.
+/// `None` means nothing was found, and init scaffolds the failing `make verify` instead.
+///
+/// It only PROPOSES: the result is printed and written into a new CLAUDE.md stub, and nothing
+/// gates on it. A wrong guess costs one line a person reads and corrects, which is why this
+/// reads freely written files at all (`anti-brittleness`). Before air-gn5o every repo was told
+/// `make verify`, and a Rust crate or Node project got a Makefile that failed on purpose next
+/// to a test command that already worked.
+pub fn detect_verify(
+    makefile: Option<&str>,
+    cargo_toml: bool,
+    package_json: Option<&str>,
+) -> Option<String> {
+    if let Some(mk) = makefile {
+        for target in ["verify", "test"] {
+            if declares(mk, target) {
+                return Some(format!("make {target}"));
+            }
+        }
+    }
+    if cargo_toml {
+        return Some("cargo test".into());
+    }
+    let test = package_json
+        .and_then(|p| serde_json::from_str::<Value>(p).ok())
+        .and_then(|v| {
+            v.pointer("/scripts/test")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })?;
+    // `npm init` writes `echo "Error: no test specified" && exit 1`, a test script that exists
+    // only to fail.
+    (!test.contains("no test specified")).then(|| "npm test".into())
+}
 
 /// The header of the `Makefile` `air init` writes into a repo that has none (air-ej4).
 const MAKEFILE_HEADER: &str = r#"# Written by `air init` because this repo had no Makefile. Air creates this file only when it
@@ -255,9 +318,9 @@ pub struct ScaffoldItem {
 /// Whether a Makefile text declares a `verify` target. Read from text somebody wrote freely,
 /// so it decides only which SENTENCE prints: Air never edits an existing Makefile either way,
 /// and a wrong read costs one misleading report line rather than a wrong write.
-fn declares_verify(makefile: &str) -> bool {
+fn declares(makefile: &str, target: &str) -> bool {
     makefile.lines().any(|l| {
-        let Some(rest) = l.strip_prefix("verify") else {
+        let Some(rest) = l.strip_prefix(target) else {
             return false;
         };
         matches!(rest.trim_start().as_bytes().first(), Some(b':'))
@@ -296,23 +359,39 @@ this was written.
 "#;
 
 /// Pure: what the scaffold would do, given what the directory already holds. `makefile` is the
-/// Makefile's text when there is one; `journal` is `(dir, its README exists)`.
+/// Makefile's text when there is one; `found` is the verify command [`detect_verify`] found, if
+/// any; `journal` is `(dir, its README exists)`.
+///
+/// The failing Makefile is written only when there is NEITHER a Makefile NOR a verify command
+/// found elsewhere (air-gn5o): a crate whose check is `cargo test` does not need a Makefile
+/// that fails on purpose.
 pub fn scaffold(
     makefile: Option<&str>,
+    found: bool,
     worktreeinclude_exists: bool,
     journal: (&str, bool),
 ) -> Vec<ScaffoldItem> {
     vec![
         match makefile {
+            None if found => ScaffoldItem {
+                path: "Makefile".to_string(),
+                create: false,
+                note: "absent, and not written: the verify command above is enough",
+            },
             None => ScaffoldItem {
                 path: "Makefile".to_string(),
                 create: true,
                 note: "will write a `verify` target that FAILS until you edit it",
             },
-            Some(mk) if declares_verify(mk) => ScaffoldItem {
+            Some(mk) if declares(mk, "verify") => ScaffoldItem {
                 path: "Makefile".to_string(),
                 create: false,
                 note: "present, declares `verify` (not touched)",
+            },
+            Some(_) if found => ScaffoldItem {
+                path: "Makefile".to_string(),
+                create: false,
+                note: "present (not touched)",
             },
             Some(_) => ScaffoldItem {
                 path: "Makefile".to_string(),
@@ -358,17 +437,25 @@ pub fn scaffold(
 /// What `air init` will do about Metis, said before it does it (air-g5o). Three states, and
 /// only one of them runs anything: an existing `.metis/` is the coordinator's plan and is never
 /// re-initialised, and a missing binary is an install step named rather than a failure.
-fn metis_plan(dir: &Path) -> String {
+fn metis_plan(dir: &Path, on_path: bool) -> String {
     if dir.join(".metis").is_dir() {
         return "present (not touched)".to_string();
     }
-    if crate::cmd::metis::on_path() {
+    if on_path {
         return "will run `metis init <prefix>`".to_string();
     }
-    "not installed; `air coordinator` will launch without it. Install from \
-     https://github.com/colliery-io/metis, then re-run `air init --write`, or set \
-     \"metis\": false in .claude/air.json"
+    // air-gn5o: `"metis": false` when it is not installed, so a fresh repo's first
+    // `air coordinator` does not open on a warning about a tool nobody asked for.
+    "not installed, so \"metis\": false. To use it, install it from \
+     https://github.com/colliery-io/metis and set \"metis\": true"
         .to_string()
+}
+
+/// Whether a new `.claude/air.json` says `"metis": true`: Metis is installed or the repo
+/// already has a workspace. The 2026-09-06 ruling made Metis the coordinator's planning tool;
+/// writing `true` where it cannot run only bought a warning at every launch (air-gn5o).
+pub fn metis_default(on_path: bool, workspace: bool) -> bool {
+    on_path || workspace
 }
 
 pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
@@ -393,22 +480,25 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     // is the gate.
     let bd_present = bd.version.is_some();
     let gate_ok = bd_present && claude.is_some();
-    let prefix = prefix.map(str::to_string).unwrap_or_else(|| {
-        dir.file_name()
-            .map(|s| {
-                s.to_string_lossy()
-                    .to_lowercase()
-                    .chars()
-                    .filter(|c| c.is_ascii_alphanumeric())
-                    .take(4)
-                    .collect()
-            })
-            .unwrap_or_else(|| "air".into())
-    });
+    // The directory name: bd's own default prefix when none is passed, and the project name.
+    let dir_name = dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "air".into());
+    let given_prefix = prefix.map(str::to_string);
+    let prefix = given_prefix.clone().unwrap_or_else(|| dir_name.clone());
     let files = list_files(&dir);
     let makefile = std::fs::read_to_string(dir.join("Makefile")).ok();
     let package_json = std::fs::read_to_string(dir.join("package.json")).ok();
     let proposed_deny = propose_deny(&files, makefile.as_deref(), package_json.as_deref());
+    let found = detect_verify(
+        makefile.as_deref(),
+        dir.join("Cargo.toml").is_file(),
+        package_json.as_deref(),
+    );
+    let verify = found.clone().unwrap_or_else(|| "make verify".into());
+    let metis_on_path = crate::cmd::metis::on_path();
+    let metis = metis_default(metis_on_path, dir.join(".metis").is_dir());
     let gitignore_has = std::fs::read_to_string(dir.join(".gitignore"))
         .map(|s| {
             s.lines()
@@ -425,6 +515,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     let journal_readme_exists = dir.join(&journal).join("README.md").exists();
     let scaffold = scaffold(
         makefile.as_deref(),
+        found.is_some(),
         dir.join(".worktreeinclude").exists(),
         (&journal, journal_readme_exists),
     );
@@ -441,22 +532,28 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         gate_ok,
         beads: if has_beads { "present" } else { "will bd init" },
         prefix: prefix.clone(),
+        project: dir_name.clone(),
+        verify: verify.clone(),
+        verify_found: found.is_some(),
         gitignore: if gitignore_has {
             "has .air/"
         } else {
             "will add .air/"
         },
         air_json: if air_json_exists {
-            "present (not touched)"
+            "present (not touched)".to_string()
         } else {
-            "will write with proposed deny patterns and \"metis\": true"
+            format!(
+                "will write \"project\": \"{dir_name}\", \"metis\": {metis}, and the deny \
+                 patterns below"
+            )
         },
-        metis: metis_plan(&dir),
+        metis: metis_plan(&dir, metis_on_path),
         proposed_deny: proposed_deny.clone(),
         claude_md: if claude_md_exists {
-            "present (not touched)"
+            format!("present (not touched); name `{verify}` in it as this repo's verify")
         } else {
-            "will write a minimal stub: the work-flow sequence and the `Bead:` trailer rule"
+            format!("will write a short stub naming `{verify}` and pointing at `.air/roles.md`")
         },
         scaffold,
         written: false,
@@ -513,46 +610,31 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             // to `bd update --claim` and `bd create`, which Air denies. --skip-hooks: no bd git
             // hooks; Air's hooks are the ones installed here.
             let bdbin = crate::cmd::claim::bd_for(&dir).bin;
-            run_in(
-                &dir,
-                &bdbin.to_string_lossy(),
-                &[
-                    "init",
-                    "--prefix",
-                    &prefix,
-                    "--non-interactive",
-                    "--init-if-missing",
-                    "--skip-agents",
-                    "--skip-hooks",
-                ],
-            )?;
-        }
-        // The hand-over state Air's gate watches is a custom bd status; a fresh workspace
-        // rejects it until declared (found dogfooding on 2026-08-22). Idempotent.
-        {
-            let bdbin = crate::cmd::claim::bd_for(&dir).bin;
-            run_in(
-                &dir,
-                &bdbin.to_string_lossy(),
-                &["config", "set", "status.custom", "awaiting_review"],
-            )?;
+            // No `--prefix` unless one was given: bd then uses the directory name, which is
+            // what `plan.prefix` printed. air-gn5o: no `bd config set status.custom
+            // awaiting_review` either, since no flow uses that status any more.
+            let mut args = vec![
+                "init",
+                "--non-interactive",
+                "--init-if-missing",
+                "--skip-agents",
+                "--skip-hooks",
+            ];
+            if let Some(p) = given_prefix.as_deref() {
+                args.extend(["--prefix", p]);
+            }
+            run_in(&dir, &bdbin.to_string_lossy(), &args)?;
         }
         if !air_json_exists {
             std::fs::create_dir_all(dir.join(".claude")).map_err(|e| format!(".claude: {e}"))?;
-            // `"metis": true` by default (air-g5o, owner ruling 2026-09-06). It costs nothing
-            // in a repo with no metis installed — the coordinator prints one line and
-            // launches — and a default of false would mean the rule the owner asked to be
-            // programmatic arrives off.
-            // `"adopters": false` is written so the key EXISTS with the honest answer for a
-            // fresh repo (air-jsz). It decides what `air adopter-check` does when
-            // `private/adopters.md` is absent: false skips, which is right for a repo that
-            // quotes nobody, and true refuses. Leaving the key out entirely is how a repo that
-            // DID quote somebody ran a whole round with the check silently checking nothing.
+            // `"metis"` follows whether Metis can run here ([`metis_default`], air-gn5o).
+            // No `"adopters"`: that key is for a repo that quotes an adopter (Air's own), and
+            // absent already reads as false (air-gn5o).
             let v = json!({
+                "project": dir_name,
                 "worker_deny": proposed_deny,
                 "coordinator_deny": [],
-                "metis": true,
-                "adopters": false,
+                "metis": metis,
                 // No `journal_dir` since air-1qnp: journals default to `.air/journal/`, and
                 // the key is an override for a repo that wants them tracked.
             });
@@ -565,12 +647,15 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         // Metis's own workspace, once, and only when metis can make it (air-g5o). Never
         // re-run over an existing `.metis/`: its documents are the coordinator's plan, and
         // `metis init` is not this command's to re-apply to them.
-        if crate::cmd::metis::on_path() && !dir.join(".metis").is_dir() {
+        if metis_on_path && !dir.join(".metis").is_dir() {
             run_in(&dir, "metis", &["init", &prefix])?;
         }
         if !claude_md_exists {
-            std::fs::write(dir.join("CLAUDE.md"), CLAUDE_MD_STUB)
-                .map_err(|e| format!("CLAUDE.md: {e}"))?;
+            std::fs::write(
+                dir.join("CLAUDE.md"),
+                claude_md_stub(&verify, found.is_none()),
+            )
+            .map_err(|e| format!("CLAUDE.md: {e}"))?;
         }
         // The empty-but-ready four (air-ej4). Two of them are the CLAUDE.md stub's own
         // paragraphs above; these two are files, and each is written ONLY when absent.
@@ -609,13 +694,25 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     plan.written = true;
     if !json {
         println!("{}", render(&plan));
-        println!(
-            "next:\n  air selftest\n  air record verify -- <your verify command>   # the first proof\n  air coordinator                                # own worktree and tmux session, channel attached\n  air worker <name> --tmux --task \"<a complete task>\""
-        );
+        println!("{}", next_steps(&verify, found.is_none()));
     } else {
         emit(true, &plan, String::new);
     }
     0
+}
+
+/// What to do after `--write`, with the proposed verify command in it.
+fn next_steps(verify: &str, placeholder: bool) -> String {
+    let edit = if placeholder {
+        "  # edit the Makefile's verify target first: it fails until you do\n"
+    } else {
+        ""
+    };
+    format!(
+        "next:\n{edit}  git add -A && git commit -m \"Adopt Air\"\n  \
+         air record verify -- {verify}   # the first green\n  \
+         air coordinator                  # its own worktree and tmux session"
+    )
 }
 
 fn render(p: &Plan) -> String {
@@ -633,18 +730,29 @@ fn render(p: &Plan) -> String {
     ));
     s.push_str(&format!("git:      {}\n", p.git));
     s.push_str(&format!("beads:    {} (prefix {})\n", p.beads, p.prefix));
+    s.push_str(&format!(
+        "verify:   {}\n",
+        if p.verify_found {
+            format!("`{}` (found in this repo)", p.verify)
+        } else {
+            format!(
+                "`{}`, a Makefile target that fails until you put your check in it",
+                p.verify
+            )
+        }
+    ));
     s.push_str(&format!("gitignore: {}\n", p.gitignore));
     s.push_str(&format!("air.json: {}\n", p.air_json));
-    s.push_str(&format!("metis: {}\n", p.metis));
     for d in &p.proposed_deny {
         s.push_str(&format!("  deny {d}\n"));
     }
+    s.push_str(&format!("metis:    {}\n", p.metis));
     s.push_str(&format!("CLAUDE.md: {}\n", p.claude_md));
     for item in &p.scaffold {
         s.push_str(&format!("{:<9} {}\n", format!("{}:", item.path), item.note));
     }
     s.push_str(if p.written {
-        "written.\n"
+        "written: every step above that says `will` is done.\n"
     } else if p.gate_ok {
         "dry run; re-run with --write to apply.\n"
     } else {
@@ -656,7 +764,10 @@ fn render(p: &Plan) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::{CLAUDE_MD_STUB, DEFAULT_JOURNAL_DIR, makefile_stub, propose_deny, scaffold};
+    use super::{
+        DEFAULT_JOURNAL_DIR, claude_md_stub, detect_verify, makefile_stub, metis_default,
+        propose_deny, scaffold,
+    };
 
     #[test]
     fn deny_patterns_name_the_verb_not_the_tool() {
@@ -687,7 +798,7 @@ mod tests {
     #[test]
     fn the_scaffold_creates_only_what_is_absent() {
         // Fresh repo: both files are created, and the verify target Air writes fails.
-        let fresh = scaffold(None, false, (DEFAULT_JOURNAL_DIR, false));
+        let fresh = scaffold(None, false, false, (DEFAULT_JOURNAL_DIR, false));
         assert!(fresh.iter().all(|i| i.create), "{fresh:?}");
         assert!(makefile_stub().contains("exit 1"), "{}", makefile_stub());
 
@@ -695,6 +806,7 @@ mod tests {
         // Makefile with no verify target is named rather than edited.
         let with = scaffold(
             Some("verify: ## the repo's own\n\t@true\n"),
+            true,
             true,
             (DEFAULT_JOURNAL_DIR, true),
         );
@@ -705,6 +817,7 @@ mod tests {
         );
         let without = scaffold(
             Some("build:\n\t@true\nverify-scope:\n\t@true\n"),
+            false,
             true,
             (DEFAULT_JOURNAL_DIR, true),
         );
@@ -715,19 +828,65 @@ mod tests {
                 .any(|i| i.path == "Makefile" && i.note.contains("NO `verify`")),
             "a verify-scope target is not a verify target: {without:?}"
         );
+
+        // air-gn5o: no Makefile, but a verify command found elsewhere: nothing is written.
+        let crate_only = scaffold(None, true, true, (DEFAULT_JOURNAL_DIR, true));
+        assert!(crate_only.iter().all(|i| !i.create), "{crate_only:?}");
+    }
+
+    /// air-gn5o: init proposes the check a repo already has. Red before: every repo was told
+    /// `make verify`. Each case below is one of the four temp repos init was run on.
+    #[test]
+    fn init_proposes_the_verify_command_the_repo_already_has() {
+        assert_eq!(detect_verify(None, false, None), None, "empty directory");
+        assert_eq!(
+            detect_verify(None, true, None).as_deref(),
+            Some("cargo test")
+        );
+        let npm = r#"{"scripts":{"test":"node test.js"}}"#;
+        assert_eq!(
+            detect_verify(None, false, Some(npm)).as_deref(),
+            Some("npm test")
+        );
+        // npm's own placeholder script is not a test.
+        let placeholder = r#"{"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}"#;
+        assert_eq!(detect_verify(None, false, Some(placeholder)), None);
+        // A Makefile wins, `verify` before `test`, and `verify-scope` is neither.
+        assert_eq!(
+            detect_verify(Some("test:\n\t@true\n"), true, Some(npm)).as_deref(),
+            Some("make test")
+        );
+        assert_eq!(
+            detect_verify(Some("test:\n\t@x\nverify:\n\t@y\n"), false, None).as_deref(),
+            Some("make verify")
+        );
+        assert_eq!(
+            detect_verify(Some("verify-scope:\n\t@y\n"), false, None),
+            None
+        );
+    }
+
+    #[test]
+    fn metis_is_on_only_where_it_can_run() {
+        assert!(!metis_default(false, false));
+        assert!(metis_default(true, false));
+        assert!(metis_default(false, true));
     }
 
     #[test]
     fn the_stub_points_at_roles_and_keeps_only_the_repos_own() {
         // air-vuwx: the protocol is Air's (owner, 2026-09-25), so the stub names roles.md and
         // the repo's own commands, and carries no close sequence of its own to drift from it.
-        assert!(CLAUDE_MD_STUB.contains(".air/roles.md"), "{CLAUDE_MD_STUB}");
-        assert!(CLAUDE_MD_STUB.contains("air record verify -- make verify"));
+        let stub = claude_md_stub("make verify", true);
+        assert!(stub.contains(".air/roles.md"), "{stub}");
+        assert!(stub.contains("air record verify -- make verify"));
         for gone in ["work flow", "bd close", "git merge main"] {
-            assert!(
-                !CLAUDE_MD_STUB.contains(gone),
-                "restates the protocol: {gone}"
-            );
+            assert!(!stub.contains(gone), "restates the protocol: {gone}");
         }
+        // air-gn5o: the placeholder sentence only where there is a placeholder.
+        assert!(stub.contains("Replace the\n  placeholder"), "{stub}");
+        let found = claude_md_stub("cargo test", false);
+        assert!(found.contains("air record verify -- cargo test"), "{found}");
+        assert!(!found.contains("placeholder"), "{found}");
     }
 }
