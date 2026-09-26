@@ -586,7 +586,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     0
 }
 
-pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, json: bool) -> i32 {
+pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
     if !RELEASE_REASONS.contains(&reason) {
         eprintln!(
             "air release: --reason must be one of {}",
@@ -601,17 +601,10 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             return 1;
         }
     };
-    // The coordinator may release a peer's claim (a gone worker's bead); workers only their own.
-    let worker = match as_worker {
-        Some(w) if w != me => {
-            if super::is_worker_like(super::caller_role()) {
-                eprintln!("air release: --worker is for the coordinator, not a worker");
-                return 1;
-            }
-            w.to_string()
-        }
-        _ => me.clone(),
-    };
+    // Your own bead only. A gone worker's bead comes back through `air reclaim`, which bd lets
+    // through once that worker's lease has run out.
+    let worker = me.clone();
+    let actor = actor_for(&worker);
     let inputs = serde_json::json!({"bead": bead, "reason": reason, "worker": worker});
     let bd = bd_for(repo);
     // Closed is closed: only a bead bd holds as in_progress goes back to open.
@@ -667,8 +660,9 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
         // pencilled in, and in bd 1.2.x that blocks every other worker's `--claim`: the bead
         // sat in `bd ready` claimable by nobody but the worker that had just released it
         // (the adopter; here air-an9 after gate's session was gone). One process, so
-        // the status and the assignee cannot be left half-applied.
-        match bd.reopen_unassigned(bead) {
+        // the status and the assignee cannot be left half-applied. `--actor` is the one Air
+        // claimed with, because bd 1.3.0 refuses the unassign to anyone but the holder.
+        match bd.reopen_unassigned(bead, &actor) {
             Ok(()) => {}
             Err(BdError::Timeout(_)) => {
                 return fail(
@@ -738,6 +732,187 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
         }
         Err(e) => {
             eprintln!("air release: ledger: {e}");
+            1
+        }
+    }
+}
+
+/// bd 1.3's claim lease, as observed: `lease_expires_at` minus `heartbeat_at` on a fresh
+/// `bd update --claim` (bd 1.3.0, throwaway repo, 2026-09-26). Air never runs `bd heartbeat`,
+/// so a lease runs out this long after the claim. Only printed; the time `air reclaim` names
+/// comes from bd's own `lease_expires_at`.
+pub const BD_LEASE_MINUTES: u32 = 5;
+
+/// `air reclaim`: the coordinator takes back a bead held by a worker that is gone.
+///
+/// Route: `bd reclaim --id <id> --older-than 0s`, never `bd update -a "" --force` (owner ruling
+/// 2026-09-26: no `--force`). Tested on bd 1.3.0 in a throwaway repo: while the holder's lease
+/// is live, `bd reclaim --id` exits 0 with `"count": 0` and changes nothing; once it has
+/// expired, it reopens the bead and clears the assignee. So a count of 0 on an in_progress
+/// bead is bd declining, and this says when bd will agree and exits non-zero.
+pub fn reclaim(repo: &Path, bead: &str, worker: &str, reason: &str, json: bool) -> i32 {
+    if !RELEASE_REASONS.contains(&reason) {
+        eprintln!(
+            "air reclaim: --reason must be one of {}",
+            RELEASE_REASONS.join("|")
+        );
+        return 1;
+    }
+    if super::is_worker_like(super::caller_role()) {
+        eprintln!(
+            "air reclaim: the coordinator takes back a gone worker's bead; a worker gives back its own with `air release`"
+        );
+        return 1;
+    }
+    let (ledger, me) = match open(repo) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("air reclaim: {e}");
+            return 1;
+        }
+    };
+    use super::decisions as d;
+    let inputs = serde_json::json!({"bead": bead, "reason": reason, "worker": worker});
+    let bd = bd_for(repo);
+    let issue = match bd.show(bead) {
+        Ok(Some(i)) => i,
+        Ok(None) => {
+            let msg = format!("{bead}: bd knows no such bead");
+            return fail(
+                &ledger,
+                &me,
+                d::RECLAIM_NO_SUCH_BEAD,
+                inputs,
+                msg,
+                "bd show",
+                json,
+                1,
+            );
+        }
+        Err(BdError::Timeout(_)) => {
+            return fail(
+                &ledger,
+                &me,
+                d::RECLAIM_TIMEOUT,
+                inputs,
+                timeout_msg("show", bead),
+                "bd show",
+                json,
+                1,
+            );
+        }
+        Err(e) => {
+            eprintln!("air reclaim: bd show: {e}");
+            return 1;
+        }
+    };
+    if issue.status == "closed" {
+        let msg = format!(
+            "refused: {bead} is closed; closed is closed. Unfinished work is a new bead that references {bead}."
+        );
+        return fail(
+            &ledger,
+            &me,
+            d::RECLAIM_REFUSE,
+            inputs,
+            msg,
+            "bd show",
+            json,
+            2,
+        );
+    }
+    if issue.status == "in_progress" {
+        match bd.reclaim(bead, &actor_for(&me)) {
+            Ok(0) => {
+                let holder = issue.assignee.as_deref().unwrap_or("nobody");
+                let when = match issue.lease_expires_at.as_deref() {
+                    Some(t) => format!(
+                        "its lease expires at {t} (bd's claim lease is {BD_LEASE_MINUTES} minutes and Air does not renew it); run this again after that"
+                    ),
+                    None => {
+                        "bd records no lease on it, so `bd reclaim` cannot take it back".to_string()
+                    }
+                };
+                let msg = format!(
+                    "bd has not let go of {bead}, held by {holder}: {when}. Nothing recorded."
+                );
+                return fail(
+                    &ledger,
+                    &me,
+                    d::RECLAIM_LEASE_LIVE,
+                    inputs,
+                    msg,
+                    "bd reclaim",
+                    json,
+                    1,
+                );
+            }
+            Ok(_) => {}
+            Err(BdError::Timeout(_)) => {
+                return fail(
+                    &ledger,
+                    &me,
+                    d::RECLAIM_TIMEOUT,
+                    inputs,
+                    timeout_msg("reclaim", bead),
+                    "bd exit",
+                    json,
+                    1,
+                );
+            }
+            Err(e) => {
+                let msg = format!("bd refused to reclaim {bead}; nothing recorded: {e}");
+                return fail(
+                    &ledger,
+                    &me,
+                    d::RECLAIM_BD_REFUSED,
+                    inputs,
+                    msg,
+                    "bd exit",
+                    json,
+                    1,
+                );
+            }
+        }
+    }
+    // Any other status (awaiting_review, open): bd is left alone; only the ledger row closes.
+    let at = now();
+    match ledger.release_claim(bead, worker, reason, &at) {
+        Ok(true) => {
+            let msg = format!(
+                "reclaimed {bead} from {worker} ({reason}) at {at}; bd status was {}",
+                issue.status
+            );
+            log_event(
+                &ledger,
+                &me,
+                d::RECLAIM_RECLAIMED,
+                &inputs,
+                &msg,
+                "1 ledger row",
+            );
+            emit(
+                json,
+                &serde_json::json!({"ok": true, "bead": bead, "reason": reason, "worker": worker}),
+                || msg.clone(),
+            );
+            0
+        }
+        Ok(false) => {
+            let msg = format!("no open claim on {bead} by {worker} in the ledger");
+            fail(
+                &ledger,
+                &me,
+                d::RECLAIM_NO_CLAIM,
+                inputs,
+                msg,
+                "0 ledger rows",
+                json,
+                2,
+            )
+        }
+        Err(e) => {
+            eprintln!("air reclaim: ledger: {e}");
             1
         }
     }
