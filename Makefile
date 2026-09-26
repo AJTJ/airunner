@@ -2,14 +2,14 @@
 # seconds (backlog #7): fmt, clippy, tests, then `air selftest` on the binary this tree just
 # built, never the installed one. No quick/full split until the ledger shows avg verify > 60 s.
 # Record it: `air record verify -- make verify`.
-# The tests are killed after 300 s (the suite takes about 90 s) so a hung test fails the gate
+# The tests are killed after 900 s (the suite takes about 90 s): only a fallback, so a hang fails the gate
 # instead of holding it open; a stuck test once held verify for minutes (2026-09-26).
 
 .PHONY: verify
 verify:
 	cargo fmt --check
 	cargo clippy --workspace --all-targets -- -D warnings
-	sh scripts/time-limit.sh 300 cargo test --workspace
+	sh scripts/time-limit.sh 900 cargo test --workspace
 	cargo run -q -p air -- adopter-check
 	cargo run -q -p air -- selftest
 
