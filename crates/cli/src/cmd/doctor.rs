@@ -119,6 +119,9 @@ pub struct Report {
     pub build_gap: Option<BuildGap>,
     /// The binary this repo is pinned to, when it is (air-4usc).
     pub pin: Option<crate::cmd::install::PinState>,
+    /// How bd reaches its data, and whether a server's port answers.
+    pub bd_mode: crate::cmd::bd_server::Mode,
+    pub bd_server_up: bool,
 }
 
 /// The running binary against the checkout it is being run in, when that checkout is Air's
@@ -252,6 +255,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(-1);
     let rows = table_rows(ledger.conn());
+    let bd_mode = crate::cmd::bd_server::mode(&crate::cmd::worktree::main_checkout(repo));
     let report = Report {
         bd: bd_check(repo),
         air: crate::cmd::install::version_json(),
@@ -275,6 +279,8 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         install_lag: crate::cmd::install::lag(ledger.dir()),
         build_gap: build_gap(repo, env!("CARGO_PKG_VERSION")),
         pin: crate::cmd::install::pin_state(ledger.dir()),
+        bd_server_up: crate::cmd::bd_server::view(&bd_mode),
+        bd_mode,
     };
     emit(json, &report, || {
         let mut s = format!(
@@ -312,6 +318,10 @@ pub fn run(repo: &Path, json: bool) -> i32 {
             } else {
                 "MISMATCH; brew upgrade beads && brew pin beads"
             }
+        ));
+        s.push_str(&format!(
+            "{}\n",
+            crate::cmd::bd_server::line(&report.bd_mode, report.bd_server_up)
         ));
         match (&b.list_count, &b.error) {
             (Some(n), _) => s.push_str(&format!("bd list --json: ok ({n} ready)\n")),

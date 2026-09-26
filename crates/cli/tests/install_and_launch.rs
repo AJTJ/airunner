@@ -524,6 +524,8 @@ fn flaky_head_is_reported_by_record_and_handover() {
 
 #[test]
 fn init_gates_then_builds_a_project_from_nothing() {
+    const FAKE_TMUX: &str = "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in\n*\" new-session \"*) sh -c \"$last\" </dev/null >/dev/null 2>&1 & ;;\n*\" has-session \"*) exit 1 ;;\nesac\nexit 0\n";
+    const FAKE_DOLT: &str = "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --port ] && port=$2; shift; done\nexec perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(LocalAddr=>\"127.0.0.1\",LocalPort=>$ARGV[0],Listen=>5,ReuseAddr=>1) or exit 1; alarm 5; while(my $c=$s->accept){close $c}' \"$port\"\n";
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let proj = root.join("newproj");
@@ -532,7 +534,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
     std::fs::write(proj.join("ios/fastlane/Fastfile"), "").unwrap();
     // Fake bd that supports init (creates .beads) and answers list/show.
     let bd = root.join("bd");
-    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.3.0';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; config) echo \"$@\" >> .beads/config.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
+    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.3.0';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args; echo '{\"dolt_mode\":\"server\",\"dolt_database\":\"np\",\"dolt_server_port\":1}' > .beads/metadata.json;; config) echo \"$@\" >> .beads/config.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -545,10 +547,16 @@ fn init_gates_then_builds_a_project_from_nothing() {
         .to_string();
     let fake_claude = root.join("claude");
     std::fs::write(&fake_claude, "#!/bin/sh\necho '9.9.9 (Claude Code)'\n").unwrap();
+    // A new project's bd runs on its own Dolt server: a fake tmux that runs the start command
+    // detached, and a fake dolt that listens on its port for a few seconds.
+    std::fs::write(root.join("tmux"), FAKE_TMUX).unwrap();
+    std::fs::write(root.join("dolt"), FAKE_DOLT).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake_claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for f in [fake_claude.clone(), root.join("tmux"), root.join("dolt")] {
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
     let path_ok = format!("{bin_dir}:{}:/usr/bin:/bin", root.display());
     let run = |path: &str, args: &[&str]| {
@@ -588,11 +596,22 @@ fn init_gates_then_builds_a_project_from_nothing() {
     let (c, out, err) = run(&path_ok, &["init", "--write", "--prefix", "np"]);
     assert_eq!(c, 0, "{out}{err}");
     assert!(proj.join(".git").is_dir());
+    let args = std::fs::read_to_string(proj.join(".beads/init.args")).unwrap();
     assert!(
-        std::fs::read_to_string(proj.join(".beads/init.args"))
-            .unwrap()
-            .contains("--non-interactive --init-if-missing --skip-agents --skip-hooks --prefix np")
+        args.contains("--non-interactive --init-if-missing --skip-agents --skip-hooks --server --external --server-host 127.0.0.1 --server-port ")
+            && args.contains(" --prefix np"),
+        "{args}"
     );
+    // The port is bd's port file, never the tracked metadata, and the server answers on it.
+    let port: u16 = std::fs::read_to_string(proj.join(".beads/dolt-server.port"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(args.contains(&format!("--server-port {port}")), "{args}");
+    let meta = std::fs::read_to_string(proj.join(".beads/metadata.json")).unwrap();
+    assert!(!meta.contains("dolt_server_port"), "{meta}");
+    assert!(proj.join(".air/dolt/data").is_dir());
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     // air-gn5o: no custom bd status is declared; no flow uses `awaiting_review`.
     assert!(!proj.join(".beads/config.args").exists());
     assert_eq!(

@@ -178,6 +178,16 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // The failure notice is said on every poll instead of once per outage.
+    (
+        "bd-server: a server that is down is started and the coordinator told once; nothing while it answers, one notice per failed outage",
+        Mutation {
+            file: "crates/cli/src/cmd/bd_server.rs",
+            from: "        Outcome::Failed { why } if !told => {",
+            to: "        Outcome::Failed { why } => {",
+            also_red: &[],
+        },
+    ),
     // air-1vri.3: the want is kept after the worker was told. Seen red 2026-09-26.
     (
         "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
@@ -2240,6 +2250,105 @@ fn restore(path: &Path, original: &str) -> Result<(), String> {
     }
 }
 
+/// The bd server's keep-alive (owner, 2026-09-26): bd in server mode fails every command while
+/// its Dolt server is down, and nothing restarted it. A fake `tmux` runs the start command and a
+/// fake `dolt` listens on the port, so no real Dolt runs.
+///
+/// Red: with the port closed, one keep-alive pass starts the server, the port answers, and the
+/// coordinator is told once that it was restarted. Green: a pass while it answers does nothing,
+/// and a server that cannot be restarted is told once per outage, not once per poll.
+fn probe_bd_server_down_is_started_and_told_once() -> Probe {
+    use crate::cmd::bd_server::{Bins, Mode, Outcome, keep_alive, start};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        let bin = dir.join("bin");
+        let main = dir.join("main");
+        std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(main.join(".air/dolt/data/zz/.dolt")).map_err(|e| e.to_string())?;
+        let script = |name: &str, body: &str| -> Result<std::path::PathBuf, String> {
+            let p = bin.join(name);
+            std::fs::write(&p, body).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(p)
+        };
+        let bins = Bins {
+            tmux: script("tmux", FAKE_TMUX)?,
+            dolt: script("dolt", FAKE_DOLT)?,
+        };
+        let port = || -> Result<u16, String> {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .and_then(|l| l.local_addr())
+                .map(|a| a.port())
+                .map_err(|e| e.to_string())
+        };
+        let l = Ledger::open_in(&main.join(".air")).map_err(|e| e.to_string())?;
+        let told = |at: &str| {
+            l.take_deliveries("coordinator", at)
+                .map(|v| v.len())
+                .unwrap_or(99)
+        };
+        let up = Mode::Server {
+            port: Some(port()?),
+            database: "zz".into(),
+        };
+        let mut real = |p: u16, db: &str| {
+            start(
+                &main,
+                "zz-dolt",
+                p,
+                db,
+                false,
+                &bins,
+                std::time::Duration::from_secs(5),
+            )
+        };
+        let first = keep_alive(&l, "coordinator", &up, "2026-09-26T10:00:00Z", &mut real);
+        let red =
+            matches!(first, Some(Outcome::Started { .. })) && told("2026-09-26T10:00:01Z") == 1;
+
+        let again = keep_alive(&l, "coordinator", &up, "2026-09-26T10:00:30Z", &mut real);
+        let quiet_while_up = again.is_none() && told("2026-09-26T10:00:31Z") == 0;
+        let down = Mode::Server {
+            port: Some(port()?),
+            database: "zz".into(),
+        };
+        let mut failing = |_: u16, _: &str| Outcome::Failed {
+            why: "probe".into(),
+        };
+        for (i, at) in [
+            "2026-09-26T10:01:00Z",
+            "2026-09-26T10:01:30Z",
+            "2026-09-26T10:02:00Z",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let _ = (i, keep_alive(&l, "coordinator", &down, at, &mut failing));
+        }
+        let once_per_outage = told("2026-09-26T10:02:01Z") == 1;
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red, quiet_while_up && once_per_outage))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "bd-server: a server that is down is started and the coordinator told once; nothing while it answers, one notice per failed outage",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// Runs the command a real tmux would, detached, with no pipe back to the caller.
+const FAKE_TMUX: &str = "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in\n*\" new-session \"*) sh -c \"$last\" </dev/null >/dev/null 2>&1 & ;;\n*\" has-session \"*) exit 1 ;;\nesac\nexit 0\n";
+
+/// Listens on `--port` for five seconds, which is all a probe or a test needs of a server.
+const FAKE_DOLT: &str = "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --port ] && port=$2; shift; done\nexec perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(LocalAddr=>\"127.0.0.1\",LocalPort=>$ARGV[0],Listen=>5,ReuseAddr=>1) or exit 1; alarm 5; while(my $c=$s->accept){close $c}' \"$port\"\n";
+
 /// air-7q5: starting a session must not start work. The owner drew the line at launch time, and
 /// the mechanism that holds it is that a worker launched with no `--task` gets NO PROMPT: the
 /// roles prose reaches it through `--append-system-prompt-file`, which is context rather than a
@@ -2468,6 +2577,7 @@ fn probe_every_decision_is_measured() -> Probe {
 
 fn all_probes() -> Vec<Probe> {
     vec![
+        probe_bd_server_down_is_started_and_told_once(),
         probe_every_decision_is_measured(),
         probe_every_condition_kind_is_registered(),
         probe_model_is_recorded_per_session(),

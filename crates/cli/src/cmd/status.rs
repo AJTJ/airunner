@@ -243,6 +243,9 @@ pub struct Snapshot {
     pub install_lag: Option<super::install::InstallLag>,
     /// The fleet-wide stop, while one is set (air-1vri.1).
     pub fleet_stop: Option<air_ledger::fleet::FleetStop>,
+    /// How bd reaches its data here and, in server mode, whether the port answered.
+    pub bd_mode: Option<super::bd_server::Mode>,
+    pub bd_server_up: bool,
     /// The binary this repo is pinned to, when it is (air-4usc).
     pub pin: Option<super::install::PinState>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
@@ -2264,6 +2267,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         .collect();
     let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
     let loops = super::loops::measure(&ledger, &day_before(&at));
+    let bd_mode = super::bd_server::mode(&super::worktree::main_checkout(repo));
     Ok(Snapshot {
         main_checkout_sessions,
         at,
@@ -2294,6 +2298,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
         fleet_stop: ledger.fleet_stop().ok().flatten(),
+        bd_mode: Some(bd_mode.clone()),
+        bd_server_up: super::bd_server::view(&bd_mode),
         pin: super::install::pin_state(ledger.dir()),
         // air-i6fd, third site: the parameter is named `main_head` and was fed the running
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
@@ -2557,6 +2563,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             "FLEET STOPPED: {}; `air fleet resume` ends it\n",
             f.line()
         ));
+    }
+    if let Some(m) = &s.bd_mode {
+        out.push_str(&format!("{}\n", super::bd_server::line(m, s.bd_server_up)));
     }
     for w in &s.workers {
         let sess = w

@@ -6,14 +6,19 @@ into the repo and gives every session at start. This file does not restate it.
 
 ## Install
 
-You need git 2.38 or later, tmux, Claude Code, and bd 1.3.0 (`brew install beads && brew pin
-beads`). Build Air from its checkout with `cargo install --path crates/cli` and check that
+You need git 2.38 or later, tmux, Claude Code, bd 1.3.0 (`brew install beads && brew pin
+beads`), and, for a new repo, Dolt (`brew install dolt`). Build Air from its checkout with `cargo install --path crates/cli` and check that
 `which air` is that binary. Then run `air doctor`: it compares bd against the pinned version,
 checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.
 
 In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs
-`git init` if needed and `bd init --skip-agents --skip-hooks`, which names the bead prefix after
-the directory unless you pass `--prefix`. It adds `.air/` to `.gitignore` and writes
+`git init` if needed, starts a Dolt server for bd on a free port in 3400..3900 (data in
+`.air/dolt/`, tmux session `<project>-dolt`), and runs `bd init --server --skip-agents
+--skip-hooks` against it, which names the bead prefix after the directory unless you pass
+`--prefix`. The port goes in `.beads/dolt-server.port`, which is not committed. From then on
+`air fleet up` and the launchers start the server when it does not answer, `air bd-server up`
+does the same by hand, and the coordinator's channel restarts it if it stops. A repo that
+already has `.beads/` keeps whatever mode it is in; `air doctor` and `air status` print it. It adds `.air/` to `.gitignore` and writes
 `.claude/air.json` with the directory name as `project`, `metis` set to whether Metis is
 installed, and deny patterns proposed from a scan of the repo. It also writes the hooks,
 `.mcp.json`, `.air/roles.md`, the `air-*` skills, a `.worktreeinclude`, and a `CLAUDE.md` stub.

@@ -848,6 +848,10 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
         // One bad tick (a panic in git parsing, a malformed row) must not end the thread:
         // the process lives as long as the coordinator session.
         let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // bd's server first: every bd read below needs it. A TCP connect while it is up.
+            if let Ok((ledger, worker)) = crate::cmd::open(repo) {
+                crate::cmd::bd_server::keep_alive_tick(repo, &ledger, &worker);
+            }
             // Ledger-only on an ordinary tick; bd at most once every 10 minutes
             // (air-cmn). Only `idle-without-claim` needs bd at all, for `ready_depth`.
             match status::gather_with(repo, status::BdUse::CachedFor(10)) {

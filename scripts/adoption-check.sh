@@ -7,7 +7,9 @@
 # that no test caught (air-gn5o). This is that run, repeated. Removed when `air init` is gone
 # or a test suite runs the same steps.
 #
-# Needs bd (pinned) and claude on PATH, like `air init` itself. Uses a private tmux socket.
+# Needs bd (pinned), dolt, tmux and claude on PATH, like `air init` itself. Uses a private tmux
+# socket, so the Dolt server `air init --write` starts for the example runs there and is stopped
+# on exit.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -15,7 +17,7 @@ bin="$here/target/debug"
 [ -x "$bin/air" ] || { echo "adoption-check: build first (cargo build -p air)"; exit 1; }
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'tmux -L "$AIR_TMUX_SOCKET" kill-server 2>/dev/null; rm -rf "$tmp"' EXIT
 # A `metis` that is not there, so the result does not depend on whether this machine has it.
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nexit 127\n' > "$tmp/bin/metis"
@@ -61,6 +63,6 @@ step "air worker --print" "claude" "$bad" -- air worker --print
 
 # What init wrote must be what the example shows. Generated per machine, and not in the
 # example: the ledger, the task store, the skills `air install` writes, launcher worktrees.
-diff -r -x .git -x .air -x .beads -x skills -x worktrees "$here/examples/minimal" "$repo" \
+diff -r -x .git -x .air -x .beads -x .beads.gate.lock -x skills -x worktrees "$here/examples/minimal" "$repo" \
     || fail "air init writes something examples/minimal does not show; regenerate the example"
 echo "ok  examples/minimal matches what air init writes"

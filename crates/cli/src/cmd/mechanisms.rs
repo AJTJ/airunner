@@ -582,6 +582,37 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "bd-server-start",
+        class: "action",
+        what: "`air bd-server up`, `air fleet up`, the launchers and `air init --write` start the \
+               project's Dolt server for bd (tmux session `<project>-dolt`, data in \
+               `.air/dolt`) when bd is in server mode and the port does not answer.",
+        added: "2026-09-26 (owner)",
+        source: "crates/cli/src/cmd/bd_server.rs, up and start",
+        // Owner, 2026-09-26: bd moved to server mode, where every bd command fails while the
+        // server is down, and the server had been started by hand.
+        fires: Fires::Decisions(&[("bd-server", "started")]),
+        removal: Removal::Judgement(
+            "bd starts and keeps its own server for a project, or Air's projects go back to embedded mode",
+        ),
+    },
+    Mechanism {
+        id: "bd-server-keep-alive",
+        class: "nudge",
+        what: "The coordinator's channel poll checks the bd server's port each tick; when it \
+               does not answer, Air starts the server and tells the coordinator once that it \
+               was restarted, or once per outage that it could not be.",
+        added: "2026-09-26 (owner)",
+        source: "crates/cli/src/cmd/bd_server.rs, keep_alive; called from mcp.rs poll_loop",
+        fires: Fires::Decisions(&[
+            ("bd-server.keep-alive", "restarted"),
+            ("bd-server.keep-alive", "restart-failed"),
+        ]),
+        removal: Removal::Judgement(
+            "bd starts and keeps its own server for a project, or a round of server mode records no restart",
+        ),
+    },
+    Mechanism {
         id: "pin-delegation",
         class: "action",
         what: "In a repo pinned at `<main>/.air/bin/air`, any other `air` re-executes the pin \
