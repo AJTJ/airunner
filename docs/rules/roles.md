@@ -259,6 +259,16 @@ branch that becomes batch-ready, and tells each member its batch's result or its
 When main moves, Air tells you and every worker `main moved to <sha>: landed <beads>; files
 changed: <paths>`. It needs no reply; continue whatever waited on the landing, such as filing
 the next wave.
+Air also sends you two notices that ask you to act:
+
+- `capture from <worker>: <first line>` arrives once when a worker runs `air capture`. The
+  worker is blocked or needs a decision. Read it with `air inbox` and triage it with `air
+  triage <id>`, filing a bead or dropping it with a reason.
+- `the ready queue is empty: <n> worker(s) idle; epics with no open child: <ids or none>`
+  arrives once when no bead is left to claim and a worker holds no claim. It is not repeated
+  until the queue has had a bead again. File the next wave, or decompose one of the named
+  epics.
+
 `air status` prints the loop times this buys (`loops (24 h):`).
 
 When a session stops, `air status` prints `STOPPED at <t>` with the kind. Read the kind before

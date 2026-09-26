@@ -857,6 +857,39 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "capture-to-coordinator",
+        class: "nudge",
+        what: "When a worker runs `air capture`, the coordinator hears \"capture from <worker>: \
+               <first line>\" once, at once. A capture written in the coordinator's or the main \
+               checkout is not sent.",
+        added: "2026-09-26 (air-1vri.5)",
+        source: "crates/cli/src/cmd/fanout.rs, capture_to_coordinator; called from capture.rs",
+        // Owner, 2026-09-26: the fleet should keep moving without the 5-minute wake. A capture
+        // (a worker blocked or needing a decision) sat in the inbox until the coordinator's
+        // next wake.
+        fires: Fires::Decisions(&[("fanout", "capture")]),
+        removal: Removal::Judgement(
+            "a round in which the coordinator acted on none of these notices (no capture triaged before its own wake)",
+        ),
+    },
+    Mechanism {
+        id: "queue-empty-to-coordinator",
+        class: "nudge",
+        what: "When the claimable ready set is empty and at least one worker holds no claim, \
+               the coordinator hears \"the ready queue is empty: <n> worker(s) idle; epics \
+               with no open child: <ids or none>\" once per emptying, and not again until the \
+               set has had a bead.",
+        added: "2026-09-26 (air-1vri.5)",
+        source: "crates/cli/src/cmd/fanout.rs, queue_empty; called from tick",
+        // Owner, 2026-09-26: when the last bead closed or every remaining bead was blocked,
+        // nothing told the coordinator to file the next wave or decompose an epic before its
+        // wake.
+        fires: Fires::Decisions(&[("fanout", "queue-empty")]),
+        removal: Removal::Judgement(
+            "a round in which the coordinator acted on none of these notices (no bead filed or epic decomposed before its own wake)",
+        ),
+    },
+    Mechanism {
         id: "fleet-stop",
         class: "refusal",
         what: "`air fleet stop` sets a fleet-wide stop and tells every other session; while it \

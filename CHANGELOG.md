@@ -30,6 +30,8 @@ which are fixed below.
 - `air fleet stop` and `air fleet resume` stop and resume all work with one command.
 - When main moves, the coordinator and every worker hear which beads landed and which files
   changed.
+- The coordinator hears each worker's capture at once, and hears once when the ready queue runs
+  empty while a worker is idle, with the epics that have no open child.
 - `air status` shows what else is running in each worktree, and warns about a session running
   in the main checkout.
 - `air install --write --pin` runs a repository on its own copy of `air`, so a new build can be
