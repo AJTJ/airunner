@@ -2587,6 +2587,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-26: 0.4.6's trial fixes; the text-matching close gate deleted (workers close with
     // `air close` and are denied bd writes); bd's own server start off; port ownership checked.
     ("0.4.7", 37, 141),
+    // 2026-09-26: air close judges the bead by its `Bead:` trailer commits, so a worker can start
+    // its next bead while the lane verifies the last. 0.4.7's trial found the head-based refusal.
+    ("0.4.8", 38, 142),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
