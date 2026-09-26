@@ -7,8 +7,7 @@ in beads (`bd ready`, `air claim`, `air capture`).
 
 ## What is this repo's own
 
-- **Verify** is `make verify`, which runs `test.sh`. The lane records it with
-  `air record verify -- make verify`.
+- **Verify** is `make verify`, recorded as `air record verify -- make verify`.
 - **Precheck**: none yet. If workers under a verification lane should run one, name it here
   and set `"precheck": true` in `.claude/air.json`.
 - **Worktree setup**: untracked files a new worktree needs are listed in `.worktreeinclude`.

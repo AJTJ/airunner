@@ -593,9 +593,17 @@ session reads uptime before it diagnoses a slow test. (From the worktree protoco
 The verify target checks formatting, runs clippy and the tests, runs the adopter check, and runs
 the self-test against the binary it just built. Record a run with air record. A release adds one
 row to the release list and sets the same version in the Cargo manifest. Then the release target
-refuses a dirty tree or any branch but main, runs the release check and the verify target, and
-tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
+refuses a dirty tree or any branch but main, runs the release check, the verify target and the
+adoption check, and tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
 were waiting for the next one.
+
+The adoption check (make adoption-check, scripts/adoption-check.sh) copies examples/minimal to a
+temporary directory, deletes the files air init writes, and adopts it with this tree's binary
+first on the path: init as a dry run and with --write, a commit, install, the first recorded
+verify, status, and each launcher with --print. It fails on a non-zero exit, on output naming a
+warning, error, refusal or suspicious run, or on any difference between what init wrote and
+examples/minimal. It needs beads and Claude Code, and took 18 to 22 seconds on 2026-09-26, so it
+runs in the release target and on demand, not in the verify target.
 
 In a repository, Air writes three tracked files: the Claude Code settings, the channel server
 entry, and the role prose. Everything else it writes is ignored by git. That includes the full
