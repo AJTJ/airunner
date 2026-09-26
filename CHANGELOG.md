@@ -108,6 +108,10 @@ missing notices, which are fixed or added below.
   project's data. When a different process answers, they name it and start nothing.
 - `air bd-server up` picks and writes a port when `.beads/dolt-server.port` is missing, instead
   of failing.
+- Every Air session runs with `BEADS_DOLT_AUTO_START=0`, and `air status`, `air doctor` and the
+  coordinator's keep-alive report a port held by another process as not this project's server
+  instead of up; the keep-alive starts nothing on it and tells the coordinator once. Workers
+  and the lane are denied `bd ready --claim`, `bd orphans --fix` and `bd events prune`.
 - `air release` passes the worker's actor to bd, which bd 1.3.0 requires to unassign a bead.
   Without it a session whose `BEADS_ACTOR` was not its claim's actor could not give its own
   bead back.

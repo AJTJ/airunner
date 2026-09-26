@@ -2336,11 +2336,33 @@ fn probe_bd_server_down_is_started_and_told_once() -> Probe {
                 std::time::Duration::from_secs(5),
             )
         };
-        let first = keep_alive(&l, "coordinator", &up, "2026-09-26T10:00:00Z", &mut real);
+        // The fake dolt is not a real server, so "ours" here is "answers".
+        let mut who = |p: u16| {
+            if crate::cmd::bd_server::answers(p) {
+                crate::cmd::bd_server::Listener::Ours
+            } else {
+                crate::cmd::bd_server::Listener::None
+            }
+        };
+        let first = keep_alive(
+            &l,
+            "coordinator",
+            &up,
+            "2026-09-26T10:00:00Z",
+            &mut who,
+            &mut real,
+        );
         let red =
             matches!(first, Some(Outcome::Started { .. })) && told("2026-09-26T10:00:01Z") == 1;
 
-        let again = keep_alive(&l, "coordinator", &up, "2026-09-26T10:00:30Z", &mut real);
+        let again = keep_alive(
+            &l,
+            "coordinator",
+            &up,
+            "2026-09-26T10:00:30Z",
+            &mut who,
+            &mut real,
+        );
         let quiet_while_up = again.is_none() && told("2026-09-26T10:00:31Z") == 0;
         let down = Mode::Server {
             port: Some(port()?),
@@ -2357,7 +2379,10 @@ fn probe_bd_server_down_is_started_and_told_once() -> Probe {
         .iter()
         .enumerate()
         {
-            let _ = (i, keep_alive(&l, "coordinator", &down, at, &mut failing));
+            let _ = (
+                i,
+                keep_alive(&l, "coordinator", &down, at, &mut who, &mut failing),
+            );
         }
         let once_per_outage = told("2026-09-26T10:02:01Z") == 1;
         std::fs::remove_dir_all(&dir).ok();

@@ -142,6 +142,9 @@ pub const WORKER_DENY: &[&str] = &[
     "Bash(bd epic close-eligible *)",
     "Bash(bd swarm create *)",
     "Bash(bd doctor *--fix*)",
+    "Bash(bd ready *--claim*)",
+    "Bash(bd orphans *--fix*)",
+    "Bash(bd events prune*)",
     "Bash(claude *)",
     "Bash(air worker *)",
     "Bash(air coordinator *)",
@@ -320,6 +323,9 @@ fn roles_file(repo: &Path, write: bool) -> Result<std::path::PathBuf, String> {
 /// advisory gate 2026-08-22 06:00). Coordinator launches do not set it.
 /// AIR_PROJECT: which fleet this session may touch (air-0lk); both roles set it.
 /// `role` is `worker` or `lane` (air-jc2p.2): the lane is enforced and named as a worker is.
+/// BEADS_DOLT_AUTO_START=0, every role: with the project's Dolt server down, bd started its own
+/// empty one on the same port and every bd call showed zero beads, twice on 2026-09-26.
+/// Removed when bd no longer starts a server of its own.
 pub fn role_env(role: &str, name: &str, project: &str) -> Vec<(String, String)> {
     [
         ("AIR_ROLE", role),
@@ -327,6 +333,7 @@ pub fn role_env(role: &str, name: &str, project: &str) -> Vec<(String, String)> 
         ("AIR_ENFORCE", "1"),
         ("AIR_PROJECT", project),
         ("AIR_CHANNEL", "1"),
+        ("BEADS_DOLT_AUTO_START", "0"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -340,6 +347,7 @@ pub fn coordinator_env(project: &str) -> Vec<(String, String)> {
         ("AIR_ROLE", "coordinator"),
         ("AIR_PROJECT", project),
         ("AIR_CHANNEL", "1"),
+        ("BEADS_DOLT_AUTO_START", "0"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1647,8 +1655,17 @@ mod tests {
         let line = print_env_line(&env, "claude", &["--model".into(), "x".into()]);
         assert_eq!(
             line,
-            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1 claude --model x"
+            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1 BEADS_DOLT_AUTO_START=0 claude --model x"
         );
+    }
+
+    /// Every role's session keeps bd from starting its own Dolt server (2026-09-26).
+    #[test]
+    fn every_role_turns_off_bd_auto_start() {
+        let off = ("BEADS_DOLT_AUTO_START".to_string(), "0".to_string());
+        assert!(role_env("worker", "w1", "air").contains(&off));
+        assert!(role_env("lane", "l1", "air").contains(&off));
+        assert!(coordinator_env("air").contains(&off));
     }
 
     #[test]
@@ -1709,6 +1726,10 @@ mod tests {
                 "bd label add zz-1 owner",
                 "bd reopen zz-1",
                 "bd sync",
+                "bd ready --claim",
+                "bd ready --json --claim",
+                "bd orphans --fix",
+                "bd events prune",
             ] {
                 assert!(denied(w), "{w}");
             }
