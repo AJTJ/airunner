@@ -72,12 +72,20 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         r#"{"permissions":{"allow":["Bash(ls *)"]}}"#,
     )
     .unwrap();
+    // air-rr98: a skill Air once installed and has retired, and the repo's own skills, one of
+    // them `air-` named but never Air's.
+    for s in ["air-phase-transitions", "mine", "air-mine"] {
+        std::fs::create_dir_all(repo.join(".claude/skills").join(s)).unwrap();
+        std::fs::write(repo.join(".claude/skills").join(s).join("SKILL.md"), "x\n").unwrap();
+    }
 
     // Dry run: nothing written.
     let (code, out, _) = air(&repo, Some("/nonexistent"), &["install"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("dry run"));
     assert!(!repo.join(".mcp.json").exists());
+    assert!(out.contains("will remove"), "{out}");
+    assert!(repo.join(".claude/skills/air-phase-transitions").exists());
 
     // --write with the wrong `air` on PATH: refused, nothing written.
     let (code, _, err) = air(&repo, Some("/nonexistent"), &["install", "--write"]);
@@ -111,11 +119,14 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         &skill[..60]
     );
     // Retired 2026-09-25 (air-vuwx): it restated a hand-over protocol roles.md contradicts.
+    // `--write` removes it and says so (air-rr98), and touches no skill Air never wrote.
+    assert!(!repo.join(".claude/skills/air-phase-transitions").exists());
     assert!(
-        !repo
-            .join(".claude/skills/air-phase-transitions/SKILL.md")
-            .exists()
+        out.contains("removed") && out.contains("air-phase-transitions"),
+        "{out}"
     );
+    assert!(repo.join(".claude/skills/mine/SKILL.md").exists());
+    assert!(repo.join(".claude/skills/air-mine/SKILL.md").exists());
 
     // Second --write: no change.
     let before = std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
@@ -128,6 +139,47 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap(),
         before
     );
+
+    // air-rr98: a worker or lane launched now would get a worktree without any of it, so the
+    // launch is refused naming the files; the repo's own skills are not named.
+    for role in [&["worker", "w"][..], &["lane"][..]] {
+        let args: Vec<&str> = role.iter().copied().chain(["--print"]).collect();
+        let (code, _, err) = air(&repo, None, &args);
+        assert_eq!(code, 1, "{err}");
+        for f in [
+            ".claude/settings.json",
+            ".mcp.json",
+            ".claude/skills/air-decomposition/SKILL.md",
+        ] {
+            assert!(err.contains(f), "{f}: {err}");
+        }
+        assert!(
+            !err.contains("skills/mine") && !err.contains("air-mine"),
+            "{err}"
+        );
+    }
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "air")
+            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+            .env("GIT_COMMITTER_NAME", "air")
+            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&[
+        "add",
+        ".claude/settings.json",
+        ".mcp.json",
+        ".claude/skills",
+    ]);
+    git(&["commit", "-q", "-m", "install"]);
+    let (code, _, err) = air(&repo, None, &["worker", "w", "--print"]);
+    assert_eq!(code, 0, "{err}");
 }
 
 /// air-6g1: a repo that already has Air, installed before a surface change, is told what
@@ -214,7 +266,15 @@ fn launchers_print_the_exact_command() {
     // air-0lk: both roles carry the project they may touch.
     assert!(out.contains(r#""AIR_PROJECT":"zz""#), "{out}");
     assert!(out.trim().ends_with("--model opus"), "{out}");
-    assert!(repo.join(".air/roles.md").exists());
+    // air-rr98: `--print` writes nothing, roles and task file included, on every launcher.
+    let (code, out, err) = air(&repo, None, &["worker", "w2", "--task", "do x", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains(".air/tasks/w2.md"), "{out}");
+    let (code, _, err) = air(&repo, None, &["lane", "--task", "do y", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = air(&repo, None, &["coordinator", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!repo.join(".air").exists(), "--print wrote under .air/");
 
     // air-jc2p.4: names that read as another role are not a worker's.
     for reserved in ["main", "coordinator", "lane"] {
@@ -802,4 +862,135 @@ fn worker_with_no_name_picks_the_next_free_lane() {
         stdout.contains("/.claude/worktrees/worker-1 "),
         "the lane's worktree is claude's cwd: {stdout}"
     );
+}
+
+/// air-jc2p.5: `air fleet up` brings up the lane and the configured workers, each in its
+/// worktree and a detached tmux session, and leaves a running session alone. tmux is a stub on
+/// PATH that records every call and lists the sessions a file names; no claude runs.
+#[test]
+fn fleet_up_starts_the_lane_and_workers_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 2}"#).unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let bin = stub.path().canonicalize().unwrap();
+    std::fs::write(
+        bin.join("tmux"),
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\ncase \"$*\" in *list-sessions*) cat \"$d/sessions\" 2>/dev/null; exit 0;; esac\nprintf '%s\\n' \"$*\" >> \"$d/calls\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin.join("tmux"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .current_dir(&repo)
+            .env("PATH", &path)
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env_remove("AIR_TMUX_SOCKET")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let calls = || std::fs::read_to_string(bin.join("calls")).unwrap_or_default();
+
+    // --print shows every launch, the lane with its start prompt, and writes nothing.
+    let (code, out, err) = run(&["fleet", "up", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.lines().count(), 3, "{out}");
+    for s in ["zz-lane", "zz-worker-1", "zz-worker-2"] {
+        assert!(
+            out.contains(&format!("new-session -d -s {s} ")),
+            "{s}: {out}"
+        );
+    }
+    assert_eq!(
+        out.matches("'You are the verification lane.").count(),
+        1,
+        "{out}"
+    );
+    assert!(!repo.join(".claude/worktrees").exists() && !repo.join(".air").exists());
+    assert_eq!(calls(), "");
+
+    // The lane is already running in its worktree: only the two workers start.
+    let lane = repo.join(".claude/worktrees/lane");
+    std::fs::write(
+        bin.join("sessions"),
+        format!("zz-lane\t{}\n", lane.display()),
+    )
+    .unwrap();
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("zz-lane is already running"), "{out}");
+    let c = calls();
+    assert_eq!(c.lines().count(), 2, "{c}");
+    assert!(!c.contains("-s zz-lane "), "{c}");
+    for w in ["worker-1", "worker-2"] {
+        let line = c
+            .lines()
+            .find(|l| l.contains(&format!("-s zz-{w} ")))
+            .unwrap();
+        assert!(line.starts_with("new-session -d "), "{line}");
+        // Idle: no first prompt, so claude's first argument is Air's roles flag.
+        assert!(
+            line.contains(" -- claude --append-system-prompt-file "),
+            "{line}"
+        );
+        assert!(
+            repo.join(".claude/worktrees")
+                .join(w)
+                .join(".git")
+                .is_file()
+        );
+    }
+
+    // Everything running: nothing new starts.
+    let listed: String = ["lane", "worker-1", "worker-2"]
+        .iter()
+        .map(|n| {
+            format!(
+                "zz-{n}\t{}\n",
+                repo.join(".claude/worktrees").join(n).display()
+            )
+        })
+        .collect();
+    std::fs::write(bin.join("sessions"), listed).unwrap();
+    std::fs::remove_file(bin.join("calls")).unwrap();
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(calls(), "", "{out}");
+
+    // The coordinator: no terminal and no flag means no fleet; --fleet starts it first.
+    let (code, out, _) = run(&["coordinator", "--print"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let (code, out, _) = run(&["coordinator", "--no-fleet", "--print"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let (code, out, err) = run(&["coordinator", "--fleet", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "{out}");
+    assert!(lines[0].contains("-s zz-lane ") && lines[3].contains("-s zz-coordinator "));
+
+    // Zero workers is the lane alone.
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 0}"#).unwrap();
+    let (_, out, _) = run(&["fleet", "up", "--print"]);
+    assert_eq!(out.lines().count(), 1, "{out}");
 }

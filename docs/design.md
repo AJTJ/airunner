@@ -153,7 +153,7 @@ belongs to, but it grants nothing.
 Workers are kept from a small set of commands in two ways. Claude Code's deny list stops them
 from running the commands at all. For air land and air close, Air's own checks refuse again when
 AIR_ROLE is worker or lane, which covers the command being spelled a different way. The lane's
-deny list is the worker's without air land, and a worker's includes air lane.
+deny list is the worker's without air land, and a worker's includes air lane and air fleet.
 
 ## 4. Interfaces
 
@@ -187,10 +187,11 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
 | air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. |
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
-| air worker | Starts a worker session, or prints the command it would run. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
-| air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. |
-| air coordinator | Starts the coordinator session. |
-| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
+| air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
+| air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
+| air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
+| air fleet up | Starts the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
+| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
 | air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
@@ -273,8 +274,8 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
   --name air-worker-9
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
-    'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' EnterWorktree ExitWorktree
-    AskUserQuestion
+    'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' 'Bash(air fleet *)'
+    EnterWorktree ExitWorktree AskUserQuestion
 ```
 
 The repository's own worker_deny patterns follow the list. The coordinator launch attaches the
@@ -578,8 +579,9 @@ already uses beads, run air install. Both show their changes first and write onl
 Air doctor exits cleanly when the ledger, the schema, and the beads version are right.
 
 Start the coordinator with air coordinator, which opens it in its own worktree and tmux
-session. From that session, start the lane with air lane and each worker with air worker and a
-task. The launcher prints the tmux command to attach to it. Air status is the screen to
+session. It first asks whether to start the fleet; a yes, or air fleet up later, starts the
+lane and the workers in theirs. Air lane and air worker start one session by hand. Each
+launcher prints the tmux command to attach to what it started. Air status is the screen to
 watch, and the channel brings the attention conditions to the coordinator.
 
 Worktrees isolate the branch, not the machine. Cargo's build.jobs defaults to every logical core
@@ -655,8 +657,8 @@ protocol. It replaces plan 0009, retired 2026-09-25; what that plan proposed and
 built is described in sections 4 and 6.
 
 - [ ] Describe the fleet everywhere as three workers, a verification lane, and the coordinator.
-      The roles text still introduces the lane as a worker named by the `verify_lane` key, and
-      CLAUDE.md still says "the workers and the coordinator".
+      CLAUDE.md still says "the workers and the coordinator". The roles text no longer names
+      the lane by the `verify_lane` key (air-rr98).
 - [x] Air creates every tmux session, including the coordinator's. `claude --tmux` still
       needs `--worktree` (2.1.272, 2026-09-14), so Air's detached start stays. (air-jc2p.1)
 - [x] The coordinator works in its own worktree on its own branch, and nobody works in the main
@@ -671,9 +673,9 @@ built is described in sections 4 and 6.
 - [x] A launch command for the verification lane, air lane. It sets AIR_ROLE to lane and the
       lane's deny list, so the lane can land and nothing else can. The repository's verify
       scope was not built: nothing asked for it yet. (air-jc2p.2)
-- [x] The verification lane key in the config was read by no code. The stop nudge now reads
-      the role instead, and only air batch cut reads the key, to name the lane's worktree
-      (crates/cli/src/cmd/batch_cut.rs).
+- [x] The verification lane key in the config is a boolean that picks the closing sequence,
+      and no code reads it. The stop nudge reads the role, and air batch cut's refusal names
+      air lane's worktree (air-rr98; decisions 2026-09-25).
 - [x] Prove with a test that a bead can close after its commits land on main, then drop the
       adopter's rule to wait for every close before landing. Settled 2026-09-25:
       `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the
@@ -701,11 +703,10 @@ built is described in sections 4 and 6.
       whole protocol, the coordinator's worktree and the lane's landing. Another rewrite is in
       progress the same day.
 - [ ] Keep the adopting guide current and condense it lightly.
-- [ ] The fleet starts from the coordinator. The owner starts only the coordinator and asks it to
-      set up the fleet, which by default starts three workers and a verification lane, each in
-      its own worktree and tmux session. The same launches stay available as air commands the
-      owner can run by hand. The roles text still has the coordinator launch workers one by
-      one. (Owner, 2026-09-14.)
+- [x] The fleet starts from the coordinator. Air coordinator asks whether to start the lane and
+      three workers (the workers key sets the count), each in its own worktree and tmux
+      session; air fleet up does the same later, and the single launchers stay (air-jc2p.5,
+      crates/cli/src/cmd/launch.rs).
 - [ ] Update the README's quick start once the coordinator sets up the default fleet on request.
 - [ ] On a fresh repository, air doctor reports two expired dated rules and says to delete their
       fallbacks. Delete them, since both expired on 2026-08-23 (`FALLBACK_BEFORE` in
@@ -730,8 +731,8 @@ Surface, added 2026-09-14 and 2026-09-25:
 - [ ] The channel server answers three lease tools it does not list (crates/cli/src/cmd/mcp.rs).
       List them or remove them. Its instructions string names eight of the eleven conditions.
       (2026-09-25.)
-- [ ] The help line for air land still calls it the coordinator's (crates/cli/src/main.rs).
-      Landing is the lane's. (2026-09-25.)
+- [x] The help line for air land said it was the coordinator's. It now says the lane lands
+      (crates/cli/src/main.rs, air-rr98).
 - [ ] Cut the source comments down to what a maintainer needs: what a piece is responsible for,
       its invariants, and its contract. Incident stories move to the decisions log. Go crate by
       crate and run verify after each. The self-test file alone is 13,670 lines.

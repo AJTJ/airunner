@@ -33,8 +33,9 @@ stub names the command, and so does the last thing `air init --write` prints:
 In a repo that already has its own setup, run `air install` to read what it would do and `air
 install --write` to apply it. It merges `air hook` into every hook event in
 `.claude/settings.json`, adds the `air` server to `.mcp.json`, and writes `.air/roles.md` and
-the `air-*` skills. Add `.air/` to `.gitignore` yourself. Commit `.mcp.json`: the coordinator
-runs in a worktree and needs the channel server there.
+the `air-*` skills. Add `.air/` to `.gitignore` yourself. Commit `.claude/settings.json`,
+`.mcp.json` and the `air-*` skills on main: every session runs in a worktree, which gets only
+committed files, and `air worker` and `air lane` refuse while they are uncommitted.
 
 Air does not install bd's agent setup, because `bd prime` tells agents to run commands Air
 denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, delete that
@@ -43,9 +44,10 @@ entry from `.claude/settings.json`.
 Then commit, record the first green and start the fleet:
 
     air record verify -- <your verify command>
-    air coordinator                                   # tmux session <project>-coordinator
-    air lane --tmux                                   # the verification lane; only it lands
-    air worker --tmux --task "<a complete task>"      # worker-1, worker-2, …
+    air coordinator      # asks whether to start the fleet, then opens <project>-coordinator
+
+A yes starts the verification lane and the workers, each in its own worktree and tmux session,
+the same as `air fleet up`. `air lane` and `air worker` start one session by hand.
 
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.
@@ -84,7 +86,8 @@ key is optional.
 | `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
 | `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
 | `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix; `air init` writes the directory name |
-| `verify_lane` | Names the lane. It puts the with-lane closing sequence in force, and when `air batch cut` is refused in the main checkout, the refusal names the lane's worktree from it. | absent: no lane sequence |
+| `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
+| `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. An older string value counts as `true`. | absent: workers verify their own branch |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
 | `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
@@ -118,11 +121,15 @@ once per round, so notices arrive in batches.
    behaviour without an error; do those first.
 4. `air install --write`. It merges into `.claude/settings.json` and `.mcp.json`, and
    overwrites `.air/roles.md`, `.claude/skills/air-*/SKILL.md` and `.air/installed.json`. It
-   never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/` or any other file,
-   and it does not delete a skill Air no longer ships. It refuses to write when the `air` on
-   `PATH` is not the binary being run.
-5. Restart every session. A running session keeps the old roles text and hooks.
-6. Grep the repo's Makefile, scripts and `CLAUDE.md` for `air ` and check each use against the
+   removes each `air-*` skill directory Air once installed and no longer ships, naming it. It
+   never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/`, a skill whose name
+   does not start with `air-`, or any other file. It refuses to write when the `air` on `PATH`
+   is not the binary being run.
+5. Commit `.claude/settings.json`, `.mcp.json` and `.claude/skills/air-*` on main. A new
+   worktree gets only committed files, so `air worker` and `air lane` refuse, naming the files,
+   while any of them is uncommitted in the main checkout.
+6. Restart every session. A running session keeps the old roles text and hooks.
+7. Grep the repo's Makefile, scripts and `CLAUDE.md` for `air ` and check each use against the
    notices. Air cannot see what the repo built on top of it.
 
 Between upgrades, `air doctor` and `air status` print one line when `.air/installed.json` lags

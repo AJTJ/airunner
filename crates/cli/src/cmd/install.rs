@@ -96,6 +96,24 @@ pub const SKILLS: &[(&str, &str)] = &[
     // seen invoked in place of the source.
 ];
 
+/// Skills `air install` once wrote and no longer ships. `--write` removes each one's directory
+/// and reports it; nothing else under `.claude/skills/` is touched. Append a name when a skill
+/// leaves [`SKILLS`]; never remove one, because a repo installed long ago may still carry it.
+///
+/// Before this, a retired skill stayed installed until an adopter deleted it by hand, which a
+/// notice asked them to do (an adopter's re-audit, 2026-09-25, air-rr98). Air owns the `air-`
+/// names, so removing them takes nothing that is the repo's.
+pub const RETIRED_SKILLS: &[&str] = &["air-phase-transitions"];
+
+/// Pure: the retired skills present in a repo, given which `air-*` directories exist there.
+pub fn retired_present(existing: &[String]) -> Vec<String> {
+    RETIRED_SKILLS
+        .iter()
+        .filter(|r| existing.iter().any(|e| e == *r))
+        .map(|r| (*r).to_string())
+        .collect()
+}
+
 /// Rename the frontmatter `name:` so the installed copy does not collide with a repo's own
 /// skill of the same name. Pure.
 pub fn skill_with_name(text: &str, name: &str) -> String {
@@ -1604,8 +1622,8 @@ pub const SURFACE: &[SurfaceChange] = &[
     SurfaceChange {
         id: "nudge-skips-the-lane",
         since: "2026-09-25 (from an adopter's fleet protocol)",
-        headline: "The Stop hook no longer offers ready beads to the worker `.claude/air.json` \
-                   names as `verify_lane`. The lane claims no bead.",
+        headline: "The Stop hook no longer offers ready beads to the verification lane, the \
+                   session `air lane` started (AIR_ROLE=lane). The lane claims no bead.",
         silent_break: false,
         action: "",
     },
@@ -1686,8 +1704,8 @@ pub const SURFACE: &[SurfaceChange] = &[
                    CLAUDE.md that `air init` scaffolds no longer says the hand-over flow is the \
                    repo's own; it points at roles.md and keeps only what is the repo's.",
         silent_break: true,
-        action: "Delete `.claude/skills/air-phase-transitions/`; `air install` does not remove \
-                 it. If this repo's CLAUDE.md restates a close or hand-over sequence, cut it to \
+        action: "`air install --write` removes `.claude/skills/air-phase-transitions/` (see \
+                 `install-removes-retired-skills`). If this repo's CLAUDE.md restates a close or hand-over sequence, cut it to \
                  what roles.md leaves to the repo: the verify and precheck commands, worktree \
                  setup, shared resources and domain rules.",
     },
@@ -1744,8 +1762,7 @@ pub const SURFACE: &[SurfaceChange] = &[
                    default): a worker session with AIR_ROLE=lane and the worker deny list minus \
                    `air land`. `air land` is now refused to AIR_ROLE=coordinator as well as to \
                    workers; the lane and the owner's own shell may land. `air close` is refused \
-                   to the lane as to a worker. Workers are denied `air lane`. The Stop hook skips \
-                   the nudge for AIR_ROLE=lane and no longer reads `verify_lane` to do it.",
+                   to the lane as to a worker. Workers are denied `air lane`.",
         silent_break: true,
         action: "Start the lane with `air lane` (`air lane w4` keeps an existing worktree). A \
                  lane still running as `air worker <name>` is refused `air land` and is offered \
@@ -1829,6 +1846,64 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "Nothing required. A repo that read `suspicious` as \"under 2 s\" now sees it \
                  only on a drop against its own history.",
+    },
+    SurfaceChange {
+        id: "print-writes-nothing",
+        since: "2026-09-25 (an adopter's re-audit, air-rr98)",
+        headline: "`--print` on `air worker`, `air lane` and `air coordinator` writes nothing. \
+                   It used to rewrite `.air/roles.md` (and `.air/coordinator.md`), and with \
+                   `--task` write `.air/tasks/<name>.md`; the printed line now names a task \
+                   file that does not exist yet.",
+        silent_break: false,
+        action: "Refresh `.air/roles.md` with `air install --write`, not with a printed launch.",
+    },
+    SurfaceChange {
+        id: "install-removes-retired-skills",
+        since: "2026-09-25 (an adopter's re-audit, air-rr98)",
+        headline: "`air install --write` removes each `air-*` skill directory Air once installed \
+                   and no longer ships (today `air-phase-transitions`) and names each one. A \
+                   skill whose name does not start with `air-` is never touched. The installed \
+                   skills and `.air/roles.md` no longer name a skill Air does not install: \
+                   roles.md now says `air-decomposition`.",
+        silent_break: false,
+        action: "Nothing to run beyond `air install --write`, then commit the removal.",
+    },
+    SurfaceChange {
+        id: "verify-lane-is-a-switch",
+        since: "2026-09-25 (air-rr98)",
+        headline: "`verify_lane` in `.claude/air.json` is now `true` or absent. `true` puts the \
+                   with-lane closing sequence in force; it no longer names the lane, which is \
+                   the session `air lane` started. A string value still counts as `true`, and \
+                   no code reads the key: `air batch cut`'s refusal in the main checkout names \
+                   `air lane`'s worktree instead of the key's value.",
+        silent_break: false,
+        action: "Optional: change `\"verify_lane\": \"<name>\"` to `\"verify_lane\": true`. A \
+                 lane whose worktree is not `lane` is started with `air lane <name>`.",
+    },
+    SurfaceChange {
+        id: "launch-needs-install-committed",
+        since: "2026-09-25 (owner, air-rr98)",
+        headline: "`air worker` and `air lane` refuse, naming the files, while `air install`'s \
+                   output (`.claude/settings.json`, `.mcp.json`, `.claude/skills/air-*`) has \
+                   uncommitted changes in the main checkout. A new worktree gets only \
+                   committed files, so such a session ran without hooks, channel or skills.",
+        silent_break: false,
+        action: "Commit those files on main after every `air install --write`.",
+    },
+    SurfaceChange {
+        id: "coordinator-starts-the-fleet",
+        since: "2026-09-25 (owner, air-jc2p.5)",
+        headline: "`air coordinator` asks on its terminal \"Start the fleet (lane + N workers)? \
+                   [Y/n]\" before it starts. Yes, or the new `air fleet up`, starts the lane and \
+                   N workers (`\"workers\"` in `.claude/air.json`, default 3, 0 allowed) as \
+                   `lane` and `worker-<N>`, each in its worktree and a detached tmux session, \
+                   leaving one already running alone. Workers start with no task; the lane is \
+                   told to start its loop. `--fleet` and `--no-fleet` answer in advance; with no \
+                   terminal the answer is no. Workers and the lane are denied `air fleet`.",
+        silent_break: false,
+        action: "A script that runs `air coordinator` with a terminal passes `--no-fleet` to \
+                 keep today's behaviour. A repo whose workers use other names (`w1`) gets \
+                 `worker-<N>` sessions beside them from `air fleet up`.",
     },
 ];
 
@@ -2285,6 +2360,8 @@ struct Plan {
     mcp_changed: bool,
     air_dir: PathBuf,
     skills_dir: PathBuf,
+    /// Retired `air-*` skill directories present here, which `--write` removes (air-rr98).
+    retired_skills: Vec<String>,
     gitignore_has_air: bool,
     /// Air's own surface changes this repo has not been told about (air-6g1). Empty on a
     /// first install: nothing has moved under a repo that never had Air.
@@ -2389,6 +2466,16 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     let mcp_path = repo.join(".mcp.json");
     let air_dir = repo.join(".air");
     let skills_dir = repo.join(".claude/skills");
+    let retired_skills = retired_present(
+        &std::fs::read_dir(&skills_dir)
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    );
 
     let before_settings = match read_json(&settings_path) {
         Ok(v) => v,
@@ -2438,6 +2525,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         mcp_changed: before_mcp != after_mcp,
         air_dir: air_dir.clone(),
         skills_dir: skills_dir.clone(),
+        retired_skills,
         gitignore_has_air,
         surface_diff,
         stale_hooks: stale,
@@ -2511,6 +2599,10 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
                 std::fs::write(dir.join("SKILL.md"), skill_with_name(text, name))
                     .map_err(|e| format!("{}: {e}", dir.display()))?;
             }
+            for name in &plan.retired_skills {
+                let dir = skills_dir.join(name);
+                std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
             // Last: the repo has now been told everything above, so record it. Written after
             // the files so a failed install does not claim the surface was delivered.
             write_installed(&air_dir, &super::now())?;
@@ -2563,6 +2655,17 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             "ledger:   {}/ (roles.md written here)\n",
             plan.air_dir.display()
         ));
+        for name in &plan.retired_skills {
+            s.push_str(&format!(
+                "skills:   {} {} (Air no longer ships it)\n",
+                if plan.written {
+                    "removed"
+                } else {
+                    "will remove"
+                },
+                plan.skills_dir.join(name).display()
+            ));
+        }
         if let Some(why) = ignore_refusal(plan.gitignore_has_air) {
             s.push_str(&format!("REFUSAL:  {why}\n"));
         }
@@ -2679,7 +2782,7 @@ mod tests {
         assert!(!has("owner decision waiting"));
         // Decomposition is a duty, not a property of the queue (air-84u).
         assert!(has("When an epic has no open child, decompose it"));
-        assert!(has("the `decomposition` skill"));
+        assert!(has("the `air-decomposition` skill"));
         assert!(has("The reading may be delegated to a background agent"));
         assert!(!has("(epics decomposed;"));
         // A journal-only branch lands without a trailer; a mixed one does not (air-kexg).
