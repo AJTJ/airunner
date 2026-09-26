@@ -2446,6 +2446,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-26: the coordinator's own commits land with no bead, bd 1.3.0 pin, air reclaim,
     // air bd-server and server mode for new projects. 0.4.4's trial found the first.
     ("0.4.5", 35, 128),
+    // 2026-09-26: workers close with `air close`, which runs the hand-over gate itself. 0.4.5's
+    // trial found a close the text-matching gate missed (a `bd close` on its own line).
+    ("0.4.6", 36, 129),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
