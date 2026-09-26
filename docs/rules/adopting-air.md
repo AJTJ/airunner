@@ -124,7 +124,16 @@ once per round, so notices arrive in batches.
    removes each `air-*` skill directory Air once installed and no longer ships, naming it. It
    never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/`, a skill whose name
    does not start with `air-`, or any other file. It refuses to write when the `air` on `PATH`
-   is not the binary being run.
+   is not the binary being run, because the hooks call `air` through `PATH`.
+
+   To run a different build in one repo without replacing the `air` on `PATH`, use
+   `air install --write --pin`. It copies the binary being run to `.air/bin/air` and points the
+   hooks and the channel at that copy by absolute path. Air's launchers put `.air/bin` first on
+   `PATH` in every session they start, and `air status` and `air doctor` name the pin. `air
+   install --write --unpin` goes back to the `air` on `PATH`. A pinned repo refuses a plain
+   `--write` until one of the two flags says which binary it should run. The hook commands
+   hold an absolute path, so a pin suits a scratch copy or one machine rather than a repo
+   others clone.
 5. Commit `.claude/settings.json`, `.mcp.json` and `.claude/skills/air-*` on main. A new
    worktree gets only committed files, so `air worker` and `air lane` refuse, naming the files,
    while any of them is uncommitted in the main checkout.

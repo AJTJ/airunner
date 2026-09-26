@@ -244,6 +244,28 @@ pub fn coordinator_env(project: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Pure: `PATH` with `pin_dir` first and nowhere else.
+pub fn path_with_pin(pin_dir: &Path, path: &str) -> String {
+    let dir = pin_dir.display().to_string();
+    std::iter::once(dir.as_str())
+        .chain(path.split(':').filter(|d| *d != dir && !d.is_empty()))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// When the repo is pinned (`air install --write --pin`), `PATH` with the pin's directory
+/// first goes on the session's env, so an agent's own `air ...` runs the pinned copy the
+/// hooks run, not whatever PATH held (air-4usc). On the process env and `tmux -e`, not the
+/// `--settings` blob. Removed with the pin.
+fn with_pin(repo: &Path, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let pin = super::install::pin_path(&super::worktree::main_checkout(repo).join(".air"));
+    if let Some(dir) = pin.parent().filter(|_| pin.is_file()) {
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.push(("PATH".into(), path_with_pin(dir, &path)));
+    }
+    env
+}
+
 fn settings_blob(env: &[(String, String)]) -> String {
     let env: serde_json::Map<String, serde_json::Value> = env
         .iter()
@@ -1031,7 +1053,10 @@ fn launch_role(
     if !print && ensure_worktree(repo, name, &who).is_err() {
         return 1;
     }
-    let env = role_env(role, name, &super::tmux::project_prefix(repo));
+    let env = with_pin(
+        repo,
+        role_env(role, name, &super::tmux::project_prefix(repo)),
+    );
     let argv = match worker_argv_for(repo, role, name, &roles, extra) {
         Ok(v) => v,
         Err(e) => {
@@ -1102,7 +1127,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
             return 1;
         }
     };
-    let env = coordinator_env(&super::tmux::project_prefix(repo));
+    let env = with_pin(repo, coordinator_env(&super::tmux::project_prefix(repo)));
     // Its own worktree, like every other role (owner, 2026-09-14 and 2026-09-25; air-jc2p.1).
     // The failures: a coordinator's commit in the main checkout invalidated four workers'
     // landability at an adopter on 2026-09-06, and a verify run there dirtied it and moved main

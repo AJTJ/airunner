@@ -191,7 +191,7 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
 | air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
 | air fleet up | Starts the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
-| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
+| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. With --pin it copies itself to .air/bin/air, points the hooks and the channel at the copy, and the launchers put .air/bin first on the path of every session they start; the path check does not apply then. --unpin goes back to the path. |
 | air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
@@ -621,9 +621,11 @@ Every release is tried on a real fleet before it is tagged (owner, 2026-09-25). 
 prove each rule can fire; the trial shows the whole system working together with real Claude
 Code sessions.
 
-1. Install the release candidate on PATH.
-2. Copy `examples/minimal` to a scratch directory outside this repository. Run `air init
-   --write` and `air install --write`, and commit.
+1. Pin the candidate into the trial copy (`make trial`). It builds the release binary, copies
+   `examples/minimal` to a scratch directory outside this repository, runs `air init --write`
+   and `air install --write --pin` with that binary, and commits. The `air` on PATH, which the
+   fleet building Air runs, is not touched.
+2. In the scratch directory, check that `air status` names the pin.
 3. Start `air coordinator` and say yes to starting the fleet: the lane and three workers.
 4. Ask the coordinator to file the beads each scenario below needs, and let the fleet work. The
    person running the trial only types what a scenario says to type.

@@ -275,9 +275,17 @@ enum Cmd {
     },
     /// Wire Air into this repo's Claude Code config (hooks, MCP server, .air/). Dry run by default.
     Install {
-        /// Apply the changes (refuses if `air` on PATH is not this binary).
+        /// Apply the changes (refuses if `air` on PATH is not this binary, unless --pin).
         #[arg(long)]
         write: bool,
+        /// Copy this binary to `.air/bin/air` and point the hooks, the channel and Air's
+        /// launchers at the copy, so a candidate build runs here without replacing the `air`
+        /// on PATH.
+        #[arg(long, conflicts_with = "unpin")]
+        pin: bool,
+        /// Remove the pin: hooks and the channel go back to the `air` on PATH.
+        #[arg(long)]
+        unpin: bool,
     },
     /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
     /// from `.worktreeinclude`), then runs claude IN it with role prose, deny list, env. No
@@ -548,7 +556,16 @@ fn main() -> ExitCode {
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
-        Cmd::Install { write } => cmd::install::run(&repo, write, cli.json),
+        Cmd::Install { write, pin, unpin } => cmd::install::run(
+            &repo,
+            write,
+            cli.json,
+            match (pin, unpin) {
+                (true, _) => cmd::install::PinArg::Pin,
+                (_, true) => cmd::install::PinArg::Unpin,
+                _ => cmd::install::PinArg::Keep,
+            },
+        ),
         Cmd::Worker {
             name, remove: true, ..
         } => cmd::worktree::remove_cmd(&repo, name.as_deref()),

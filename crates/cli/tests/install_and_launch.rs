@@ -994,3 +994,137 @@ fn fleet_up_starts_the_lane_and_workers_once() {
     let (_, out, _) = run(&["fleet", "up", "--print"]);
     assert_eq!(out.lines().count(), 1, "{out}");
 }
+
+/// air-4usc: a repo pinned to its own copy of air. `--pin` writes with no `air` on PATH at
+/// all; every Air hook and the channel name the copy by absolute path; a plain `--write`
+/// then refuses; a launched session finds the copy first on PATH; `air status` names the pin
+/// and warns when PATH's `air` is at another surface version; `--unpin` goes back.
+#[test]
+fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let pin = repo.join(".air/bin/air");
+    let no_air = "/usr/bin:/bin";
+
+    let (code, out, err) = air(&repo, Some(no_air), &["install", "--write", "--pin"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(pin.is_file(), "{out}");
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    // The probe: every Air hook runs the copy, none resolves `air` through PATH.
+    let want = format!("{} hook", pin.display());
+    let mut n = 0;
+    for groups in settings["hooks"].as_object().unwrap().values() {
+        for g in groups.as_array().unwrap() {
+            for h in g["hooks"].as_array().unwrap() {
+                assert_eq!(h["command"], want.as_str(), "{settings}");
+                n += 1;
+            }
+        }
+    }
+    assert!(n > 5, "{settings}");
+    let mcp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        mcp["mcpServers"]["air"]["command"],
+        pin.display().to_string()
+    );
+    let v = Command::new(&pin).arg("--version").output().unwrap();
+    assert!(String::from_utf8_lossy(&v.stdout).starts_with("air "));
+
+    // Pinned, a plain --write refuses even with this binary on PATH: which binary wins must
+    // be said.
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_air")).parent().unwrap();
+    let on_path = format!("{}:{no_air}", bin_dir.display());
+    let (code, _, err) = air(&repo, Some(&on_path), &["install", "--write"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--pin") && err.contains("--unpin"), "{err}");
+
+    // A session: a stub claude records which `air` its PATH finds.
+    for args in [&["add", "-A"][..], &["commit", "-qm", "install --pin"][..]] {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=air",
+                "-c",
+                "user.email=air@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    let stub = tempfile::tempdir().unwrap();
+    let stub_dir = stub.path().canonicalize().unwrap();
+    let seen = stub_dir.join("seen");
+    std::fs::write(
+        stub_dir.join("claude"),
+        format!("#!/bin/sh\ncommand -v air > '{}'\n", seen.display()),
+    )
+    .unwrap();
+    // And an older `air` on PATH, at surface 1.
+    std::fs::write(
+        stub_dir.join("air"),
+        "#!/bin/sh\necho '{\"surface_version\": 1}'\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    for f in ["claude", "air"] {
+        std::fs::set_permissions(stub_dir.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!("{}:{no_air}", stub_dir.display());
+    let (code, out, err) = air(&repo, Some(&path), &["worker", "w", "--print"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "PATH={}:{}",
+            pin.parent().unwrap().display(),
+            stub_dir.display()
+        )),
+        "{out}"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "w"])
+        .current_dir(&repo)
+        .env("PATH", &path)
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .env("AIR_CLAUDE_BIN", stub_dir.join("claude"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap().trim(),
+        pin.display().to_string()
+    );
+
+    let (_, out, err) = air(&repo, Some(&path), &["status"]);
+    assert!(
+        out.contains(&format!(
+            "pinned: hooks, the channel and Air's sessions run {}",
+            pin.display()
+        )),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("PIN DIFFERS from PATH") && out.contains("(surface 1)"),
+        "{out}"
+    );
+
+    // --unpin: back to PATH, the copy gone.
+    let (code, out, err) = air(&repo, Some(&on_path), &["install", "--write", "--unpin"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!pin.exists());
+    let settings = std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
+    assert!(!settings.contains(".air/bin"), "{settings}");
+    let mcp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(mcp["mcpServers"]["air"]["command"], "air");
+}

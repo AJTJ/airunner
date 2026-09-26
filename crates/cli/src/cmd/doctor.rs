@@ -116,6 +116,8 @@ pub struct Report {
     /// The running binary is not the one this checkout would build (air-ilh4). `None` outside
     /// Air's own checkout, where the comparison has no meaning, and `None` when they agree.
     pub build_gap: Option<BuildGap>,
+    /// The binary this repo is pinned to, when it is (air-4usc).
+    pub pin: Option<crate::cmd::install::PinState>,
 }
 
 /// The running binary against the checkout it is being run in, when that checkout is Air's
@@ -271,6 +273,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         ),
         install_lag: crate::cmd::install::lag(ledger.dir()),
         build_gap: build_gap(repo, env!("CARGO_PKG_VERSION")),
+        pin: crate::cmd::install::pin_state(ledger.dir()),
     };
     emit(json, &report, || {
         let mut s = format!(
@@ -337,6 +340,9 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         // decides which program a number describes. Air's own checkout only.
         if let Some(g) = &report.build_gap {
             s.push_str(&format!("{}\n", build_gap_line(g)));
+        }
+        for l in report.pin.iter().flat_map(crate::cmd::install::pin_lines) {
+            s.push_str(&format!("{l}\n"));
         }
         s.trim_end().to_string()
     });
