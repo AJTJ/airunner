@@ -229,6 +229,7 @@ pub fn role_env(role: &str, name: &str, project: &str) -> Vec<(String, String)> 
         ("BEADS_ACTOR", name),
         ("AIR_ENFORCE", "1"),
         ("AIR_PROJECT", project),
+        ("AIR_CHANNEL", "1"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -238,10 +239,14 @@ pub fn role_env(role: &str, name: &str, project: &str) -> Vec<(String, String)> 
 /// The coordinator's env: no AIR_ENFORCE (the gate is the worker's), the project fence for
 /// both roles (air-0lk).
 pub fn coordinator_env(project: &str) -> Vec<(String, String)> {
-    [("AIR_ROLE", "coordinator"), ("AIR_PROJECT", project)]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    [
+        ("AIR_ROLE", "coordinator"),
+        ("AIR_PROJECT", project),
+        ("AIR_CHANNEL", "1"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 /// Pure: `PATH` with `pin_dir` first and nowhere else.
@@ -323,20 +328,27 @@ pub const MCP_SERVERS: &[&str] = &["air"];
 ///
 /// Removal: when Claude Code offers a supported way to pre-accept trust for a directory the
 /// owner already trusted, and the channel leaves the research preview.
-pub fn startup_prompts_note(main: &Path, coordinator: bool) -> String {
-    let mut note = format!(
+///
+/// Every session warns about development channels since air-1vri: the Air channel is how each
+/// session receives the messages Air addresses to it, so the lane and the workers load it too.
+pub fn startup_prompts_note(main: &Path) -> String {
+    format!(
         "If Claude Code has not been trusted in {} yet, each session asks \"Is this a project \
          you created or one you trust?\": answer Yes; the default exits. One accept covers \
-         every worktree; running `claude` there once first avoids the question.",
+         every worktree; running `claude` there once first avoids the question. Each session \
+         also warns about loading development channels (the Air channel, which is how Air's \
+         messages reach it): choose \"I am using this for local development\"; Exit quits.",
         main.display()
-    );
-    if coordinator {
-        note.push_str(
-            " The coordinator also warns about loading development channels (the Air \
-             channel): choose \"I am using this for local development\"; Exit quits.",
-        );
-    }
-    note
+    )
+}
+
+/// The flag that attaches the Air channel. A local `.mcp.json` server is not on Claude Code's
+/// channel allowlist, so the research-preview flag is required (verified live on 2.1.239,
+/// 2026-08-21: "server air is not on the approved channels allowlist (use
+/// --dangerously-load-development-channels for local dev)"). `AIR_CHANNELS_FLAG` overrides.
+pub fn channels_flag() -> String {
+    std::env::var("AIR_CHANNELS_FLAG")
+        .unwrap_or_else(|_| "--dangerously-load-development-channels".into())
 }
 
 fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
@@ -491,6 +503,10 @@ fn role_argv(
         settings.to_string(),
         "--name".into(),
         display_name(project, name),
+        // air-1vri: the lane and every worker load the Air channel too, which is how Air's
+        // messages reach them. Before `--disallowed-tools`, whose values run to the next flag.
+        channels_flag(),
+        "server:air".into(),
         "--disallowed-tools".into(),
     ];
     v.extend(deny.iter().map(|s| (*s).to_string()));
@@ -1051,7 +1067,7 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     }
     if note && !print {
         let main = super::worktree::main_checkout(repo);
-        eprintln!("air fleet up: {}", startup_prompts_note(&main, false));
+        eprintln!("air fleet up: {}", startup_prompts_note(&main));
     }
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
@@ -1210,7 +1226,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
     // this process on a terminal.
     if !print {
         let main = super::worktree::main_checkout(repo);
-        eprintln!("air coordinator: {}", startup_prompts_note(&main, true));
+        eprintln!("air coordinator: {}", startup_prompts_note(&main));
     }
     // Before the coordinator: on a terminal its launch replaces this process.
     if start_fleet && fleet_up_noting(repo, print, false) != 0 {
@@ -1233,11 +1249,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
             return 1;
         }
     };
-    // A local `.mcp.json` server is not on Claude Code's channel allowlist; the preview flag
-    // is required (verified live on 2.1.239, 2026-08-21: "server air is not on the approved
-    // channels allowlist (use --dangerously-load-development-channels for local dev)").
-    let flag = std::env::var("AIR_CHANNELS_FLAG")
-        .unwrap_or_else(|_| "--dangerously-load-development-channels".into());
+    let flag = channels_flag();
     let argv = match coordinator_argv_for(repo, &roles, &flag, &metis_argv, extra) {
         Ok(v) => v,
         Err(e) => {
@@ -1381,12 +1393,10 @@ mod tests {
     /// start detached.
     #[test]
     fn the_startup_note_names_each_remaining_prompt_and_its_answer() {
-        let fleet = startup_prompts_note(Path::new("/m"), false);
-        assert!(fleet.contains("trust") && fleet.contains("Yes") && fleet.contains("/m"));
-        assert!(!fleet.contains("development channels"));
-        let coord = startup_prompts_note(Path::new("/m"), true);
-        assert!(coord.contains("development channels"));
-        assert!(coord.contains("I am using this for local development"));
+        let note = startup_prompts_note(Path::new("/m"));
+        assert!(note.contains("trust") && note.contains("Yes") && note.contains("/m"));
+        assert!(note.contains("development channels"));
+        assert!(note.contains("I am using this for local development"));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
@@ -1532,7 +1542,7 @@ mod tests {
         let line = print_env_line(&env, "claude", &["--model".into(), "x".into()]);
         assert_eq!(
             line,
-            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air claude --model x"
+            "AIR_ROLE=worker BEADS_ACTOR=w1 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1 claude --model x"
         );
     }
 

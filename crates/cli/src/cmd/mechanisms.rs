@@ -777,4 +777,20 @@ pub const MECHANISMS: &[Mechanism] = &[
             "every process that runs in a fleet tree is one Air recorded, so the ledger alone answers what is running there; or the harness exposes a session's background tasks (readers.rs header)",
         ),
     },
+    Mechanism {
+        id: "channel-delivery",
+        class: "nudge",
+        what: "A session Air launched receives, through its own `air mcp` channel, the \
+               messages Air addressed to it in the ledger's `deliveries` table; each is pushed \
+               once and marked delivered.",
+        added: "2026-09-26 (air-1vri, air-dkm1)",
+        source: "crates/cli/src/cmd/mcp.rs, deliver_once; docs/design.md, delivery",
+        // Owner, 2026-09-26: a bead waited minutes between done and closed because the lane
+        // and the workers learned things only on their 5-minute wakes, and the coordinator
+        // relayed ready beads by hand. Only the coordinator had a channel.
+        fires: Fires::Decisions(&[("channel.deliver", "delivered")]),
+        removal: Removal::Judgement(
+            "Claude Code offers a supported push into an idle session that needs no development-channels confirmation (drop the channel flag for it), or a round's deliveries are all read only after the session's own 5-minute wake (the push bought nothing)",
+        ),
+    },
 ];

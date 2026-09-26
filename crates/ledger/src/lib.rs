@@ -12,6 +12,7 @@
 pub mod budgets;
 pub mod captures;
 pub mod claims;
+pub mod deliveries;
 pub mod events;
 pub mod landings;
 pub mod leases;

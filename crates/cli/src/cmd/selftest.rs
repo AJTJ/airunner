@@ -17,6 +17,8 @@
 use std::path::Path;
 use std::process::Command;
 
+mod messaging;
+
 use air_hooks::{GateFacts, handover_verdict};
 use air_ledger::Ledger;
 use air_ledger::verify::{Kind, VerifyRun, new_id};
@@ -72,7 +74,8 @@ fn air_command(exe: &Path, cwd: &Path) -> Command {
         .env_remove("AIR_ROLE")
         .env_remove("BEADS_ACTOR")
         .env_remove("AIR_PROJECT")
-        .env_remove("AIR_ENFORCE");
+        .env_remove("AIR_ENFORCE")
+        .env_remove("AIR_CHANNEL");
     c
 }
 
@@ -175,6 +178,17 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-1vri: the channel marks the row delivered and pushes nothing, which is exactly what a
+    // session that did not load the server as a channel would see. Seen red 2026-09-26.
+    (
+        "channel: a message Air addresses to a session is pushed once by that session's channel and by no other; an unattached server delivers nothing",
+        Mutation {
+            file: "crates/cli/src/cmd/mcp.rs",
+            from: "        out(&delivery_event(d));",
+            to: "        let _ = delivery_event(d);",
+            also_red: &[],
+        },
+    ),
     (
         "audit: every decision Air can write and every budget it can hit has a registry row, or is bookkeeping",
         Mutation {
@@ -2567,6 +2581,7 @@ fn all_probes() -> Vec<Probe> {
         probe_status_json_says_why_a_branch_cannot_land(),
         probe_handover_says_what_the_landing_gate_would_say(),
         probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
+        messaging::probe_a_message_reaches_only_its_session(),
     ]
 }
 

@@ -254,7 +254,7 @@ fn launchers_print_the_exact_command() {
     // the blob; `zz` is scratch_repo's prefix.
     assert!(
         out.starts_with(
-            "AIR_ROLE=worker BEADS_ACTOR=frontend AIR_ENFORCE=1 AIR_PROJECT=zz claude --append-system-prompt-file "
+            "AIR_ROLE=worker BEADS_ACTOR=frontend AIR_ENFORCE=1 AIR_PROJECT=zz AIR_CHANNEL=1 claude --append-system-prompt-file "
         ),
         "{out}"
     );
@@ -287,7 +287,9 @@ fn launchers_print_the_exact_command() {
     let (code, out, err) = air(&repo, None, &["lane", "--print"]);
     assert_eq!(code, 0, "{err}");
     assert!(
-        out.starts_with("AIR_ROLE=lane BEADS_ACTOR=lane AIR_ENFORCE=1 AIR_PROJECT=zz claude "),
+        out.starts_with(
+            "AIR_ROLE=lane BEADS_ACTOR=lane AIR_ENFORCE=1 AIR_PROJECT=zz AIR_CHANNEL=1 claude "
+        ),
         "{out}"
     );
     assert!(
@@ -302,7 +304,7 @@ fn launchers_print_the_exact_command() {
     for want in [
         "tmux new-session ".to_string(),
         " -s zz-coordinator ".to_string(),
-        " -e AIR_ROLE=coordinator -e AIR_PROJECT=zz ".to_string(),
+        " -e AIR_ROLE=coordinator -e AIR_PROJECT=zz -e AIR_CHANNEL=1 ".to_string(),
         format!(" -c {} ", wt.display()),
         " -- claude --dangerously-load-development-channels server:air ".to_string(),
         " --name zz-coordinator ".to_string(),
@@ -784,7 +786,7 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
     // air-9dg: the env rides on `-e`, which is how a pane gets it from a running server.
     assert!(
         stdout.starts_with(
-            "tmux new-session -d -s zz-w -e AIR_ROLE=worker -e BEADS_ACTOR=w -e AIR_ENFORCE=1 -e AIR_PROJECT=zz -c "
+            "tmux new-session -d -s zz-w -e AIR_ROLE=worker -e BEADS_ACTOR=w -e AIR_ENFORCE=1 -e AIR_PROJECT=zz -e AIR_CHANNEL=1 -c "
         ),
         "{stdout}"
     );

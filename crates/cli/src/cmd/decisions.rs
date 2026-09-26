@@ -73,6 +73,7 @@ traces! {
     TRIAGE_PARTIAL = "triage" / "partial";
 
     CHANNEL_PUSHED = "channel.push" / "pushed";
+    CHANNEL_DELIVERED = "channel.deliver" / "delivered";
     MCP_TOOL_TIMEOUT = "mcp.tool" / "timeout";
 
     CLAIM_REFUSE = "claim" / "refuse";
