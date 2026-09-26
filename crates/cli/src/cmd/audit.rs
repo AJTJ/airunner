@@ -96,7 +96,71 @@ pub struct Audit {
     /// How often a worker took a bead it could not start (air-5nh). Read from `claims`; the
     /// window is the audit's own `since`.
     pub churn: Churn,
+    /// Worker messages to the coordinator per closed bead (air-uzh2). Filled by `run` from the
+    /// ledger; `gather_from` has no ledger and reports none.
+    pub chatter: Option<Chatter>,
     pub duration_ms: u64,
+}
+
+/// Worker-to-coordinator messages against beads closed, over the window (air-uzh2).
+///
+/// The owner watched the 2026-09-26 trial's workers message the coordinator on every close and
+/// ruled that a branch that is good and done has nothing to say. roles.md now says a worker
+/// messages only when blocked, needing a decision or finding work outside its bead; this is
+/// the number that shows whether that held. The `messages` table records the sender's role but
+/// not the recipient's, so a recipient is read from its address: a session named
+/// `coordinator` or `<project>-coordinator` counts as the coordinator, and a `uds:` socket
+/// address, which names no session, is counted apart rather than guessed.
+///
+/// Removal: when two rounds show the rate near zero, or when the owner stops asking about it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Chatter {
+    pub to_coordinator: usize,
+    pub to_unresolved: usize,
+    pub closes: usize,
+}
+
+/// Pure over `(from_role, to)` rows from `messages` and the window's closed-bead count.
+pub fn chatter_of(msgs: &[(String, String)], closes: usize) -> Chatter {
+    let mut c = Chatter {
+        closes,
+        ..Chatter::default()
+    };
+    for (role, to) in msgs {
+        if role != "worker" {
+            continue;
+        }
+        if to == "coordinator" || to.ends_with("-coordinator") {
+            c.to_coordinator = c.to_coordinator.saturating_add(1);
+        } else if to.starts_with("uds:") {
+            c.to_unresolved = c.to_unresolved.saturating_add(1);
+        }
+    }
+    c
+}
+
+/// The chatter line, with what it counts beside it.
+pub fn render_chatter(c: &Chatter) -> String {
+    let rate = match (
+        u32::try_from(c.to_coordinator),
+        u32::try_from(c.to_coordinator.saturating_add(c.to_unresolved)),
+        u32::try_from(c.closes),
+    ) {
+        (Ok(named), Ok(all), Ok(k)) if k > 0 => format!(
+            "{:.2} to {:.2} per closed bead",
+            f64::from(named) / f64::from(k),
+            f64::from(all) / f64::from(k)
+        ),
+        _ => "no closes, so no rate".to_string(),
+    };
+    format!(
+        "\nworker-to-coordinator messages: {} to the coordinator by name and {} to a `uds:` \
+         address that names no session, over {} closed bead(s): {rate}.\n  counts: SendMessage \
+         rows from a worker (`messages`) against claims released as `closed`, both since the \
+         window start; the upper figure assumes every `uds:` message went to the coordinator. \
+         Baseline 0.83 to 2.67, the 2026-09-26 trial (air-uzh2).\n",
+        c.to_coordinator, c.to_unresolved, c.closes,
+    )
 }
 
 /// What one worker spent on talking to other agents (air-q07).
@@ -734,6 +798,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         // Filled in by `run` from the ledger's `claims` table (air-5nh); the event log does
         // not hold a release, so `gather_from` reports none rather than zero.
         churn: Churn::default(),
+        chatter: None,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -1159,6 +1224,9 @@ pub fn render(a: &Audit) -> String {
         );
     }
     s.push_str(&render_churn(&a.churn));
+    if let Some(c) = &a.chatter {
+        s.push_str(&render_chatter(c));
+    }
     s.push_str(&render_peer(&a.peer));
     s
 }
@@ -1242,6 +1310,24 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
         })
         .unwrap_or_default();
     audit.churn = churn_of(&claims);
+    // Worker-to-coordinator messages per closed bead (air-uzh2). Both tables already exist.
+    let msgs: Vec<(String, String)> = ledger
+        .conn()
+        .prepare("SELECT from_role, \"to\" FROM messages WHERE at >= ?1 ORDER BY at")
+        .and_then(|mut st| {
+            st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect()
+        })
+        .unwrap_or_default();
+    let closed: usize = ledger
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM claims WHERE release_reason = 'closed' AND released_at >= ?1",
+            rusqlite::params![since],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_or(0, |n| usize::try_from(n).unwrap_or(0));
+    audit.chatter = Some(chatter_of(&msgs, closed));
     let defects = audit
         .rows
         .iter()
@@ -1474,5 +1560,27 @@ mod tests {
         assert_eq!(row("bd-budget-timeout").evaluations, 2);
         assert_eq!(row("mcp-tool-budget-kill").evaluations, 0);
         assert!(a.unregistered.is_empty(), "{:?}", a.unregistered);
+    }
+
+    /// air-uzh2: only a worker's messages count, and a `uds:` address is kept apart rather
+    /// than guessed to be the coordinator.
+    #[test]
+    fn chatter_counts_worker_messages_to_the_coordinator_per_close() {
+        let r = |a: &str, b: &str| (a.to_string(), b.to_string());
+        let c = chatter_of(
+            &[
+                r("worker", "minimal-coordinator"),
+                r("worker", "coordinator"),
+                r("worker", "uds:/tmp/cc-socks/1.sock"),
+                r("worker", "minimal-lane"),
+                r("lane", "minimal-coordinator"),
+                r("coordinator", "minimal-worker-1"),
+            ],
+            4,
+        );
+        assert_eq!((c.to_coordinator, c.to_unresolved, c.closes), (2, 1, 4));
+        let line = render_chatter(&c);
+        assert!(line.contains("0.50 to 0.75 per closed bead"), "{line}");
+        assert!(render_chatter(&chatter_of(&[], 0)).contains("no closes, so no rate"));
     }
 }
