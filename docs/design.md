@@ -153,7 +153,7 @@ belongs to, but it grants nothing.
 Workers are kept from a small set of commands in two ways. Claude Code's deny list stops them
 from running the commands at all. For air land and air close, Air's own checks refuse again when
 AIR_ROLE is worker or lane, which covers the command being spelled a different way. The lane's
-deny list is the worker's without air land, and a worker's includes air lane.
+deny list is the worker's without air land, and a worker's includes air lane and air fleet.
 
 ## 4. Interfaces
 
@@ -189,7 +189,8 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
-| air coordinator | Starts the coordinator session. |
+| air coordinator | Starts the coordinator session. First it asks on the terminal whether to start the fleet as air fleet up does; its fleet flags answer in advance, and with no terminal the answer is no. |
+| air fleet up | Starts the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
 | air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
 | air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads, writes the ignore file and Air's config, then installs. |
 
@@ -273,8 +274,8 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
   --name air-worker-9
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
-    'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' EnterWorktree ExitWorktree
-    AskUserQuestion
+    'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' 'Bash(air fleet *)'
+    EnterWorktree ExitWorktree AskUserQuestion
 ```
 
 The repository's own worker_deny patterns follow the list. The coordinator launch attaches the
@@ -578,8 +579,9 @@ already uses beads, run air install. Both show their changes first and write onl
 Air doctor exits cleanly when the ledger, the schema, and the beads version are right.
 
 Start the coordinator with air coordinator, which opens it in its own worktree and tmux
-session. From that session, start the lane with air lane and each worker with air worker and a
-task. The launcher prints the tmux command to attach to it. Air status is the screen to
+session. It first asks whether to start the fleet; a yes, or air fleet up later, starts the
+lane and the workers in theirs. Air lane and air worker start one session by hand. Each
+launcher prints the tmux command to attach to what it started. Air status is the screen to
 watch, and the channel brings the attention conditions to the coordinator.
 
 Worktrees isolate the branch, not the machine. Cargo's build.jobs defaults to every logical core
@@ -661,11 +663,10 @@ built is described in sections 4 and 6.
       whole protocol, the coordinator's worktree and the lane's landing. Another rewrite is in
       progress the same day.
 - [ ] Keep the adopting guide current and condense it lightly.
-- [ ] The fleet starts from the coordinator. The owner starts only the coordinator and asks it to
-      set up the fleet, which by default starts three workers and a verification lane, each in
-      its own worktree and tmux session. The same launches stay available as air commands the
-      owner can run by hand. The roles text still has the coordinator launch workers one by
-      one. (Owner, 2026-09-14.)
+- [x] The fleet starts from the coordinator. Air coordinator asks whether to start the lane and
+      three workers (the workers key sets the count), each in its own worktree and tmux
+      session; air fleet up does the same later, and the single launchers stay (air-jc2p.5,
+      crates/cli/src/cmd/launch.rs).
 - [ ] Update the README's quick start once the coordinator sets up the default fleet on request.
 - [ ] On a fresh repository, air doctor reports two expired dated rules and says to delete their
       fallbacks. Delete them, since both expired on 2026-08-23 (`FALLBACK_BEFORE` in

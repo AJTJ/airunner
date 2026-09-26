@@ -50,6 +50,8 @@ pub const WORKER_DENY: &[&str] = &[
     "Bash(air coordinator *)",
     // A worker that could start a lane could start a session that lands (air-jc2p.2).
     "Bash(air lane *)",
+    // `air fleet up` starts a lane and workers, so it is denied for the same reason (air-jc2p.5).
+    "Bash(air fleet *)",
     "EnterWorktree",
     "ExitWorktree",
     // Owner, 2026-08-30 (air-bm3): a worker reaches the owner through `air capture`, which
@@ -614,7 +616,7 @@ fn spawn_tmux(
                 .as_deref()
                 .map(|s| format!("-L {s} "))
                 .unwrap_or_default();
-            println!("started tmux session {session} (stdin is not a tty; detached)");
+            println!("started tmux session {session} (detached)");
             println!("attach: tmux {l}attach -t {session}");
             0
         }
@@ -871,6 +873,118 @@ fn launch_worker_like(
     task: Option<&str>,
     print: bool,
 ) -> i32 {
+    let start = Start {
+        tmux,
+        task,
+        fixed: None,
+        detached: false,
+    };
+    launch_role(repo, role, name, extra, start, print)
+}
+
+/// The fixed first prompt `air fleet up` gives the lane, so it starts its loop without anyone
+/// typing. Air's own words, so nothing a person wrote reaches argv (air-er0). Workers get none:
+/// starting a session is not being given work.
+pub const LANE_START: &str =
+    "You are the verification lane. Start your loop as .air/roles.md describes it.";
+
+/// `"workers"` in `.claude/air.json`: how many workers `air fleet up` starts beside the lane.
+/// 3 when absent or not a number (owner, 2026-09-14: three workers, a lane and the
+/// coordinator); 0 starts only the lane.
+pub fn fleet_workers(repo: &Path) -> usize {
+    let main = super::worktree::main_checkout(repo);
+    std::fs::read_to_string(main.join(".claude/air.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("workers").and_then(serde_json::Value::as_u64))
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(3)
+}
+
+/// Pure: the fleet's sessions as (role, name), lane first. Fixed names rather than the next
+/// free ones, so running it twice finds the same sessions instead of starting more.
+pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
+    std::iter::once(("lane", "lane".to_string()))
+        .chain((1..=workers).map(|i| ("worker", format!("worker-{i}"))))
+        .collect()
+}
+
+/// `air fleet up`: the lane and the workers, each in its worktree and a detached tmux session
+/// (air-jc2p.5; owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator, and
+/// the fleet comes up from it). A session already running is left running and named. Every
+/// member is tried, and the exit is 1 if any failed.
+pub fn fleet_up(repo: &Path, print: bool) -> i32 {
+    if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
+        eprintln!("{refusal}");
+        return 1;
+    }
+    let mut failed = Vec::new();
+    for (role, name) in fleet_members(fleet_workers(repo)) {
+        let start = Start {
+            tmux: true,
+            task: None,
+            fixed: (role == "lane").then_some(LANE_START),
+            detached: true,
+        };
+        if launch_role(repo, role, &name, &[], start, print) != 0 {
+            failed.push(name);
+        }
+    }
+    if failed.is_empty() {
+        0
+    } else {
+        eprintln!("air fleet up: did not start {}", failed.join(", "));
+        1
+    }
+}
+
+/// Pure: the owner's answer to "Start the fleet?". Enter or anything starting with `y` is yes;
+/// end of input is no.
+pub fn fleet_answer(line: Option<&str>) -> bool {
+    match line.map(str::trim) {
+        None => false,
+        Some(l) => l.is_empty() || l.to_ascii_lowercase().starts_with('y'),
+    }
+}
+
+/// Ask on the terminal. Only called when stdin is one.
+fn ask_fleet(workers: usize) -> bool {
+    use std::io::{BufRead, Write};
+    eprint!("Start the fleet (lane + {workers} workers)? [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(0) | Err(_) => fleet_answer(None),
+        Ok(_) => fleet_answer(Some(&line)),
+    }
+}
+
+/// How a role's session starts.
+struct Start<'a> {
+    tmux: bool,
+    task: Option<&'a str>,
+    /// Air's own first prompt, used when there is no task.
+    fixed: Option<&'a str>,
+    /// A detached tmux session whether or not stdin is a terminal: `air fleet up` starts
+    /// several sessions from one command, and only one could hold the terminal.
+    detached: bool,
+}
+
+fn launch_role(
+    repo: &Path,
+    role: &str,
+    name: &str,
+    extra: &[String],
+    start: Start<'_>,
+    print: bool,
+) -> i32 {
+    let Start {
+        tmux,
+        task,
+        fixed,
+        detached: force_detached,
+    } = start;
+    let tmux = tmux || force_detached;
     let who = format!("air {role}");
     if let Some(refusal) = install_output_refusal(repo, &who) {
         eprintln!("{refusal}");
@@ -910,15 +1024,25 @@ fn launch_worker_like(
                 return 1;
             }
         },
-        None => None,
+        None => fixed.map(str::to_string),
     };
     // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule).
     let argv = worker_argv_prompt(argv, prompt.as_deref());
-    let detached = launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
+    let detached =
+        force_detached || launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
     spawn_tmux(repo, &wt, name, &env, &argv, detached, print)
 }
 
-pub fn coordinator(repo: &Path, extra: &[String], print: bool) -> i32 {
+/// `fleet` is the answer given on the command line (`--fleet` / `--no-fleet`); `None` asks on
+/// the terminal, and with no terminal the answer is no, so a script never starts a fleet by
+/// accident (owner, 2026-09-25, air-jc2p.5).
+pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<bool>) -> i32 {
+    let start_fleet =
+        fleet.unwrap_or_else(|| std::io::stdin().is_terminal() && ask_fleet(fleet_workers(repo)));
+    // Before the coordinator: on a terminal its launch replaces this process.
+    if start_fleet && fleet_up(repo, print) != 0 {
+        eprintln!("air coordinator: the fleet did not fully start; starting the coordinator");
+    }
     // Metis first, because its split paragraph goes into the file the next line writes
     // (air-g5o). Every note is printed and nothing refuses: a missing planning tool must not
     // cost the owner their coordinator session.
@@ -1183,5 +1307,36 @@ mod tests {
         assert!(settings["env"].get("AIR_ENFORCE").is_none());
         // But the project fence is both roles' (air-0lk).
         assert_eq!(settings["env"]["AIR_PROJECT"], "air");
+    }
+
+    /// air-jc2p.5: Enter is yes, end of input is no; the lane comes first and names are fixed.
+    #[test]
+    fn fleet_answer_and_members() {
+        for yes in ["", "\n", "y", "Yes\n"] {
+            assert!(fleet_answer(Some(yes)), "{yes:?}");
+        }
+        for no in ["n", "no\n", "q"] {
+            assert!(!fleet_answer(Some(no)), "{no:?}");
+        }
+        assert!(!fleet_answer(None));
+        assert_eq!(fleet_members(0), [("lane", "lane".to_string())]);
+        assert_eq!(fleet_members(3)[3], ("worker", "worker-3".to_string()));
+        assert!(WORKER_DENY.contains(&"Bash(air fleet *)"));
+        assert!(lane_deny().contains(&"Bash(air fleet *)"));
+    }
+
+    /// air-rr98: only the files `air install` writes count, never a repo's own skill.
+    #[test]
+    fn install_output_is_settings_mcp_and_shipped_skills() {
+        let dirty: Vec<String> = [
+            ".claude/settings.json",
+            ".mcp.json",
+            ".claude/skills/air-do-less/SKILL.md",
+            ".claude/skills/air-mine/SKILL.md",
+            "src/lib.rs",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(install_output_uncommitted(&dirty), dirty[..3].to_vec());
     }
 }

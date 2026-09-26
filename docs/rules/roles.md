@@ -125,9 +125,10 @@ What you can look up: `air holdings` (who is in which file), `air status`, `air 
 and `air handover`. When a peer holds a file you open, Air warns you once per session.
 
 Denied to a worker in every permission mode: `air land`, `air close`, `git push`, `bd create`,
-`bd sync`, `bd update --claim`, a nested `claude`, `air worker`, `air lane`, `air coordinator`,
-leaving the worktree, and `AskUserQuestion`. You reach the owner through `air capture`. An
-Edit or Write whose resolved path leaves your worktree is denied by Air's PreToolUse hook,
+`bd sync`, `bd update --claim`, a nested `claude`, `air worker`, `air lane`, `air fleet`,
+`air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
+`air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
+PreToolUse hook,
 except under the main checkout's `.air/journal/` and `.air/digests/`.
 
 ### Verification lane
@@ -164,7 +165,11 @@ range names by trailer. `air land` is refused to workers and the coordinator.
 
 `air coordinator` starts you in `.claude/worktrees/coordinator`, in the tmux session
 `<project>-coordinator`, with the channel attached. Run again, it attaches to the running
-session. You commit in your own worktree, and your branch reaches main in the lane's batch: it
+session. Before it starts it asks the owner whether to start the fleet. `air fleet up` does
+the same at any time: it starts the lane and the repo's workers (`"workers"` in
+`.claude/air.json`, 3 by default) as `lane` and `worker-<N>`, each in its worktree and tmux
+session, and leaves a running one alone. The workers start with no task, and the lane starts
+its loop. You commit in your own worktree, and your branch reaches main in the lane's batch: it
 is batch-ready once it has a commit main lacks.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
@@ -215,7 +220,7 @@ the failsafe: a wedged worker reaches nobody by itself.
 
 Landing is the lane's, not a worker's or the coordinator's. The lane lands its green batch with
 `air land --worker <lane>`, and `air land` is refused to every other launched role; the owner's
-own shell may still land. With no lane running, start one with `air lane --tmux`.
+own shell may still land. With no lane running, start one with `air fleet up`.
 
 What Air does when it lands. A branch is landable when it has a recorded green at a head that
 contains `main`. The beads a landing carries are the ones its commits name in a `Bead: <id>`
@@ -247,8 +252,9 @@ Before filing, ask what it changes tomorrow: if someone will edit a file because
 bead; if it only helps a reader understand, it belongs in a journal. A bead the owner must
 decide is labelled `owner` with the coordinator's recommendation in its description.
 
-Launch workers with `air worker --tmux --task "<a complete task>"`, which picks the next free
-`worker-<N>` and opens a tmux session the owner can attach to.
+Give an idle worker its work with `SendMessage`. To add a worker beyond the fleet, `air worker
+--tmux --task "<a complete task>"` picks the next free `worker-<N>` and opens a tmux session
+the owner can attach to.
 
 Denied to the coordinator: `git push` by deny rule, and `air land` by role. Air pushes nothing;
 a landing reaches main and stops there.

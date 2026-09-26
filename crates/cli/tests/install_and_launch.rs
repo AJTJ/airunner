@@ -856,3 +856,134 @@ fn worker_with_no_name_picks_the_next_free_lane() {
         "the lane's worktree is claude's cwd: {stdout}"
     );
 }
+
+/// air-jc2p.5: `air fleet up` brings up the lane and the configured workers, each in its
+/// worktree and a detached tmux session, and leaves a running session alone. tmux is a stub on
+/// PATH that records every call and lists the sessions a file names; no claude runs.
+#[test]
+fn fleet_up_starts_the_lane_and_workers_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 2}"#).unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let bin = stub.path().canonicalize().unwrap();
+    std::fs::write(
+        bin.join("tmux"),
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\ncase \"$*\" in *list-sessions*) cat \"$d/sessions\" 2>/dev/null; exit 0;; esac\nprintf '%s\\n' \"$*\" >> \"$d/calls\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin.join("tmux"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .current_dir(&repo)
+            .env("PATH", &path)
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env_remove("AIR_TMUX_SOCKET")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let calls = || std::fs::read_to_string(bin.join("calls")).unwrap_or_default();
+
+    // --print shows every launch, the lane with its start prompt, and writes nothing.
+    let (code, out, err) = run(&["fleet", "up", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.lines().count(), 3, "{out}");
+    for s in ["zz-lane", "zz-worker-1", "zz-worker-2"] {
+        assert!(
+            out.contains(&format!("new-session -d -s {s} ")),
+            "{s}: {out}"
+        );
+    }
+    assert_eq!(
+        out.matches("'You are the verification lane.").count(),
+        1,
+        "{out}"
+    );
+    assert!(!repo.join(".claude/worktrees").exists() && !repo.join(".air").exists());
+    assert_eq!(calls(), "");
+
+    // The lane is already running in its worktree: only the two workers start.
+    let lane = repo.join(".claude/worktrees/lane");
+    std::fs::write(
+        bin.join("sessions"),
+        format!("zz-lane\t{}\n", lane.display()),
+    )
+    .unwrap();
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("zz-lane is already running"), "{out}");
+    let c = calls();
+    assert_eq!(c.lines().count(), 2, "{c}");
+    assert!(!c.contains("-s zz-lane "), "{c}");
+    for w in ["worker-1", "worker-2"] {
+        let line = c
+            .lines()
+            .find(|l| l.contains(&format!("-s zz-{w} ")))
+            .unwrap();
+        assert!(line.starts_with("new-session -d "), "{line}");
+        // Idle: no first prompt, so claude's first argument is Air's roles flag.
+        assert!(
+            line.contains(" -- claude --append-system-prompt-file "),
+            "{line}"
+        );
+        assert!(
+            repo.join(".claude/worktrees")
+                .join(w)
+                .join(".git")
+                .is_file()
+        );
+    }
+
+    // Everything running: nothing new starts.
+    let listed: String = ["lane", "worker-1", "worker-2"]
+        .iter()
+        .map(|n| {
+            format!(
+                "zz-{n}\t{}\n",
+                repo.join(".claude/worktrees").join(n).display()
+            )
+        })
+        .collect();
+    std::fs::write(bin.join("sessions"), listed).unwrap();
+    std::fs::remove_file(bin.join("calls")).unwrap();
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(calls(), "", "{out}");
+
+    // The coordinator: no terminal and no flag means no fleet; --fleet starts it first.
+    let (code, out, _) = run(&["coordinator", "--print"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let (code, out, _) = run(&["coordinator", "--no-fleet", "--print"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let (code, out, err) = run(&["coordinator", "--fleet", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "{out}");
+    assert!(lines[0].contains("-s zz-lane ") && lines[3].contains("-s zz-coordinator "));
+
+    // Zero workers is the lane alone.
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 0}"#).unwrap();
+    let (_, out, _) = run(&["fleet", "up", "--print"]);
+    assert_eq!(out.lines().count(), 1, "{out}");
+}

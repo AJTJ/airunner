@@ -32,9 +32,10 @@ entry from `.claude/settings.json`.
 Then record the first green and start the fleet:
 
     air record verify -- make verify
-    air coordinator                                   # tmux session <project>-coordinator
-    air lane --tmux                                   # the verification lane; only it lands
-    air worker --tmux --task "<a complete task>"      # worker-1, worker-2, …
+    air coordinator      # asks whether to start the fleet, then opens <project>-coordinator
+
+A yes starts the verification lane and the workers, each in its own worktree and tmux session,
+the same as `air fleet up`. `air lane` and `air worker` start one session by hand.
 
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.
@@ -71,6 +72,7 @@ key is optional.
 | `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
 | `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
 | `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix |
+| `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
 | `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. An older string value counts as `true`. | absent: workers verify their own branch |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
