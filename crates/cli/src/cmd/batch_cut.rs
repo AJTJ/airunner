@@ -509,6 +509,21 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         }
         if !cut.members.is_empty() {
             cut.head = git::head(repo).ok();
+            // D2 (0.4.6 trial): the members go in the ledger, keyed by the head, because a
+            // batch of one fast-forwards and leaves no merge commit to read them back from.
+            if let Some(h) = &cut.head {
+                let members: Vec<air_ledger::landings::Member> = cut
+                    .members
+                    .iter()
+                    .map(|m| air_ledger::landings::Member {
+                        worker: m.worker.clone(),
+                        sha: m.head.clone(),
+                    })
+                    .collect();
+                if let Err(e) = ledger.record_batch_cut(h, &lane, &main, &members, &super::now()) {
+                    eprintln!("air batch cut: could not record the members: {e}");
+                }
+            }
             cut.next = Some("air record verify -- <the repo's verify command>".to_string());
         }
     }

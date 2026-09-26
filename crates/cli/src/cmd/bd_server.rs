@@ -90,6 +90,94 @@ pub fn answers(port: u16) -> bool {
     .is_ok()
 }
 
+/// Who answers on the project's port. "Something answers" is not "the project's server is
+/// up": with Air's server down, bd started its own with an empty database on the same port,
+/// twice on 2026-09-26, and every bd command then saw an empty task store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "listener", rename_all = "kebab-case")]
+pub enum Listener {
+    /// Nothing answers.
+    None,
+    /// A server whose data directory is this project's `.air/dolt/data`.
+    Ours,
+    /// Something else answers: its pid and command line.
+    Other { what: String },
+    /// Something answers and `lsof`/`ps` could not say what; treated as up, as before.
+    Unknown,
+}
+
+/// Pure: does a listener with this command line and working directory serve `data`? The data
+/// directory is `--data-dir` (relative to `cwd` when relative), else `cwd`, which is what
+/// `dolt sql-server` serves without the flag.
+pub fn serves(data: &Path, command: &str, cwd: Option<&str>) -> bool {
+    let flag = command.find("--data-dir").map(|i| {
+        let rest = command
+            .get(i.saturating_add("--data-dir".len())..)
+            .unwrap_or("");
+        let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
+        let end = rest.find(" --").unwrap_or(rest.len());
+        rest.get(..end).unwrap_or(rest).trim().to_string()
+    });
+    let served = match (flag, cwd) {
+        (Some(d), Some(c)) if !Path::new(&d).is_absolute() => Path::new(c).join(d),
+        (Some(d), _) => PathBuf::from(d),
+        (None, Some(c)) => PathBuf::from(c),
+        (None, None) => return false,
+    };
+    let norm = |p: &Path| {
+        p.canonicalize()
+            .unwrap_or_else(|_| p.components().collect::<PathBuf>())
+    };
+    norm(&served) == norm(data)
+}
+
+fn output(prog: &str, args: &[&str]) -> Option<String> {
+    Command::new(prog)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Who answers on `port`, judged against `main`'s data directory.
+pub fn listener(main: &Path, port: u16) -> Listener {
+    if !answers(port) {
+        return Listener::None;
+    }
+    let tcp = format!("-iTCP:{port}");
+    let Some(pid) = output("lsof", &["-nP", &tcp, "-sTCP:LISTEN", "-t"])
+        .and_then(|s| s.lines().next().map(str::to_string))
+    else {
+        return Listener::Unknown;
+    };
+    let Some(command) = output("ps", &["-o", "command=", "-p", &pid]) else {
+        return Listener::Unknown;
+    };
+    let cwd = output("lsof", &["-a", "-p", &pid, "-d", "cwd", "-Fn"]).and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix('n').map(str::to_string))
+    });
+    if serves(&data_dir(main), &command, cwd.as_deref()) {
+        Listener::Ours
+    } else {
+        Listener::Other {
+            what: format!("pid {pid}: {command}"),
+        }
+    }
+}
+
+/// What `up` and `status` say when something else holds the port.
+pub fn other_text(port: u16, main: &Path, what: &str) -> String {
+    format!(
+        "port {port} is answered by a process that does not serve this project's data ({}): \
+         {what}. Air started nothing. Stop that process, then run `air bd-server up`.",
+        data_dir(main).display()
+    )
+}
+
 /// One line for `air doctor`, `air status` and `air bd-server status`.
 pub fn line(m: &Mode, up: bool) -> String {
     match m {
@@ -261,18 +349,28 @@ pub fn up(repo: &Path) -> Outcome {
     let main = super::worktree::main_checkout(repo);
     let (port, database) = match mode(&main) {
         Mode::None | Mode::Embedded => return Outcome::NotServer,
-        Mode::Server { port: None, .. } => {
-            return Outcome::Failed {
-                why: ".beads/dolt-server.port is missing, so Air does not know the port".into(),
-            };
-        }
+        // A fresh clone or a new machine: the port file is per machine and git ignores it.
+        // Pick a free port the way `air init` does and write it where bd reads it first.
+        Mode::Server {
+            port: None,
+            database,
+        } => match assign_port(&main, free_port(&main)) {
+            Ok(p) => (p, database),
+            Err(why) => return Outcome::Failed { why },
+        },
         Mode::Server {
             port: Some(p),
             database,
         } => (p, database),
     };
-    if answers(port) {
-        return Outcome::Up { port };
+    match listener(&main, port) {
+        Listener::Ours | Listener::Unknown => return Outcome::Up { port },
+        Listener::Other { what } => {
+            return Outcome::Failed {
+                why: other_text(port, &main, &what),
+            };
+        }
+        Listener::None => {}
     }
     match bins() {
         Ok(b) => start(
@@ -332,15 +430,28 @@ pub fn up_cmd(repo: &Path, json: bool) -> i32 {
     i32::from(matches!(o, Outcome::Failed { .. }))
 }
 
-/// `air bd-server status`.
+/// `air bd-server status`. "Up" is this project's server answering, not any process on the
+/// port.
 pub fn status_cmd(repo: &Path, json: bool) -> i32 {
     let main = super::worktree::main_checkout(repo);
     let m = mode(&main);
-    let up = view(&m);
+    let who = match &m {
+        Mode::Server { port: Some(p), .. } => listener(&main, *p),
+        _ => Listener::None,
+    };
+    let up = matches!(who, Listener::Ours | Listener::Unknown);
     super::emit(
         json,
-        &json!({"bd": m, "up": up, "session": session(repo)}),
-        || line(&m, up),
+        &json!({"bd": m, "up": up, "listener": who, "session": session(repo)}),
+        || match (&m, &who) {
+            (Mode::Server { port: Some(p), .. }, Listener::Other { what }) => {
+                format!(
+                    "bd: server 127.0.0.1:{p}, NOT this project's: {}",
+                    other_text(*p, &main, what)
+                )
+            }
+            _ => line(&m, up),
+        },
     );
     0
 }
@@ -367,6 +478,37 @@ pub fn free_port(main: &Path) -> Option<u16> {
             !answers(*p)
                 && std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], *p))).is_ok()
         })
+}
+
+/// Write `port` to `.beads/dolt-server.port` for a project that has none (a fresh clone or a
+/// new machine). `None` means no free port in the range.
+pub fn assign_port(main: &Path, port: Option<u16>) -> Result<u16, String> {
+    let port = port.ok_or("no free port in 3400..3900 for the bd server")?;
+    let path = main.join(".beads/dolt-server.port");
+    std::fs::write(&path, port.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(port)
+}
+
+/// What `air init --write` appends to `.beads/config.yaml` in server mode.
+pub const NO_AUTO_START: &str = "\n# Air starts this project's Dolt server (air bd-server up); bd must not start its own,\n# which would serve an empty database from .beads/dolt on the same port.\ndolt.auto-start: false\n";
+
+/// Stop bd starting its own Dolt server when Air's is down. Seen twice on 2026-09-26: bd's
+/// server came up with an empty database on the same port and rewrote the port file. Appends
+/// `dolt.auto-start: false` to `.beads/config.yaml` unless the key is already set there.
+pub fn disable_bd_auto_start(main: &Path) -> Result<(), String> {
+    let path = main.join(".beads/config.yaml");
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    if text
+        .lines()
+        .any(|l| l.trim_start().starts_with("dolt.auto-start:"))
+    {
+        return Ok(());
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(NO_AUTO_START);
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// After `bd init --server` in a new project: bd wrote the port into the tracked
@@ -531,6 +673,86 @@ mod tests {
         assert!(
             matches!(&o, Outcome::Failed { why } if why.contains("no database `zz`")),
             "{o:?}"
+        );
+    }
+
+    /// A listener is this project's only when it serves `.air/dolt/data`. The first command
+    /// line is the one Air starts; bd's own server runs from `.beads/dolt`.
+    #[test]
+    fn a_listener_serving_other_data_is_not_this_projects_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path();
+        let data = data_dir(main);
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(main.join(".beads/dolt")).unwrap();
+        let d = data.to_string_lossy().to_string();
+        let ours =
+            format!("/usr/local/bin/dolt sql-server --host 127.0.0.1 --port 3417 --data-dir {d}");
+        assert!(serves(&data, &ours, None));
+        assert!(serves(
+            &data,
+            &format!("dolt sql-server --data-dir={d} --port 1"),
+            None
+        ));
+        assert!(
+            serves(&data, "dolt sql-server --port 1", Some(&d)),
+            "no flag: the cwd"
+        );
+        let bds = main.join(".beads/dolt").to_string_lossy().to_string();
+        assert!(!serves(&data, "dolt sql-server --port 3417", Some(&bds)));
+        assert!(!serves(
+            &data,
+            "dolt sql-server --data-dir . --port 1",
+            Some(&bds)
+        ));
+        assert!(!serves(&data, "nc -l 3417", None));
+    }
+
+    /// A server-mode project with no port file gets one, in init's range.
+    #[test]
+    fn a_missing_port_file_is_assigned_a_free_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = dir.path();
+        std::fs::create_dir_all(m.join(".beads")).unwrap();
+        std::fs::write(
+            m.join(".beads/metadata.json"),
+            r#"{"dolt_mode":"server","dolt_database":"zz"}"#,
+        )
+        .unwrap();
+        assert!(matches!(mode(m), Mode::Server { port: None, .. }));
+        let p = assign_port(m, free_port(m)).unwrap();
+        assert!((3400..3900).contains(&p), "{p}");
+        assert_eq!(
+            mode(m),
+            Mode::Server {
+                port: Some(p),
+                database: "zz".into()
+            }
+        );
+        assert!(assign_port(m, None).is_err());
+    }
+
+    /// Init's config line is added once, and a setting already there is left alone.
+    #[test]
+    fn bd_auto_start_is_turned_off_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = dir.path();
+        std::fs::create_dir_all(m.join(".beads")).unwrap();
+        let path = m.join(".beads/config.yaml");
+        std::fs::write(&path, "# bd's own comments\n# no-db: false").unwrap();
+        disable_bd_auto_start(m).unwrap();
+        disable_bd_auto_start(m).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("dolt.auto-start: false").count(), 1, "{text}");
+        assert!(
+            text.starts_with("# bd's own comments\n# no-db: false\n"),
+            "{text}"
+        );
+        std::fs::write(&path, "dolt.auto-start: true\n").unwrap();
+        disable_bd_auto_start(m).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "dolt.auto-start: true\n"
         );
     }
 

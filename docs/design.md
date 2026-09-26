@@ -190,7 +190,7 @@ Any session may run these.
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
 | air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it merges main and each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It tells each dropped worker its conflict, and it refuses while the fleet is stopped. It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, whether beads is the pinned version, and beads' mode (embedded, or server with its port and whether it answers). |
-| air bd-server up, air bd-server status | For a project whose beads runs in server mode, up starts the Dolt server when its port does not answer and waits up to 10 seconds for it; status prints the mode and whether the port answers. Neither touches a project whose beads is embedded. |
+| air bd-server up, air bd-server status | For a project whose beads runs in server mode, up starts the Dolt server when its port does not answer and waits up to 10 seconds for it; status prints the mode and whether the port answers. Both count the server as up only when the process on the port serves this project's `.air/dolt/data`; when another process answers they name it and start nothing. With no `.beads/dolt-server.port`, up picks a free port in 3400..3900 and writes the file first. `air init --write` sets `dolt.auto-start: false` so bd never starts a server of its own. Neither touches a project whose beads is embedded. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
 | air selftest | Runs a red and a green probe for every check. There were 162 probes on 2026-09-25. |
 | air gc | Reports how much of the event stream a retention period would remove, and removes it only when told to. |
@@ -269,7 +269,7 @@ timeout.
 | Event | What happens |
 |---|---|
 | Session start and end | The session's row is created, idle, or removed. |
-| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. This match on the command text is the backstop for a raw `bd close`, and its refusal names air close. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it. For a message to another agent, Air records the message and its content. |
+| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. For a shell command that closes a bead, the gate also runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. This match on the command text is the backstop for a raw `bd close`, and its refusal names air close. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
 | Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
@@ -309,7 +309,7 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1
   --name air-worker-9
   --dangerously-load-development-channels server:air
   --disallowed-tools 'Bash(air land *)' 'Bash(git push *)'
-    'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
+    'Bash(bd close *)' 'Bash(bd create *)' 'Bash(bd update *)' ... (every bd write) 'Bash(claude *)'
     'Bash(air worker *)' 'Bash(air coordinator *)' 'Bash(air lane *)' 'Bash(air fleet *)'
     EnterWorktree ExitWorktree AskUserQuestion
 ```
@@ -338,6 +338,7 @@ erDiagram
 | Table | Holds | Written by |
 |---|---|---|
 | verify runs | One row per recorded check, with the commit, exit code, command, duration, dirty flag, tree, and batch members. | record and land |
+| batch cuts | The members air batch cut merged, keyed by the lane and the head it left. A batch of one fast-forwards and has no merge commit to read them from. | batch cut; read by record |
 | verify in flight | The check currently running and its process. | record |
 | edit journal | Which worker touched which file, and when. | the hook |
 | claims | Which worker holds which bead, the files it declared, and when it let go. | claim, release, close, the gate |
@@ -414,6 +415,11 @@ close in either case. The text match is why air close exists. In the 0.4.5 live 
 put a commit and a `bd close` on separate lines of one shell call, the match missed it, and the
 bead closed with no green containing its commits.
 
+The gate refuses a branch that main is ahead of, except when main already contains the branch's
+head: a merge would then bring in only work that has landed. The 0.4.6 live trial refused five
+correct closes that way, each seconds after the worker's own batch landed. The green is still
+required.
+
 A green means a successful recorded run at the exact commit, or, if the repository matches by
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a
 batch commit that contains both the worker's commit and main also counts. That lets workers
@@ -421,7 +427,8 @@ close without running verification themselves. A commit made after the batch was
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
 names a bead its worker holds, or, for the coordinator's branch, has any commit main lacks; it
 does not have to contain main, because the lane merges main
-in when it cuts the batch.
+in when it cuts the batch. A branch whose head a red batch was recorded at, as a batch of one
+is, is not ready again until it has a new commit.
 
 The lane cuts with air batch cut, then records its verification at the new head. Which of two
 conflicting branches is dropped is decided by the order rule, oldest ready first, and never by
@@ -528,7 +535,8 @@ fanout event line records each change and who was told.
 The lane and its members are told the same way. The coordinator's tick queues "batch-ready"
 for the lane once per branch head. air batch cut queues "dropped from batch" for each worker it
 drops, air record queues each member's result when the lane records a batch verify (close on a
-green, the exit and the kept output on a red, nothing on a kill), and air land queues "main
+green, the exit and the kept output on a red, nothing on a kill; the members are the ones air batch cut recorded for that head, else the
+branches its merge commits took), and air land queues "main
 moved to <sha>: landed <beads>; files changed: <paths>" once per landing for every worktree's
 session except the main checkout, the lane and the session that ran it. A member's copy also
 says its beads may be closed, so a member gets one landing message. It asks for no reply
@@ -543,7 +551,7 @@ red batch's air record end with the branches
 batch-ready now and the next command, or with "nothing is batch-ready", and when the lane ran
 the command that output counts as telling it. air status prints two loop times from these rows
 for the last 24 hours: from batch-ready to the start of the batch verify that took the branch,
-and from "batch green" to the member's close. The 5-minute wakes stay as the backstop for a
+and from "batch green" to the member's close. The coordinator's 5-minute heartbeat stays as the backstop for a
 push that is missed.
 
 The coordinator's tick first checks beads' server when beads runs in server mode: a TCP connect
@@ -715,6 +723,8 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | The merge-queue protocol is Air's and ships in `.air/roles.md`; a repo keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
 | A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate |
 | A worker closes with `air close`, which runs the hand-over gate itself; the match on a raw `bd close` stays as the backstop. | 2026-09-26 | `close.rs` `gate` |
+| Workers and the lane read beads and use `bd comment`; every other bd write, a raw `bd close` among them, is denied in the settings their launchers pass. | 2026-09-26 | `launch.rs` `WORKER_DENY` |
+| Only the coordinator is told at SessionStart to create its 5-minute wake; Air's channel notices reach workers and the lane. | 2026-09-26 | `hook.rs` `WAKE_CONTEXT` |
 | Proof is a command's output, a `file:line` or a test; a remainder only the owner can do becomes a successor bead. | 2026-08-22 | `roles.md` |
 | Landing attributes beads by the `Bead:` trailers in the merged range; workers pull work, nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
 | An acceptance clause names what settles it and what changes; no regex checks it. | 2026-08-29 | `decomposition` skill |
@@ -801,7 +811,6 @@ The release is tagged only if every scenario ends as expected.
 | Fence | A worker is asked to edit a file in the main checkout | The edit is refused |
 | Lease | Declare a lease for a command such as `sh serve.sh`, and have two workers run it | The second worker is refused until the first releases the lease |
 | Behind main | A branch is still waiting when another batch lands | It stays ready for the lane and lands without its worker merging main |
-| Lost session | Stop a worker's session while it holds a bead | The coordinator is told the worker is gone with a claim |
 | Landing by role | The coordinator runs `air land` | It is refused; only the lane lands |
 | Precheck | Set `"precheck": true` and let a worker hand over without running it | The branch is not ready for the lane until `air record precheck` passes |
 

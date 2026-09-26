@@ -573,14 +573,36 @@ pub fn segments(cmd: &str) -> Vec<String> {
     out.push(cur);
     out.iter()
         .map(|s| {
-            strip_wrappers(
-                s.trim()
-                    .trim_start_matches(['(', '{', ' '])
-                    .trim_end_matches([')', '}', ' ']),
-            )
+            let s = s
+                .trim()
+                .trim_start_matches(['(', '{', ' '])
+                .trim_end_matches([')', '}', ' ']);
+            strip_wrappers(&strip_redirects(s))
         })
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// Redirections and their targets, removed so `sh serve.sh 2>&1` matches `sh serve.sh` as the
+/// bare command does. The 0.4.6 live trial ran a leased command with a trailing `2>&1` while
+/// another worker held the lease, and nothing refused it (D4). Handles `2>&1`, `>&2`, `>file`,
+/// `> file`, `>>`, `2>`, `&>` and `<file`, by whitespace-separated token.
+fn strip_redirects(seg: &str) -> String {
+    const OPS: [&str; 7] = ["&>>", "&>", ">>", ">&", "<&", ">", "<"];
+    let mut out: Vec<&str> = Vec::new();
+    let mut target_next = false;
+    for t in seg.split_whitespace() {
+        if target_next {
+            target_next = false;
+            continue;
+        }
+        let rest = t.trim_start_matches(|c: char| c.is_ascii_digit());
+        match OPS.iter().find_map(|o| rest.strip_prefix(o)) {
+            Some(target) => target_next = target.is_empty(),
+            None => out.push(t),
+        }
+    }
+    out.join(" ")
 }
 
 /// Leading `VAR=value` assignments and the `timeout`/`nice`/`nohup` wrappers, removed the way
@@ -809,7 +831,7 @@ mod tests {
         assert_eq!(segments("cd app && make api"), vec!["cd app", "make api"]);
         assert_eq!(
             segments("FOO=1 timeout -k 5 60 nice -n 3 nohup make api 2>&1 | tee x; ls || true"),
-            vec!["make api 2>&1", "tee x", "ls", "true"]
+            vec!["make api", "tee x", "ls", "true"]
         );
         assert_eq!(
             segments("bd create -d \"then make api && adb shell\""),
@@ -817,7 +839,7 @@ mod tests {
         );
         assert_eq!(
             segments("git commit -F- <<'EOF'\nadb shell\nEOF\ngit log"),
-            vec!["git commit -F- <<'EOF'", "git log"]
+            vec!["git commit -F-", "git log"]
         );
     }
 

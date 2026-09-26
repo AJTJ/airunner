@@ -41,9 +41,107 @@ use crate::cmd::install::ROLES_MD;
 pub const WORKER_DENY: &[&str] = &[
     "Bash(air land *)",
     "Bash(git push *)",
+    // Owner, 2026-09-26: a worker and the lane READ beads and add comments (`bd comment`,
+    // `bd comments add`); every other change to a bead or to the store goes through `air`
+    // (`air claim`, `air close`, `air capture`). Each bd subcommand that writes, from
+    // `bd --help` of bd 1.3.0; the read-only ones (ready, show, list, search, count, dep list,
+    // dep tree, comments) are left out. A raw close used to be caught only by Air reading the
+    // command line, and the 0.4.5 trial showed that miss one. Removed when bd's `--readonly`
+    // can be forced on a session with comments still allowed.
+    "Bash(bd assign *)",
+    "Bash(bd close *)",
     "Bash(bd create *)",
+    "Bash(bd create-form *)",
+    "Bash(bd delete *)",
+    "Bash(bd edit *)",
+    "Bash(bd heartbeat *)",
+    "Bash(bd link *)",
+    "Bash(bd note *)",
+    "Bash(bd priority *)",
+    "Bash(bd promote *)",
+    "Bash(bd q *)",
+    "Bash(bd reclaim *)",
+    "Bash(bd reopen *)",
+    "Bash(bd set-state *)",
+    "Bash(bd tag *)",
+    "Bash(bd unclaim *)",
+    "Bash(bd update *)",
+    "Bash(bd duplicate *)",
+    "Bash(bd duplicates *)",
+    "Bash(bd supersede *)",
+    "Bash(bd defer *)",
+    "Bash(bd undefer *)",
+    "Bash(bd rename *)",
+    "Bash(bd rename-prefix *)",
+    "Bash(bd backup *)",
+    "Bash(bd branch *)",
+    "Bash(bd conflicts *)",
+    "Bash(bd federation *)",
+    "Bash(bd import *)",
+    "Bash(bd restore *)",
     "Bash(bd sync *)",
-    "Bash(bd update *--claim*)",
+    "Bash(bd vc *)",
+    "Bash(bd bootstrap *)",
+    "Bash(bd dolt *)",
+    "Bash(bd forget *)",
+    "Bash(bd hooks *)",
+    "Bash(bd init *)",
+    "Bash(bd migrate-personal *)",
+    "Bash(bd remember *)",
+    "Bash(bd setup *)",
+    "Bash(bd batch *)",
+    "Bash(bd compact *)",
+    "Bash(bd flatten *)",
+    "Bash(bd gc *)",
+    "Bash(bd migrate *)",
+    "Bash(bd prune *)",
+    "Bash(bd purge *)",
+    "Bash(bd recompute-blocked *)",
+    "Bash(bd sql *)",
+    "Bash(bd upgrade *)",
+    "Bash(bd worktree *)",
+    "Bash(bd admin *)",
+    "Bash(bd jira *)",
+    "Bash(bd linear *)",
+    "Bash(bd repo *)",
+    "Bash(bd ado *)",
+    "Bash(bd github *)",
+    "Bash(bd gitlab *)",
+    "Bash(bd notion *)",
+    "Bash(bd audit *)",
+    "Bash(bd provenance *)",
+    "Bash(bd cook *)",
+    "Bash(bd formula *)",
+    "Bash(bd mol *)",
+    "Bash(bd ship *)",
+    "Bash(bd serve *)",
+    "Bash(bd mail *)",
+    "Bash(bd metrics *)",
+    "Bash(bd dep add *)",
+    "Bash(bd dep remove *)",
+    "Bash(bd dep relate *)",
+    "Bash(bd dep unrelate *)",
+    "Bash(bd label add *)",
+    "Bash(bd label remove *)",
+    "Bash(bd label propagate *)",
+    "Bash(bd gate create *)",
+    "Bash(bd gate resolve *)",
+    "Bash(bd gate check *)",
+    "Bash(bd gate add-waiter *)",
+    "Bash(bd merge-slot acquire *)",
+    "Bash(bd merge-slot create *)",
+    "Bash(bd merge-slot release *)",
+    "Bash(bd config set *)",
+    "Bash(bd config set-many *)",
+    "Bash(bd config unset *)",
+    "Bash(bd config apply *)",
+    "Bash(bd kv set *)",
+    "Bash(bd kv clear *)",
+    "Bash(bd todo add *)",
+    "Bash(bd todo done *)",
+    "Bash(bd epic close-eligible *)",
+    "Bash(bd swarm create *)",
+    "Bash(bd doctor *--fix*)",
     "Bash(claude *)",
     "Bash(air worker *)",
     "Bash(air coordinator *)",
@@ -1587,6 +1685,44 @@ mod tests {
         assert_eq!(fleet_members(3)[3], ("worker", "worker-3".to_string()));
         assert!(WORKER_DENY.contains(&"Bash(air fleet *)"));
         assert!(lane_deny().contains(&"Bash(air fleet *)"));
+    }
+
+    /// Owner, 2026-09-26: a worker and the lane read beads and add comments; every bd write,
+    /// a raw `bd close` among them, is denied in the settings the launcher passes. Matched with
+    /// the harness's deny syntax, the same matcher the lease gate uses.
+    #[test]
+    fn worker_and_lane_settings_deny_bd_writes_and_allow_reads_and_comments() {
+        for v in [
+            worker_argv("w1", "air", Path::new("/r/.air/roles.md"), &[]),
+            lane_argv("lane", "air", Path::new("/r/.air/roles.md"), &[]),
+        ] {
+            let denied = |cmd: &str| {
+                v.iter()
+                    .filter(|a| a.starts_with("Bash(bd "))
+                    .any(|p| crate::cmd::lease::pattern_matches(p, cmd))
+            };
+            for w in [
+                "bd close zz-1 --reason done",
+                "bd update zz-1 --status closed",
+                "bd create -t task x",
+                "bd dep add zz-1 zz-2",
+                "bd label add zz-1 owner",
+                "bd reopen zz-1",
+                "bd sync",
+            ] {
+                assert!(denied(w), "{w}");
+            }
+            for r in [
+                "bd ready",
+                "bd show zz-1",
+                "bd list --status closed",
+                "bd dep list zz-1",
+                "bd comment zz-1 notes",
+                "bd comments add zz-1 notes",
+            ] {
+                assert!(!denied(r), "{r}");
+            }
+        }
     }
 
     /// air-rr98: only the files `air install` writes count, never a repo's own skill.

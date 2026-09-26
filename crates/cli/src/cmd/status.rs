@@ -560,6 +560,9 @@ pub struct BatchFacts {
     /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
     /// be batch-ready with nothing in it.
     pub ahead: bool,
+    /// A red batch was recorded at this exact head and took it as a member (0.4.6
+    /// trial D3).
+    pub red_batch_at_head: bool,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -598,6 +601,18 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             "green-at-head",
             format!(
                 "{} at {short} is already green with main merged: landable on its own, nothing to batch",
+                f.worker
+            ),
+        ));
+    }
+    // D3 (0.4.6 trial): a head a red batch already took is not cut again until it moves. The
+    // lane cut the same red member twice and had no command to leave it out.
+    if f.red_batch_at_head {
+        return Err(not(
+            "red-at-head",
+            format!(
+                "{} at {short} went red as a batch at this head; it is batch-ready again after \
+                 a new commit",
                 f.worker
             ),
         ));
@@ -691,6 +706,7 @@ pub fn batch_ready_for(
         }
     };
     let claims = ledger.open_claims().unwrap_or_default();
+    let red_batches = ledger.red_batches(Kind::Verify).unwrap_or_default();
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
@@ -732,7 +748,13 @@ pub fn batch_ready_for(
             .ok()
             .and_then(|n| n.trim().parse::<u64>().ok())
             .is_some_and(|n| n > 0);
+        // Only a red AT this head, which a batch of one is: in a larger batch the red may be
+        // another member's doing, and this head was never verified alone.
+        let red_batch_at_head = red_batches
+            .iter()
+            .any(|r| r.sha == head && r.members.iter().any(|m| m.sha == head));
         let facts = BatchFacts {
+            red_batch_at_head,
             precheck_required,
             precheck_green_at_head,
             coordinator,

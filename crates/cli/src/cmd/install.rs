@@ -2226,6 +2226,103 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "Replace `bd close` with `air close` in your repo's own prose, prompts and \
                  scripts that tell a worker how to close a bead.",
     },
+    SurfaceChange {
+        id: "close-after-own-landing",
+        since: "2026-09-26 (0.4.6 live trial, D1)",
+        headline: "The hand-over gate no longer refuses a close as behind main when main already contains \
+                   the worker's head, which is the state right after its own batch lands. The \
+                   green is still required.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "batch-cut-records-members",
+        since: "2026-09-26 (0.4.6 live trial, D2 and D3)",
+        headline: "`air batch cut` records the members it merged in the ledger (schema v24, table \
+                   `batch_cuts`), and `air record` reads them, so a batch of one tells its member \
+                   the result. A branch whose head a red batch was recorded at is not batch-ready \
+                   (`red-at-head` in `air status --json`) until it has a new commit.",
+        silent_break: false,
+        action: "A worker whose batch went red fixes it with a new commit; the lane no longer cuts the \
+                 same red head again.",
+    },
+    SurfaceChange {
+        id: "lease-sees-redirects",
+        since: "2026-09-26 (0.4.6 live trial, D4)",
+        headline: "The lease check removes redirections (`2>&1`, `>&2`, `> file`, `>> file`, `2> file`, \
+                   `&> file`, `< file`) before matching, so `sh serve.sh 2>&1` needs the same \
+                   lease as `sh serve.sh`.",
+        silent_break: true,
+        action: "",
+    },
+    SurfaceChange {
+        id: "precheck-silence-not-suspicious",
+        since: "2026-09-26 (0.4.6 live trial, D5)",
+        headline: "`air record precheck` no longer flags a green precheck `suspicious` for printing \
+                   nothing, so a silent check such as `sh -n` records clean. A verify that prints \
+                   nothing is still flagged.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "workers-read-beads-only",
+        since: "2026-09-26 (owner ruling)",
+        headline: "Workers and the lane read beads and add comments (`bd comment`, `bd comments add`); \
+                   every bd command that changes a bead or the store, `bd close` and \
+                   `bd update` among them, is on their deny list. Claims, closes and captures go \
+                   through `air claim`, `air close` and `air capture`.",
+        silent_break: false,
+        action: "Remove any instruction in your repo's own prose or prompts that tells a worker or the \
+                 lane to run a bd write command.",
+    },
+    SurfaceChange {
+        id: "wake-coordinator-only",
+        since: "2026-09-26 (owner ruling)",
+        headline: "Only the coordinator is told at SessionStart to create its 5-minute wake. Workers and \
+                   the lane get no wake instruction; Air's channel notices reach them.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "install-adds-project",
+        since: "2026-09-26 (owner ruling)",
+        headline: "`air install --write` adds `\"project\"` to a `.claude/air.json` that has none, set to \
+                   the main checkout's directory name (what `air init` writes), and says so. It \
+                   never changes a value that is there. Without it, session names, \
+                   `<project>-dolt` included, used the bead prefix.",
+        silent_break: false,
+        action: "If your sessions were named after the bead prefix, their names change to the directory \
+                 name after this install; set `\"project\"` yourself first to keep another name.",
+    },
+    SurfaceChange {
+        id: "bd-auto-start-off",
+        since: "2026-09-26 (owner ruling)",
+        headline: "`air init --write` turns off bd's own Dolt server in a new server-mode project \
+                   (`dolt.auto-start: false` in `.beads/config.yaml`).",
+        silent_break: false,
+        action: "In an existing server-mode project, add `dolt.auto-start: false` to \
+                 `.beads/config.yaml`. Otherwise, when Air's server is down, bd starts its own \
+                 server with an empty database on the same port.",
+    },
+    SurfaceChange {
+        id: "bd-server-checks-its-data",
+        since: "2026-09-26 (owner ruling)",
+        headline: "`air bd-server up` and `air bd-server status` count the server as up only when the \
+                   process on the port serves this project's `.air/dolt/data`. If another process \
+                   answers, they name it and start nothing.",
+        silent_break: false,
+        action: "If told the port is held by another process, stop that process and run \
+                 `air bd-server up` again.",
+    },
+    SurfaceChange {
+        id: "bd-server-assigns-a-port",
+        since: "2026-09-26 (owner ruling)",
+        headline: "`air bd-server up` in a server-mode project with no `.beads/dolt-server.port` (a fresh \
+                   clone or a new machine) picks a free port in 3400..3900, writes the file and \
+                   starts the server.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2679,6 +2776,15 @@ pub fn render_surface(changes: &[&SurfaceChange], written: bool) -> String {
     s
 }
 
+/// The `"project"` `air install --write` adds to an existing `.claude/air.json` that has none:
+/// the main checkout's directory name, which is what `air init` writes (owner, 2026-09-26).
+/// Without it session names, `<project>-dolt` included, fall back to the bead prefix. `None`
+/// when the key is there, whatever its value, or when the file is not a JSON object.
+pub fn project_to_add(air_json: &Value, main_dir_name: &str) -> Option<String> {
+    let m = air_json.as_object()?;
+    (!m.contains_key("project") && !main_dir_name.is_empty()).then(|| main_dir_name.to_string())
+}
+
 fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -2829,6 +2935,8 @@ struct Plan {
     /// What the binary that last installed here was built from, for the refusal's message.
     recorded_build: String,
     previously_installed: bool,
+    /// `"project"` added to `.claude/air.json`, which had none (owner, 2026-09-26).
+    project_added: Option<String>,
     written: bool,
 }
 
@@ -2968,6 +3076,17 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
     // git's answer, not a scan of one file: a nested `.gitignore`, `.git/info/exclude` or a
     // later `!.air` line all change it, and the ledger's content is what is at stake.
     let gitignore_has_air = air_ignored(&repo);
+    let air_json_path = repo.join(".claude/air.json");
+    let air_json = if air_json_path.is_file() {
+        read_json(&air_json_path).unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let main_dir_name = super::worktree::main_checkout(&repo)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let project_added = project_to_add(&air_json, &main_dir_name);
 
     // "Already installed" means the hooks are wired or `.air/roles.md` is there. Without
     // that, this is a first install and nothing has changed under anyone.
@@ -3004,6 +3123,7 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
         recorded_version: recorded.surface_version,
         recorded_build: recorded.built_from.clone(),
         previously_installed,
+        project_added: project_added.clone(),
         written: false,
     };
 
@@ -3073,6 +3193,10 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
             }
             if plan.mcp_changed {
                 write_json(&mcp_path, &after_mcp)?;
+            }
+            if let (Some(p), Value::Object(mut m)) = (&project_added, air_json.clone()) {
+                m.insert("project".into(), Value::String(p.clone()));
+                write_json(&air_json_path, &Value::Object(m))?;
             }
             std::fs::create_dir_all(&air_dir).map_err(|e| format!("{}: {e}", air_dir.display()))?;
             std::fs::write(air_dir.join("roles.md"), ROLES_MD)
@@ -3170,6 +3294,12 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
                 "already wired"
             }
         ));
+        if let Some(p) = &plan.project_added {
+            s.push_str(&format!(
+                "air.json: {} \"project\": \"{p}\" (it had none; session names use it)\n",
+                if plan.written { "added" } else { "will add" }
+            ));
+        }
         s.push_str(&format!(
             "ledger:   {}/ (roles.md written here)\n",
             plan.air_dir.display()
@@ -3213,6 +3343,19 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// Owner, 2026-09-26: install adds `"project"` when it is missing and never changes one
+    /// that is there.
+    #[test]
+    fn install_adds_a_missing_project_and_leaves_one_that_is_there() {
+        assert_eq!(
+            project_to_add(&json!({"worker_deny": []}), "minimal"),
+            Some("minimal".to_string())
+        );
+        assert_eq!(project_to_add(&json!({"project": "mine"}), "minimal"), None);
+        assert_eq!(project_to_add(&json!({"project": ""}), "minimal"), None);
+        assert_eq!(project_to_add(&Value::Null, "minimal"), None);
+    }
 
     /// Collapse every run of whitespace to one space, so a pin can quote a sentence the way
     /// it reads rather than the way it happens to wrap (air-ahl). Two pins this round were

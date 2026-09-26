@@ -2895,6 +2895,79 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     );
 }
 
+/// D2 and D3 of the 0.4.6 live trial. A batch of one fast-forwards the lane to the member's
+/// head, so there is no merge commit to read the member from: the red batch told its member
+/// nothing (D2), and the next cut took the same red head again (D3). Now the cut records its
+/// members, the red reaches the member, and the member is batch-ready again only after a new
+/// commit.
+#[test]
+fn a_batch_of_one_tells_its_member_and_a_red_head_is_not_cut_again() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    let lane = root.join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    let lane = lane.canonicalize().unwrap();
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
+    std::fs::write(alpha.join("a.txt"), "a\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(&alpha, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
+    let head = git(&alpha, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        git(&lane, &["rev-parse", "HEAD"]),
+        head,
+        "a batch of one fast-forwards"
+    );
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "false"]);
+    assert_eq!(code, 1, "{out}{err}");
+
+    // D2: the member hears the red.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let told: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE kind='batch-red' AND to_worker='alpha'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(told, 1, "{out}{err}");
+
+    // D3: the red head is not cut again, and a new commit makes it batch-ready again.
+    let members = |out: &str| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["worker"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(members(&out).is_empty(), "{out}");
+    std::fs::write(alpha.join("a.txt"), "fixed\n").unwrap();
+    git(&alpha, &["commit", "-q", "-am", &bead_trailer("zz-1")]);
+    let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(members(&out), ["alpha"], "{out}");
+}
+
 fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");
