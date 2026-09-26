@@ -70,6 +70,8 @@ pub struct HookInput {
     pub trigger: Option<String>,
     /// SessionEnd reason.
     pub reason: Option<String>,
+    /// SessionStart: "startup" | "resume" | "clear" | "compact". Only "compact" fires mid-turn.
+    pub source: Option<String>,
     pub permission_mode: Option<String>,
     /// Notification: what the harness showed the person. Recorded verbatim and never parsed
     /// for a decision (air-1n3): the wording is the harness's and moves between versions,

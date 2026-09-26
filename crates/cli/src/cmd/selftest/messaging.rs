@@ -146,12 +146,13 @@ pub(super) fn view(
     }
 }
 
-/// air-dkm1: when the claimable ready set gains a bead, "beads are ready" is queued once for
-/// each live idle worker holding no claim, and for nobody else.
+/// air-dkm1, air-ludo: when the claimable ready set gains a bead, "beads are ready" is queued
+/// once for each worker with a live session holding no claim, whatever its state, and for
+/// nobody else.
 ///
-/// Red: after a seeding tick, a tick where `zz-2` joins the set queues one row for `idle`
-/// naming both beads. Green: the worker holding a claim, the lane and the working worker get
-/// nothing; the seeding tick, a repeat of the same set, and a set that only shrank queue
+/// Red: after a seeding tick, a tick where `zz-2` joins the set queues one row each for `idle`
+/// and `busy` (mid-turn, holding nothing), naming both beads. Green: the worker holding a claim
+/// and the lane get nothing; the seeding tick, a repeat of the same set, and a set that only shrank queue
 /// nothing more.
 pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
     use crate::cmd::fanout::fan_out_ready;
@@ -177,22 +178,22 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         let rows = l
             .deliveries_since("2026-09-26T00:00:00Z")
             .map_err(|e| e.to_string())?;
-        let red = grew == ["idle"]
-            && rows.len() == 1
-            && rows.first().is_some_and(|d| {
-                d.to_worker == "idle" && d.content.starts_with("beads are ready: zz-1 zz-2")
-            });
+        let red = grew == ["idle", "busy"]
+            && rows.len() == 2
+            && rows
+                .iter()
+                .all(|d| d.content.starts_with("beads are ready: zz-1 zz-2"));
         let green = seeded.is_empty()
             && same.is_empty()
             && shrank.is_empty()
             && !rows
                 .iter()
-                .any(|d| matches!(d.to_worker.as_str(), "holding" | "lane" | "busy"));
+                .any(|d| matches!(d.to_worker.as_str(), "holding" | "lane"));
         Ok((red, green))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "fanout: new ready beads are queued once for each live idle worker without a claim, never for the lane or a worker holding one",
+        name: "fanout: new ready beads are queued once for each live worker without a claim, whatever its state, never for the lane or a worker holding one",
         red_fires: red,
         green_passes: green,
     }

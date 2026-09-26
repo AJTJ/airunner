@@ -25,10 +25,13 @@ const READY_REFRESH_SECS: i64 = 60;
 /// not announce what was already there.
 const READY_SEEN: &str = "fanout_ready_seen";
 
-/// Workers told about new beads: live, idle, holding nothing, and not running a check of their
-/// own. The lane and the coordinator are never on the list: the lane takes no bead and the
-/// coordinator files them.
-pub fn idle_without_claim(s: &Snapshot) -> Vec<String> {
+/// Workers told about new beads: every worker with a live session holding no claim, whatever
+/// its session state (air-ludo). A worker mid-turn reads it after that turn; it holds nothing,
+/// so it is free. Filtering on `idle` reached nobody in the 2026-09-26 trial: workers launched
+/// with no task never took a turn, so none was ever recorded idle and the fleet sat at
+/// `ready: 3`. The lane and the coordinator are never on the list: the lane takes no bead and
+/// the coordinator files them.
+pub fn without_claim(s: &Snapshot) -> Vec<String> {
     s.workers
         .iter()
         .filter(|w: &&WorkerView| {
@@ -37,8 +40,7 @@ pub fn idle_without_claim(s: &Snapshot) -> Vec<String> {
                 && w.handed_over.is_empty()
                 && w.session
                     .as_ref()
-                    .is_some_and(|x| x.state == "idle" && x.pid_alive != Some(false))
-                && !super::status::verify_running(s, &w.worker)
+                    .is_some_and(|x| x.pid_alive != Some(false))
         })
         .map(|w| w.worker.clone())
         .collect()
@@ -60,7 +62,7 @@ pub fn beads_ready_text(ids: &[String]) -> String {
     )
 }
 
-/// Queue "beads are ready" for every idle worker without a claim when the claimable set gained
+/// Queue "beads are ready" for every worker without a claim when the claimable set gained
 /// a bead since the last tick. Returns the workers queued for.
 pub fn fan_out_ready(
     ledger: &Ledger,
@@ -89,7 +91,7 @@ pub fn fan_out_ready(
     let key = ready.join(" ");
     let text = beads_ready_text(ready);
     let mut told = Vec::new();
-    for w in idle_without_claim(s) {
+    for w in without_claim(s) {
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
@@ -113,7 +115,7 @@ pub fn fan_out_ready(
         super::decisions::FANOUT_BEADS_READY,
         &json!({"ready": ready, "new": new, "to": told}),
         &format!(
-            "{} new bead(s); told {} idle worker(s) without a claim",
+            "{} new bead(s); told {} worker(s) without a claim",
             new.len(),
             told.len()
         ),
