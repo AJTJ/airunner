@@ -81,7 +81,7 @@ Index items are 1–3 lines; detail lives behind the link.
   2026-08-20).
 - **Rust.** Prefer using or borrowing from an existing good project; research must show why not
   before we build. Never make a target repo's tooling depend on Air's *build* — install a binary.
-- **Steal avidly** from the adopters we work with and from `~/projects/metis` (and cite what was
+- **Steal avidly** from the adopters we work with and from Metis (`colliery-io/metis`) (and cite what was
   taken). **Cite them as "an adopter", never by name** (air-bpj, owner 2026-09-06: the Air
   project is separate from theirs). The incident keeps its date, its count and its `air-` bead;
   the name, their paths, their bead ids and anything that copies their files live in `private/`,
@@ -147,10 +147,6 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (or the main checkout for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
 | Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). Never blocks a prompt or a WIP commit. |
 | Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
-
-## Essentials
-
-- Owner is `29932896+AJTJ@users.noreply.github.com`; commits are authored `ajtj`.
 
 ## This repo's work flow
 

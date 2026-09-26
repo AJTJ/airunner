@@ -1034,7 +1034,7 @@ fn air_handover_is_a_query_and_the_hook_path_is_the_attempt() {
         );
         out.matches("handover-not-green").count()
     };
-    // bd keeps holding fd-1 in_progress, so `air status`'s reconcile leaves the claim open and
+    // bd keeps holding ad-1 in_progress, so `air status`'s reconcile leaves the claim open and
     // the only thing that can move the counter is a hand-over.
     std::fs::write(repo.join("bd.in_progress"), "zz-1\n").unwrap();
     assert_eq!(air(&repo, &bd, &["claim", "zz-1"]).0, 0);
@@ -1254,7 +1254,7 @@ fn handover_names_the_held_bead_and_skips_the_digest_with_no_claim() {
     assert!(!o.contains("<bead>"), "{o}");
     assert_eq!(code, 0, "advisory outside the hook path: {o}");
 
-    // The digest declaring it satisfies the check; the one for fd-x never did.
+    // The digest declaring it satisfies the check; the one for ad-x never did.
     std::fs::write(
         repo.join("docs/log.d/2026-08-30-main-zz-251z.md"),
         "---\nbead: zz-251z\n---\n\ndigest\n",
@@ -1267,13 +1267,13 @@ fn handover_names_the_held_bead_and_skips_the_digest_with_no_claim() {
     );
 }
 
-/// air-60x (the adopter, 2026-08-31), end to end. Worker A claims fd-1, does the work
-/// with a `Bead: fd-1` trailer, and releases it as landed. Worker B then builds a better fix
-/// for the same defect on its own branch, carrying fd-1 by trailer and holding no claim on it.
-/// `air handover fd-1` from B used to refuse with "not claimed by B, run `air claim fd-1`",
+/// air-60x (the adopter, 2026-08-31), end to end. Worker A claims ad-1, does the work
+/// with a `Bead: ad-1` trailer, and releases it as landed. Worker B then builds a better fix
+/// for the same defect on its own branch, carrying ad-1 by trailer and holding no claim on it.
+/// `air handover ad-1` from B used to refuse with "not claimed by B, run `air claim ad-1`",
 /// while `air land` would have taken the branch on its own criterion. Now the trailer is the
 /// path, the refusal (before green) never offers `air claim`, and once green with main merged
-/// the hand-over passes. The digest check looks for fd-1 too, because that is the work carried.
+/// the hand-over passes. The digest check looks for ad-1 too, because that is the work carried.
 #[test]
 fn a_superseding_branch_hands_over_by_its_trailer() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -1311,7 +1311,7 @@ fn a_superseding_branch_hands_over_by_its_trailer() {
     );
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
 
-    // B: a better instrument for the same defect, carrying fd-1 by trailer, no claim on it.
+    // B: a better instrument for the same defect, carrying ad-1 by trailer, no claim on it.
     std::fs::write(beta.join("better.txt"), "measured, not rounded\n").unwrap();
     git(&beta, &["add", "better.txt"]);
     git(&beta, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
@@ -1321,7 +1321,7 @@ fn a_superseding_branch_hands_over_by_its_trailer() {
     };
 
     // Before merging main and recording a green: refused on those, never on the claim, and
-    // nothing offers `air claim fd-1`. The digest check names fd-1, the carried bead.
+    // nothing offers `air claim ad-1`. The digest check names ad-1, the carried bead.
     let (_, o, _) = air(&beta, &bd, &["--json", "handover", "--bead", "zz-1"]);
     let m = missing(&o);
     assert!(!m.iter().any(|m| m["check"] == "claim"), "{o}");
@@ -1647,7 +1647,7 @@ fn install_reports_a_stale_bd_prime_hook() {
     assert!(!out.contains("STALE HOOK"), "{out}");
 }
 
-/// air-80x.3, end to end: alpha claims fd-1, commits with the trailer, merges main: batch-ready.
+/// air-80x.3, end to end: alpha claims ad-1, commits with the trailer, merges main: batch-ready.
 /// A green at its head: gone, reason `green-at-head`. main moves past it: batch-ready again.
 #[test]
 fn status_lists_batch_ready_branches_as_a_fact() {
@@ -1894,7 +1894,7 @@ fn status_lists_green_landings_with_their_commands() {
     );
 
     // Claimed, worked, and committed with a `Bead:` trailer. That commit is the only thing
-    // attributing this branch to fd-1.
+    // attributing this branch to ad-1.
     std::fs::write(repo.join("bd.in_progress"), "zz-1\n").unwrap();
     assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
     std::fs::write(repo.join("bd.in_progress"), "").unwrap();
@@ -2213,8 +2213,8 @@ fn awaiting_review_keeps_the_claim_and_close_releases_it() {
 /// air-80x.1: a verify lane's green at a batch commit closes the bead it covers, and a batch
 /// cut before the worker's last commit does not. End to end: alpha commits with a `Bead:`
 /// trailer; a lane worktree merges main and alpha's branch and records the only green, at the
-/// batch head, as worker `lane`; alpha's `air handover --bead fd-1` passes on it with no green
-/// at alpha's HEAD. Then alpha commits more for fd-1, and the same batch is refused by name.
+/// batch head, as worker `lane`; alpha's `air handover --bead ad-1` passes on it with no green
+/// at alpha's HEAD. Then alpha commits more for ad-1, and the same batch is refused by name.
 #[test]
 fn a_lane_batch_green_closes_the_bead_it_covers_and_a_stale_batch_is_named() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -2257,7 +2257,7 @@ fn a_lane_batch_green_closes_the_bead_it_covers_and_a_stale_batch_is_named() {
         air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
         0
     );
-    // No green at alpha's HEAD; the batch's green covers fd-1's one commit.
+    // No green at alpha's HEAD; the batch's green covers ad-1's one commit.
     let (code, out, err) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "zz-1"], dead);
     assert_eq!(code, 0, "{out}{err}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -2274,7 +2274,7 @@ fn a_lane_batch_green_closes_the_bead_it_covers_and_a_stale_batch_is_named() {
         "{out}"
     );
 
-    // alpha commits again for fd-1 after the batch was cut: the batch no longer covers it.
+    // alpha commits again for ad-1 after the batch was cut: the batch no longer covers it.
     std::fs::write(alpha.join("late.txt"), "late\n").unwrap();
     git(&alpha, &["add", "-A"]);
     git(
@@ -3196,7 +3196,7 @@ fn after_a_land_the_other_branch_reads_as_needing_a_remerge() {
 }
 
 /// air-09b: the adopter's two observed cases, end to end. A batching lane (beta) merges alpha's
-/// branch, so both ranges name fd-1. Naming the bead is refused with both carriers and the
+/// branch, so both ranges name ad-1. Naming the bead is refused with both carriers and the
 /// `--worker` command for each: never the oldest-waiting branch, which is what landed the
 /// wrong one on 2026-08-30. When alpha's green goes stale the bead is still refused, now with
 /// beta's command and alpha's fix, rather than either refused outright or silently landing
@@ -3219,7 +3219,7 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
     );
     let bd = fake_bd(&main);
 
-    // alpha does fd-1 and hands it on (the claim is released, as close-with-proof does).
+    // alpha does ad-1 and hands it on (the claim is released, as close-with-proof does).
     std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
     assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
     std::fs::write(alpha.join("a.txt"), "work\n").unwrap();
@@ -3231,7 +3231,7 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
         air(&alpha, &bd, &["release", "zz-1", "--reason", "landed"]).0,
         0
     );
-    // beta is the batching lane: it takes alpha's branch and adds fd-2 on top.
+    // beta is the batching lane: it takes alpha's branch and adds ad-2 on top.
     std::fs::write(main.join("bd.in_progress"), "zz-1\nzz-2\n").unwrap();
     assert_eq!(air(&beta, &bd, &["claim", "zz-1"]).0, 0);
     assert_eq!(air(&beta, &bd, &["claim", "zz-2"]).0, 0);
@@ -3295,7 +3295,7 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
         .query_row("SELECT beads FROM landings", [], |r| r.get(0))
         .unwrap();
     assert!(beads.contains("zz-1") && beads.contains("zz-2"), "{beads}");
-    // Everything alpha had went in with beta, so no listed branch carries fd-1 now: the
+    // Everything alpha had went in with beta, so no listed branch carries ad-1 now: the
     // missing-bead refusal, unchanged. (A bead on ONE blocked branch is the refusal
     // `after_a_land_the_other_branch_reads_as_needing_a_remerge` drives.)
     let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
@@ -3783,7 +3783,7 @@ fn land_refuses_a_worker_and_an_unlandable_bead() {
 }
 
 /// air-9ij, end to end, and the limb the adopter measured: **a batch green goes on covering
-/// its bead after main moves.** alpha commits for fd-1, a lane batches and records the only
+/// its bead after main moves.** alpha commits for ad-1, a lane batches and records the only
 /// green, then main gains an ordinary prose commit — no landing, nothing to do with alpha —
 /// and alpha merges it. The close used to be refused with no mention of the batch at all,
 /// because `contains main` was asked of main as it stood at the moment of the question. The
@@ -3791,7 +3791,7 @@ fn land_refuses_a_worker_and_an_unlandable_bead() {
 ///
 /// The same test carries the limb that did NOT bite, because it was reported as if it had:
 /// starting the next bead costs nothing. The gate is content-based on the bead's own trailer
-/// commits and never compares the batch with HEAD, so a commit for fd-2 leaves fd-1 closable.
+/// commits and never compares the batch with HEAD, so a commit for ad-2 leaves ad-1 closable.
 #[test]
 fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_starts() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -3801,7 +3801,7 @@ fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_
     git(&alpha, &["add", "more.txt"]);
     git(
         &alpha,
-        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+        &["commit", "-q", "-m", "feat: the work\n\nBead: ad-1\n"],
     );
     let lane = main.parent().unwrap().join("lane");
     git(
@@ -3831,20 +3831,20 @@ fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_
         0
     );
     let ask = || -> serde_json::Value {
-        let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+        let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-1"], dead);
         serde_json::from_str(&out).unwrap()
     };
     let batch = git(&lane, &["rev-parse", "--short=8", "HEAD"]);
     let v = ask();
     assert_eq!(v["pass"], true, "{v}");
 
-    // The next bead starts on the same branch. fd-1's own commits are unchanged, so the batch
+    // The next bead starts on the same branch. ad-1's own commits are unchanged, so the batch
     // still covers it; this limb was reported as a separate failure and is not one.
     std::fs::write(alpha.join("next.txt"), "next\n").unwrap();
     git(&alpha, &["add", "next.txt"]);
     git(
         &alpha,
-        &["commit", "-q", "-m", "feat: the next bead\n\nBead: fd-2\n"],
+        &["commit", "-q", "-m", "feat: the next bead\n\nBead: ad-2\n"],
     );
     let v = ask();
     assert_eq!(v["pass"], true, "next bead must not close the window: {v}");
@@ -3870,7 +3870,7 @@ fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_
         msg.contains(&batch),
         "must name the batch it passed on: {msg}"
     );
-    assert!(msg.contains("every commit of fd-1"), "{msg}");
+    assert!(msg.contains("every commit of ad-1"), "{msg}");
 }
 
 /// air-9ij, limb 1: **a bead whose every commit is already in main closes on the landing that
@@ -3887,14 +3887,14 @@ fn a_bead_already_in_main_closes_on_its_landing() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
     let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
-    std::fs::write(main.join("bd.in_progress"), "fd-1\n").unwrap();
-    assert_eq!(air_env(&alpha, &bd, &["claim", "fd-1"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "ad-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "ad-1"], dead).0, 0);
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
     std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
     git(&alpha, &["add", "more.txt"]);
     git(
         &alpha,
-        &["commit", "-q", "-m", "feat: the work\n\nBead: fd-1\n"],
+        &["commit", "-q", "-m", "feat: the work\n\nBead: ad-1\n"],
     );
     let lane = main.parent().unwrap().join("lane");
     git(
@@ -3933,7 +3933,7 @@ fn a_bead_already_in_main_closes_on_its_landing() {
         "",
         "the landing leaves the worker nothing main does not have"
     );
-    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-1"], dead);
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-1"], dead);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let msg = v["message"].as_str().unwrap().to_string();
     assert_eq!(v["pass"], true, "{msg}");
@@ -3942,7 +3942,7 @@ fn a_bead_already_in_main_closes_on_its_landing() {
 
     // A bead nothing landed is still refused: the landing row is what proves the work is
     // there, so an empty range on its own closes nothing.
-    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "fd-9"], dead);
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-9"], dead);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["pass"], false, "{out}");
 }
@@ -3968,7 +3968,7 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     git(&alpha, &["add", "a.txt"]);
     git(
         &alpha,
-        &["commit", "-q", "-m", "feat: alpha\n\nBead: fd-1\n"],
+        &["commit", "-q", "-m", "feat: alpha\n\nBead: ad-1\n"],
     );
     let alpha_taken = git(&alpha, &["rev-parse", "HEAD"]);
 
@@ -3987,7 +3987,7 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     let beta = beta.canonicalize().unwrap();
     std::fs::write(beta.join("b.txt"), "b\n").unwrap();
     git(&beta, &["add", "b.txt"]);
-    git(&beta, &["commit", "-q", "-m", "feat: beta\n\nBead: fd-2\n"]);
+    git(&beta, &["commit", "-q", "-m", "feat: beta\n\nBead: ad-2\n"]);
     let beta_taken = git(&beta, &["rev-parse", "HEAD"]);
 
     // A worker the lane does NOT merge: it must not appear, then or now.
@@ -4008,7 +4008,7 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     git(&gamma, &["add", "g.txt"]);
     git(
         &gamma,
-        &["commit", "-q", "-m", "feat: gamma\n\nBead: fd-3\n"],
+        &["commit", "-q", "-m", "feat: gamma\n\nBead: ad-3\n"],
     );
 
     let lane = root.join("lane");
@@ -4042,7 +4042,7 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     git(&alpha, &["add", "late.txt"]);
     git(
         &alpha,
-        &["commit", "-q", "-m", "feat: after the cut\n\nBead: fd-1\n"],
+        &["commit", "-q", "-m", "feat: after the cut\n\nBead: ad-1\n"],
     );
     let alpha_now = git(&alpha, &["rev-parse", "HEAD"]);
     assert_ne!(alpha_now, alpha_taken, "the window has to be real");

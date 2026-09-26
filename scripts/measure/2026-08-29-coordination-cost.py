@@ -30,7 +30,9 @@ import os
 import re
 import sys
 
-PREFIX = sys.argv[1] if len(sys.argv) > 1 else "-Users-owner-projects-ai-runner"
+# Claude Code names a project's transcript directory after its path, with "/" and "_" as "-".
+# Run from the main checkout, or pass that directory-name prefix as the first argument.
+PREFIX = sys.argv[1] if len(sys.argv) > 1 else os.getcwd().replace("/", "-").replace("_", "-")
 ROOT = os.path.expanduser("~/.claude/projects")
 INCOMING = re.compile(r"<cross-session-message\b.*?</cross-session-message>", re.S)
 

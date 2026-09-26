@@ -20,12 +20,14 @@ could ever save, so a narrow list would understate the case against building it 
 """
 
 import collections
+import os
 import sqlite3
 import subprocess
 import sys
 
-DB = sys.argv[1] if len(sys.argv) > 1 else "~/projects/ai_runner/.air/ledger.db"
-REPO = sys.argv[2] if len(sys.argv) > 2 else "~/projects/ai_runner"
+# Run from the main checkout, or pass the ledger and the checkout as arguments.
+DB = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.getcwd(), ".air/ledger.db")
+REPO = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 IGNORE_PREFIXES = ("docs/", ".beads/")
 IGNORE_EXACT = ("README.md", "CLAUDE.md")
 
