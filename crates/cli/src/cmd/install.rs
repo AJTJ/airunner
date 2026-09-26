@@ -2649,6 +2649,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-09-26: air close judges the bead by its `Bead:` trailer commits, so a worker can start
     // its next bead while the lane verifies the last. 0.4.7's trial found the head-based refusal.
     ("0.4.8", 38, 142),
+    // 2026-09-26: every batch starts from main; the causes behind past trial workarounds
+    // (precheck hold told, no merge-main advice under a lane, landing green, wording).
+    ("0.4.9", 39, 148),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
