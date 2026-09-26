@@ -6,7 +6,7 @@ into the repo and gives every session at start. This file does not restate it.
 
 ## Install
 
-You need git 2.38 or later, tmux, Claude Code, and bd 1.2.2 (`brew install beads && brew pin
+You need git 2.38 or later, tmux, Claude Code, and bd 1.3.0 (`brew install beads && brew pin
 beads`). Build Air from its checkout with `cargo install --path crates/cli` and check that
 `which air` is that binary. Then run `air doctor`: it compares bd against the pinned version,
 checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.

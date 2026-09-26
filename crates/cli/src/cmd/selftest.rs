@@ -8248,7 +8248,7 @@ fn fake_bd_script(dir: &Path) -> Result<std::path::PathBuf, String> {
         &script,
         format!(
             "#!/bin/sh\nd='{d}'\necho \"$@\" >> \"$d/bd.log\"\ncase \"$1\" in\n  \
-             --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+             --version) echo 'bd version 1.3.0'; exit 0;;\n  \
              show) shift; out=''; for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n    \
              case \"$id\" in zz-1) s=closed;; zz-2) s=awaiting_review;; *) s=open;; esac\n    \
              out=\"$out${{out:+,}}{{\\\"id\\\":\\\"$id\\\",\\\"status\\\":\\\"$s\\\",\\\"labels\\\":[]}}\"; done\n    \
@@ -11672,7 +11672,7 @@ fn probe_close_takes_a_reason_file_whole() -> Probe {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nd='{d}'\ncase \"$1\" in\n  --version) echo 'bd version 1.2.2'; \
+                "#!/bin/sh\nd='{d}'\ncase \"$1\" in\n  --version) echo 'bd version 1.3.0'; \
                  exit 0;;\nesac\nprev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = '--reason' ]; \
                  then printf '%s' \"$a\" > \"$d/reason.txt\"; fi\n  prev=\"$a\"\ndone\n\
                  printf '%s\\n' \"$@\" | head -20 > \"$d/argv.txt\"\nexit 0\n",
@@ -11796,7 +11796,7 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let script = dir.join("bd");
         std::fs::write(
             &script,
-            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'bd version 1.3.0'; exit 0;;\n  \
              show) printf '%s\\n' \
              '[{\"id\":\"zz-6wv2\",\"status\":\"open\",\"assignee\":\"alerts\",\"labels\":[]}]'; \
              exit 0;;\n  *) echo '[]'; exit 0;;\nesac\n",
@@ -12709,7 +12709,7 @@ fn probe_a_prefix_claim_is_recorded_and_survives_the_reconcile() -> Probe {
             &script,
             format!(
                 "#!/bin/sh\nd='{d}'\necho \"$@\" >> \"$d/bd.log\"\ncase \"$1\" in\n  \
-                 --version) echo 'bd version 1.2.2'; exit 0;;\n  \
+                 --version) echo 'bd version 1.3.0'; exit 0;;\n  \
                  show) shift; out=''\n    for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n      \
                  case \"$id\" in\n        \
                  zz-pre|zz-full) row='{{\"id\":\"zz-full\",\"title\":\"t\",\"status\":\"open\",\"labels\":[],\"issue_type\":\"task\"}}';;\n        \

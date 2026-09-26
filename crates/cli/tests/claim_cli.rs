@@ -60,7 +60,7 @@ echo "$@" >> "$d/bd.log"
 # here is what the ledger said mid-land. Off unless the test creates bd.peek.
 [ -f "$d/bd.peek" ] && { rm -rf "$d/seen_air"; cp -R "$d/.air" "$d/seen_air"; }
 case "$1" in
-  --version) echo "bd version 1.2.2"; exit 0;;
+  --version) echo "bd version 1.3.0"; exit 0;;
   show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; exit 0; fi
        shift; out=""; desc=""; [ -f "$d/bd.desc.json" ] && desc=$(cat "$d/bd.desc.json")
        for id in "$@"; do

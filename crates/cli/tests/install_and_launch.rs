@@ -532,7 +532,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
     std::fs::write(proj.join("ios/fastlane/Fastfile"), "").unwrap();
     // Fake bd that supports init (creates .beads) and answers list/show.
     let bd = root.join("bd");
-    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.2.2';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; config) echo \"$@\" >> .beads/config.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
+    std::fs::write(&bd, "#!/bin/sh\ncase \"$1\" in --version) echo 'bd version 1.3.0';; init) mkdir -p .beads; echo \"$@\" > .beads/init.args;; config) echo \"$@\" >> .beads/config.args;; show) echo '{\"id\":\"x\",\"status\":\"open\",\"labels\":[]}';; *) echo '[]';; esac\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -649,7 +649,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
         std::fs::read_to_string(proj.join(".claude/skills/air-do-less/SKILL.md")).unwrap();
     assert!(do_less.starts_with("---\nname: air-do-less\n"), "{do_less}");
     assert!(do_less.contains("removal condition"), "{do_less}");
-    // And `beads` is deliberately not installed: it documents bd 1.2.1, and Air pins 1.2.2.
+    // And `beads` is deliberately not installed: it documents bd 1.2.1, and Air pins 1.3.0.
     assert!(!proj.join(".claude/skills/air-beads").exists());
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(proj.join(".claude/settings.json")).unwrap())
