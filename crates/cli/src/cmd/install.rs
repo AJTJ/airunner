@@ -2239,6 +2239,10 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // pinned to its own binary. Twenty-nine notices, each written with its change; the sweep
     // read every landing of the round against them.
     ("0.4.0", 30, 111),
+    // 2026-09-26: 0.4.0 was never tagged: its live trial failed (pinning did not hold, the lane
+    // could not land, the trial copy had no verify_lane, eleven start-up prompts). The fixes
+    // added three notices: pin-delegation, lane-land-allow, launch-startup-prompts.
+    ("0.4.1", 31, 114),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
