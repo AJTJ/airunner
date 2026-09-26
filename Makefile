@@ -21,6 +21,14 @@ adoption-check:
 	cargo build -q -p air
 	sh scripts/adoption-check.sh
 
+# Prepare the live trial (docs/design.md §9.1, air-4usc): build the release binary and pin it
+# into a scratch copy of examples/minimal under $TMPDIR, leaving the `air` on PATH alone. Prints
+# where the copy is and how to start it. Starts no session.
+.PHONY: trial
+trial:
+	cargo build -q --release -p air
+	sh scripts/trial.sh
+
 # Cut a release (owner, 2026-08-29: "enforce a good release system, so that we draw those lines
 # in the sand more readily"). Air had no release concept at all until then: version 0.0.1 since
 # the first commit, no tags, and a surface version that could move on nobody's authority.

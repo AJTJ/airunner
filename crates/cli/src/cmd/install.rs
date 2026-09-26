@@ -14,7 +14,10 @@
 //!
 //! It never touches the live fleet's state beyond these files, and it refuses to write when
 //! the `air` on PATH is not this binary (enforcement rank 10: a worktree copy must not be
-//! what the hooks resolve to).
+//! what the hooks resolve to). `--pin` lifts that refusal because it removes its cause: the
+//! binary is copied to `.air/bin/air` and the hooks and channel name the copy by absolute
+//! path, so what they run is this binary whatever PATH says (air-4usc). A pinned repo refuses
+//! a plain `--write` for the same reason, until `--pin` or `--unpin` says which binary wins.
 
 use std::path::{Path, PathBuf};
 
@@ -188,14 +191,42 @@ pub fn hook_entries() -> Vec<(&'static str, Option<&'static str>)> {
     ]
 }
 
-fn air_hook() -> Value {
-    json!({"type": "command", "command": "air hook", "timeout": HOOK_TIMEOUT_SECS})
+fn air_hook(command: &str) -> Value {
+    json!({"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS})
 }
 
 fn is_ours(h: &Value) -> bool {
     h.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|c| c == "air hook" || c.ends_with("/air hook"))
+        .is_some_and(|c| c == "air hook" || c.ends_with("/air hook") || c.ends_with("/air' hook"))
+}
+
+/// Where `air install --write --pin` puts its copy of the binary (air-4usc): `.air/bin/air`,
+/// so it is ignored with the rest of `.air/`.
+///
+/// Why: the owner builds Air with Air (2026-09-25), and a candidate build must run in a repo
+/// without replacing the `air` on PATH that the fleet building it depends on. A copy, not a
+/// path into `target/`: CLAUDE.md's rule that a repo's tooling never depends on Air's build
+/// stays true. Removed when Air is no longer built by a fleet that runs Air.
+pub fn pin_path(air_dir: &Path) -> PathBuf {
+    air_dir.join("bin").join("air")
+}
+
+/// The hook command: the pinned copy by absolute path, shell-quoted because the harness runs
+/// it through a shell, or `air hook` from PATH.
+pub fn hook_command(pin: Option<&Path>) -> String {
+    match pin {
+        Some(p) => format!(
+            "{} hook",
+            crate::cmd::launch::shell_quote(&p.display().to_string())
+        ),
+        None => "air hook".to_string(),
+    }
+}
+
+/// Pure: merge our hook entries into a settings object with `air hook` from PATH. Idempotent.
+pub fn merge_hooks(settings: Value) -> Value {
+    merge_hooks_with(settings, "air hook")
 }
 
 /// Does git ignore the ledger in this repo? `git check-ignore -q .air/ledger.db` is the same
@@ -226,8 +257,10 @@ pub fn ignore_refusal(ignored: bool) -> Option<String> {
     })
 }
 
-/// Pure: merge our hook entries into a settings object. Idempotent.
-pub fn merge_hooks(mut settings: Value) -> Value {
+/// Pure: merge our hook entries into a settings object, each running `command`. Idempotent,
+/// and an existing Air hook whose command differs is rewritten, which is how `--pin` and
+/// `--unpin` move a repo between the pinned copy and PATH (air-4usc).
+pub fn merge_hooks_with(mut settings: Value, command: &str) -> Value {
     if !settings.is_object() {
         settings = json!({});
     }
@@ -258,6 +291,19 @@ pub fn merge_hooks(mut settings: Value) -> Value {
                 .is_some_and(|hs| hs.iter().any(is_ours))
         });
         if let Some(group) = ours {
+            for h in group
+                .get_mut("hooks")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+                .filter(|h| is_ours(h))
+            {
+                if h.get("command").and_then(Value::as_str) != Some(command)
+                    && let Some(obj) = h.as_object_mut()
+                {
+                    obj.insert("command".into(), json!(command));
+                }
+            }
             match (matcher, group.get("matcher").and_then(Value::as_str)) {
                 (Some(want), have) if have != Some(want) => {
                     if let Some(obj) = group.as_object_mut() {
@@ -269,16 +315,18 @@ pub fn merge_hooks(mut settings: Value) -> Value {
             continue;
         }
         let group = match matcher {
-            Some(m) => json!({"matcher": m, "hooks": [air_hook()]}),
-            None => json!({"hooks": [air_hook()]}),
+            Some(m) => json!({"matcher": m, "hooks": [air_hook(command)]}),
+            None => json!({"hooks": [air_hook(command)]}),
         };
         arr.push(group);
     }
     settings
 }
 
-/// Pure: merge the `air` MCP server into a `.mcp.json` object. Idempotent.
-pub fn merge_mcp(mut mcp: Value) -> Value {
+/// Pure: merge the `air` MCP server into a `.mcp.json` object, running `command` (`air`, or
+/// the pin). Idempotent. An entry Air wrote (`air`, or a pin under `.air/bin/`) is pointed at
+/// `command`; one somebody wrote by hand is left alone.
+pub fn merge_mcp_with(mut mcp: Value, command: &str) -> Value {
     if !mcp.is_object() {
         mcp = json!({});
     }
@@ -287,9 +335,16 @@ pub fn merge_mcp(mut mcp: Value) -> Value {
         .map(|o| o.entry("mcpServers").or_insert_with(|| json!({})))
         .and_then(Value::as_object_mut)
     {
-        servers
+        let entry = servers
             .entry("air")
-            .or_insert_with(|| json!({"command": "air", "args": ["mcp"]}));
+            .or_insert_with(|| json!({"command": command, "args": ["mcp"]}));
+        let ours = entry
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|c| c == "air" || c.ends_with("/.air/bin/air"));
+        if ours && let Some(obj) = entry.as_object_mut() {
+            obj.insert("command".into(), json!(command));
+        }
     }
     mcp
 }
@@ -1932,6 +1987,19 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "Only if something of the repo's reads `.air/events/`: match the two renamed \
                  decisions.",
     },
+    SurfaceChange {
+        id: "install-pin",
+        since: "2026-09-25 (owner, air-4usc)",
+        headline: "`air install --write --pin` copies the running binary to `.air/bin/air` and \
+                   points the hooks and the `.mcp.json` channel at that copy by absolute path. \
+                   The launchers then put `.air/bin` first on PATH in every session they start, \
+                   and `air status` and `air doctor` name the pin and warn when the `air` on \
+                   PATH has a different surface version. `--unpin` goes back to PATH. A pinned \
+                   repo refuses a plain `air install --write` until `--pin` or `--unpin` is \
+                   given.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -2367,6 +2435,83 @@ fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     std::fs::write(path, s).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// A repo's pin as `air status` and `air doctor` report it (air-4usc).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PinState {
+    /// The copy the hooks, the channel and Air's sessions run.
+    pub binary: PathBuf,
+    /// Its surface version, asked of the copy itself; None when it does not answer.
+    pub surface: Option<u32>,
+    /// The first `air` on PATH outside the pin's directory: what a shell that Air did not
+    /// start runs.
+    pub path_binary: Option<PathBuf>,
+    pub path_surface: Option<u32>,
+}
+
+/// A binary's surface version from `--version --json`, or from the plain `--version` line of
+/// a binary older than air-dwq5.
+pub fn surface_of(bin: &Path) -> Option<u32> {
+    let out = std::process::Command::new(bin)
+        .args(["--version", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if let Ok(v) = serde_json::from_str::<Value>(text.trim()) {
+        return v
+            .get("surface_version")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok());
+    }
+    let tail = text.split("surface ").nth(1)?;
+    tail.trim_end_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .ok()
+}
+
+/// The pin under `air_dir`, with both surface versions, or None when the repo is not pinned.
+pub fn pin_state(air_dir: &Path) -> Option<PinState> {
+    let binary = pin_path(air_dir);
+    if !binary.is_file() {
+        return None;
+    }
+    let pin_dir = binary.parent().and_then(|d| d.canonicalize().ok());
+    let path_binary = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .filter(|d| d.canonicalize().ok() != pin_dir)
+            .map(|d| d.join("air"))
+            .find(|p| p.is_file())
+    });
+    Some(PinState {
+        surface: surface_of(&binary),
+        path_surface: path_binary.as_deref().and_then(surface_of),
+        path_binary,
+        binary,
+    })
+}
+
+/// The pin's line, and a second when the pin and the PATH binary differ in surface version.
+pub fn pin_lines(p: &PinState) -> Vec<String> {
+    let v = |s: Option<u32>| s.map_or_else(|| "unknown".to_string(), |n| n.to_string());
+    let mut out = vec![format!(
+        "pinned: hooks, the channel and Air's sessions run {} (surface {})",
+        p.binary.display(),
+        v(p.surface)
+    )];
+    if let Some(path) = &p.path_binary
+        && p.path_surface != p.surface
+    {
+        out.push(format!(
+            "PIN DIFFERS from PATH: `air` on PATH is {} (surface {}); a shell Air did not start \
+             runs that one, not the pin",
+            path.display(),
+            v(p.path_surface)
+        ));
+    }
+    out
+}
+
 /// The `air` that PATH resolves to, if any.
 fn air_on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -2375,10 +2520,39 @@ fn air_on_path() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// What `air install` does about the pin (air-4usc). `Keep` is no flag: a repo with no pin
+/// stays on PATH, and a pinned repo refuses `--write` until one of the other two is said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinArg {
+    Keep,
+    Pin,
+    Unpin,
+}
+
+/// Copy `from` to `to` by way of a temporary file and a rename, so a hook that is running the
+/// old copy at that moment keeps its file and the next one gets the new one whole. A no-op
+/// when they are already the same file (re-pinning from the pin itself).
+fn copy_binary(from: &Path, to: &Path) -> Result<(), String> {
+    if let (Ok(a), Ok(b)) = (from.canonicalize(), to.canonicalize())
+        && a == b
+    {
+        return Ok(());
+    }
+    let dir = to.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tmp = dir.join(format!(".air.{}.tmp", std::process::id()));
+    std::fs::copy(from, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))
+}
+
 #[derive(Debug, serde::Serialize)]
 struct Plan {
     repo: PathBuf,
     binary: PathBuf,
+    /// The copy the hooks and the channel run after this install, or None for PATH (air-4usc).
+    pin: Option<PathBuf>,
+    /// A pin was there before this run.
+    pinned_before: bool,
     path_binary: Option<PathBuf>,
     binary_ok: bool,
     settings_path: PathBuf,
@@ -2475,7 +2649,7 @@ fn plan_settings_changed(before: &Value, after: &Value) -> bool {
     before != after
 }
 
-pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
+pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
     let repo = match repo.canonicalize() {
         Ok(r) => r,
         Err(e) => {
@@ -2485,13 +2659,23 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     };
     let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("air"));
     let path_binary = air_on_path();
-    let binary_ok = match (&path_binary, binary.canonicalize()) {
-        (Some(p), Ok(me)) => p.canonicalize().map(|p| p == me).unwrap_or(false),
-        _ => false,
-    };
     let settings_path = repo.join(".claude/settings.json");
     let mcp_path = repo.join(".mcp.json");
     let air_dir = repo.join(".air");
+    let pin_file = pin_path(&air_dir);
+    let pinned_before = pin_file.is_file();
+    // With `--pin` the hooks call the copy by absolute path, so the binary they run IS this
+    // one whatever PATH says, and the PATH check below has nothing left to protect (air-4usc).
+    let pin = match pin_arg {
+        PinArg::Pin => Some(pin_file.clone()),
+        PinArg::Unpin => None,
+        PinArg::Keep => pinned_before.then(|| pin_file.clone()),
+    };
+    let binary_ok = pin_arg == PinArg::Pin
+        || match (&path_binary, binary.canonicalize()) {
+            (Some(p), Ok(me)) => p.canonicalize().map(|p| p == me).unwrap_or(false),
+            _ => false,
+        };
     let skills_dir = repo.join(".claude/skills");
     let retired_skills = retired_present(
         &std::fs::read_dir(&skills_dir)
@@ -2511,7 +2695,7 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    let after_settings = merge_hooks(before_settings.clone());
+    let after_settings = merge_hooks_with(before_settings.clone(), &hook_command(pin.as_deref()));
     // What the merge leaves in place and should not (air-b5k). Read off the merged value so
     // the report describes the file as it will be after `--write`.
     let stale = stale_hooks(&after_settings);
@@ -2522,7 +2706,12 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    let after_mcp = merge_mcp(before_mcp.clone());
+    let after_mcp = merge_mcp_with(
+        before_mcp.clone(),
+        &pin.as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "air".into()),
+    );
     // git's answer, not a scan of one file: a nested `.gitignore`, `.git/info/exclude` or a
     // later `!.air` line all change it, and the ledger's content is what is at stake.
     let gitignore_has_air = air_ignored(&repo);
@@ -2544,6 +2733,8 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
     let mut plan = Plan {
         repo: repo.clone(),
         binary,
+        pin: pin.clone(),
+        pinned_before,
         path_binary,
         binary_ok,
         settings_path: settings_path.clone(),
@@ -2595,6 +2786,15 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             );
             return 2;
         }
+        if pin_arg == PinArg::Keep && pinned_before {
+            eprintln!(
+                "air install: refusing to write: this repo is pinned to {}, and its hooks and \
+                 channel run that copy. Re-run with --pin to pin this binary in its place, or \
+                 --unpin to go back to the `air` on PATH.",
+                pin_file.display()
+            );
+            return 2;
+        }
         if !binary_ok {
             eprintln!(
                 "air install: refusing to write: `air` on PATH is {} but this binary is {}. Install this binary on PATH first (cargo install --path crates/cli).",
@@ -2611,6 +2811,10 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             return 2;
         }
         let steps: Result<(), String> = (|| {
+            // The copy first, so no hook is ever written pointing at a file that is not there.
+            if pin_arg == PinArg::Pin {
+                copy_binary(&plan.binary, &pin_file)?;
+            }
             if plan.settings_changed {
                 write_json(&settings_path, &after_settings)?;
             }
@@ -2641,6 +2845,11 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
                     );
                 }
             }
+            // After the hooks stop naming it.
+            if pin_arg == PinArg::Unpin && pinned_before {
+                std::fs::remove_file(&pin_file)
+                    .map_err(|e| format!("{}: {e}", pin_file.display()))?;
+            }
             // Last: the repo has now been told everything above, so record it. Written after
             // the files so a failed install does not claim the surface was delivered.
             write_installed(&air_dir, &super::now())?;
@@ -2659,12 +2868,31 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
         s.push_str(&format!(
             "binary:   {} ({})\n",
             plan.binary.display(),
-            if plan.binary_ok {
+            if pin_arg == PinArg::Pin {
+                "pinned, so PATH does not matter"
+            } else if plan.binary_ok {
                 "is the `air` on PATH"
             } else {
                 "NOT the `air` on PATH; fix before --write"
             }
         ));
+        match (&plan.pin, pin_arg) {
+            (Some(p), PinArg::Pin) => s.push_str(&format!(
+                "pin:      {} {} (hooks and the channel run this copy)\n",
+                if plan.written { "copied to" } else { "will copy to" },
+                p.display()
+            )),
+            (Some(p), _) => s.push_str(&format!(
+                "pin:      {} (hooks and the channel run this copy; --write needs --pin or --unpin)\n",
+                p.display()
+            )),
+            (None, PinArg::Unpin) if plan.pinned_before => s.push_str(&format!(
+                "pin:      {} {} (hooks and the channel go back to the `air` on PATH)\n",
+                if plan.written { "removed" } else { "will remove" },
+                pin_file.display()
+            )),
+            _ => {}
+        }
         s.push_str(&format!(
             "settings: {} ({})\n",
             plan.settings_path.display(),
@@ -3018,11 +3246,45 @@ mod tests {
 
     #[test]
     fn merge_mcp_adds_air_once_and_keeps_user_servers() {
-        let v = merge_mcp(json!({"mcpServers": {"other": {"command": "x"}}}));
+        let v = merge_mcp_with(json!({"mcpServers": {"other": {"command": "x"}}}), "air");
         assert_eq!(v["mcpServers"]["air"]["args"][0], "mcp");
         assert_eq!(v["mcpServers"]["other"]["command"], "x");
         let custom = json!({"mcpServers": {"air": {"command": "/opt/air", "args": ["mcp", "-v"]}}});
-        assert_eq!(merge_mcp(custom.clone()), custom);
-        assert!(merge_mcp(json!("garbage"))["mcpServers"]["air"].is_object());
+        assert_eq!(merge_mcp_with(custom.clone(), "air"), custom);
+        assert!(merge_mcp_with(json!("garbage"), "air")["mcpServers"]["air"].is_object());
+    }
+
+    /// air-4usc: `--pin` and `--unpin` move an installed repo's hooks and channel between the
+    /// copy and PATH, in both directions, touching nobody else's entries.
+    #[test]
+    fn pin_rewrites_our_hooks_and_channel_and_unpin_restores_them() {
+        let pin = Path::new("/r/my repo/.air/bin/air");
+        let cmd = hook_command(Some(pin));
+        assert_eq!(cmd, "'/r/my repo/.air/bin/air' hook");
+        let mine =
+            json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}});
+        let unpinned = merge_hooks(mine);
+        let pinned = merge_hooks_with(unpinned.clone(), &cmd);
+        let cmds: Vec<&str> = pinned["hooks"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|g| g.as_array().unwrap())
+            .flat_map(|g| g["hooks"].as_array().unwrap())
+            .filter_map(|h| h["command"].as_str())
+            .collect();
+        assert!(cmds.contains(&"mine"), "{cmds:?}");
+        assert!(!cmds.contains(&"air hook"), "{cmds:?}");
+        assert_eq!(
+            cmds.iter().filter(|c| **c == cmd).count(),
+            hook_entries().len()
+        );
+        assert_eq!(merge_hooks(pinned), unpinned);
+        let mcp = merge_mcp_with(json!({}), "/r/.air/bin/air");
+        assert_eq!(mcp["mcpServers"]["air"]["command"], "/r/.air/bin/air");
+        assert_eq!(
+            merge_mcp_with(mcp, "air")["mcpServers"]["air"]["command"],
+            "air"
+        );
     }
 }

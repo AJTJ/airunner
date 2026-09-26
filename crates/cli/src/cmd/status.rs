@@ -239,6 +239,8 @@ pub struct Snapshot {
     /// The install record is older than this binary (air-d61); the same line `air doctor`
     /// prints, so the coordinator sees it without asking.
     pub install_lag: Option<super::install::InstallLag>,
+    /// The binary this repo is pinned to, when it is (air-4usc).
+    pub pin: Option<super::install::PinState>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
     /// from main and cannot un-merge it from anyone who took it, so this is the obligation a
     /// red land leaves behind. The message at rewind time is not the only copy.
@@ -2223,6 +2225,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
+        pin: super::install::pin_state(ledger.dir()),
         // air-i6fd, third site: the parameter is named `main_head` and was fed the running
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
         // the worktree's own branch, and the answer suppresses the warning — so a worker whose
@@ -2609,6 +2612,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // air-d61: one line while the record lags; gone the moment `air install --write` runs.
     if let Some(l) = &s.install_lag {
         out.push_str(&format!("{}\n", super::install::lag_line(l)));
+    }
+    for l in s.pin.iter().flat_map(super::install::pin_lines) {
+        out.push_str(&format!("{l}\n"));
     }
     // air-bxe: the merge commit exists for minutes before the verify decides whether it stays.
     for f in &s.landings_in_flight {
