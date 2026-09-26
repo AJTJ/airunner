@@ -26,7 +26,6 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cmd::emit;
-use crate::cmd::hook::{handover_gate, is_handover_command};
 
 /// The ONE way a probe spawns `air` (air-dws). Identity comes from the launcher's environment
 /// since air-75u (`AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_ENFORCE`), so a child that
@@ -670,16 +669,15 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // air-zqmi. The anchor restores the unconditional stamp, which is the defect exactly:
-    // every hand-over command the gate saw counted, passes included. The refusal still
-    // counts and the gate still decides, so what it isolates is whether a SUCCESS is
-    // recorded as a failure — the thing the channel then reported to the whole fleet.
+    // air-zqmi. The anchor stamps every close the gate saw, passes included, and never clears.
+    // The refusal still counts and the gate still decides, so what it isolates is whether a
+    // SUCCESS is recorded as a failure — the thing the channel then reported to the fleet.
     (
         "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
         Mutation {
-            file: "crates/cli/src/cmd/hook.rs",
-            from: "    let stamped = match (&bead, v.pass) {",
-            to: "    let stamped = match (&bead, false) {",
+            file: "crates/cli/src/cmd/close.rs",
+            from: "        if v.pass {",
+            to: "        if false {",
             also_red: &[],
         },
     ),
@@ -1007,7 +1005,9 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "        let subject = f.refused_command.as_deref().unwrap_or(\"handover\");",
             to: "        let subject = \"handover\";",
-            also_red: &[],
+            also_red: &[
+                "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
+            ],
         },
     ),
     (
@@ -1117,7 +1117,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
+        "hook: the gate reads digest_dir from the worktree root, so a Stop from a subdirectory says what the root says",
         Mutation {
             // Keep the cwd as the tool gave it: the root is looked up and thrown away, which
             // is the code before air-1r6. The probe's subdirectory run then differs from the
@@ -1190,9 +1190,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // it, correctly. Declared rather than worked around: the mutation really is
                 // wider than one probe now, and saying so is the honest form of that.
                 "gate: a batch green that contains main and every commit of the bead closes it; one cut before the last commit is refused naming that commit",
-                "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
                 "gate: two closes on one unchanged HEAD cost one verify; a commit demands a new one and clears",
-                "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
                 // Its "with neither digest nor green it is still refused" half is this rule
                 // (air-60x; declared by air-8d7).
                 "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
@@ -1422,7 +1420,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a leased command the worker does not hold",
         Mutation {
             // The launcher stops delivering enforcement: the stub's recorded environment
             // carries AIR_ENFORCE=0, and the real hook run in it advises instead of refusing
@@ -1512,18 +1510,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/doctor.rs",
             from: "expired: date.parse::<jiff::Timestamp>().is_ok_and(|t| now >= t),",
             to: "expired: false,",
-            also_red: &[],
-        },
-    ),
-    (
-        "claim: a closed bead stops alarming; awaiting_review still holds it",
-        Mutation {
-            // Widen `closes_bead` back to every hand-over, so `-s awaiting_review` releases
-            // the claim too. That is the air-3eu regression the probe's green half is about,
-            // and it leaves the close path working, which is what makes it one branch.
-            file: "crates/cli/src/cmd/hook.rs",
-            from: "closing.then(|| handover_bead(cmd)).flatten()",
-            to: "handover_bead(cmd)",
             also_red: &[],
         },
     ),
@@ -2666,7 +2652,6 @@ fn all_probes() -> Vec<Probe> {
         probe_status_tests_hold_one_instant(),
         probe_gate_names_the_landing_that_moved_main(),
         probe_handover_ok_names_the_main_it_checked(),
-        probe_handover_matcher(),
         probe_ledger_roundtrip(),
         probe_green_follows_the_tree_only_where_declared(),
         probe_killed_is_no_verdict(),
@@ -2685,7 +2670,6 @@ fn all_probes() -> Vec<Probe> {
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
         probe_expired_cutoff_is_reported(),
-        probe_close_releases_the_claim(),
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
@@ -2703,7 +2687,6 @@ fn all_probes() -> Vec<Probe> {
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
-        probe_enforced_gate(),
         probe_env_reaches_the_hook(),
         probe_worktree_is_airs(),
         probe_digest_refusal_names_the_order_only_with_a_green(),
@@ -3803,9 +3786,6 @@ fn probe_capture_records_where_it_was_written() -> Probe {
 }
 
 fn probe_close_with_proof_sequence() -> Probe {
-    use crate::cmd::hook::handover_gate;
-    use air_hooks::HookOutcome;
-
     let res = (|| -> Result<(bool, bool), String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -3853,11 +3833,7 @@ fn probe_close_with_proof_sequence() -> Probe {
             .map_err(|e| e.to_string())
         };
         let passes = |bead: &str| -> bool {
-            matches!(
-                handover_gate(&l, "probe", &dir, &format!("bd close {bead}"), true)
-                    .map(|d| d.outcome),
-                Ok(HookOutcome::Allow { .. })
-            )
+            crate::cmd::close::gate(&l, "probe", &dir, &[bead.to_string()]).is_ok()
         };
 
         // Bead one: claim, work already committed, verify recorded, close.
@@ -5318,93 +5294,38 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
     }
 }
 
-/// air-kcns: a refusal names the command it refused, so `bd close` is not reported as a failed
-/// hand-over.
+/// air-kcns: a refusal names the command it refused. The gate said `handover refused` whatever
+/// had triggered it, so a worker that had just handed over successfully read its close being
+/// reported as a failed hand-over. `stop_message` runs at Stop, where no command was refused,
+/// so it must not name one.
 ///
-/// The gate said `handover refused for w3 at <sha>` whatever it had matched. An adopter's
-/// worker met that on `bd close <bead>` having just run its hand-over successfully, and the
-/// reading it invites — the hand-over failed, run it again — costs 350 to 700 seconds there and
-/// fixes nothing. The sentence was a **true statement about the gate and a false one about what
-/// the reader had just done**: it named the thing that succeeded and reported it as failing.
-///
-/// Both formatters are pinned, on air-jy99's evidence that one line had six renderings. They do
-/// NOT get the same treatment, and that is the finding rather than an omission: `stop_message`
-/// runs at Stop, where **no command was refused**, so naming one there would invent a subject.
-/// Its "handover would refuse" is correct and is asserted to stay.
-///
-/// Red: a real `handover_gate` refusal triggered by `bd close` names `bd close` and does not
-/// call itself a hand-over. Green: the advisory form says "would be refused" rather than
-/// "would refuse"; `air handover`, which has no command, keeps the old subject; the Stop
-/// message names no command; and what the gate MATCHES is unchanged for all three forms.
+/// Red: `air close` refused by the gate names `air close` and does not call itself a
+/// hand-over. Green: `air handover`, which has no command, keeps the old subject, and the Stop
+/// message names no command.
 fn probe_refusal_names_the_command_it_refused() -> Probe {
-    use crate::cmd::hook::{handover_command_label, is_handover_command};
-    use air_hooks::{HookOutcome, handover_verdict, stop_message};
+    use air_hooks::{handover_verdict, stop_message};
 
     let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let g = |args: &[&str]| -> Result<String, String> {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).to_string());
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
         g(&["init", "-q", "-b", "main"])?;
         g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_claim("zz-1", "w3", &[], "t0")
             .map_err(|e| e.to_string())?;
-
-        // The reported case, through the real gate: no green at HEAD, refused on a close.
-        let refused = handover_gate(&l, "w3", &dir, "bd close zz-1 --reason \"x\"", true)?;
-        let reason = match &refused.outcome {
-            HookOutcome::Block { reason } => reason.clone(),
-            _ => String::new(),
-        };
-        // Both namings are the red half: they are the assertions the mutation must take, and
-        // putting the advisory one in green would let one mutation claim two halves.
-        let red_block = reason.contains("bd close refused for w3 at")
-            // The false statement is gone, not merely joined by a true one.
-            && !reason.contains("handover refused");
-
-        // Advisory: same subject, and a mode that reads as a prediction about the command.
-        let advisory = handover_gate(&l, "w3", &dir, "bd close zz-1", false)?;
-        let ctx = match &advisory.outcome {
-            HookOutcome::Allow { context } => context.clone().unwrap_or_default(),
-            HookOutcome::Block { reason } => reason.clone(),
-        };
-
+        // The reported case, through `air close`'s gate: no green at HEAD.
+        let reason = crate::cmd::close::gate(&l, "w3", &dir, &["zz-1".to_string()])
+            .err()
+            .unwrap_or_default();
+        let red =
+            reason.contains("air close refused for w3 at") && !reason.contains("handover refused");
         // No command to name: `air handover` IS the hand-over query, so the subject stands.
-        let f = crate::cmd::handover::facts(&l, "w3", &dir, Some("zz-1"), true)
-            .map_err(|e| e.to_string())?;
+        let f = crate::cmd::handover::facts(&l, "w3", &dir, Some("zz-1"), true)?;
         let v = handover_verdict(&f);
-
-        let red = red_block && ctx.contains("bd close would be refused for w3 at");
-
-        // Every clause below holds with the subject hardcoded again, so the mutation cannot
-        // take both halves: these are the cases that must NOT gain a command.
+        let stop = stop_message(&v, "w3", &f.head);
         let green = v.message.starts_with("handover would refuse for w3 at")
-            // Stop has no command, so it must not invent one.
-            && !stop_message(&v, "w3", &f.head).contains("bd close")
-            && stop_message(&v, "w3", &f.head).contains("handover would refuse")
-            // What the gate MATCHES is unchanged, and each form labels itself.
-            && handover_command_label("bd close zz-1") == Some("bd close")
-            && handover_command_label("bd update zz-1 -s closed") == Some("bd update -s closed")
-            && handover_command_label("bd update zz-1 --status=awaiting_review")
-                == Some("bd update -s awaiting_review")
-            && handover_command_label("git commit -m x").is_none()
-            && is_handover_command("bd close zz-1")
-            && !is_handover_command("git merge main");
+            && !stop.contains("air close refused")
+            && stop.contains("handover would refuse");
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
@@ -5422,11 +5343,9 @@ fn probe_refusal_names_the_command_it_refused() -> Probe {
 /// containing its commits. The check now runs when the close runs, whatever the line looks like.
 ///
 /// Red: a worker's close with no green at HEAD is refused, naming `air close` and the missing
-/// verify, and the raw-`bd close` backstop's refusal names `air close`. Green: with a green
-/// recorded at HEAD the same close passes.
+/// verify. Green: with a green recorded at HEAD the same close passes.
 fn probe_worker_close_runs_the_gate() -> Probe {
     use crate::cmd::close::gate;
-    use air_hooks::HookOutcome;
 
     let res = (|| -> Result<(bool, bool), String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -5456,12 +5375,9 @@ fn probe_worker_close_runs_the_gate() -> Probe {
         let beads = vec!["zz-1".to_string()];
 
         let refused = gate(&l, "w3", &dir, &beads);
-        let backstop = handover_gate(&l, "w3", &dir, "bd close zz-1 --reason x", true)?;
-        let backstop_names_air_close = matches!(&backstop.outcome,
-            HookOutcome::Block { reason } if reason.contains("air close zz-1 --reason-file"));
         let red = refused.as_ref().is_err_and(|m| {
             m.contains("air close refused for w3 at") && m.contains("verify-green-at-head")
-        }) && backstop_names_air_close;
+        });
 
         l.record_verify(&VerifyRun {
             id: new_id(),
@@ -6192,79 +6108,6 @@ fn probe_lease_take() -> Probe {
     }
 }
 
-/// air-i59: with `AIR_ENFORCE=1` the PreToolUse gate denies `bd update x -s awaiting_review`
-/// when no green is recorded at HEAD, and the reason names the fixing command; once a green
-/// verify run is recorded at HEAD (main merged) the same command is allowed.
-fn probe_enforced_gate() -> Probe {
-    use air_hooks::HookOutcome;
-    let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let g = |args: &[&str]| -> Result<String, String> {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).to_string());
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
-        g(&["init", "-q", "-b", "main"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
-        let head = g(&["rev-parse", "HEAD"])?;
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_claim("zz-1", "probe", &[], "t0")
-            .map_err(|e| e.to_string())?;
-        let cmd = "bd update zz-1 -s awaiting_review";
-        let red = handover_gate(&l, "probe", &dir, cmd, true)?;
-        // air-155w: this asserted the refusal names `air record verify -- make verify`,
-        // which is the clause a verify lane forbids. What must be true is that the refusal
-        // names the CONDITION and the check, so a worker knows what is missing without being
-        // told to run something their flow may not allow.
-        let red_fires = matches!(&red.outcome, HookOutcome::Block { reason }
-            if reason.contains("verify-green-at-head")
-                && reason.contains("a green at this head")
-                && !reason.contains("air record verify -- make verify"));
-        l.record_verify(&VerifyRun {
-            id: new_id(),
-            worker: "probe".into(),
-            sha: head,
-            kind: Kind::Verify,
-            exit_code: 0,
-            trigger: "selftest".into(),
-            failing_step: None,
-            started_at: "t1".into(),
-            finished_at: "t1".into(),
-            log_path: None,
-            command: None,
-            duration_ms: None,
-            output_bytes: None,
-            dirty: false,
-            tree: None,
-            members: vec![],
-            main_sha: None,
-        })
-        .map_err(|e| e.to_string())?;
-        let green = handover_gate(&l, "probe", &dir, cmd, true)?;
-        let green_passes = matches!(green.outcome, HookOutcome::Allow { context: None });
-        let _ = std::fs::remove_dir_all(&dir);
-        Ok((red_fires, green_passes))
-    })();
-    let (red, green) = res.unwrap_or_else(blocked);
-    Probe {
-        name: "gate: AIR_ENFORCE=1 denies bd update -s awaiting_review without green at HEAD (names the fix); allows with green",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
 /// Check 4: a hand-over names a bead the worker neither holds nor carries → missing `claim`.
 /// Held or carried by trailer (air-60x) passes; the pure decision is `handover::handable`.
 fn probe_gate_claim() -> Probe {
@@ -6557,80 +6400,6 @@ fn probe_expired_cutoff_is_reported() -> Probe {
         name: "doctor: a dated rule says so when its cutoff has passed",
         red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
         green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
-    }
-}
-
-/// air-8p4: a claim row survived `bd close`, so conditions kept firing on a bead that was
-/// closed and landed. Red: the row still open, `handover-not-green` fires on it — the state
-/// The adopter's coordinator spent a setup window diagnosing. Green: the close releases the row
-/// and nothing fires; and `-s awaiting_review` does NOT release it, because a handed-over bead
-/// is still the worker's until it lands (air-3eu).
-///
-/// The mutation that made it red, seen: widening `closes_bead` to `handover_bead(cmd)`, so
-/// `-s awaiting_review` releases too — "red fires / green BLOCKED". The hook path that applies
-/// it is covered separately by `hook::tests::a_successful_close_releases_the_claim_and_awaiting_review_does_not`,
-/// whose mutation is deleting the arm from `dispatch`.
-fn probe_close_releases_the_claim() -> Probe {
-    use crate::cmd::hook::closes_bead;
-    use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
-
-    const NOW: &str = "2026-08-20T12:00:00Z";
-    let res = (|| -> Result<(bool, bool), String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_claim("zz-1", "w", &[], "2026-08-20T11:00:00Z")
-            .map_err(|e| e.to_string())?;
-        l.stamp_handover("zz-1", "w", "2026-08-20T11:50:00Z")
-            .map_err(|e| e.to_string())?;
-        // A live worker, recently seen, so the only thing that can speak is the claim.
-        let fires = |l: &Ledger| -> Result<Vec<&'static str>, String> {
-            let claims = l.open_claims().map_err(|e| e.to_string())?;
-            let s = Snapshot {
-                workers: vec![WorkerView {
-                    worker: "w".into(),
-                    role: "worker".into(),
-                    green_at_head: Some(false),
-                    claims,
-                    session: Some(Session {
-                        session_id: "s".into(),
-                        state: "working".into(),
-                        changed_at: "2026-08-20T11:59:00Z".into(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            };
-            Ok(attention(&s, NOW, Thresholds::default())
-                .iter()
-                .map(|a| a.kind)
-                .collect())
-        };
-        let before = fires(&l)?;
-        // Not an ending: a hand-over leaves the claim held.
-        let handover_keeps_it = closes_bead("bd update zz-1 -s awaiting_review").is_none();
-        // The close, as the PostToolUse arm applies it.
-        let bead = closes_bead("bd close zz-1 --reason done").ok_or("close not recognised")?;
-        let released = l
-            .release_claim(&bead, "w", "closed", "t2")
-            .map_err(|e| e.to_string())?;
-        let after = fires(&l)?;
-        // Threshold-independent on both sides: the claim on ad-1 is what speaks and what goes
-        // quiet, so no fixture here is a second copy of a number in `Thresholds` (air-jc0).
-        let still_held = l
-            .open_claims()
-            .map_err(|e| e.to_string())?
-            .iter()
-            .any(|c| c.bead == "zz-1");
-        Ok((
-            before.contains(&"handover-not-green"),
-            handover_keeps_it && released && !after.contains(&"handover-not-green") && !still_held,
-        ))
-    })()
-    .unwrap_or_else(blocked);
-    Probe {
-        name: "claim: a closed bead stops alarming; awaiting_review still holds it",
-        red_fires: res.0,
-        green_passes: res.1,
     }
 }
 
@@ -7779,16 +7548,6 @@ fn probe_status_tests_hold_one_instant() -> Probe {
     }
 }
 
-fn probe_handover_matcher() -> Probe {
-    Probe {
-        name: "hook: handover command matcher",
-        red_fires: is_handover_command("bd close zz-1")
-            && is_handover_command("bd update zz-1 -s awaiting_review"),
-        green_passes: !is_handover_command("git commit -am wip")
-            && !is_handover_command("bd update zz-1 --claim"),
-    }
-}
-
 fn probe_ledger_roundtrip() -> Probe {
     let ok = (|| -> Result<(bool, bool), String> {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -8181,17 +7940,18 @@ fn probe_worker_task_prompt() -> Probe {
 /// air-9dg: Air's env has to reach the HOOK, because that is where the one refusal runs.
 /// The adopter's workers carried two `--settings`; the second replaced the first, `AIR_ENFORCE`
 /// never reached a hook, and `bd close` without a green was ADVISED and executed for five
-/// hours. `probe_enforced_gate` sets the env directly and so never exercised delivery.
+/// hours. Since 2026-09-26 the hook's enforced refusal is the lease gate, so that is what this
+/// drives.
 ///
 /// Red: the old shape. Two `--settings` on the line, the env the session runs with is the
-/// second's alone, and the real `air hook` run in that env ALLOWS `bd close` on a claimed bead
-/// with no green at HEAD (exit 0: advisory). Green: `air worker --task … -- --settings '{…}'`
+/// second's alone, and the real `air hook` run in that env ALLOWS a leased command the worker
+/// does not hold (exit 0: advisory). Green: `air worker --task … -- --settings '{…}'`
 /// launched against a stub `claude` that records its argv and its environment. The argv
 /// carries ONE `--settings`, merged (theirs kept, AIR_ENFORCE=1 on top); the environment the
 /// stub ran in carries AIR_ENFORCE=1 and BEADS_ACTOR by `tmux new-session -e`, with the
 /// launcher's own inherited values scrubbed so only delivery can put them there; and the real
-/// `air hook`, run in exactly that recorded environment in a worktree holding a claim and no
-/// green, REFUSES the close (exit 2) naming `air record verify`.
+/// `air hook`, run in exactly that recorded environment, REFUSES the leased command (exit 2)
+/// naming `air lease take serve`.
 fn probe_env_reaches_the_hook() -> Probe {
     use crate::cmd::launch::worker_argv;
     let theirs = r#"{"remoteControlAtStartup":false}"#;
@@ -8228,9 +7988,13 @@ fn probe_env_reaches_the_hook() -> Probe {
             "w",
             &wt.display().to_string(),
         ])?;
+        std::fs::create_dir_all(dir.join(".claude")).map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join(".claude").join("air.json"),
+            r#"{"leases": {"serve": ["sh serve.sh"]}}"#,
+        )
+        .map_err(|e| e.to_string())?;
         let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
-        l.record_claim("zz-1", "w", &[], "t0")
-            .map_err(|e| e.to_string())?;
         drop(l);
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let hook = |env: &[(String, String)]| -> Result<(i32, String), String> {
@@ -8238,7 +8002,7 @@ fn probe_env_reaches_the_hook() -> Probe {
             let input = serde_json::json!({
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Bash",
-                "tool_input": {"command": "bd close zz-1 --reason done"},
+                "tool_input": {"command": "sh serve.sh"},
                 "session_id": "air-9dg-probe",
                 "cwd": wt.display().to_string(),
             });
@@ -8273,7 +8037,7 @@ fn probe_env_reaches_the_hook() -> Probe {
                 .unwrap_or_default()
         };
 
-        // RED: two --settings, the second wins, and the hook in that env lets the close by.
+        // RED: two --settings, the second wins, and the hook in that env lets the command by.
         let mut old = worker_argv("w", "air", std::path::Path::new("/r/roles.md"), &[]);
         old.extend(["--settings".to_string(), theirs.to_string()]);
         let last = old
@@ -8365,15 +8129,13 @@ fn probe_env_reaches_the_hook() -> Probe {
             && recorded.iter().any(|(k, v)| k == "BEADS_ACTOR" && v == "w");
         let (code, err) = hook(&recorded)?;
         let _ = std::fs::remove_dir_all(&dir);
-        // air-155w: the refusal names the CONDITION, not a command a verify lane forbids.
-        // What this probe is about is that the env reached the hook and the gate refused, so
-        // it asserts the refusal happened and names its check.
-        let refused = code == 2 && err.contains("verify-green-at-head");
+        // What this probe is about is that the env reached the hook and the gate refused.
+        let refused = code == 2 && err.contains("air lease take serve");
         Ok((red, merged && delivered && refused))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a close without green",
+        name: "launch: Air's env survives a pass-through --settings and reaches the hook, which refuses a leased command the worker does not hold",
         red_fires: red,
         green_passes: green,
     }
@@ -9440,8 +9202,8 @@ fn probe_acceptance_budget_scales_with_ids() -> Probe {
 /// ROOT, not to the Bash tool's cwd. A persisted `cd crates` made the gate refuse "no digest"
 /// for a digest that was there; the adopter's w1 hit it three times on 2026-09-06.
 ///
-/// Red: a real `air hook` gate run on `bd close` from a subdirectory says exactly what the
-/// same run from the root says, and neither names a missing digest while the digest exists.
+/// Red: a real `air hook` Stop advisory from a subdirectory says exactly what the same run
+/// from the root says, and neither names a missing digest while the digest exists.
 /// Green: with the digest removed, both runs name it missing, so the refusal for a truly
 /// absent digest is unchanged.
 fn probe_hook_reads_from_the_worktree_root() -> Probe {
@@ -9489,21 +9251,28 @@ fn probe_hook_reads_from_the_worktree_root() -> Probe {
         std::fs::write(&digest, "---\nbead: zz-1r6\n---\n# ours\n").map_err(|e| e.to_string())?;
         let sub = wt.join("crates");
         std::fs::create_dir_all(&sub).map_err(|e| e.to_string())?;
+        // The Stop advisory speaks only for a worker with work in hand.
+        Ledger::open_for_repo(&dir)
+            .map_err(|e| e.to_string())?
+            .record_claim("zz-1r6", "w", &[], "t0")
+            .map_err(|e| e.to_string())?;
         let script = fake_bd_script(&dir)?;
+        let calls = std::cell::Cell::new(0u32);
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        // The gate's answer, advisory (no AIR_ENFORCE): stdout carries the context, stderr
-        // anything the hook says on its own. Both together are "what the gate said".
+        // The gate's answer at Stop: stdout carries the context, stderr anything the hook says
+        // on its own. A fresh session each call, because the advisory speaks once per session.
         let gate = |cwd: &Path| -> Result<String, String> {
             use std::io::Write;
+            calls.set(calls.get().saturating_add(1));
             let input = serde_json::json!({
-                "hook_event_name": "PreToolUse",
-                "session_id": "air-1r6-probe",
+                "hook_event_name": "Stop",
+                "session_id": format!("air-1r6-probe-{}", calls.get()),
                 "cwd": cwd.display().to_string(),
-                "tool_name": "Bash",
-                "tool_input": {"command": "bd close zz-1r6 --reason done"},
             });
             let mut child = air_command(&exe, cwd)
                 .arg("hook")
+                .env("AIR_ROLE", "worker")
+                .env("BEADS_ACTOR", "w")
                 .env("AIR_BD_BIN", &script)
                 // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
                 // a shell stub inside it. At load 186 that budget becomes the thing under
@@ -9544,7 +9313,7 @@ fn probe_hook_reads_from_the_worktree_root() -> Probe {
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "hook: the gate reads digest_dir from the worktree root, so a close from a subdirectory says what the root says",
+        name: "hook: the gate reads digest_dir from the worktree root, so a Stop from a subdirectory says what the root says",
         red_fires: red,
         green_passes: green,
     }
@@ -13625,7 +13394,7 @@ fn probe_batch_members_are_the_shas_the_batch_took() -> Probe {
 /// refusal that never happened and a worker spent a message establishing it.
 ///
 /// The event log says it exactly: at 13:51:59 the `PreToolUse` line for that close reads
-/// `decision: pass`. `handover_gate` stamped the claim anyway — the stamp ran on every
+/// `decision: pass`. The hook's gate stamped the claim anyway — the stamp ran on every
 /// hand-over command the gate saw — while `handover-not-green` reads that counter and says
 /// "handed over N time(s) without green verify at HEAD". So a worker whose closes all passed
 /// was reported to the whole fleet as having failed.
@@ -13647,9 +13416,6 @@ fn probe_batch_members_are_the_shas_the_batch_took() -> Probe {
 /// refusal keeps the condition firing after a clean close, which is the same false positive
 /// arriving a few minutes later.
 fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
-    use crate::cmd::hook::handover_gate;
-    use air_hooks::HookOutcome;
-
     let res = (|| -> Result<(bool, bool), String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -13667,7 +13433,7 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_claim("zz-1", "w3", &[], "t0")
             .map_err(|e| e.to_string())?;
-        let cmd = "bd close zz-1 --reason 'done'";
+        let beads = vec!["zz-1".to_string()];
         let attempts = || -> i64 {
             l.open_claims()
                 .unwrap_or_default()
@@ -13677,7 +13443,7 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
         };
 
         // No green: the gate refuses, and THAT is an attempt.
-        handover_gate(&l, "w3", &dir, cmd, true)?;
+        let refused = crate::cmd::close::gate(&l, "w3", &dir, &beads).is_err();
         let after_refusal = attempts();
 
         // Now green at that head, so the same close passes.
@@ -13701,13 +13467,12 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
             main_sha: None,
         })
         .map_err(|e| e.to_string())?;
-        let d = handover_gate(&l, "w3", &dir, cmd, true)?;
-        let passed = matches!(d.outcome, HookOutcome::Allow { context: None });
+        let passed = crate::cmd::close::gate(&l, "w3", &dir, &beads).is_ok();
         let after_pass = attempts();
 
         let _ = std::fs::remove_dir_all(&dir);
         // Red: the refusal counted. Green: the pass counted nothing AND cleared the one before.
-        Ok((after_refusal == 1, passed && after_pass == 0))
+        Ok((refused && after_refusal == 1, passed && after_pass == 0))
     })();
     let (red, green) = res.unwrap_or((false, false));
     Probe {

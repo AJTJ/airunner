@@ -12,7 +12,8 @@
 //! commit and `bd close <id> …` on separate lines of one Bash call; the matcher missed it and
 //! the bead closed with no green containing its commits. The same matcher refused a heredoc
 //! that only mentioned `bd close`. Here the check runs when the close runs, however the command
-//! line is written. The text matcher stays as the backstop for a raw `bd close`.
+//! line is written. The text matcher was deleted the same day: a worker's and the lane's bd
+//! writes are denied by their launchers instead.
 //!
 //! `AIR_ENFORCE` does not apply here: a worker's `air close` refuses on a failed gate whether or
 //! not it is set. Advisory mode exists for the text matcher, which can misfire on a command
@@ -74,9 +75,9 @@ pub fn gated(role: &str) -> bool {
 }
 
 /// The hand-over gate over a worker's close, for every bead named: the same facts and the same
-/// verdict `air handover` and the hook gate compute, never advisory. `Err` carries the gate's
+/// verdict `air handover` computes, never advisory. `Err` carries the gate's
 /// refusal for each bead that fails, one per line, and then nothing is closed. Stamps and clears
-/// the hand-over attempt counter exactly as the hook gate does, since this is a real attempt.
+/// the hand-over attempt counter, since this is a real attempt.
 pub fn gate(ledger: &Ledger, worker: &str, repo: &Path, beads: &[String]) -> Result<(), String> {
     let mut refusals = Vec::new();
     for b in beads {

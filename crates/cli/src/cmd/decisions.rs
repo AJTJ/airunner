@@ -137,7 +137,6 @@ traces! {
     POST_TOOL_USE_FAILURE_FAILED = "hook.PostToolUseFailure" / "failed";
     POST_TOOL_USE_OBSERVED = "hook.PostToolUse" / "observed";
     POST_TOOL_USE_JOURNALED = "hook.PostToolUse" / "journaled";
-    POST_TOOL_USE_RELEASED = "hook.PostToolUse" / "released";
     STOP_OBSERVED = "hook.Stop" / "observed";
     STOP_NUDGE = "hook.Stop" / "nudge";
     STOP_PASS = "hook.Stop" / "pass";
@@ -158,9 +157,6 @@ traces! {
     PRE_TOOL_USE_LEASE_HELD = "hook.PreToolUse" / "lease-held";
     PRE_TOOL_USE_LEASE_REFUSE = "hook.PreToolUse" / "lease-refuse";
     PRE_TOOL_USE_LEASE_WOULD_REFUSE = "hook.PreToolUse" / "lease-would-refuse";
-    PRE_TOOL_USE_PASS = "hook.PreToolUse" / "pass";
-    PRE_TOOL_USE_REFUSE = "hook.PreToolUse" / "refuse";
-    PRE_TOOL_USE_WOULD_REFUSE = "hook.PreToolUse" / "would-refuse";
 
     LAND_REFUSE_ROLE = "land" / "refuse-role";
     LAND_REFUSE = "land" / "refuse";

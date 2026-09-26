@@ -1201,9 +1201,9 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
 /// increment the very counter `handover-not-green` reads. So the documented diagnostic raised
 /// the alarm, and the coordinator chased a worker who was following the docs.
 ///
-/// N direct invocations produce no condition; one hook-path refusal produces one.
+/// N direct invocations produce no condition; one refused `air close` produces one.
 #[test]
-fn air_handover_is_a_query_and_the_hook_path_is_the_attempt() {
+fn air_handover_is_a_query_and_a_refused_close_is_the_attempt() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
@@ -1231,17 +1231,16 @@ fn air_handover_is_a_query_and_the_hook_path_is_the_attempt() {
     }
     assert_eq!(alarms(), 0, "a query must not raise the alarm");
 
-    // The hook path: an actual `bd close`, refused because there is no green at HEAD. THAT is
-    // a hand-over attempt, and it is the one the coordinator should see.
-    let (code, err) = air_hook(
+    // A worker's actual close, refused because there is no green at HEAD. THAT is a
+    // hand-over attempt, and it is the one the coordinator should see.
+    let (code, out, err) = air_env(
         &repo,
         &bd,
-        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
-        "tool_input": {"command": "bd close zz-1 --reason done"}}),
-        true,
+        &["close", "zz-1", "--reason", "done"],
+        &[("AIR_ROLE", "worker")],
     );
-    assert_eq!(code, 2, "the gate must refuse: {err}");
-    assert_eq!(alarms(), 1, "the hook path must raise it exactly once");
+    assert_ne!(code, 0, "the gate must refuse: {out}{err}");
+    assert_eq!(alarms(), 1, "the close must raise it exactly once");
 }
 
 /// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.

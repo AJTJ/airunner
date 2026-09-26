@@ -44,8 +44,8 @@
 //! closing layer, which is what the split was for.)
 //!
 //! The green-at-HEAD gate matters more under this model, not less, since an agent is proving
-//! its own work: `is_handover_command` already matches `bd close` and `-s closed`, so the one
-//! refusal covers close-with-proof exactly as it covered hand-over.
+//! its own work: `air close` runs the gate on every close a worker makes, so the one refusal
+//! covers close-with-proof exactly as it covered hand-over.
 //!
 //! **Air is not the judge of prose.** It discharges exactly two clause shapes, and both are
 //! lookups rather than readings:

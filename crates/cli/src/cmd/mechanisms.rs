@@ -109,9 +109,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
         class: "refusal",
-        what: "`awaiting_review`/close needs a recorded green at HEAD that contains main. A \
-               worker's `air close` runs it itself; the PreToolUse match on raw `bd close` is \
-               the backstop.",
+        what: "A worker's or the lane's close needs a recorded green that contains main and \
+               the bead's commits. `air close` runs it; `hook.PreToolUse / refuse` is the \
+               matcher on raw `bd close` deleted 2026-09-26, kept so older days attribute.",
         added: "2026-08-22 (air-i59); in `air close` 2026-09-26",
         source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/close.rs, gate",
         // `hook.handover` is what the first slice called the same gate before hook events

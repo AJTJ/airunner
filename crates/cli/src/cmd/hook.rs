@@ -5,9 +5,8 @@
 //! First slice behaviour (plan 0001 §5):
 //! - PostToolUse(Edit|Write): journal the touched file.
 //! - PreToolUse(Edit|Write): warn (additionalContext) if a peer is journaled on that file.
-//! - PreToolUse(Bash `bd close`/`bd update … -s awaiting_review|closed`): run the hand-over gate,
-//!   advisory (context) unless AIR_ENFORCE=1 (then exit 2 with the reason). The backstop for a
-//!   raw `bd close`: workers close with `air close`, which runs the same gate itself.
+//! - Closes are not read from Bash here (owner, 2026-09-26): workers and the lane close with
+//!   `air close`, which runs the hand-over gate itself, and their launchers deny bd's writes.
 //! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
 //!   missing; quiet on the ok path and for the coordinator. One block: a worker with no claim
 //!   while beads are ready is nudged once with the ids (air-09i; `stop_hook_active` is the
@@ -326,20 +325,6 @@ fn dispatch(
                 d.decision = dec::POST_TOOL_USE_JOURNALED;
                 d.inputs = serde_json::json!({"path": rel});
             }
-            // A closed bead is not held by anyone (air-8p4). PostToolUse is the success
-            // signal: a Bash command that exits non-zero arrives as `PostToolUseFailure`
-            // instead, which this arm never sees (verified in `.air/events/2026-08-29.ndjson`,
-            // three failed Bash calls, all filed as PostToolUseFailure).
-            if let Some(cmd) = input.bash_command()
-                && let Some(bead) = closes_bead(cmd)
-                && ledger
-                    .release_claim(&bead, worker, "closed", &now())
-                    .unwrap_or(false)
-            {
-                d.decision = dec::POST_TOOL_USE_RELEASED;
-                d.reason = format!("{bead} closed; claim released");
-                d.inputs = serde_json::json!({"bead": bead, "command": cmd});
-            }
             d
         }
         HookEvent::Stop | HookEvent::SubagentStop if role != "worker" => {
@@ -594,29 +579,6 @@ fn claim_followed(ledger: &Ledger, worker: &str, nudged_at: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The bead id in a hand-over command: first token after `close`/`update` that is not a flag.
-pub fn handover_bead(cmd: &str) -> Option<String> {
-    let toks: Vec<&str> = cmd.split_whitespace().collect();
-    let i = toks.iter().position(|t| *t == "close" || *t == "update")?;
-    let mut skip_next = false;
-    for t in toks.get(i.saturating_add(1)..)? {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if let Some(flag) = t.strip_prefix('-') {
-            // A flag without `=` takes the next token as its value, except bare switches.
-            skip_next = !flag.contains('=') && !matches!(*t, "--claim" | "--force" | "--json");
-            continue;
-        }
-        if matches!(*t, "&&" | ";" | "||" | "|") {
-            return None;
-        }
-        return Some((*t).to_string());
-    }
-    None
-}
-
 /// The state a SessionStart records (air-ludo). A session that has just started has taken no
 /// turn: `air fleet up` launches workers with no task, and they never stop, so recording them
 /// `working` made every fresh worker look busy forever and the "beads are ready" fan-out and
@@ -769,13 +731,6 @@ fn pre_tool_use(
         )
         .inputs(serde_json::json!({"to": to, "bytes": bytes}))
         .denominator("1 message"));
-    }
-    // Hand-over gate on bd status writes.
-    if let Some(cmd) = input.bash_command()
-        && is_handover_command(cmd)
-    {
-        let enforce = std::env::var("AIR_ENFORCE").is_ok_and(|v| v == "1");
-        return handover_gate(ledger, worker, cwd, cmd, enforce);
     }
     // Lease-needed gate: a command the repo declares as needing a lease, from a session that
     // does not hold it (`lease_gate`). The owner is never asked; the config read is skipped.
@@ -933,160 +888,6 @@ pub fn record_message(
             content: content.to_string(),
         })
         .map_err(|e| e.to_string())
-}
-
-/// The hand-over gate for one `bd` status write (air-i59). `enforce` (worker launches set
-/// `AIR_ENFORCE=1`) turns a failed check into a deny whose reason names the fixing command;
-/// otherwise the same message is returned as context and the write is allowed. Pure over the
-/// ledger and the repo, so `air selftest` can run it red and green.
-pub fn handover_gate(
-    ledger: &Ledger,
-    worker: &str,
-    cwd: &Path,
-    cmd: &str,
-    enforce: bool,
-) -> Result<Dispatched, String> {
-    let bead = handover_bead(cmd);
-    let mut f = handover::facts(ledger, worker, cwd, bead.as_deref(), !enforce)?;
-    // air-kcns: the gate knows what it matched; the message used to discard it.
-    f.refused_command = handover_command_label(cmd).map(str::to_string);
-    let v = handover_verdict(&f);
-    // air-zqmi: only a hand-over that did NOT go through is an attempt. Stamping every
-    // command the gate saw made `handover_attempts` count successes, and the condition that
-    // reads it says "handed over N times without green verify at HEAD" — so a worker whose
-    // closes all passed was reported to the whole fleet as having failed. A pass clears the
-    // counter instead, because there is then nothing outstanding: without that it is a
-    // high-water mark, and one early refusal would keep firing after a clean close.
-    let stamped = match (&bead, v.pass) {
-        (Some(b), false) => ledger.stamp_handover(b, worker, &now()).unwrap_or(false),
-        (Some(b), true) => {
-            let _ = ledger.clear_handover_attempts(b, worker);
-            false
-        }
-        (None, _) => false,
-    };
-    let decision = if v.pass {
-        dec::PRE_TOOL_USE_PASS
-    } else if v.block {
-        dec::PRE_TOOL_USE_REFUSE
-    } else {
-        dec::PRE_TOOL_USE_WOULD_REFUSE
-    };
-    // Owner ruling, 2026-09-26: workers close with `air close`, which runs this check when the
-    // close runs. This matcher is the backstop for a raw `bd close`, so its refusal names the
-    // command that does not depend on how the line is written.
-    let message = if v.pass {
-        v.message.clone()
-    } else {
-        format!(
-            "{}. Close with `air close {} --reason-file <proof>`, which runs this check itself.",
-            v.message,
-            bead.as_deref().unwrap_or("<id>")
-        )
-    };
-    let outcome = if v.block {
-        HookOutcome::Block {
-            reason: format!("air: {message}"),
-        }
-    } else if !v.pass {
-        HookOutcome::Allow {
-            context: Some(format!("air: {message}")),
-        }
-    } else {
-        HookOutcome::Allow { context: None }
-    };
-    Ok(Dispatched::new(outcome, decision, message)
-        .inputs(serde_json::json!({"command": cmd, "head": f.head, "enforce": enforce, "bead": bead, "claim_stamped": stamped}))
-        .denominator("4 checks"))
-}
-
-/// The bead this command CLOSES, if it closes one (air-8p4).
-///
-/// Narrower than [`is_handover_command`] on purpose: `-s awaiting_review` is a hand-over, not
-/// an ending, and air-3eu is explicit that a handed-over bead is still the worker's until it
-/// lands. Only `bd close` and `-s/--status closed` end a claim.
-///
-/// The failure this closes: a claim row survived `bd close`, so `handover-not-green` and the
-/// idle conditions kept firing on a bead that was closed and landed — three repeats of one
-/// alert on.1, and a coordinator spending a setup window establishing that a row was
-/// stale rather than a worker stuck. `air status` reconciled it against bd eventually, but only
-/// when bd answered inside its 2 s budget, which under load it does not.
-///
-/// Removal: when nothing computes a condition from an open claim row.
-pub fn closes_bead(cmd: &str) -> Option<String> {
-    if !is_handover_command(cmd) {
-        return None;
-    }
-    let toks: Vec<&str> = cmd.split_whitespace().collect();
-    let closing = toks.contains(&"close")
-        || toks
-            .windows(2)
-            .any(|w| matches!(w, [a, b] if (*a == "-s" || *a == "--status") && *b == "closed"))
-        || toks.contains(&"--status=closed");
-    closing.then(|| handover_bead(cmd)).flatten()
-}
-
-/// Does this shell command hand a bead over? `bd close …`, or `bd update … -s/--status
-/// awaiting_review|closed`. Deliberately narrow: WIP commits and merges are never matched.
-pub fn is_handover_command(cmd: &str) -> bool {
-    handover_command_label(cmd).is_some()
-}
-
-/// WHICH hand-over this command is, for the refusal to name (air-kcns).
-///
-/// The gate said `handover refused for w3 at <sha>` whatever it had matched, so a worker that
-/// had just run its hand-over successfully and then ran `bd close` read the thing that
-/// succeeded being reported as failing. An adopter's worker met exactly that; the remedy it
-/// implies — re-run the hand-over — costs 350 to 700 seconds there and fixes nothing. The
-/// refusal was a true statement about the gate and a false one about what the reader just did.
-///
-/// Returns the MATCHED PATTERN, never a slice of the command: reasons run to several hundred
-/// words here and a truncation would put arbitrary user text in a refusal. What the gate
-/// matches is unchanged — this is the same walk, returning which arm hit instead of `true`.
-pub fn handover_command_label(cmd: &str) -> Option<&'static str> {
-    let toks: Vec<&str> = cmd.split_whitespace().collect();
-    // `bd` must start a command: first token, or right after a shell separator.
-    let starts: Vec<usize> = toks
-        .iter()
-        .enumerate()
-        .filter(|(i, t)| {
-            **t == "bd"
-                && (*i == 0
-                    || matches!(
-                        toks.get(i.wrapping_sub(1)),
-                        Some(&"&&")
-                            | Some(&";")
-                            | Some(&"||")
-                            | Some(&"|")
-                            | Some(&"(")
-                            | Some(&"{")
-                    ))
-        })
-        .map(|(i, _)| i)
-        .collect();
-    for i in starts {
-        let rest = toks.get(i.saturating_add(1)..).unwrap_or(&[]);
-        match rest.first() {
-            Some(&"close") => return Some("bd close"),
-            Some(&"update") => {
-                let closed = rest.windows(2).any(
-                    |w| matches!(w, [a, b] if (*a == "-s" || *a == "--status") && *b == "closed"),
-                ) || rest.contains(&"--status=closed");
-                if closed {
-                    return Some("bd update -s closed");
-                }
-                let review = rest.windows(2).any(|w| {
-                    matches!(w, [a, b] if (*a == "-s" || *a == "--status")
-                        && *b == "awaiting_review")
-                }) || rest.contains(&"--status=awaiting_review");
-                if review {
-                    return Some("bd update -s awaiting_review");
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Which session this hook is running in (air-75u).
@@ -1297,7 +1098,7 @@ fn set_session(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::{identity_from, inner_env, is_handover_command};
+    use super::{identity_from, inner_env};
     use std::path::Path;
     use std::process::Command;
 
@@ -1625,60 +1426,6 @@ mod tests {
         assert_eq!(d.decision, "pass");
     }
 
-    #[test]
-    fn extracts_the_bead_from_handover_commands() {
-        use super::handover_bead;
-        assert_eq!(
-            handover_bead("bd close zz-1 --reason done").as_deref(),
-            Some("zz-1")
-        );
-        assert_eq!(
-            handover_bead("bd update zz-2 -s awaiting_review").as_deref(),
-            Some("zz-2")
-        );
-        assert_eq!(
-            handover_bead("bd update --status closed zz-3").as_deref(),
-            Some("zz-3")
-        );
-        assert_eq!(handover_bead("make verify"), None);
-    }
-
-    /// air-8p4, end to end through the hook: the close releases the claim, the hand-over does
-    /// not, and the event line names the bead so the release is auditable.
-    #[test]
-    fn a_successful_close_releases_the_claim_and_awaiting_review_does_not() {
-        let dir = scratch_repo();
-        let repo = dir.path().canonicalize().unwrap();
-        let repo = repo.as_path();
-        let open = || crate::cmd::open(repo).unwrap().0.open_claims().unwrap();
-        let post = |cmd: &str| {
-            fire(
-                repo,
-                serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Bash",
-                "tool_input": {"command": cmd}}),
-            );
-        };
-        fire(repo, serde_json::json!({"hook_event_name": "SessionStart"}));
-        {
-            let (l, worker) = crate::cmd::open(repo).unwrap();
-            l.record_claim("zz-1", &worker, &[], "t0").unwrap();
-            l.record_claim("zz-2", &worker, &[], "t0").unwrap();
-        }
-
-        // A hand-over is not an ending: the row stays (air-3eu).
-        post("bd update zz-2 -s awaiting_review");
-        assert_eq!(open().len(), 2, "awaiting_review must not release");
-
-        post("bd close zz-1 --reason done");
-        let held: Vec<String> = open().into_iter().map(|c| c.bead).collect();
-        assert_eq!(held, vec!["zz-2".to_string()], "close must release zz-1");
-
-        let released = events(repo)
-            .iter()
-            .any(|e| e["decision"] == "released" && e["inputs"]["bead"] == "zz-1");
-        assert!(released, "the release must be on the event line");
-    }
-
     /// air-q07: one message, one event line, a byte count, and no content.
     #[test]
     fn a_message_is_one_event_line_with_a_byte_count_and_no_content() {
@@ -1715,21 +1462,6 @@ mod tests {
         assert_eq!(rows[0].session_id, "s1");
         // No AIR_ROLE in this test: a shell Air did not start is the owner.
         assert_eq!(rows[0].from_role, "owner");
-    }
-
-    #[test]
-    fn matches_only_handover_writes() {
-        assert!(is_handover_command("bd close zz-1 --reason done"));
-        assert!(is_handover_command("bd update zz-1 -s awaiting_review"));
-        assert!(is_handover_command("bd update zz-1 --status closed"));
-        assert!(is_handover_command(
-            "bd update zz-1 --status=awaiting_review"
-        ));
-        assert!(!is_handover_command("bd update zz-1 -s in_progress"));
-        assert!(!is_handover_command("bd update zz-1 --claim"));
-        assert!(!is_handover_command("git commit -am wip"));
-        assert!(!is_handover_command("git merge worktree-x"));
-        assert!(!is_handover_command("echo bd close"));
     }
 
     /// Owner, 2026-09-26: the wake instruction goes to the coordinator only.
