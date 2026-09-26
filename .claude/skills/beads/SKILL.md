@@ -33,7 +33,7 @@ Consequences for agents:
 - Do not upgrade or downgrade `bd` on your own. `bd` is pinned; changing it is an owner
   decision.
 - Full findings, sources, the ready and claim semantics, and the surface Air uses on the pinned
-  1.2.2: `references/bd-facts.md`. Why bd, and why pinned: `docs/design.md` §11.
+  1.3.0 (owner ruling 2026-09-26; re-checked that day): `references/bd-facts.md`. Why bd, and why pinned: `docs/design.md` §11.
 
 ## First step
 

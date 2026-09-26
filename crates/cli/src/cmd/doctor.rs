@@ -9,8 +9,9 @@ use serde::Serialize;
 
 use crate::cmd::{emit, open};
 
-/// The bd release Air is verified against (decisions 2026-08-18).
-pub const BD_PINNED: &str = "1.2.2";
+/// The bd release Air is verified against (decisions 2026-08-18; moved from 1.2.2 to 1.3.0 by
+/// owner ruling 2026-09-26, when Homebrew stable became 1.3.0).
+pub const BD_PINNED: &str = "1.3.0";
 
 #[derive(Debug, Serialize)]
 pub struct BdCheck {

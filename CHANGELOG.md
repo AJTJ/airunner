@@ -44,6 +44,9 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).
+  bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; a fix is
+  pending.
 - The fleet's protocol lives in Air's roles text (`.air/roles.md`). An adopting repository keeps
   only its own commands, setup and resources.
 - A branch no longer has to contain main to be ready for the lane; the lane merges main in.
