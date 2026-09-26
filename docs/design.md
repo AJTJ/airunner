@@ -269,7 +269,7 @@ timeout.
 | Event | What happens |
 |---|---|
 | Session start and end | The session's row is created, idle, or removed. |
-| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. For a shell command that closes a bead, the gate also runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. This match on the command text is the backstop for a raw `bd close`, and its refusal names air close. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
+| Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. Closes are not read from the command text. A command the repository declares as needing a lease is refused to a session not holding it when enforcement is on, which the worker and lane launchers turn on; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
 | Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
@@ -408,12 +408,12 @@ sequenceDiagram
   H->>L: one event line
 ```
 
-A worker closes with air close, which runs the gate when the
-close runs. The PreToolUse hook runs the same gate on a raw `bd close` it can read from the
-command text, as a backstop: it refuses under AIR_ENFORCE=1, advises otherwise, and names air
-close in either case. The text match is why air close exists. In the 0.4.5 live trial a worker
-put a commit and a `bd close` on separate lines of one shell call, the match missed it, and the
-bead closed with no green containing its commits.
+A worker closes with air close, which runs the gate when the close runs, and its launcher
+denies bd's write commands. The PreToolUse hook used to run the gate on a raw `bd close` it
+read from the command text. In the 0.4.5 live trial a worker put a commit and a `bd close` on
+separate lines of one shell call, the match missed it, and the bead closed with no green
+containing its commits. That match, and the claim release that followed a matched close, were
+deleted on 2026-09-26; air close releases the claims it closes.
 
 The gate refuses a branch that main is ahead of, except when main already contains the branch's
 head: a merge would then bring in only work that has landed. The 0.4.6 live trial refused five
@@ -722,7 +722,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | Air makes each session's worktree and fences edits to it; the verification lane is a role. | 2026-09-14 | `edit-outside-worktree`, `air lane` |
 | The merge-queue protocol is Air's and ships in `.air/roles.md`; a repo keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
 | A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate |
-| A worker closes with `air close`, which runs the hand-over gate itself; the match on a raw `bd close` stays as the backstop. | 2026-09-26 | `close.rs` `gate` |
+| A worker closes with `air close`, which runs the hand-over gate itself. The hook's match on a raw `bd close` and its claim release are deleted. | 2026-09-26 | `close.rs` `gate` |
 | Workers and the lane read beads and use `bd comment`; every other bd write, a raw `bd close` among them, is denied in the settings their launchers pass. | 2026-09-26 | `launch.rs` `WORKER_DENY` |
 | Only the coordinator is told at SessionStart to create its 5-minute wake; Air's channel notices reach workers and the lane. | 2026-09-26 | `hook.rs` `WAKE_CONTEXT` |
 | Proof is a command's output, a `file:line` or a test; a remainder only the owner can do becomes a successor bead. | 2026-08-22 | `roles.md` |

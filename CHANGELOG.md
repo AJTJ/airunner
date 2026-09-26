@@ -74,8 +74,7 @@ missing notices, which are fixed or added below.
 - Workers and the lane close with `air close <id> --reason-file <proof>`. It runs the hand-over
   check on each bead before closing and closes nothing if one fails. It is no longer denied to
   workers, and the roles text no longer tells anyone to run `bd close`.
-- The hook's check on a raw `bd close` stays as a backstop, and its refusal now names
-  `air close`. `air handover` names the `air close` that would pass.
+- `air handover` names the `air close` that would pass.
 - Workers and the lane read beads and use `bd comment`; every bd command that changes a bead
   or the store is on their deny list.
 - Only the coordinator is told at session start to create its 5-minute wake.
@@ -86,6 +85,9 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell
+  command: neither the hand-over check on it nor the claim release after it. Workers and the
+  lane close with `air close`, and their launchers deny bd's write commands.
 - `air release --worker`. The coordinator uses `air reclaim` instead.
 - The `phase-transitions` skill is no longer installed. `air install --write` removes it.
 - Most of the general-purpose skills this repository carried; it keeps Air's own and the few
