@@ -529,8 +529,10 @@ fn init_gates_then_builds_a_project_from_nothing() {
     assert!(
         std::fs::read_to_string(proj.join(".beads/init.args"))
             .unwrap()
-            .contains("--prefix np --non-interactive --init-if-missing --skip-agents --skip-hooks")
+            .contains("--non-interactive --init-if-missing --skip-agents --skip-hooks --prefix np")
     );
+    // air-gn5o: no custom bd status is declared; no flow uses `awaiting_review`.
+    assert!(!proj.join(".beads/config.args").exists());
     assert_eq!(
         std::fs::read_to_string(proj.join(".gitignore")).unwrap(),
         ".air/\n"
@@ -545,6 +547,11 @@ fn init_gates_then_builds_a_project_from_nothing() {
             .iter()
             .any(|x| x == "Bash(make deploy*)")
     );
+    // air-gn5o: the project is the directory name, Metis is off where it is not installed,
+    // and the Air-repo-only `adopters` key is not written.
+    assert_eq!(aj["project"], "newproj");
+    assert_eq!(aj["metis"], false);
+    assert!(aj.get("adopters").is_none(), "{aj}");
     assert!(proj.join("CLAUDE.md").exists());
     assert!(proj.join(".mcp.json").exists() && proj.join(".air/roles.md").exists());
     // air-arq: the roles prose a fresh init writes carries the run-to-completion sentence.

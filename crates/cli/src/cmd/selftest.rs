@@ -7283,9 +7283,10 @@ fn probe_installed_text_names_real_subcommands() -> Probe {
         .get_subcommands()
         .map(|c| c.get_name().to_string())
         .collect();
+    let stub = crate::cmd::init::claude_md_stub("make verify", true);
     let mut texts: Vec<(&str, &str)> = crate::cmd::install::SKILLS.to_vec();
     texts.push(("roles.md", crate::cmd::install::ROLES_MD));
-    texts.push(("init CLAUDE.md", crate::cmd::init::CLAUDE_MD_STUB));
+    texts.push(("init CLAUDE.md", &stub));
     let dangling: Vec<String> = texts
         .iter()
         .flat_map(|(name, text)| {
@@ -10263,18 +10264,28 @@ fn probe_scaffolded_verify_fails_until_edited() -> Probe {
         name: "init: the verify target `air init` scaffolds FAILS until it is edited, so a fresh repo cannot record a green for an empty check",
         red_fires: !placeholder_passed
             && written.contains("Makefile:verify")
-            && scaffold(None, false, ("docs/journal", false))
+            && scaffold(None, false, false, ("docs/journal", false))
                 .iter()
                 .any(|i| i.path == "Makefile" && i.create),
         // Present means untouched, both ways round: a Makefile with a verify target and one
         // without are both left alone, and only the printed sentence differs.
         green_passes: edited_passed
-            && scaffold(Some("verify:\n\t@true\n"), true, ("docs/journal", true))
-                .iter()
-                .all(|i| !i.create)
-            && scaffold(Some("build:\n\t@true\n"), false, ("docs/journal", true))
-                .iter()
-                .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
+            && scaffold(
+                Some("verify:\n\t@true\n"),
+                false,
+                true,
+                ("docs/journal", true),
+            )
+            .iter()
+            .all(|i| !i.create)
+            && scaffold(
+                Some("build:\n\t@true\n"),
+                false,
+                false,
+                ("docs/journal", true),
+            )
+            .iter()
+            .any(|i| i.path == "Makefile" && !i.create && i.note.contains("NO `verify`")),
     }
 }
 
@@ -13283,7 +13294,7 @@ fn probe_a_discharged_clause_names_its_lookup() -> Probe {
 fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
     use crate::cmd::init::{DEFAULT_JOURNAL_DIR, scaffold};
 
-    let fresh = scaffold(None, false, (DEFAULT_JOURNAL_DIR, false));
+    let fresh = scaffold(None, false, false, (DEFAULT_JOURNAL_DIR, false));
     let readme = format!("{DEFAULT_JOURNAL_DIR}/README.md");
     let scaffolds = fresh
         .iter()
@@ -13296,7 +13307,7 @@ fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
             .any(|i| i.path == ".worktreeinclude" && i.create);
 
     // Configured, not hard-coded.
-    let elsewhere = scaffold(None, false, ("log.d", false));
+    let elsewhere = scaffold(None, false, false, ("log.d", false));
     let honours_config = elsewhere
         .iter()
         .any(|i| i.path == "log.d/README.md" && i.create)
@@ -13304,7 +13315,7 @@ fn probe_the_journal_is_scaffolded_and_nothing_reads_it() -> Probe {
             .iter()
             .any(|i| i.path.starts_with(DEFAULT_JOURNAL_DIR));
     // Present is present: created only when absent, the rule every scaffolded item follows.
-    let untouched = scaffold(None, false, (DEFAULT_JOURNAL_DIR, true))
+    let untouched = scaffold(None, false, false, (DEFAULT_JOURNAL_DIR, true))
         .iter()
         .any(|i| i.path == readme && !i.create);
 
