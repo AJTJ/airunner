@@ -518,8 +518,11 @@ fanout event line records each change and who was told.
 The lane and its members are told the same way. The coordinator's tick queues "batch-ready"
 for the lane once per branch head. air batch cut queues "dropped from batch" for each worker it
 drops, air record queues each member's result when the lane records a batch verify (close on a
-green, the exit and the kept output on a red, nothing on a kill), and air land queues "landed
-in main" for each member. air land and a red batch's air record end with the branches
+green, the exit and the kept output on a red, nothing on a kill), and air land queues "main
+moved to <sha>: landed <beads>; files changed: <paths>" once per landing for every worktree's
+session except the main checkout, the lane and the session that ran it. A member's copy also
+says its beads may be closed, so a member gets one landing message. It asks for no reply
+(fanout.rs, main_moved; air-1vri.4). air land and a red batch's air record end with the branches
 batch-ready now and the next command, or with "nothing is batch-ready", and when the lane ran
 the command that output counts as telling it. air status prints two loop times from these rows
 for the last 24 hours: from batch-ready to the start of the batch verify that took the branch,
@@ -807,6 +810,8 @@ fans it out).
 - [x] Tell each worker that was refused a lease when it is released or broken, oldest want
       first, and clear the want on delivery (crates/cli/src/cmd/fanout.rs, lease_free).
       (air-1vri.3)
+- [x] Tell the coordinator and every worker when air land moves main, with the beads and the
+      files changed, once per landing (crates/cli/src/cmd/fanout.rs, main_moved). (air-1vri.4)
 - [ ] The next live trial shows batch-ready to its batch and batch green to close each under a
       minute plus the verify's own duration (the loops line in air status). (air-1vri.2)
 - [ ] The next live trial shows a bead fan-out and a fleet stop each reaching every intended

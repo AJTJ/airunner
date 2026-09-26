@@ -137,7 +137,9 @@ from `air`:
   branch in it went green. Close each named bead now, with the lane's green as the proof.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
   splits the batch. If the failure is in your change, fix it with a new commit.
-- `landed in main at <sha>` says your beads are on main. Close any of them still open.
+- `main moved to <sha>: landed <beads>; files changed: <paths>` arrives each time main moves.
+  Merge main only if those files touch your own work. When it also says `Your <sha> ... is in
+  it`, your beads are on main; close any of them still open. It needs no reply.
 - `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
   branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
   again.
@@ -254,6 +256,9 @@ What Air carries for you, so you do not send it: when the claimable ready set ga
 Air tells every worker without a claim which beads are ready. The `idle-without-claim`
 condition still names a worker that stays idle after that. Air also tells the lane each
 branch that becomes batch-ready, and tells each member its batch's result or its drop.
+When main moves, Air tells you and every worker `main moved to <sha>: landed <beads>; files
+changed: <paths>`. It needs no reply; continue whatever waited on the landing, such as filing
+the next wave.
 `air status` prints the loop times this buys (`loops (24 h):`).
 
 When a session stops, `air status` prints `STOPPED at <t>` with the kind. Read the kind before

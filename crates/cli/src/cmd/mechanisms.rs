@@ -828,14 +828,32 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "batch-result-to-members",
         class: "nudge",
         what: "Each member worker hears its batch's result at once: close on a green or a \
-               landing, the exit and the kept output on a red, the other side and the paths \
-               when `air batch cut` drops it. A killed run says nothing.",
+               landing (inside \"main moved\"), the exit and the kept output on a red, the \
+               other side and the paths when `air batch cut` drops it. A killed run says \
+               nothing.",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_landed, batch_dropped",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
         // Same trial: a worker learned the lane's green, and could close, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(
             "the lane is removed, or a round's `loops` line shows batch green to close no shorter with the push than the wake gave",
+        ),
+    },
+    Mechanism {
+        id: "main-moved-to-all",
+        class: "nudge",
+        what: "When `air land` moves main, every session but the lane and the one that ran it \
+               hears \"main moved to <sha>: landed <beads>; files changed: <paths>\" once per \
+               landing; a member's copy also says its beads may be closed. It asks for no \
+               reply.",
+        added: "2026-09-26 (air-1vri.4)",
+        source: "crates/cli/src/cmd/fanout.rs, main_moved; called from land.rs run",
+        // Owner, 2026-09-26: "have air fan out a msg to ALL agents ... whenever the lane lands
+        // something". The same night the coordinator waited about 4 minutes for its wake after
+        // wave 1 landed, because only members heard of a landing.
+        fires: Fires::Decisions(&[("fanout", "main-moved")]),
+        removal: Removal::Judgement(
+            "a round in which no session acted on a \"main moved\" notice (no worker merged main and no coordinator step followed one before its own wake)",
         ),
     },
     Mechanism {

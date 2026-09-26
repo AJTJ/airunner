@@ -386,46 +386,180 @@ pub fn batch_result(repo: &Path, ledger: &Ledger, run: &air_ledger::verify::Veri
     );
 }
 
-/// After `air land` landed a batch: tell each member its beads are in main.
-pub fn batch_landed(
+// ---------- main moved (air-1vri.4) ----------
+
+/// How many changed paths the "main moved" notice names before it says how many more.
+const MAIN_MOVED_PATHS: usize = 10;
+
+/// Who hears "main moved": every worktree's session but the main checkout, the lane, and the
+/// session that ran `air land` (its own output said it). The owner in a plain shell has no
+/// session, so every session hears an owner's landing. Pure over the names.
+pub fn main_moved_recipients(
+    worktrees: &[String],
+    lanes: &[String],
+    me: &str,
+    role: &str,
+) -> Vec<String> {
+    let mut v: Vec<String> = worktrees
+        .iter()
+        .filter(|n| n.as_str() != "main" && !lanes.contains(n))
+        .filter(|n| role == "owner" || n.as_str() != me)
+        .cloned()
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The lane's names without a snapshot: the default name, and every session row whose role
+/// is `lane`.
+fn lane_names(ledger: &Ledger) -> Vec<String> {
+    let mut v = vec!["lane".to_string()];
+    if let Ok(mut st) = ledger
+        .conn()
+        .prepare("SELECT DISTINCT worker FROM sessions WHERE role='lane'")
+        && let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0))
+    {
+        v.extend(rows.flatten());
+    }
+    v
+}
+
+/// The paths, the first [`MAIN_MOVED_PATHS`] of them and a count of the rest.
+pub fn paths_line(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return "none".to_string();
+    }
+    let shown = paths
+        .iter()
+        .take(MAIN_MOVED_PATHS)
+        .cloned()
+        .collect::<Vec<_>>();
+    let more = paths.len().saturating_sub(MAIN_MOVED_PATHS);
+    if more == 0 {
+        shown.join(", ")
+    } else {
+        format!("{} and {more} more", shown.join(", "))
+    }
+}
+
+/// The text one session reads. Everyone gets the fact; a worker also reads when it merges
+/// main, and a member reads that its beads are in and may be closed, so a member gets one
+/// notice rather than this and a second "landed" one. Asks for no reply.
+pub fn main_moved_text(
+    merge: &str,
+    beads: &[String],
+    paths: &[String],
+    to_coordinator: bool,
+    member: Option<(&str, &[String])>,
+) -> String {
+    let mut t = format!(
+        "main moved to {}: landed {}; files changed: {}.",
+        short(merge),
+        if beads.is_empty() {
+            "no declared bead".to_string()
+        } else {
+            beads.join(" ")
+        },
+        paths_line(paths)
+    );
+    if let Some((sha, mine)) = member {
+        t.push_str(&format!(
+            " Your {} ({}) is in it: close any of those beads still open, with the lane's green \
+             as proof.",
+            short(sha),
+            if mine.is_empty() {
+                "your commits".to_string()
+            } else {
+                mine.join(" ")
+            }
+        ));
+    }
+    if !to_coordinator {
+        t.push_str(" Merge main only if these files touch your own work.");
+    }
+    t.push_str(" No reply needed.");
+    t
+}
+
+/// A member head a landing carried, with the main tip its batch merged onto.
+pub type LandedMember = (air_ledger::landings::Member, String);
+
+/// After `air land` moved main from `before` to `merge`: tell every session but the lane and
+/// the caller, once per landing. Returns who was queued.
+#[allow(clippy::too_many_arguments)]
+pub fn main_moved(
     repo: &Path,
     ledger: &Ledger,
-    lane: &str,
+    me: &str,
+    role: &str,
+    before: &str,
     merge: &str,
-    tip: &str,
-    members: &[air_ledger::landings::Member],
-) {
-    let notes: Vec<MemberNote> = members
-        .iter()
-        .filter(|m| !m.worker.is_empty())
-        .map(|m| {
-            let beads = member_beads(repo, tip, &m.sha);
-            MemberNote {
-                to: m.worker.clone(),
-                kind: "batch-landed",
-                key: merge.to_string(),
-                beads: beads.join(" "),
-                content: format!(
-                    "landed in main at {}: your {} ({}). Close any of those beads still open, \
-                     with the lane's green as proof.",
-                    short(merge),
-                    short(&m.sha),
-                    if beads.is_empty() {
-                        "your commits".to_string()
-                    } else {
-                        beads.join(" ")
-                    }
-                ),
-            }
-        })
+    beads: &[String],
+    members: &[LandedMember],
+) -> Vec<String> {
+    let paths: Vec<String> = crate::git::run(
+        repo,
+        &["diff", "--name-only", &format!("{before}..{merge}")],
+    )
+    .map(|o| {
+        o.lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect()
+    })
+    .unwrap_or_default();
+    let names: Vec<String> = crate::git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(p, _)| air_ledger::paths::worker_name_for(&p).ok())
         .collect();
-    queue_notes(
+    let to = main_moved_recipients(&names, &lane_names(ledger), me, role);
+    let at = super::now();
+    let subject = beads.join(" ");
+    let mut told = Vec::new();
+    for w in &to {
+        let member = members.iter().find(|(m, _)| &m.worker == w);
+        let mine = member
+            .map(|(m, tip)| member_beads(repo, tip, &m.sha))
+            .unwrap_or_default();
+        let text = main_moved_text(
+            merge,
+            beads,
+            &paths,
+            super::hook::role_for(w) == "coordinator",
+            member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
+        );
+        let queued = ledger
+            .enqueue_delivery(
+                &Outgoing {
+                    to: w,
+                    kind: "main-moved",
+                    key: merge,
+                    subject: &subject,
+                    content: &text,
+                    supersede: false,
+                },
+                &at,
+            )
+            .unwrap_or(false);
+        if queued {
+            told.push(w.clone());
+        }
+    }
+    super::log_event(
         ledger,
-        lane,
-        &notes,
-        &format!("landed at {}", short(merge)),
-        &super::now(),
+        me,
+        super::decisions::FANOUT_MAIN_MOVED,
+        &json!({"merge": merge, "beads": beads, "paths": paths.len(), "to": told}),
+        &format!(
+            "main moved to {}; told {} session(s)",
+            short(merge),
+            told.len()
+        ),
+        "1 landing",
     );
+    told
 }
 
 /// A lease came free (released, or broken): tell each worker recorded as wanting it, oldest
@@ -509,4 +643,64 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
         &format!("{} dropped from batch", d.worker),
         &super::now(),
     );
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn main_moved_reaches_everyone_but_the_lane_and_the_caller() {
+        let all = names(&["main", "coordinator", "lane", "w1", "w2", "w4"]);
+        let lanes = names(&["lane", "w4"]);
+        // The lane ran it: every other session, never the main checkout or a lane.
+        assert_eq!(
+            main_moved_recipients(&all, &lanes, "w4", "lane"),
+            names(&["coordinator", "w1", "w2"])
+        );
+        // The coordinator ran it: its own output told it.
+        assert_eq!(
+            main_moved_recipients(&all, &lanes, "coordinator", "coordinator"),
+            names(&["w1", "w2"])
+        );
+        // The owner from a plain shell has no session to skip.
+        assert_eq!(
+            main_moved_recipients(&all, &lanes, "coordinator", "owner"),
+            names(&["coordinator", "w1", "w2"])
+        );
+    }
+
+    #[test]
+    fn main_moved_text_truncates_paths_and_asks_for_no_reply() {
+        let paths: Vec<String> = (0..12).map(|i| format!("f{i}")).collect();
+        let t = main_moved_text("abcdef0123", &names(&["b-1"]), &paths, true, None);
+        assert!(
+            t.starts_with("main moved to abcdef01: landed b-1; files changed: f0,"),
+            "{t}"
+        );
+        assert!(t.contains("f9 and 2 more."), "{t}");
+        assert!(!t.contains("Merge main"), "{t}");
+        assert!(t.ends_with("No reply needed."), "{t}");
+        let mine = names(&["b-1"]);
+        let w = main_moved_text(
+            "abcdef0123",
+            &mine,
+            &paths[..1],
+            false,
+            Some(("0011223344", &mine)),
+        );
+        assert!(
+            w.contains("files changed: f0. Your 00112233 (b-1) is in it"),
+            "{w}"
+        );
+        assert!(
+            w.contains("Merge main only if these files touch your own work."),
+            "{w}"
+        );
+    }
 }

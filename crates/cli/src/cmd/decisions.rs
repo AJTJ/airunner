@@ -78,6 +78,7 @@ traces! {
     FANOUT_BATCH_READY = "fanout" / "batch-ready";
     FANOUT_BATCH_RESULT = "fanout" / "batch-result";
     FANOUT_LEASE_FREE = "fanout" / "lease-free";
+    FANOUT_MAIN_MOVED = "fanout" / "main-moved";
     FLEET_STOP = "fleet" / "stop";
     FLEET_RESUME = "fleet" / "resume";
     FLEET_REFUSE_ROLE = "fleet" / "refuse-role";
