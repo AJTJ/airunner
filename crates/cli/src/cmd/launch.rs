@@ -293,6 +293,52 @@ pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
         .collect()
 }
 
+/// The one project MCP server Air installs (`.mcp.json`, and `server:air` for the channel).
+///
+/// air-oe9k (2026-09-25 trial): every session stopped at "New MCP server found in this project:
+/// air", whose default ("Continue without using this MCP server") drops the channel.
+/// `enabledMcpjsonServers` approves named `.mcp.json` servers "so Claude Code connects them
+/// without asking", and in a folder whose trust dialog is not yet accepted it is still
+/// honored "from user settings, managed settings, and `--settings`"
+/// (https://code.claude.com/docs/en/settings-reference.md `enabledMcpjsonServers`, accessed
+/// 2026-09-25). So it goes on each session's `--settings`, not in the project file, where an
+/// untrusted folder ignores it. Removal: when `air install` stops shipping `.mcp.json`.
+pub const MCP_SERVERS: &[&str] = &["air"];
+
+/// What Claude Code will still ask each session Air starts, and the answer, said once before
+/// sessions start where nobody is watching them (air-oe9k: eleven answers for five sessions in
+/// the 0.4.0 trial).
+///
+/// Folder trust stays a prompt. Claude Code has no flag or settings key that accepts it: the
+/// documented way is by hand, `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`
+/// (https://code.claude.com/docs/en/permissions.md "What runs before you trust a folder"),
+/// a file "that it writes for itself; you don't need to edit it"
+/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so Air
+/// does not write it. Trust in a worktree is keyed on the main checkout's root
+/// (permissions.md "Project allow rules and workspace trust"), so one accept covers every
+/// session Air starts; the trial asked five times because five sessions started at once in a
+/// fresh copy. The development-channels warning has no documented skip either: the flag works
+/// "after a confirmation prompt" (https://code.claude.com/docs/en/channels-reference.md "Test
+/// during the research preview"). All accessed 2026-09-25.
+///
+/// Removal: when Claude Code offers a supported way to pre-accept trust for a directory the
+/// owner already trusted, and the channel leaves the research preview.
+pub fn startup_prompts_note(main: &Path, coordinator: bool) -> String {
+    let mut note = format!(
+        "If Claude Code has not been trusted in {} yet, each session asks \"Is this a project \
+         you created or one you trust?\": answer Yes; the default exits. One accept covers \
+         every worktree; running `claude` there once first avoids the question.",
+        main.display()
+    );
+    if coordinator {
+        note.push_str(
+            " The coordinator also warns about loading development channels (the Air \
+             channel): choose \"I am using this for local development\"; Exit quits.",
+        );
+    }
+    note
+}
+
 fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
     let env: serde_json::Map<String, serde_json::Value> = env
         .iter()
@@ -300,6 +346,10 @@ fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
         .collect();
     let mut blob = serde_json::Map::new();
     blob.insert("env".into(), serde_json::Value::Object(env));
+    blob.insert(
+        "enabledMcpjsonServers".into(),
+        serde_json::json!(MCP_SERVERS),
+    );
     if !allow.is_empty() {
         blob.insert("permissions".into(), serde_json::json!({ "allow": allow }));
     }
@@ -989,10 +1039,19 @@ pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
 /// the fleet comes up from it). A session already running is left running and named. Every
 /// member is tried, and the exit is 1 if any failed.
 pub fn fleet_up(repo: &Path, print: bool) -> i32 {
+    fleet_up_noting(repo, print, true)
+}
+
+/// `note` false when `air coordinator` has already said what the sessions will ask.
+fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
         eprintln!("{refusal}");
         log_install_refusal(repo, "air fleet up", &refusal, print);
         return 1;
+    }
+    if note && !print {
+        let main = super::worktree::main_checkout(repo);
+        eprintln!("air fleet up: {}", startup_prompts_note(&main, false));
     }
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
@@ -1147,8 +1206,14 @@ fn launch_role(
 pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<bool>) -> i32 {
     let start_fleet =
         fleet.unwrap_or_else(|| std::io::stdin().is_terminal() && ask_fleet(fleet_workers(repo)));
+    // Said once for every session about to start (air-oe9k), before the launch below replaces
+    // this process on a terminal.
+    if !print {
+        let main = super::worktree::main_checkout(repo);
+        eprintln!("air coordinator: {}", startup_prompts_note(&main, true));
+    }
     // Before the coordinator: on a terminal its launch replaces this process.
-    if start_fleet && fleet_up(repo, print) != 0 {
+    if start_fleet && fleet_up_noting(repo, print, false) != 0 {
         eprintln!("air coordinator: the fleet did not fully start; starting the coordinator");
     }
     // Metis first, because its split paragraph goes into the file the next line writes
@@ -1290,6 +1355,38 @@ mod tests {
                 .iter()
                 .any(|r| r == "Bash(air land *)")
         );
+    }
+
+    /// air-oe9k: every session stopped at "New MCP server found in this project: air", whose
+    /// default drops the channel. `enabledMcpjsonServers` from `--settings` approves it, and is
+    /// honored there even in a folder not yet trusted.
+    #[test]
+    fn every_role_approves_the_air_mcp_server() {
+        let roles = Path::new("/r/.air/roles.md");
+        for v in [
+            worker_argv("w", "air", roles, &[]),
+            lane_argv("lane", "air", roles, &[]),
+            coordinator_argv("air", roles, "--ch", &[], &[]),
+        ] {
+            let s = settings_of(&v);
+            assert_eq!(
+                s["enabledMcpjsonServers"],
+                serde_json::json!(["air"]),
+                "{s}"
+            );
+        }
+    }
+
+    /// air-oe9k: the prompts that remain are named once, with the answer, before sessions
+    /// start detached.
+    #[test]
+    fn the_startup_note_names_each_remaining_prompt_and_its_answer() {
+        let fleet = startup_prompts_note(Path::new("/m"), false);
+        assert!(fleet.contains("trust") && fleet.contains("Yes") && fleet.contains("/m"));
+        assert!(!fleet.contains("development channels"));
+        let coord = startup_prompts_note(Path::new("/m"), true);
+        assert!(coord.contains("development channels"));
+        assert!(coord.contains("I am using this for local development"));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
