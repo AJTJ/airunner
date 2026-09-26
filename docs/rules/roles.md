@@ -131,8 +131,7 @@ coordinator files owner questions as beads labelled `owner`.
 Air delivers these messages into your session through its channel, each once, marked as coming
 from `air`:
 
-- `beads are ready: <ids>` arrives when new beads became claimable while you were idle with no
-  claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
+- `beads are ready: <ids>` arrives when new beads became claimable while you held no claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
   refused claim means someone else took it; take another.
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
   branch in it went green. Close each named bead now, with the lane's green as the proof.
@@ -252,7 +251,7 @@ one command to Air, not a `SendMessage` to each session. Only you and the owner 
 stop does not stop you: triage and file as usual, and nothing new starts until you resume.
 
 What Air carries for you, so you do not send it: when the claimable ready set gains a bead,
-Air tells every idle worker without a claim which beads are ready. The `idle-without-claim`
+Air tells every worker without a claim which beads are ready. The `idle-without-claim`
 condition still names a worker that stays idle after that. Air also tells the lane each
 branch that becomes batch-ready, and tells each member its batch's result or its drop.
 `air status` prints the loop times this buys (`loops (24 h):`).

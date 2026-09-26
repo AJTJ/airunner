@@ -266,7 +266,7 @@ timeout.
 
 | Event | What happens |
 |---|---|
-| Session start and end | The session's row is created or removed. |
+| Session start and end | The session's row is created, idle, or removed. |
 | Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. For a shell command that closes a bead, the gate runs; it refuses only when enforcement is on, which the worker and lane launchers turn on. A command the repository declares as needing a lease is refused, under the same switch, to a session not holding it. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
@@ -510,8 +510,8 @@ channel.deliver event line with how long the message waited.
 Deliveries are queued by whatever notices the change. After each 30-second tick, the
 coordinator's server compares the claimable ready list with the one it saw last (asking beads
 again when the cached list is more than a minute old) and, when a bead was added, queues
-"beads are ready" for every live, idle worker holding no claim. The lane and a worker holding a
-claim are never told. A later list replaces a worker's undelivered one, so a session that was
+"beads are ready" for every worker with a live session holding no claim, whatever its state; one
+mid-turn reads it after that turn. The lane and a worker holding a claim are never told. A later list replaces a worker's undelivered one, so a session that was
 away hears the latest. The first tick after the server starts only records the list. One
 fanout event line records each change and who was told.
 
@@ -534,7 +534,7 @@ the lease removes it too.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> working: session start
+  [*] --> idle: session start
   working --> running: tool starts
   running --> working: tool finishes
   working --> idle: stop
@@ -542,6 +542,10 @@ stateDiagram-v2
   working --> [*]: session end
   idle --> [*]: session end
 ```
+
+A session starts idle: one launched with no task takes no turn and never stops, so recording it
+working made a fresh worker look busy for good (the 2026-09-26 trial stalled at three ready
+beads). A start caused by compaction, which happens mid-turn, keeps the state it found.
 
 Status adds two more states. A session is gone when its process disappeared without ending, and
 a worktree has no session when nothing has run there. A stuck state for sessions waiting on a

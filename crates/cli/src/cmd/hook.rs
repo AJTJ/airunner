@@ -235,7 +235,11 @@ fn dispatch(
 ) -> Result<Dispatched, String> {
     Ok(match input.event() {
         HookEvent::SessionStart => {
-            let prev = set_session(ledger, input, worker, role, "working", None)?;
+            let state = session_start_state(
+                input.source.as_deref(),
+                &session_state(ledger, &input.session_id)?,
+            );
+            let prev = set_session(ledger, input, worker, role, &state, None)?;
             // Quiet: the event line records it; a human reads every line a hook prints.
             // The ONE exception is the wake (air-1n3). Only a session can create its own
             // scheduled task — there is no settings key and no launcher flag for it — so this
@@ -247,7 +251,7 @@ fn dispatch(
                     context: (prev.is_none()).then(|| WAKE_CONTEXT.to_string()),
                 },
                 dec::SESSION_START_REGISTERED,
-                transition(&prev, "working"),
+                transition(&prev, &state),
             )
         }
         HookEvent::SessionEnd => {
@@ -606,6 +610,19 @@ pub fn handover_bead(cmd: &str) -> Option<String> {
         return Some((*t).to_string());
     }
     None
+}
+
+/// The state a SessionStart records (air-ludo). A session that has just started has taken no
+/// turn: `air fleet up` launches workers with no task, and they never stop, so recording them
+/// `working` made every fresh worker look busy forever and the "beads are ready" fan-out and
+/// the idle conditions passed them by (the 2026-09-26 trial stalled at `ready: 3`). The first
+/// tool call moves it to `running`; a turn with no tool call ends at Stop, `idle` again.
+/// `compact` is the one source that fires mid-turn, so it keeps the state it found.
+pub fn session_start_state(source: Option<&str>, prev: &Option<String>) -> String {
+    match (source, prev) {
+        (Some("compact"), Some(p)) => p.clone(),
+        _ => "idle".to_string(),
+    }
 }
 
 fn transition(prev: &Option<String>, next: &str) -> String {
@@ -1355,12 +1372,12 @@ mod tests {
             .collect();
         assert_eq!(got.len(), 8, "one line per invocation: {got:?}");
         assert_eq!(got[0].0, "hook.SessionStart");
-        assert_eq!(got[0].2, "none -> working");
+        assert_eq!(got[0].2, "none -> idle");
         assert_eq!(
             (got[1].0.as_str(), got[1].1.as_str()),
             ("hook.PreToolUse", "clear")
         );
-        assert_eq!(got[1].2, "working -> running; no peer on file");
+        assert_eq!(got[1].2, "idle -> running; no peer on file");
         assert_eq!(
             (got[2].0.as_str(), got[2].1.as_str()),
             ("hook.PostToolUse", "journaled")
@@ -1696,5 +1713,73 @@ mod tests {
         assert!(!is_handover_command("git commit -am wip"));
         assert!(!is_handover_command("git merge worktree-x"));
         assert!(!is_handover_command("echo bd close"));
+    }
+
+    /// air-ludo: a worker `air fleet up` launched with no task has had SessionStart and nothing
+    /// else. Its ledger row is what the fan-out sees, and new beads reach it. Seen red
+    /// 2026-09-26 against the `state == "idle"` filter with SessionStart writing `working`.
+    #[test]
+    fn a_freshly_launched_worker_hears_that_beads_are_ready() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        let mut v = serde_json::json!({"hook_event_name": "SessionStart", "source": "startup"});
+        v["session_id"] = "fresh".into();
+        v["cwd"] = repo.to_string_lossy().to_string().into();
+        inner_env(
+            repo,
+            &v.to_string(),
+            Some("worker"),
+            Some("w1"),
+            std::time::Instant::now(),
+        )
+        .unwrap();
+
+        let ledger = air_ledger::Ledger::open_in(&repo.join(".air")).unwrap();
+        let (worker, role, state, changed_at): (String, String, String, String) = ledger
+            .conn()
+            .query_row(
+                "SELECT worker, role, state, changed_at FROM sessions WHERE session_id='fresh'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((worker.as_str(), role.as_str()), ("w1", "worker"));
+        assert_eq!(
+            state, "idle",
+            "a session that has taken no turn is not working"
+        );
+        let s = crate::cmd::status::Snapshot {
+            workers: vec![crate::cmd::status::WorkerView {
+                worker,
+                role,
+                session: Some(crate::cmd::status::Session {
+                    session_id: "fresh".into(),
+                    state,
+                    changed_at,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        let fan = |set: &[&str], at: &str| {
+            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), at)
+        };
+        assert!(
+            fan(&[], "2026-09-26T22:20:00Z").is_empty(),
+            "the first tick seeds"
+        );
+        assert_eq!(
+            fan(&["zz-1", "zz-2", "zz-3"], "2026-09-26T22:20:30Z"),
+            ["w1"]
+        );
+        // A worker mid-turn and holding nothing is told too: it is free.
+        let mut busy = s.clone();
+        if let Some(x) = busy.workers[0].session.as_mut() {
+            x.state = "running".into();
+        }
+        assert_eq!(crate::cmd::fanout::without_claim(&busy), ["w1"]);
     }
 }
