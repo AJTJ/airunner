@@ -2385,6 +2385,19 @@ pub fn conditions_fingerprint(att: &[Attention]) -> String {
 ///
 /// A person running `air status` still gets one line per invocation: that path is one line a
 /// day, not 1,728, and an invocation is itself the fact being recorded.
+/// The line `air status` writes: which command, and whether anything held.
+fn status_trace(attention_only: bool, quiet: bool) -> super::decisions::Trace {
+    use super::decisions::{
+        STATUS_ATTENTION, STATUS_ATTENTION_ATTENTION, STATUS_ATTENTION_QUIET, STATUS_QUIET,
+    };
+    match (attention_only, quiet) {
+        (true, true) => STATUS_ATTENTION_QUIET,
+        (true, false) => STATUS_ATTENTION_ATTENTION,
+        (false, true) => STATUS_QUIET,
+        (false, false) => STATUS_ATTENTION,
+    }
+}
+
 pub fn record_and_log(
     ledger: &air_ledger::Ledger,
     worker: &str,
@@ -2420,13 +2433,8 @@ pub fn record_and_log(
     log_event(
         ledger,
         worker,
-        if attention_only {
-            "status.attention"
-        } else {
-            "status"
-        },
+        status_trace(attention_only, att.is_empty()),
         &serde_json::json!({"conditions": kinds, "opened": opened, "cleared": cleared, "ready_depth": snap.ready_depth, "inbox": snap.inbox_depth, "duration_ms": snap.duration_ms}),
-        if att.is_empty() { "quiet" } else { "attention" },
         &if att.is_empty() {
             "no conditions".to_string()
         } else {
@@ -2815,13 +2823,8 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
         log_event(
             &ledger,
             &worker,
-            if attention_only {
-                "status.attention"
-            } else {
-                "status"
-            },
+            status_trace(attention_only, att.is_empty()),
             &serde_json::json!({}),
-            if att.is_empty() { "quiet" } else { "attention" },
             &format!("{} condition(s)", att.len()),
             &format!(
                 "{} workers, {} overlaps, inbox {}",
@@ -2830,6 +2833,18 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
                 snap.inbox_depth
             ),
         );
+        // The main-checkout warning is printed only by the full status, so it is counted
+        // there: one line per invocation that printed it (air-hqj8).
+        if !attention_only && !snap.main_checkout_sessions.is_empty() {
+            log_event(
+                &ledger,
+                &worker,
+                super::decisions::STATUS_MAIN_CHECKOUT_SESSION,
+                &serde_json::json!({"sessions": snap.main_checkout_sessions}),
+                &snap.main_checkout_sessions.join("; "),
+                &format!("{} session(s)", snap.main_checkout_sessions.len()),
+            );
+        }
     }
     if attention_only {
         emit(json, &att, || {

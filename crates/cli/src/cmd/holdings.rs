@@ -193,9 +193,8 @@ pub fn run(repo: &Path, only: Option<&str>, json: bool) -> i32 {
         log_event(
             &ledger,
             &worker,
-            "holdings",
+            super::decisions::HOLDINGS_OK,
             &serde_json::json!({"file": only}),
-            "ok",
             &format!("{} files with holders", report.files.len()),
             &format!("compared {} worktrees", report.worktrees_compared),
         );

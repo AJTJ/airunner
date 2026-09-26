@@ -192,15 +192,14 @@ pub fn retry_once<T>(
 fn fail(
     ledger: &air_ledger::Ledger,
     worker: &str,
-    cmd: &str,
+    trace: super::decisions::Trace,
     inputs: serde_json::Value,
-    decision: &str,
     msg: String,
     denom: &str,
     json: bool,
     code: i32,
 ) -> i32 {
-    log_event(ledger, worker, cmd, &inputs, decision, &msg, denom);
+    log_event(ledger, worker, trace, &inputs, &msg, denom);
     emit(
         json,
         &serde_json::json!({"ok": false, "reason": msg}),
@@ -236,9 +235,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             return fail(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_REFUSE,
                 inputs(serde_json::json!({})),
-                "refuse",
                 msg,
                 "1 ledger row",
                 json,
@@ -269,9 +267,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_TIMEOUT_RETRY,
                 &inputs(serde_json::json!({})),
-                "timeout-retry",
                 "bd timed out during show; retrying once",
                 "bd show",
             );
@@ -295,9 +292,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_REFUSE,
                     inputs(serde_json::json!({})),
-                    "refuse",
                     msg,
                     "bd show",
                     json,
@@ -316,9 +312,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_REFUSE,
                     inputs(serde_json::json!({})),
-                    "refuse",
                     msg,
                     "bd show",
                     json,
@@ -332,9 +327,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_REFUSE,
                     inputs(serde_json::json!({})),
-                    "refuse",
                     msg,
                     "bd show",
                     json,
@@ -369,9 +363,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_REFUSE,
                     inputs(serde_json::json!({"assignee": a})),
-                    "refuse",
                     msg,
                     "bd show",
                     json,
@@ -384,9 +377,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             return fail(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_NO_SUCH_BEAD,
                 inputs(serde_json::json!({})),
-                "no-such-bead",
                 msg,
                 "bd show",
                 json,
@@ -397,9 +389,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             return fail(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_TIMEOUT,
                 inputs(serde_json::json!({})),
-                "timeout",
                 timeout_msg("show", bead),
                 "bd show",
                 json,
@@ -433,9 +424,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_REFUSE,
                     inputs(serde_json::json!({"resolved": bead})),
-                    "refuse",
                     msg,
                     "1 ledger row",
                     json,
@@ -477,11 +467,10 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         log_event(
             &ledger,
             &worker,
-            "claim",
+            super::decisions::CLAIM_RECLAIMED,
             &inputs(
                 serde_json::json!({"actor": actor, "files": files, "kept_row": existing.is_some()}),
             ),
-            "reclaimed",
             &msg,
             "bd show + 1 ledger row",
         );
@@ -494,7 +483,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     }
     // 3. bd: the atomic claim. The claim time is when it was issued, not when bd answered.
     let at = now();
-    let mut decision = "claimed";
+    let mut decision = super::decisions::CLAIM_CLAIMED;
     // air-gsj: one internal retry on a timeout. `--claim` is idempotent for the same actor,
     // so a retry after a write that did land is a no-op there and an Ok here.
     let (claimed, retried) = retry_once(
@@ -503,9 +492,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             log_event(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_TIMEOUT_RETRY,
                 &inputs(serde_json::json!({"actor": actor})),
-                "timeout-retry",
                 "bd timed out during --claim; retrying once (a fresh process starts at the floor)",
                 "bd exit",
             );
@@ -514,7 +502,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     match claimed {
         Ok(()) => {
             if retried {
-                decision = "claimed-retried";
+                decision = super::decisions::CLAIM_CLAIMED_RETRIED;
             }
         }
         Err(BdError::Timeout(_)) => {
@@ -525,9 +513,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 return fail(
                     &ledger,
                     &worker,
-                    "claim",
+                    super::decisions::CLAIM_TIMEOUT,
                     inputs(serde_json::json!({"actor": actor})),
-                    "timeout",
                     timeout_msg("--claim", bead),
                     "bd exit",
                     json,
@@ -537,16 +524,15 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             eprintln!(
                 "air claim: bd timed out, but `bd show` confirms the claim landed; recording it"
             );
-            decision = "claimed-late";
+            decision = super::decisions::CLAIM_CLAIMED_LATE;
         }
         Err(e) => {
             let msg = format!("bd refused the claim; nothing recorded: {e}");
             return fail(
                 &ledger,
                 &worker,
-                "claim",
+                super::decisions::CLAIM_BD_REFUSED,
                 inputs(serde_json::json!({"actor": actor})),
-                "bd-refused",
                 msg,
                 "bd exit",
                 json,
@@ -562,7 +548,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         return 1;
     }
     label_window(repo, &worker, bead, &title);
-    let msg = match decision {
+    let msg = match decision.decision {
         "claimed-late" => format!(
             "claimed {bead} as {worker} (actor {actor}) at {at} (bd was slow; reconciled by `bd show`)"
         ),
@@ -574,9 +560,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     log_event(
         &ledger,
         &worker,
-        "claim",
-        &inputs(serde_json::json!({"actor": actor, "files": files})),
         decision,
+        &inputs(serde_json::json!({"actor": actor, "files": files})),
         &msg,
         "bd + 1 ledger row",
     );
@@ -624,9 +609,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             return fail(
                 &ledger,
                 &me,
-                "release",
+                super::decisions::RELEASE_NO_SUCH_BEAD,
                 inputs,
-                "no-such-bead",
                 msg,
                 "bd show",
                 json,
@@ -637,9 +621,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             return fail(
                 &ledger,
                 &me,
-                "release",
+                super::decisions::RELEASE_TIMEOUT,
                 inputs,
-                "timeout",
                 timeout_msg("show", bead),
                 "bd show",
                 json,
@@ -656,7 +639,14 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             "refused: {bead} is closed; closed is closed. Unfinished work is a new bead that references {bead}."
         );
         return fail(
-            &ledger, &me, "release", inputs, "refuse", msg, "bd show", json, 2,
+            &ledger,
+            &me,
+            super::decisions::RELEASE_REFUSE,
+            inputs,
+            msg,
+            "bd show",
+            json,
+            2,
         );
     }
     if status == "in_progress" && reason != "landed" {
@@ -671,9 +661,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
                 return fail(
                     &ledger,
                     &me,
-                    "release",
+                    super::decisions::RELEASE_TIMEOUT,
                     inputs,
-                    "timeout",
                     timeout_msg("-s open -a \"\"", bead),
                     "bd exit",
                     json,
@@ -688,9 +677,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
                 return fail(
                     &ledger,
                     &me,
-                    "release",
+                    super::decisions::RELEASE_BD_REFUSED,
                     inputs,
-                    "bd-refused",
                     msg,
                     "bd exit",
                     json,
@@ -710,9 +698,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             log_event(
                 &ledger,
                 &me,
-                "release",
+                super::decisions::RELEASE_RELEASED,
                 &inputs,
-                "released",
                 &msg,
                 "1 ledger row",
             );
@@ -728,9 +715,8 @@ pub fn release(repo: &Path, bead: &str, reason: &str, as_worker: Option<&str>, j
             fail(
                 &ledger,
                 &me,
-                "release",
+                super::decisions::RELEASE_NO_CLAIM,
                 inputs,
-                "no-claim",
                 msg,
                 "0 ledger rows",
                 json,

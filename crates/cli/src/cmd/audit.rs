@@ -38,6 +38,8 @@ pub struct Row {
     pub what: &'static str,
     pub added: &'static str,
     pub source: &'static str,
+    /// What a firing is in the event log, so a zero says what was looked for (air-hqj8).
+    pub counts: String,
     /// Times the mechanism was **evaluated to hold** inside the window. Not a count of
     /// anything anyone was told: a condition that holds while the channel polls is
     /// re-evaluated, and calling that a firing is what made `owner-decision-waiting` read as
@@ -281,6 +283,9 @@ struct Ev {
     session_id: String,
     path: String,
     worker: String,
+    /// `(budget, hits)` for every budget this line reached (`budgets.<name>.hits`), for the
+    /// `Fires::Budget` rows (air-hqj8).
+    budget_hits: Vec<(String, usize)>,
 }
 
 /// The most specific thing an event names. Peer warnings are per file, claim refusals per
@@ -335,6 +340,18 @@ fn parse(line: &str) -> Option<Ev> {
                     .collect()
             })
             .unwrap_or_default(),
+        budget_hits: v
+            .get("budgets")
+            .and_then(|b| b.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(name, w)| {
+                        let hits = w.get("hits")?.as_u64()?;
+                        (hits > 0).then(|| (name.clone(), usize::try_from(hits).unwrap_or(0)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -351,6 +368,11 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
             let rest = c.strip_prefix(kind)?.strip_prefix(':')?;
             Some(rest)
         }),
+        Fires::Budget(names) => e
+            .budget_hits
+            .iter()
+            .any(|(n, _)| names.contains(&n.as_str()))
+            .then_some(e.worker.as_str()),
     }
 }
 
@@ -365,8 +387,28 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
 /// add to it when a new one is genuinely bookkeeping, which is a deliberate act rather than
 /// the default (air-0y9).
 pub const BOOKKEEPING: &[&str] = &[
+    // air-hqj8: the words below this one up to `would-refuse-repeat` were written and
+    // classified by nobody until `decisions::ALL` made the set enumerable. Each records what
+    // happened and decides nothing a registry row would count: a lease taken, released or
+    // broken on request, the lease gate finding every lease held, a hook event with no
+    // handler, a push (counted through the condition it carries), a cut and a dry run (their
+    // drops, refusals and precheck exclusions are rows), a landing that could not select, a
+    // triage bd could not answer, and the Stop advisory's suppressed repeat.
+    "already-mine",
     "attention",
     "bd-refused",
+    "broken",
+    "cut",
+    "dry-run",
+    "error",
+    "ignored",
+    "lease-held",
+    "not-held",
+    "pushed",
+    "taken",
+    "taken-after-break",
+    "unknown",
+    "would-refuse-repeat",
     "captured",
     "claimed",
     "claimed-late",
@@ -422,9 +464,61 @@ pub fn registered_traces() -> std::collections::BTreeSet<String> {
                 .iter()
                 .map(|(c, d)| format!("{c} / {d}"))
                 .collect::<Vec<_>>(),
-            Fires::Condition(_) => Vec::new(),
+            Fires::Condition(_) | Fires::Budget(_) => Vec::new(),
         })
         .collect()
+}
+
+/// Every trace Air can write (`decisions::ALL`) that no registry row claims and whose word is
+/// not bookkeeping, and every budget name (`air_ledger::budgets::NAMES`) no `Fires::Budget`
+/// row claims (air-hqj8). Empty means everything Air decides is counted by `air audit`.
+///
+/// Over a given registry rather than `MECHANISMS`, so the probe can show it naming a row that
+/// is taken away.
+pub fn unmeasured(mechs: &[Mechanism]) -> Vec<String> {
+    let traces: std::collections::BTreeSet<(&str, &str)> = mechs
+        .iter()
+        .flat_map(|m| match m.fires {
+            Fires::Decisions(t) => t.to_vec(),
+            Fires::Condition(_) | Fires::Budget(_) => Vec::new(),
+        })
+        .collect();
+    let budgets: Vec<&str> = mechs
+        .iter()
+        .flat_map(|m| match m.fires {
+            Fires::Budget(n) => n.to_vec(),
+            Fires::Condition(_) | Fires::Decisions(_) => Vec::new(),
+        })
+        .collect();
+    let mut out: Vec<String> = super::decisions::ALL
+        .iter()
+        .filter(|t| {
+            !BOOKKEEPING.contains(&t.decision) && !traces.contains(&(t.command, t.decision))
+        })
+        .map(|t| format!("{} / {}", t.command, t.decision))
+        .collect();
+    out.extend(
+        air_ledger::budgets::NAMES
+            .iter()
+            .filter(|n| !budgets.contains(n))
+            .map(|n| format!("budget {n}")),
+    );
+    out
+}
+
+/// What one registry row counts, in the words the event log uses.
+pub fn counts_of(f: Fires) -> String {
+    match f {
+        Fires::Condition(k) => format!("condition `{k}` in a status line's inputs.conditions"),
+        Fires::Decisions(t) => format!(
+            "lines {}",
+            t.iter()
+                .map(|(c, d)| format!("`{c} / {d}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Fires::Budget(n) => format!("hits on budget(s) {} in any line's `budgets`", n.join(", ")),
+    }
 }
 
 /// A condition firing names one subject per event, but one event can carry the same kind for
@@ -432,6 +526,13 @@ pub fn registered_traces() -> std::collections::BTreeSet<String> {
 fn subjects_in<'a>(m: &Mechanism, e: &'a Ev) -> Vec<&'a str> {
     match m.fires {
         Fires::Decisions(_) => fired(m, e).into_iter().collect(),
+        // One subject per hit, so a line that timed out twice counts two.
+        Fires::Budget(names) => e
+            .budget_hits
+            .iter()
+            .filter(|(n, _)| names.contains(&n.as_str()))
+            .flat_map(|(_, hits)| std::iter::repeat_n(e.worker.as_str(), *hits))
+            .collect(),
         Fires::Condition(kind) => e
             .conditions
             .iter()
@@ -485,7 +586,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         .iter()
         .filter_map(|m| match m.fires {
             Fires::Condition(k) => Some(k),
-            Fires::Decisions(_) => None,
+            Fires::Decisions(_) | Fires::Budget(_) => None,
         })
         .collect();
     let mut events_scanned = 0usize;
@@ -590,7 +691,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             // Suppressed occurrences record a different decision word (`warn-repeat`), so
             // they never reach this count in the first place.
             let pushes = match m.fires {
-                Fires::Decisions(_) => n,
+                Fires::Decisions(_) | Fires::Budget(_) => n,
                 Fires::Condition(_) => a.pushes,
             };
             let (removal_kind, met, defect) = removal_verdict(m.removal, n);
@@ -600,6 +701,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
                 what: m.what,
                 added: m.added,
                 source: m.source,
+                counts: counts_of(m.fires),
                 evaluations: n,
                 subjects: subs,
                 repeats: n.saturating_sub(subs),
@@ -1001,6 +1103,7 @@ pub fn render(a: &Audit) -> String {
             r.id, r.class, r.evaluations, r.subjects, r.repeats, r.pushes
         ));
         s.push_str(&format!("  is: {}\n", r.what));
+        s.push_str(&format!("  counts: {}\n", r.counts));
         s.push_str(&format!(
             "  added: {} · recorded in {}\n",
             r.added, r.source
@@ -1153,9 +1256,8 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
     super::log_event(
         &ledger,
         &worker,
-        "audit",
+        super::decisions::AUDIT_REPORTED,
         &serde_json::json!({"since": since}),
-        "reported",
         &format!(
             "{} mechanism(s); {met} with the recorded condition met; {defects} defect(s) (no condition recorded, or firing with no registry row)",
             audit.rows.len()
@@ -1228,21 +1330,23 @@ mod tests {
 
         // Nothing recorded IS a defect, asserted against the classifier. It used to be
         // asserted by finding a registry row that lacked a condition — `review-waiting` until
-        // air-s7c, then `stuck` until air-dqw deleted it — and no row lacks one now, which is
-        // the goal. A test that needs a defect to exist is a test that resists the fix.
+        // air-s7c, then `stuck` until air-dqw deleted it. A test that needs a defect to exist is
+        // a test that resists the fix, and so is one that forbids a defect from being recorded:
+        // air-hqj8 registered rows nobody had written a condition for, and the honest entry for
+        // those is `Unstated`, reported, rather than invented text. So: a row is a defect
+        // exactly when its registry entry recorded nothing.
         assert_eq!(
             removal_verdict(Removal::Unstated, 0),
             ("none", None, Some(NO_CONDITION))
         );
-        assert!(
-            a.rows.iter().all(|r| r.defect.is_none()),
-            "every mechanism should record a removal condition; defects: {:?}",
-            a.rows
-                .iter()
-                .filter(|r| r.defect.is_some())
-                .map(|r| r.id)
-                .collect::<Vec<_>>()
-        );
+        for (r, m) in a.rows.iter().zip(MECHANISMS) {
+            assert_eq!(
+                r.defect.is_some(),
+                matches!(m.removal, Removal::Unstated),
+                "{}",
+                r.id
+            );
+        }
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
@@ -1351,5 +1455,24 @@ mod tests {
             "2026-08-22",
         );
         assert_eq!(a.unregistered, vec![("hook.Stop / refuse".to_string(), 1)]);
+    }
+
+    /// air-hqj8: a budget row counts each hit on its names, from any line, and nothing else.
+    #[test]
+    fn a_budget_row_counts_hits_not_waits() {
+        let a = gather_from(
+            &[day(
+                "2026-09-25",
+                &[
+                    r#"{"at":"2026-09-25T01:00:00Z","worker":"w1","command":"claim","decision":"timeout","budgets":{"bd":{"budget_ms":60000,"n":2,"hits":2,"ms":[60000,60000]}}}"#,
+                    r#"{"at":"2026-09-25T01:00:01Z","worker":"w1","command":"close","decision":"closed","budgets":{"bd-acceptance":{"budget_ms":60000,"n":1,"hits":0,"ms":[900]}}}"#,
+                ],
+            )],
+            "2026-09-25",
+        );
+        let row = |id: &str| a.rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row("bd-budget-timeout").evaluations, 2);
+        assert_eq!(row("mcp-tool-budget-kill").evaluations, 0);
+        assert!(a.unregistered.is_empty(), "{:?}", a.unregistered);
     }
 }

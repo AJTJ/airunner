@@ -26,7 +26,8 @@ use air_hooks::{HookEvent, HookInput, HookOutcome, handover_verdict, journal, st
 use air_ledger::Ledger;
 use rusqlite::params;
 
-use crate::cmd::{handover, log_event, now, open, ready_cache};
+use crate::cmd::decisions::{self as dec, Trace};
+use crate::cmd::{handover, log_event_as, now, open, ready_cache};
 use crate::git;
 
 /// The wall-clock cap Claude Code enforces on `air hook`, mirrored from
@@ -95,12 +96,12 @@ fn log_fail_open(repo: &Path, raw: &str, error: &str) {
             .as_ref()
             .map(|i| i.session_id.clone())
             .unwrap_or_default();
-        log_event(
+        log_event_as(
             &ledger,
             &worker,
             &format!("hook.{name}"),
+            dec::HOOK_FAIL_OPEN,
             &serde_json::json!({"session_id": session}),
-            "fail-open",
             error,
             "0 checks",
         );
@@ -167,12 +168,12 @@ fn inner_env(
         HOOK_BUDGET,
         elapsed >= HOOK_BUDGET,
     );
-    log_event(
+    log_event_as(
         &ledger,
         &worker,
         &format!("hook.{}", event.as_str()),
+        d.decision,
         &inputs,
-        &d.decision,
         &d.reason,
         &d.denominator,
     );
@@ -183,17 +184,17 @@ fn inner_env(
 pub struct Dispatched {
     pub outcome: HookOutcome,
     inputs: serde_json::Value,
-    decision: String,
+    decision: Trace,
     reason: String,
     denominator: String,
 }
 
 impl Dispatched {
-    fn new(outcome: HookOutcome, decision: &str, reason: impl Into<String>) -> Self {
+    fn new(outcome: HookOutcome, decision: Trace, reason: impl Into<String>) -> Self {
         Self {
             outcome,
             inputs: serde_json::json!({}),
-            decision: decision.to_string(),
+            decision,
             reason: reason.into(),
             denominator: "0 checks".to_string(),
         }
@@ -245,7 +246,7 @@ fn dispatch(
                 HookOutcome::Allow {
                     context: (prev.is_none()).then(|| WAKE_CONTEXT.to_string()),
                 },
-                "registered",
+                dec::SESSION_START_REGISTERED,
                 transition(&prev, "working"),
             )
         }
@@ -260,7 +261,7 @@ fn dispatch(
                 .map_err(|e| e.to_string())?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                "ended",
+                dec::SESSION_END_ENDED,
                 transition(&prev, "gone"),
             )
             .inputs(serde_json::json!({"reason": input.reason}))
@@ -288,7 +289,11 @@ fn dispatch(
             let denied = input.event() == HookEvent::PermissionDenied;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                if denied { "denied" } else { "failed" },
+                if denied {
+                    dec::PERMISSION_DENIED_DENIED
+                } else {
+                    dec::POST_TOOL_USE_FAILURE_FAILED
+                },
                 why.chars().take(400).collect::<String>(),
             )
             .inputs(serde_json::json!({"command": command}))
@@ -300,7 +305,7 @@ fn dispatch(
             let _ = ledger.lease_beat(worker, &now());
             let mut d = Dispatched::new(
                 HookOutcome::Allow { context: None },
-                "observed",
+                dec::POST_TOOL_USE_OBSERVED,
                 transition(&prev, "working"),
             );
             if let Some(abs) = input.edited_path()
@@ -309,7 +314,7 @@ fn dispatch(
             {
                 journal::touch(ledger, worker, &rel, Some(&input.session_id), &now())
                     .map_err(|e| e.to_string())?;
-                d.decision = "journaled".to_string();
+                d.decision = dec::POST_TOOL_USE_JOURNALED;
                 d.inputs = serde_json::json!({"path": rel});
             }
             // A closed bead is not held by anyone (air-8p4). PostToolUse is the success
@@ -322,7 +327,7 @@ fn dispatch(
                     .release_claim(&bead, worker, "closed", &now())
                     .unwrap_or(false)
             {
-                d.decision = "released".to_string();
+                d.decision = dec::POST_TOOL_USE_RELEASED;
                 d.reason = format!("{bead} closed; claim released");
                 d.inputs = serde_json::json!({"bead": bead, "command": cmd});
             }
@@ -337,7 +342,11 @@ fn dispatch(
             let prev = set_session(ledger, input, worker, role, "idle", None)?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                "observed",
+                if input.event() == HookEvent::Stop {
+                    dec::STOP_OBSERVED
+                } else {
+                    dec::SUBAGENT_STOP_OBSERVED
+                },
                 format!("{}; {role}: no hand-over check", transition(&prev, "idle")),
             )
         }
@@ -348,7 +357,7 @@ fn dispatch(
         // which could ever be acted on (air-bp0). Observed, and nothing else.
         HookEvent::SubagentStop => Dispatched::new(
             HookOutcome::Allow { context: None },
-            "observed",
+            dec::SUBAGENT_STOP_OBSERVED,
             "subagent stop: not the worker's stop; no state change, no nudge, no bd".to_string(),
         ),
         HookEvent::Stop => {
@@ -428,15 +437,15 @@ fn dispatch(
                 let _ = ledger.emit_if_changed(&input.session_id, "nudge", &now, &now);
             }
             let decision = if nudge.is_some() {
-                "nudge"
+                dec::STOP_NUDGE
             } else if v.pass {
-                "pass"
+                dec::STOP_PASS
             } else if !has_work {
-                "no-claim"
+                dec::STOP_NO_CLAIM
             } else if speak {
-                "would-refuse"
+                dec::STOP_WOULD_REFUSE
             } else {
-                "would-refuse-repeat"
+                dec::STOP_WOULD_REFUSE_REPEAT
             };
             let outcome = match nudge {
                 Some(reason) => HookOutcome::Block { reason },
@@ -484,10 +493,11 @@ fn dispatch(
             }
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                if is_stop_kind(&kind) {
-                    "stopped"
-                } else {
-                    "observed"
+                match (input.event() == HookEvent::StopFailure, is_stop_kind(&kind)) {
+                    (true, true) => dec::STOP_FAILURE_STOPPED,
+                    (true, false) => dec::STOP_FAILURE_OBSERVED,
+                    (false, true) => dec::NOTIFICATION_STOPPED,
+                    (false, false) => dec::NOTIFICATION_OBSERVED,
                 },
                 text.clone(),
             )
@@ -495,7 +505,7 @@ fn dispatch(
         }
         _ => Dispatched::new(
             HookOutcome::Allow { context: None },
-            "ignored",
+            dec::HOOK_IGNORED,
             "no handler",
         ),
     })
@@ -631,7 +641,7 @@ fn pre_tool_use(
     {
         return Ok(Dispatched::new(
             HookOutcome::Block { reason },
-            "refuse-outside-worktree",
+            dec::PRE_TOOL_USE_REFUSE_OUTSIDE_WORKTREE,
             format!("{moved}; edit outside the worktree refused"),
         )
         .inputs(serde_json::json!({"path": abs, "worktree": root.display().to_string()}))
@@ -669,7 +679,7 @@ fn pre_tool_use(
             if !peers.is_empty() && !speak {
                 return Ok(Dispatched::new(
                     HookOutcome::Allow { context: None },
-                    "warn-repeat",
+                    dec::PRE_TOOL_USE_WARN_REPEAT,
                     format!("{moved}; peer on file (already warned)"),
                 )
                 .inputs(inputs)
@@ -688,7 +698,7 @@ fn pre_tool_use(
                             peer_ages(&peers, &now())
                         )),
                     },
-                    "warn",
+                    dec::PRE_TOOL_USE_WARN,
                     format!("{moved}; peer on file"),
                 )
                 .inputs(inputs)
@@ -696,7 +706,7 @@ fn pre_tool_use(
             }
             return Ok(Dispatched::new(
                 HookOutcome::Allow { context: None },
-                "clear",
+                dec::PRE_TOOL_USE_CLEAR,
                 format!("{moved}; no peer on file"),
             )
             .inputs(inputs)
@@ -704,7 +714,7 @@ fn pre_tool_use(
         }
         return Ok(Dispatched::new(
             HookOutcome::Allow { context: None },
-            "clear",
+            dec::PRE_TOOL_USE_CLEAR,
             format!("{moved}; path outside repo"),
         ));
     }
@@ -724,11 +734,13 @@ fn pre_tool_use(
             Ok(()) => format!("{moved}; {bytes} bytes to {to}"),
             Err(e) => format!("{moved}; {bytes} bytes to {to}; not recorded: {e}"),
         };
-        return Ok(
-            Dispatched::new(HookOutcome::Allow { context: None }, "messaged", reason)
-                .inputs(serde_json::json!({"to": to, "bytes": bytes}))
-                .denominator("1 message"),
-        );
+        return Ok(Dispatched::new(
+            HookOutcome::Allow { context: None },
+            dec::PRE_TOOL_USE_MESSAGED,
+            reason,
+        )
+        .inputs(serde_json::json!({"to": to, "bytes": bytes}))
+        .denominator("1 message"));
     }
     // Hand-over gate on bd status writes.
     if let Some(cmd) = input.bash_command()
@@ -756,7 +768,7 @@ fn pre_tool_use(
     }
     Ok(Dispatched::new(
         HookOutcome::Allow { context: None },
-        "observed",
+        dec::PRE_TOOL_USE_OBSERVED,
         moved,
     ))
 }
@@ -819,7 +831,7 @@ pub fn lease_gate(
         return Ok(Some(
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                "lease-held",
+                dec::PRE_TOOL_USE_LEASE_HELD,
                 "every lease the command needs is held",
             )
             .inputs(inputs)
@@ -832,14 +844,14 @@ pub fn lease_gate(
             HookOutcome::Block {
                 reason: msg.clone(),
             },
-            "lease-refuse",
+            dec::PRE_TOOL_USE_LEASE_REFUSE,
         )
     } else {
         (
             HookOutcome::Allow {
                 context: Some(msg.clone()),
             },
-            "lease-would-refuse",
+            dec::PRE_TOOL_USE_LEASE_WOULD_REFUSE,
         )
     };
     Ok(Some(
@@ -926,11 +938,11 @@ pub fn handover_gate(
         (None, _) => false,
     };
     let decision = if v.pass {
-        "pass"
+        dec::PRE_TOOL_USE_PASS
     } else if v.block {
-        "refuse"
+        dec::PRE_TOOL_USE_REFUSE
     } else {
-        "would-refuse"
+        dec::PRE_TOOL_USE_WOULD_REFUSE
     };
     let outcome = if v.block {
         HookOutcome::Block {

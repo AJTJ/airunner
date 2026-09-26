@@ -546,7 +546,23 @@ fn run_self(ctx: &Ctx, argv: &[String], budget: Duration) -> Result<(i32, String
         .current_dir(&ctx.repo);
     let (status, stdout, stderr) = run_group(cmd, budget).map_err(|e| match e {
         GroupRun::Spawn(e) => format!("spawn {}: {e}", ctx.exe.display()),
-        GroupRun::Timeout => format!("air {} timed out after {budget:?}", argv.join(" ")),
+        GroupRun::Timeout => {
+            let msg = format!("air {} timed out after {budget:?}", argv.join(" "));
+            // The kill is a line of its own (air-hqj8): the `mcp-tool` sample recorded in
+            // `run_group` otherwise waited for this server's next channel push to reach the
+            // log, and a server that exits first took it with it.
+            if let Ok((ledger, worker)) = crate::cmd::open(&ctx.repo) {
+                crate::cmd::log_event(
+                    &ledger,
+                    &worker,
+                    crate::cmd::decisions::MCP_TOOL_TIMEOUT,
+                    &json!({"argv": argv, "budget_ms": budget.as_millis()}),
+                    &msg,
+                    "1 tool call",
+                );
+            }
+            msg
+        }
     })?;
     Ok((
         status.code().unwrap_or(-1),
@@ -660,12 +676,11 @@ fn record_push(ledger: Option<&(air_ledger::Ledger, String)>, at: &str, a: &Atte
     crate::cmd::log_event(
         ledger,
         worker,
-        "channel.push",
+        super::decisions::CHANNEL_PUSHED,
         &json!({
             "conditions": [format!("{}:{}", a.kind, a.worker)],
             "for_minutes": a.for_minutes,
         }),
-        "pushed",
         &a.detail,
         "1 condition pushed",
     );

@@ -32,6 +32,11 @@ pub enum Fires {
     /// copying one recorded condition onto several mechanisms, which is the invention this
     /// table exists to prevent (air-0y9).
     Decisions(&'static [(&'static str, &'static str)]),
+    /// Waits that reached one of these budgets (`air_ledger::budgets` names), read from the
+    /// `budgets` object on every event line: each hit is a decision taken on less than was
+    /// asked for (air-d75). One row per recorded reason, several names where one reason
+    /// covers them (air-hqj8).
+    Budget(&'static [&'static str]),
 }
 
 /// The recorded condition under which a mechanism is removed.
@@ -40,13 +45,10 @@ pub enum Removal {
     /// Nothing was recorded. `air audit` reports this as a defect rather than skipping it:
     /// a mechanism nobody wrote a removal condition for is the one that outlives its reason.
     ///
-    /// air-byw: `stuck` was the last mechanism carrying this, so as of 2026-08-29 **every**
-    /// mechanism records a removal condition and the variant is unconstructed. Kept
-    /// deliberately, and the `allow` is the point rather than a workaround: without it the next
-    /// author with nothing to record must pick `Judgement` and invent text, which is exactly the
-    /// invention this file's header forbids. Deleting the variant would turn "I have no
-    /// condition for this" from a reported defect into an unsayable thing.
-    #[allow(dead_code)]
+    /// air-byw: `stuck` was the last mechanism carrying this on 2026-08-29, and the variant
+    /// was kept unconstructed so that the next author with nothing to record would not invent
+    /// text. air-hqj8 is that author: the budget rows and `air lease take`'s refusal were
+    /// registered on 2026-09-25 with nothing recorded, and say so.
     Unstated,
     /// Recorded, but a person has to decide. The audit prints the text and says so; it does
     /// not pretend to evaluate it.
@@ -68,7 +70,7 @@ impl Removal {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Mechanism {
     pub id: &'static str,
-    /// hook | attention | refusal | nudge | warning
+    /// hook | attention | refusal | nudge | warning | report | budget
     pub class: &'static str,
     /// What it does, in one line. Descriptive, never a recommendation.
     pub what: &'static str,
@@ -164,6 +166,10 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("handover", "would-refuse"),
             ("hook.handover", "would-refuse"),
             ("hook.stop", "would-refuse"),
+            // The Stop hook's advisory under its dispatched name, written since the event was
+            // dispatched by name and registered by nobody until air-hqj8 (30 in this repo's
+            // record on 2026-09-25).
+            ("hook.Stop", "would-refuse"),
         ]),
         // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
         // has set awaiting_review/close in this turn and evidence is missing (M1, after one
@@ -431,8 +437,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "land-refusal",
         class: "refusal",
-        what: "A landing is refused: not the coordinator, main dirty or moved off main, the \
-               branch does not contain main, or its head carries no recorded green.",
+        what: "A landing is refused: main dirty or moved off main, the branch does not contain \
+               main, or its head carries no recorded green. The role refusal is \
+               `land-role-refusal` since air-hqj8.",
         added: "2026-08-22 (air-3pz)",
         source: "crates/cli/src/cmd/land.rs, may_land and the precondition checks",
         fires: Fires::Decisions(&[("land", "refuse")]),
@@ -544,6 +551,174 @@ pub const MECHANISMS: &[Mechanism] = &[
         // do-less rule exists to prevent. Recorded properly by air-s7c.
         removal: Removal::ZeroFirings(
             "a round passes with zero denied send-keys attempts, meaning no coordinator reaches for it and SendMessage covers the need",
+        ),
+    },
+    Mechanism {
+        id: "land-role-refusal",
+        class: "refusal",
+        what: "`air land` from any role but the lane and the owner is refused before anything \
+               is read.",
+        added: "2026-08-22 (air-3pz); the coordinator lost it 2026-09-14 (air-jc2p.2)",
+        source: "crates/cli/src/cmd/land.rs, may_land",
+        fires: Fires::Decisions(&[("land", "refuse-role")]),
+        // Written as `land / refuse` until air-hqj8, so days before 2026-09-25 count it under
+        // `land-refusal`. The failures are on may_land: a coordinator's commit on main
+        // invalidated four workers' landability at an adopter on 2026-09-06, and landing order
+        // was the round's throughput limit while the coordinator landed by hand.
+        removal: Removal::Judgement(
+            "the lane goes (verify cheap enough that no round has a batch of more than one branch); landing then returns to whoever lands a worker's branch",
+        ),
+    },
+    Mechanism {
+        id: "no-precheck",
+        class: "refusal",
+        what: "Where the repo declares `precheck`, `air batch cut` leaves out a branch with no \
+               recorded green precheck at its head; one line per branch left out.",
+        added: "2026-09-25 (an adopter's fleet protocol)",
+        source: "crates/cli/src/cmd/status.rs batch_ready_rule; crates/cli/src/cmd/batch_cut.rs run",
+        // An adopter's lane script parsed a log file for this, 2026-09-05..07: a worker was
+        // cut before its check finished, a check still running was relayed as "checked", and
+        // a stale green trailer named a head two commits back.
+        fires: Fires::Decisions(&[("batch-cut", "no-precheck")]),
+        removal: Removal::Judgement(
+            "the repo drops the `precheck` key: a round under it with no batch red that a member's precheck would have caught means the precheck only delays the cut",
+        ),
+    },
+    Mechanism {
+        id: "batch-cut-refusal",
+        class: "refusal",
+        what: "`air batch cut` refuses to start: in the main checkout, git without \
+               `merge-tree --write-tree`, a dirty lane tree, or the lane's branch conflicting \
+               with main.",
+        added: "2026-09-25",
+        source: "crates/cli/src/cmd/batch_cut.rs, run",
+        // The failure is the adopter's hand cut (module header): merges judged by `tail`'s
+        // exit status for eleven batches, a skipped dry-merge, three wrong conflict predictions.
+        fires: Fires::Decisions(&[("batch-cut", "refuse")]),
+        removal: Removal::Judgement(
+            "`git merge` itself reports the conflicting pair and the lane's cut needs no set or order Air holds, or the lane goes (verify cheap enough that no batch of more than one branch forms)",
+        ),
+    },
+    Mechanism {
+        id: "batch-cut-drop",
+        class: "refusal",
+        what: "A batch-ready branch that conflicts with main or with an earlier member is left \
+               out of the batch, naming the other side and the paths.",
+        added: "2026-09-25",
+        source: "crates/cli/src/cmd/batch_cut.rs, pre_check and merge",
+        // `dropped` until air-hqj8: that word is bookkeeping for `air triage --drop`, so the
+        // audit would have counted a drop as nothing.
+        fires: Fires::Decisions(&[("batch-cut", "drop")]),
+        removal: Removal::Judgement(
+            "same as `batch-cut-refusal`: git names the pair itself, or the lane goes",
+        ),
+    },
+    Mechanism {
+        id: "main-checkout-session",
+        class: "warning",
+        what: "`air status` names every launched session whose process runs in the main \
+               checkout, where no role works since air-jc2p.1. A warning; nothing is refused.",
+        added: "2026-09-25 (air-jc2p.3)",
+        source: "crates/cli/src/cmd/readers.rs, main_checkout_sessions",
+        // A coordinator's prose commit in the main checkout invalidated four workers'
+        // landability at an adopter, and a verify there moved main under a worker's green
+        // (both 2026-09-06). One line per full `air status` that printed it.
+        fires: Fires::Decisions(&[("status", "main-checkout-session")]),
+        removal: Removal::ZeroFirings(
+            "a round's status output shows no such line with the launchers as they are; if the line keeps appearing it becomes a launcher refusal instead",
+        ),
+    },
+    Mechanism {
+        id: "lease-take-refusal",
+        class: "refusal",
+        what: "`air lease take` refused: a live holder has the resource.",
+        added: "2026-08-21 (owner ruling A; ported from the adopter's lease.sh)",
+        source: "crates/cli/src/cmd/lease.rs, take",
+        fires: Fires::Decisions(&[("lease.take", "denied")]),
+        // None recorded. The deletion of `air lease` was reversed on 2026-08-29 (air-uae)
+        // because a zero in a repo that takes no leases says nothing; that is a reason to
+        // keep it, not a condition for removing it.
+        removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "release-refusal",
+        class: "refusal",
+        what: "`air release` of a closed bead is refused: closed is closed, and unfinished work \
+               is a new bead.",
+        added: "2026-08-21 (plan 0006, owner rulings 2026-08-21)",
+        source: "crates/cli/src/cmd/claim.rs, release",
+        fires: Fires::Decisions(&[("release", "refuse")]),
+        // Written since 2026-08-21 and registered by nobody until `decisions::ALL` made the
+        // set enumerable (air-hqj8). No removal condition was recorded with it.
+        removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "bd-budget-timeout",
+        class: "budget",
+        what: "A `bd` process reached its budget and was killed. Fails closed: the command is \
+               refused and names the id count, the budget and AIR_BD_TIMEOUT_MS; status falls \
+               back to cached counts; the Stop nudge says nothing.",
+        added: "2026-09-06 (air-d75, measured); budgets made generous 2026-09-25 (owner)",
+        source: "crates/cli/src/cmd/budgets.rs CATALOGUE; docs/design.md §6.7",
+        // bd costs about 2 s per call with stalls to 44 s at an adopter (air-bp0).
+        fires: Fires::Budget(&[
+            air_ledger::budgets::BD,
+            air_ledger::budgets::BD_ACCEPTANCE,
+            air_ledger::budgets::BD_NUDGE,
+            air_ledger::budgets::BD_PROBE,
+            air_ledger::budgets::BD_STATUS,
+        ]),
+        removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "mcp-tool-budget-kill",
+        class: "budget",
+        what: "An `air` subprocess behind an MCP tool call reached its budget; its process \
+               group is killed and the tool answers with the timeout (`mcp.tool / timeout`).",
+        added: "2026-09-25 (air-se4n)",
+        source: "crates/cli/src/cmd/mcp.rs, tool_budget and run_self",
+        // air-se4n: a flat 20 s killed `air close` through the channel whatever its own bd
+        // budget.
+        fires: Fires::Budget(&[air_ledger::budgets::MCP_TOOL]),
+        removal: Removal::Judgement(
+            "the commands behind the tools stop shelling out to bd, or the MCP tools stop running the CLI as a subprocess (mcp.rs, bd_calls)",
+        ),
+    },
+    Mechanism {
+        id: "hook-path-budget",
+        class: "budget",
+        what: "A budget on the hook path was reached: git (1.5 s), the SQLite lock, or the hook \
+               itself. Fails OPEN: the hook allows, so a refusal does not happen. A hook killed \
+               at its cap writes nothing; `air audit`'s unpaired-hook count is what shows it.",
+        added: "2026-09-06 (air-d75)",
+        source: "crates/cli/src/cmd/budgets.rs CATALOGUE; docs/design.md §6.7",
+        fires: Fires::Budget(&[
+            air_ledger::budgets::GIT,
+            air_ledger::budgets::SQLITE_LOCK,
+            air_ledger::budgets::HOOK,
+        ]),
+        removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "git-worktree-budget",
+        class: "budget",
+        what: "A `git` call making or removing a worktree, or merging in `air batch cut`, \
+               reached its 120 s budget. Fails closed: the command says so.",
+        added: "2026-09-06 (air-d75)",
+        source: "crates/cli/src/cmd/worktree.rs GIT_BUDGET",
+        fires: Fires::Budget(&[air_ledger::budgets::GIT_WORKTREE]),
+        removal: Removal::Unstated,
+    },
+    Mechanism {
+        id: "tree-readers-budget",
+        class: "budget",
+        what: "The process listing behind `readers:`, the idle exemption and `air land`'s \
+               warning reached its budget; the answer is `unknown (why)`, never an empty list.",
+        added: "2026-09-25 (owner)",
+        source: "crates/cli/src/cmd/readers.rs BUDGET",
+        fires: Fires::Budget(&[air_ledger::budgets::TREE_READERS]),
+        removal: Removal::Judgement(
+            "every process that runs in a fleet tree is one Air recorded, so the ledger alone answers what is running there; or the harness exposes a session's background tasks (readers.rs header)",
         ),
     },
 ];

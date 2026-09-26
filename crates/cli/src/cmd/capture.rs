@@ -164,9 +164,8 @@ pub fn capture(
     log_event(
         &ledger,
         &worker,
-        "capture",
+        super::decisions::CAPTURE_CAPTURED,
         &serde_json::json!({"id": id, "text": text}),
-        "captured",
         &msg,
         &format!("inbox depth {depth}"),
     );
@@ -340,13 +339,12 @@ pub fn triage(repo: &Path, id: &str, bead: Option<&str>, drop: Option<&str>, jso
             return 1;
         }
     };
-    let refuse = |decision: &str, msg: String, denom: &str| -> i32 {
+    let refuse = |decision: super::decisions::Trace, msg: String, denom: &str| -> i32 {
         log_event(
             &ledger,
             &worker,
-            "triage",
-            &serde_json::json!({"ids": ids, "beads": beads}),
             decision,
+            &serde_json::json!({"ids": ids, "beads": beads}),
             &msg,
             denom,
         );
@@ -361,7 +359,7 @@ pub fn triage(repo: &Path, id: &str, bead: Option<&str>, drop: Option<&str>, jso
     match unknown_beads(repo, &plan) {
         Ok(missing) if !missing.is_empty() => {
             return refuse(
-                "no-such-bead",
+                super::decisions::TRIAGE_NO_SUCH_BEAD,
                 format!(
                     "refused: bd knows no bead {}; create it first (`bd create --validate \
                      --estimate N`) and re-run. Nothing was triaged.",
@@ -371,7 +369,7 @@ pub fn triage(repo: &Path, id: &str, bead: Option<&str>, drop: Option<&str>, jso
             );
         }
         Ok(_) => {}
-        Err(msg) => return refuse("unknown", msg, "1 bd process"),
+        Err(msg) => return refuse(super::decisions::TRIAGE_UNKNOWN, msg, "1 bd process"),
     }
     let at = now();
     let items: Vec<air_ledger::captures::TriageItem> = plan
@@ -427,18 +425,17 @@ pub fn triage(repo: &Path, id: &str, bead: Option<&str>, drop: Option<&str>, jso
     log_event(
         &ledger,
         &worker,
-        "triage",
+        if missed.is_empty() {
+            super::decisions::TRIAGE_TRIAGED
+        } else {
+            super::decisions::TRIAGE_PARTIAL
+        },
         &serde_json::json!({
             "ids": ids,
             "resolved": lines.len(),
             "repointed": repointed,
             "missed": missed,
         }),
-        if missed.is_empty() {
-            "triaged"
-        } else {
-            "partial"
-        },
         &msg,
         &format!(
             "{} capture(s), {bead_count} bead(s) verified, inbox depth {depth}",
