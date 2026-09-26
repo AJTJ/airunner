@@ -204,6 +204,14 @@ rounds, from 2026-08-21 to 2026-09-13. Status ran 4,265 times, claim 1,208, tria
 counts are not a guide, because Air has mostly been built here rather than used. Usage is one
 signal for the audit in section 10, not the verdict.
 
+Every decision Air makes is measured by air audit. Each event line's command and decision is a
+constant in `cmd/decisions.rs`, and the event writer accepts nothing else. Each registry row in
+`cmd/mechanisms.rs` names the lines it counts, or the timing budgets whose hits it counts, with
+the failure it prevents and its removal condition. Where none was recorded, the audit reports
+that as a defect. A self-test probe fails when a decision that is not bookkeeping, or a budget,
+has no row, so a new mechanism cannot ship uncounted. The audit prints every row, zeros
+included, with what it counts (air-hqj8).
+
 ### 4.2 Channel tools, resources, and conditions
 
 The channel server lists 10 tools and 5 resources. The tools cover status, attention, holdings,

@@ -170,9 +170,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     // air-ppm: a kill is not a verdict. The exit is still recorded and still mirrored below;
     // only what it is CALLED changes, and the ledger's green/red/flaky queries skip it.
     let decision = match run.verdict() {
-        air_ledger::verify::Verdict::Green => "green",
-        air_ledger::verify::Verdict::Red => "red",
-        air_ledger::verify::Verdict::Killed => "killed",
+        air_ledger::verify::Verdict::Green => super::decisions::RECORD_GREEN,
+        air_ledger::verify::Verdict::Red => super::decisions::RECORD_RED,
+        air_ledger::verify::Verdict::Killed => super::decisions::RECORD_KILLED,
     };
     let mut flags: Vec<&str> = Vec::new();
     if run.is_green() && suspicious(duration_ms, output_bytes, previous_green_ms) {
@@ -224,9 +224,8 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     log_event(
         &ledger,
         &worker,
-        "record",
-        &serde_json::json!({"kind": kind.as_str(), "sha": head, "command": command, "flags": flags}),
         decision,
+        &serde_json::json!({"kind": kind.as_str(), "sha": head, "command": command, "flags": flags}),
         &reason,
         "1 run",
     );
@@ -244,7 +243,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
             .unwrap_or_default();
         format!(
             "recorded {} {} for {} at {}: exit {}{note}{log}",
-            decision,
+            decision.decision,
             kind.as_str(),
             worker,
             head.get(..7).unwrap_or(&head),

@@ -623,15 +623,14 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     log_event(
         &ledger,
         &worker,
-        "handover",
-        &serde_json::json!({"bead": bead, "enforce": enforce, "head": f.head}),
         if v.pass {
-            "pass"
+            super::decisions::HANDOVER_PASS
         } else if v.block {
-            "refuse"
+            super::decisions::HANDOVER_REFUSE
         } else {
-            "would-refuse"
+            super::decisions::HANDOVER_WOULD_REFUSE
         },
+        &serde_json::json!({"bead": bead, "enforce": enforce, "head": f.head}),
         &v.message,
         "4 checks",
     );
