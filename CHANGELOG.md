@@ -7,8 +7,8 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
-The next release is 0.4.5. It is tagged once a live trial of it passes (see
-`docs/design.md` §9.1). 0.4.0 to 0.4.4 were never tagged: their trials found defects or
+The next release is 0.4.6. It is tagged once a live trial of it passes (see
+`docs/design.md` §9.1). 0.4.0 to 0.4.4 were never tagged, and 0.4.5 was tagged but its trial failed: their trials found defects or
 missing notices, which are fixed or added below.
 
 ### Added
