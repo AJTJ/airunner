@@ -7,7 +7,7 @@ Index items are 1–3 lines; detail lives behind the link.
 
 - **No Claude memory for this project. Ever.** It is an opaque, untrackable surface. Rules and
   decisions live here and in `docs/`. If memory files exist for this project, delete them and
-  move the content into `docs/decisions.md`.
+  move the content into `private/decisions.md`.
 - **Source trail always.** Every research claim cites a primary source — URL with access date,
   or `path:line-range`. Claims derived from the adopter's notes cite the note *and* the source it
   cited. No "mysterious bunch of claims".
@@ -111,14 +111,14 @@ Index items are 1–3 lines; detail lives behind the link.
   number about this repo, before claiming a mechanism fires or is shipped, and before saying what
   the installed `air` does (owner, 2026-08-29, air-476).
 - **This file** is rules + indexes + essentials only. What is still to build goes in `docs/design.md`
-  §10, technology choices in its §11, framing and rulings in `docs/decisions.md` (owner, 2026-09-25).
+  §10, technology choices in its §11, standing rulings in its §8.1, and the dated history of rulings
+  and framing in `private/decisions.md`, which the owner keeps and does not publish (owner, 2026-09-26).
 
 ## Index — documents
 
 | Read when | Document |
 |---|---|
 | What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans or research directory; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
-| Wanting the "why", framing, and every owner decision (dated, append-only) | [`docs/decisions.md`](docs/decisions.md) |
 | Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
 | Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | skill `system-design`; the target shape and its open rulings are `docs/design.md` §10, the merge-queue prior art `.claude/skills/system-design/references/verification-lane.md` |
 | Why Rust, SQLite, bd, Claude Code, worktrees, tmux, the MCP channel and the merge-queue lane; whether a part of Air is now commodity | `docs/design.md` §11 (technology decisions, sourced); the field roster is `.claude/skills/check-resources/references/field.md` |

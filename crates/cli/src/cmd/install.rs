@@ -3155,7 +3155,7 @@ mod tests {
         assert_eq!(ROLES_MD, on_disk);
         // Every pin reads through `flat`, because roles.md is hard-wrapped and a pin that spans
         // a wrap fails on the wrap rather than on the rule. Each pin is a fact an agent acts
-        // on; the incident behind it is in docs/decisions.md, not here and not in roles.md.
+        // on; the incident behind it stays out of here and out of roles.md.
         let roles = flat(ROLES_MD);
         let has = |s: &str| roles.contains(&flat(s));
         // Run-to-completion is scoped to a session that HAS work; starting one is not being

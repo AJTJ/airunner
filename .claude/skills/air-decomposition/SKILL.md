@@ -16,10 +16,10 @@ under "Additional resources".
 
 | Metis | Air | Notes (Air's, not Metis's) |
 |---|---|---|
-| Vision | **feature** | Owner picks it; not tracked (`docs/decisions.md` 2026-08-17). A paragraph in `decisions.md` or a plan. |
+| Vision | **feature** | Owner picks it; not tracked (owner, 2026-08-17). A paragraph in the epic's `--design`. |
 | Initiative | **epic** | `bd create --type=epic` with `--design` as its spec. Non-empty `--design` before any child can be claimed (SYNTHESIS §4.3 check 8; owner 2026-08-18 item 1). |
 | Task | **bead** | One agent, one session, one reviewable diff, one runnable acceptance. |
-| Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`decisions.md` 2026-08-18 item 3). |
+| Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`docs/design.md` §8.1). |
 | Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. |
 | "decompose phase is a visible buffer" | same | Ledger metric: time from `--design` to first child claim. |
 | `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | "the missing instrument is a size estimate at filing time" (an adopter's retrospective of its overnight fleet run of 2026-08-15). |
@@ -182,7 +182,7 @@ cannot judge prose, and nothing downstream will.
 it at **80% false positives** on their own queue before dropping it; the distinction here is
 finer than the one that failed. If anyone proposes one again, the discriminator is the absence
 of a named observer or artefact, and **the rate must be measured and reported before it is
-wired in** — not after. Recorded in `docs/decisions.md`, 2026-08-29.
+wired in** — not after (owner, 2026-08-29).
 
 ```bash
 echo "<what and why; cites file:line>" | bd create "<verb-first title>" --type=task -p 2 \
@@ -329,7 +329,7 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   to Metis exit criteria; walking skeleton from Patton/Cockburn; Lawrence's splitting-pattern
   order and selection rule; INVEST-shaped child checklist; one-wave rule; re-cut rules from
   Metis's feature-creep rule), Air's sizing unit with the adopter's floor and `--estimate`,
-  per-worker queue cutting per `docs/decisions.md` 2026-08-20, and the adopter's evidence lines
+  per-worker queue cutting (owner, 2026-08-20), and the adopter's evidence lines
   Metis reasoning kept and labelled. Full sources and access dates: "Additional resources".
 - An adopter's evidence is cited by what it is and its date, not by path (owner, 2026-09-25):
   the notes first cited here by `file:line` (read 2026-08-20, re-checked 2026-08-22, air-xsj)

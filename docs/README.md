@@ -8,7 +8,6 @@ the skill that uses them (`.claude/skills/*/references/`).
 | Read when | Document |
 |---|---|
 | Learning what Air is and how it works today: components, every interface, the ledger, the main flows as diagrams, invariants, failure model, operations, the TODO list with the fleet's target shape (§10), and the technology decisions with their sources (§11) | [`design.md`](design.md) (kept current with the code; skill `design-doc`) |
-| Wanting the why: every owner ruling, dated, append-only, with a standing-rulings index at the top | [`decisions.md`](decisions.md) |
 | Integrating Air into a target repo: install, configure (`.claude/air.json`), upgrade | [`rules/adopting-air.md`](rules/adopting-air.md) |
 | Which role a session is and what it may do; shipped to adopters as `.air/roles.md` | [`rules/roles.md`](rules/roles.md) |
 
