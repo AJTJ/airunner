@@ -91,6 +91,19 @@ impl Ledger {
         Ok(true)
     }
 
+    /// Record a message the recipient was already told some other way (a command's own
+    /// output), delivered at `at`, so no channel tells it again. `Ok(false)` when it was
+    /// already recorded.
+    pub fn record_told(&self, m: &Outgoing<'_>, at: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO deliveries \
+             (to_worker, kind, key, subject, content, created_at, delivered_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![m.to, m.kind, m.key, m.subject, m.content, at],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Take every undelivered row for `to`, oldest first, and mark them delivered at `at`. One
     /// transaction, so two readers for one name never both deliver a row.
     pub fn take_deliveries(&self, to: &str, at: &str) -> Result<Vec<Delivery>> {

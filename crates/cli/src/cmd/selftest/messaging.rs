@@ -197,3 +197,205 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         green_passes: green,
     }
 }
+
+fn batch_run(sha: &str, exit: i32, members: &[(&str, &str)]) -> air_ledger::verify::VerifyRun {
+    air_ledger::verify::VerifyRun {
+        id: format!("run-{sha}"),
+        worker: "lane".into(),
+        sha: sha.into(),
+        kind: air_ledger::verify::Kind::Verify,
+        exit_code: exit,
+        trigger: "selftest".into(),
+        failing_step: None,
+        started_at: "2026-09-26T00:00:40Z".into(),
+        finished_at: "2026-09-26T00:05:00Z".into(),
+        log_path: Some("/tmp/red.log".into()),
+        command: None,
+        duration_ms: None,
+        output_bytes: None,
+        dirty: false,
+        tree: None,
+        members: members
+            .iter()
+            .map(|(w, s)| air_ledger::landings::Member {
+                worker: (*w).into(),
+                sha: (*s).into(),
+            })
+            .collect(),
+        main_sha: Some("main0000".into()),
+    }
+}
+
+/// air-1vri.2: the lane hears each newly batch-ready branch once, and each member hears its
+/// batch's result or its drop at once. A command that already printed the batch-ready set
+/// counts as telling the lane.
+///
+/// Red: a batch-ready branch queues one row for the lane; a green batch gives each named member
+/// "batch green ... Close them now" with its beads, a red one gives the exit and the log path,
+/// a drop gives "dropped from batch" with the other side and the paths; `air land` and a red
+/// batch's `air record` end with the batch-ready set and `next: air batch cut`. Green: the same
+/// branch again, and a branch the lane was already told in a command's output, queue nothing;
+/// a killed batch and a member with no worker name say nothing; an empty set prints "nothing
+/// is batch-ready".
+pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
+    use crate::cmd::fanout::{
+        batch_dropped, batch_ready_to_lane, batch_result_notes, next_cut_lines, told_lane,
+    };
+    use crate::cmd::status::{BatchReady, Snapshot};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let br = |w: &str, h: &str| BatchReady {
+            worker: w.into(),
+            head: h.into(),
+            beads: vec![format!("zz-{w}")],
+        };
+        let mut s = Snapshot {
+            workers: vec![view("lane", "lane", "working", None)],
+            batch_ready: vec![br("w1", "aaaa1111")],
+            ..Default::default()
+        };
+        let first = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:00:00Z");
+        let again = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:00:30Z");
+        told_lane(&l, "lane", &[br("w2", "bbbb2222")], "2026-09-26T00:00:40Z");
+        s.batch_ready.push(br("w2", "bbbb2222"));
+        let already_told = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:01:00Z");
+
+        let beads = |sha: &str| vec![format!("zz-{}", sha.get(..1).unwrap_or(""))];
+        let members = [("w1", "a1a1a1a1a1"), ("", "c3c3c3c3c3")];
+        let green = batch_result_notes(&batch_run("g0g0g0g0", 0, &members), &beads);
+        let red = batch_result_notes(&batch_run("r0r0r0r0", 2, &members), &beads);
+        let killed = batch_result_notes(&batch_run("k0k0k0k0", 143, &members), &beads);
+        batch_dropped(
+            &l,
+            "lane",
+            &crate::cmd::batch_cut::Dropped {
+                worker: "w3".into(),
+                head: "d4d4d4d4".into(),
+                beads: vec!["zz-3".into()],
+                against: "w1".into(),
+                against_sha: "a1a1a1a1".into(),
+                paths: vec!["src/x.rs".into()],
+                stage: "pre-check",
+            },
+        );
+        let rows = l.deliveries_since("1970").map_err(|e| e.to_string())?;
+        let dropped = rows.iter().find(|d| d.kind == "batch-dropped");
+        let next = next_cut_lines(&[br("w1", "aaaa1111")]);
+        let none = next_cut_lines(&[]);
+
+        let red_half = first == 1
+            && rows.iter().any(|d| {
+                d.to_worker == "lane" && d.kind == "batch-ready" && d.key == "w1@aaaa1111"
+            })
+            && green.len() == 1
+            && green.first().is_some_and(|n| {
+                n.to == "w1"
+                    && n.kind == "batch-green"
+                    && n.beads == "zz-a"
+                    && n.content.contains("Close them now")
+            })
+            && red.first().is_some_and(|n| {
+                n.kind == "batch-red"
+                    && n.content.contains("exit 2")
+                    && n.content.contains("/tmp/red.log")
+            })
+            && dropped.is_some_and(|d| {
+                d.to_worker == "w3"
+                    && d.content.starts_with("dropped from batch")
+                    && d.content.contains("w1")
+                    && d.content.contains("src/x.rs")
+            })
+            && next.last().map(String::as_str) == Some("next: air batch cut")
+            && next.iter().any(|x| x.contains("w1 at aaaa1111"));
+        let green_half = again == 0
+            && already_told == 0
+            && killed.is_empty()
+            && red.len() == 1
+            && none.len() == 1
+            && none.iter().all(|x| x.starts_with("nothing is batch-ready"));
+        Ok((red_half, green_half))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "lane: the lane hears each newly batch-ready branch once and members hear a green, red or drop at once; land and a batch record end with the next cut",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-1vri.2: the two loop times come from rows, and a wait that has not ended is no sample.
+///
+/// Red: a branch told to the lane at 00:00:00 whose batch verify started at 00:00:40 measures
+/// 40 s, and a member told "batch green" at 00:05:00 who closed at 00:05:55 measures 55 s, and
+/// `air status` prints both medians. Green: a branch never batched and a bead never closed add
+/// no sample, and with no rows at all status prints no loops line.
+pub(super) fn probe_loop_times_are_measured_from_rows() -> Probe {
+    use crate::cmd::loops::{line, measure};
+    use air_ledger::deliveries::Outgoing;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let e = |x: air_ledger::LedgerError| x.to_string();
+        let empty = line(&measure(&l, "1970"));
+        let q = |to: &str, kind: &str, key: &str, subject: &str, at: &str| {
+            l.enqueue_delivery(
+                &Outgoing {
+                    to,
+                    kind,
+                    key,
+                    subject,
+                    content: "x",
+                    supersede: false,
+                },
+                at,
+            )
+        };
+        q(
+            "lane",
+            "batch-ready",
+            "w1@a1",
+            "a1a1a1a1a1",
+            "2026-09-26T00:00:00Z",
+        )
+        .map_err(e)?;
+        q(
+            "lane",
+            "batch-ready",
+            "w2@b2",
+            "b2b2b2b2b2",
+            "2026-09-26T00:00:00Z",
+        )
+        .map_err(e)?;
+        l.record_verify(&batch_run("g0g0g0g0", 0, &[("w1", "a1a1a1a1a1")]))
+            .map_err(e)?;
+        l.record_claim("zz-1", "w1", &[], "2026-09-26T00:00:00Z")
+            .map_err(e)?;
+        l.record_claim("zz-2", "w1", &[], "2026-09-26T00:00:00Z")
+            .map_err(e)?;
+        q(
+            "w1",
+            "batch-green",
+            "run-g0",
+            "zz-1 zz-2",
+            "2026-09-26T00:05:00Z",
+        )
+        .map_err(e)?;
+        l.release_claim("zz-1", "w1", "closed", "2026-09-26T00:05:55Z")
+            .map_err(e)?;
+        let t = measure(&l, "2026-09-25T00:00:00Z");
+        let shown = line(&t).unwrap_or_default();
+        let red = t.ready_to_batch == [40]
+            && t.green_to_close == [55]
+            && shown.contains("median 40 s over 1")
+            && shown.contains("median 55 s over 1");
+        let green = empty.is_none();
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "loops: batch-ready to its batch and batch green to close are measured from ledger rows; a wait that has not ended is no sample",
+        red_fires: red,
+        green_passes: green,
+    }
+}

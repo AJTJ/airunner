@@ -129,6 +129,14 @@ from `air`:
 - `beads are ready: <ids>` arrives when new beads became claimable while you were idle with no
   claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
   refused claim means someone else took it; take another.
+- `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
+  branch in it went green. Close each named bead now, with the lane's green as the proof.
+- `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
+  splits the batch. If the failure is in your change, fix it with a new commit.
+- `landed in main at <sha>` says your beads are on main. Close any of them still open.
+- `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
+  branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
+  again.
 
 You do not need to ask anyone for work: Air tells you when beads are ready, and your own wake
 and the Stop hook cover the rest.
@@ -153,9 +161,14 @@ since a lane that resets hard to main on every cut would wipe the bead's work.
 The lane's loop. Run `air batch cut` in your worktree. It merges `main` and every batch-ready
 branch at the sha `air status` lists, never a sha from a message, and drops and names a branch
 that conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the
-repo's test-state reset if it has one, `air record verify -- <verify command>`, and report the
-result to the coordinator and to each member. A dropped branch is resolved by its worker, never
-by the lane. A red batch lands nothing.
+repo's test-state reset if it has one, and `air record verify -- <verify command>`. A dropped
+branch is resolved by its worker, never by the lane. A red batch lands nothing.
+
+Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
+batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air
+record` end with your next step: the branches batch-ready now and `next: air batch cut`, or
+`nothing is batch-ready`. You need not tell members a result or a dropped worker its conflict,
+because Air tells them.
 
 A branch is batch-ready when it is not already landable on its own (green at a head that
 contains `main`), its commits carry a `Bead:` trailer for a bead its worker holds, and, where
@@ -220,7 +233,9 @@ landed and not closed, a lease held by a dead or stale session.
 
 What Air carries for you, so you do not send it: when the claimable ready set gains a bead,
 Air tells every idle worker without a claim which beads are ready. The `idle-without-claim`
-condition still names a worker that stays idle after that.
+condition still names a worker that stays idle after that. Air also tells the lane each
+branch that becomes batch-ready, and tells each member its batch's result or its drop.
+`air status` prints the loop times this buys (`loops (24 h):`).
 
 When a session stops, `air status` prints `STOPPED at <t>` with the kind. Read the kind before
 acting. A `quota_auto_resume_fired` session is being resumed by the harness, and typing at it

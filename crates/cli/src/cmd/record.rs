@@ -229,6 +229,11 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         &reason,
         "1 run",
     );
+    // air-1vri.2: a batch's members hear its result now, not on their next wake.
+    let batch = kind == Kind::Verify && !run.members.is_empty();
+    if batch {
+        super::fanout::batch_result(repo, &ledger, &run);
+    }
     emit(json, &run, || {
         let note = if run.is_killed() {
             " (signalled before it could decide: no verdict recorded for this sha)"
@@ -250,8 +255,37 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
             exit_code
         )
     });
+    // air-1vri.2: the lane's next step, from what Air knows now. Text only; `--json` stays the
+    // run's own shape.
+    if batch && !json {
+        for line in after_batch(repo, &ledger, &worker, &run) {
+            println!("{line}");
+        }
+    }
     // Mirror the check's exit so `air record verify -- make verify` behaves like `make verify`.
     if exit_code == 0 { 0 } else { 1 }
+}
+
+/// What the lane does after recording a batch: land a green one, or, after a red or a kill,
+/// cut again from the branches batch-ready now.
+fn after_batch(
+    repo: &Path,
+    ledger: &air_ledger::Ledger,
+    lane: &str,
+    run: &VerifyRun,
+) -> Vec<String> {
+    if run.is_green() {
+        return vec![format!("next: air land --worker {lane}")];
+    }
+    let (ready, _, _) = super::status::batch_ready_for(ledger, repo);
+    let ready: Vec<_> = ready.into_iter().filter(|b| b.worker != lane).collect();
+    if super::caller_role() == "lane" {
+        super::fanout::told_lane(ledger, lane, &ready, &now());
+    }
+    let mut v =
+        vec!["nothing lands on this batch; split it by its members, then cut again".to_string()];
+    v.extend(super::fanout::next_cut_lines(&ready));
+    v
 }
 
 /// Is this green suspicious? It printed nothing, or it ran in under a fifth of the time this
