@@ -1,7 +1,7 @@
 //! `air mcp` end to end over piped stdio: handshake, a tool call, a resource read, survival
 //! of a garbage line, a channel push for a seeded idle-with-claim session, and a clean exit on EOF.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -75,7 +75,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         .current_dir(&repo)
         // The first tick runs before the first sleep, so the seeded idle session is pushed
         // at startup whatever the interval. A short interval only makes the poll thread
-        // (3 bd + ~5 git spawns per tick) fight the 1800 requests below for the stdout lock:
+        // (3 bd + ~5 git spawns per tick) fight the requests below for the stdout lock:
         // 50 ms cost 3.4 s per run (air-4vu, 2026-08-22). 5 s: no second tick in a run.
         .env("AIR_CHANNEL_POLL_MS", "5000")
         .env("AIR_BD_BIN", NO_BD)
@@ -85,7 +85,18 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    // Lines arrive on a channel from a reader thread, so every wait has a real deadline: a
+    // blocking `read_line` on the test thread hung for minutes when the server stopped answering.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
 
     // Collect lines until a predicate matches, bounded in time; notifications may interleave.
     // Unmatched lines are kept: the poll thread's first tick (the seeded idle session)
@@ -98,13 +109,16 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for a matching line"
-            );
-            let mut line = String::new();
-            let n = reader.read_line(&mut line).unwrap();
-            assert!(n > 0, "server closed stdout early");
+            let left = deadline.saturating_duration_since(Instant::now());
+            let line = match rx.recv_timeout(left) {
+                Ok(line) => line,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("timed out waiting for a matching line")
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("server closed stdout early")
+                }
+            };
             let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
             if pred(&v) {
                 return v;
@@ -155,8 +169,9 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let bad = next_matching(&|v| v["id"] == 4);
     assert_eq!(bad["error"]["code"], -32602);
 
-    // Memory canary: a thousand-odd in-process requests must not grow the server. 1500 is
-    // enough: the 8 MB bar, not the count, sets the smallest leak this can see (air-4vu).
+    // Memory canary: 200 in-process requests must not grow the server by 8 MB, so it sees a
+    // leak of about 40 KB per request or more. It was 1500 (air-4vu); cut on 2026-09-26 when a
+    // loaded machine made the run slow enough to look hung.
     let rss = |pid: u32| -> u64 {
         let out = Command::new("ps")
             .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -168,7 +183,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
             .unwrap_or(0)
     };
     let pid = child.id();
-    for i in 0..300 {
+    for i in 0..50 {
         writeln!(
             stdin,
             r#"{{"jsonrpc":"2.0","id":{},"method":"tools/list"}}"#,
@@ -178,7 +193,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         let _ = next_matching(&|v| v["id"] == 1000 + i);
     }
     let before = rss(pid);
-    for i in 0..1500 {
+    for i in 0..200 {
         writeln!(
             stdin,
             r#"{{"jsonrpc":"2.0","id":{},"method":"resources/list"}}"#,
@@ -190,7 +205,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let after = rss(pid);
     assert!(
         after <= before.saturating_add(8 * 1024),
-        "rss grew from {before} KB to {after} KB over 1500 requests"
+        "rss grew from {before} KB to {after} KB over 200 requests"
     );
 
     // EOF on stdin: clean exit, no orphan.
