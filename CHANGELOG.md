@@ -71,6 +71,11 @@ missing notices, which are fixed or added below.
 - Every decision Air makes writes an event line and is counted by `air audit`.
 - The coordinator does not implement. Its roles text says to file the work as a bead for a
   worker and to commit in its own worktree only when no worker can make the change.
+- Workers and the lane close with `air close <id> --reason-file <proof>`. It runs the hand-over
+  check on each bead before closing and closes nothing if one fails. It is no longer denied to
+  workers, and the roles text no longer tells anyone to run `bd close`.
+- The hook's check on a raw `bd close` stays as a backstop, and its refusal now names
+  `air close`. `air handover` names the `air close` that would pass.
 
 ### Removed
 
@@ -86,6 +91,9 @@ missing notices, which are fixed or added below.
   bead back.
 - In a pinned repository, sessions ran the `air` on PATH instead of the pin.
 - The lane's `air land` was refused by Claude Code's auto mode.
+- A worker's `bd close` written on its own line after a commit in the same shell call was not
+  checked, so a bead closed with no green containing its commits. Closing through `air close`
+  runs the check whatever the command line looks like.
 - `make trial` did not turn on the verification lane.
 - Every session stopped at the MCP server approval prompt.
 - A freshly started worker was never counted as idle, so it was never told that beads were

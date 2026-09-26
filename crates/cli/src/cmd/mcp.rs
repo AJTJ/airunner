@@ -317,7 +317,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_close",
-            description: "Coordinator: close landed beads and release their claims. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
+            description: "Close beads and release their claims. A worker's or the lane's close runs the hand-over gate first and closes nothing if a bead fails it. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
             schema: json!({"type":"object","required":["bead","reason"],"properties":{
                 "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
                 "reason":{"type":"string"}}}),

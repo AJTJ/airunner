@@ -284,7 +284,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     // air-jc2p.2. The anchor gives the coordinator back `air land`, which is the one change the
     // ruling made; the worker refusal and the lane's permission are other arms and stand.
     (
-        "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
+        "land: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
         Mutation {
             file: "crates/cli/src/cmd/land.rs",
             from: "        \"lane\" | \"owner\" => Ok(()),",
@@ -975,6 +975,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/status.rs",
             from: "        .filter(|h| h.uncommitted || h.committed)\n",
             to: "",
+            also_red: &[],
+        },
+    ),
+    // Owner, 2026-09-26. The mutation treats every worker's close as green, which is what a raw
+    // `bd close` the matcher missed did in the 0.4.5 live trial. Seen red 2026-09-26.
+    (
+        "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
+        Mutation {
+            file: "crates/cli/src/cmd/close.rs",
+            from: "        let mut f = super::handover::facts(ledger, worker, repo, Some(b), false)?;\n",
+            to: "        let mut f = super::handover::facts(ledger, worker, repo, Some(b), false)?;\n        f.green_at_head = true;\n",
             also_red: &[],
         },
     ),
@@ -2720,6 +2731,7 @@ fn all_probes() -> Vec<Probe> {
         probe_doctor_names_the_binary_against_the_checkout(),
         probe_overlap_names_only_holders_that_can_collide(),
         probe_refusal_names_the_command_it_refused(),
+        probe_worker_close_runs_the_gate(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4635,13 +4647,13 @@ fn probe_triage_bead_exists() -> Probe {
     }
 }
 
-/// air-869: `air close` is the coordinator's, and it issues ONE bd process however many
-/// beads it is given. Red: a worker is refused. Green: the coordinator's ten ids build a
-/// single `bd close` argv and release ten claims in one transaction.
+/// air-869: `air close` issues ONE bd process however many beads it is given. Red: a worker's
+/// and the lane's close go through the hand-over gate. Green: the coordinator's and the owner's
+/// do not, and ten ids build a single `bd close` argv and release ten claims in one transaction.
 fn probe_batch_close() -> Probe {
-    use crate::cmd::close::may_close;
+    use crate::cmd::close::gated;
 
-    let red = may_close("worker").is_err();
+    let red = gated("worker") && gated(crate::cmd::role_from(Some("lane")));
     let green = (|| -> Result<bool, String> {
         let ids: Vec<String> = (1..=10).map(|i| format!("zz-{i}")).collect();
         let argv = air_bd::close_argv(&ids, "landed", "main");
@@ -4655,11 +4667,11 @@ fn probe_batch_close() -> Probe {
         let released = l
             .release_claims_on(&ids, "landed", "t1")
             .map_err(|e| e.to_string())?;
-        Ok(may_close("coordinator").is_ok() && one_process && released.len() == ids.len())
+        Ok(!gated("coordinator") && !gated("owner") && one_process && released.len() == ids.len())
     })()
     .unwrap_or(false);
     Probe {
-        name: "close: a worker is refused; ten coordinator closes are one bd argv, one transaction",
+        name: "close: a worker's and the lane's close is gated; ten coordinator closes are one bd argv, one transaction",
         red_fires: red,
         green_passes: green,
     }
@@ -5351,6 +5363,85 @@ fn probe_refusal_names_the_command_it_refused() -> Probe {
     }
 }
 
+/// Owner ruling, 2026-09-26: a worker closes with `air close`, and the close runs the hand-over
+/// gate itself. In the 0.4.5 live trial a worker put a commit and a raw `bd close` on separate
+/// lines of one Bash call; the text matcher missed the close and the bead closed with no green
+/// containing its commits. The check now runs when the close runs, whatever the line looks like.
+///
+/// Red: a worker's close with no green at HEAD is refused, naming `air close` and the missing
+/// verify, and the raw-`bd close` backstop's refusal names `air close`. Green: with a green
+/// recorded at HEAD the same close passes.
+fn probe_worker_close_runs_the_gate() -> Probe {
+    use crate::cmd::close::gate;
+    use air_hooks::HookOutcome;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let head = g(&["rev-parse", "HEAD"])?;
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        l.record_claim("zz-1", "w3", &[], "t0")
+            .map_err(|e| e.to_string())?;
+        let beads = vec!["zz-1".to_string()];
+
+        let refused = gate(&l, "w3", &dir, &beads);
+        let backstop = handover_gate(&l, "w3", &dir, "bd close zz-1 --reason x", true)?;
+        let backstop_names_air_close = matches!(&backstop.outcome,
+            HookOutcome::Block { reason } if reason.contains("air close zz-1 --reason-file"));
+        let red = refused.as_ref().is_err_and(|m| {
+            m.contains("air close refused for w3 at") && m.contains("verify-green-at-head")
+        }) && backstop_names_air_close;
+
+        l.record_verify(&VerifyRun {
+            id: new_id(),
+            worker: "w3".into(),
+            sha: head,
+            kind: Kind::Verify,
+            exit_code: 0,
+            trigger: "selftest".into(),
+            failing_step: None,
+            started_at: "t".into(),
+            finished_at: "t".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: vec![],
+            main_sha: None,
+        })
+        .map_err(|e| e.to_string())?;
+        let green = gate(&l, "w3", &dir, &beads).is_ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
 /// observe a merge conflict.
 ///
@@ -5518,26 +5609,20 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
 /// Then air-jc2p.2 (owner, 2026-09-14): landing is the verification lane's, and refused to the
 /// coordinator too, so main moves only by the lane's landing.
 ///
-/// Red: a worker is refused both commands, an unknown `AIR_ROLE` counts as a worker, the lane is
-/// refused `air close` as a worker is, and the coordinator is refused `air land`. Green: the lane
-/// and the owner (no `AIR_ROLE`, a shell Air did not start) may land; the coordinator and the
-/// owner may still close.
+/// Red: a worker is refused `air land`, an unknown `AIR_ROLE` counts as a worker, and the
+/// coordinator is refused `air land`. Green: the lane and the owner (no `AIR_ROLE`, a shell Air
+/// did not start) may land. Closing is no longer refused by role (owner, 2026-09-26): a worker's
+/// `air close` runs the hand-over gate instead, probed on its own.
 fn probe_land_role_is_the_launchers() -> Probe {
-    use crate::cmd::close::may_close;
     use crate::cmd::land::may_land;
     use crate::cmd::role_from;
 
     let red = may_land("worker").is_err()
-        && may_close("worker").is_err()
-        && may_close(role_from(Some("lane"))).is_err()
         && may_land(role_from(Some("lane-typo"))).is_err()
         && may_land(role_from(Some("coordinator"))).is_err();
-    let green = may_land(role_from(Some("lane"))).is_ok()
-        && may_land(role_from(None)).is_ok()
-        && may_close(role_from(Some("coordinator"))).is_ok()
-        && may_close(role_from(None)).is_ok();
+    let green = may_land(role_from(Some("lane"))).is_ok() && may_land(role_from(None)).is_ok();
     Probe {
-        name: "land and close: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
+        name: "land: the role is the launcher's AIR_ROLE; the lane and the owner land, the coordinator and a worker are refused, whatever the directory or --repo",
         red_fires: red,
         green_passes: green,
     }

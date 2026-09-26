@@ -74,7 +74,7 @@ Without a lane:
     … the work, every commit with a `Bead: <id>` trailer; the digest, if the repo asks for one
     git merge main
     air record verify -- <the repo's verify command>   # last, so the green contains main
-    bd close <id> --reason-file <proof>
+    air close <id> --reason-file <proof>
 
 With a lane, you run no verify of your own. The batch only forms if workers stop verifying one
 by one.
@@ -83,7 +83,7 @@ by one.
     … the work, every commit with a `Bead: <id>` trailer; the digest, if the repo asks for one
     air record precheck -- <the repo's precheck>   # if it names one
     … your branch is now batch-ready in `air status`; keep working, the lane takes it
-    bd close <id> --reason-file <proof>   # after the lane's green; `air handover` says when
+    air close <id> --reason-file <proof>   # after the lane's green; `air handover` says when
 
 Three facts about your branch under a lane. You need not merge main to stay batch-ready: the
 lane merges main at the cut, so merge it only to catch up or to resolve a conflict the lane
@@ -93,11 +93,10 @@ the next batch, and the close is refused, naming that commit, until a green cont
 
 Proof is a command and its output, a `file:line`, or a passing test. A description of the
 approach is not proof. Use `--reason-file` once the proof is more than a line or two, because
-the harness refuses a long `--reason "…"`. `air close --reason-file` and `air capture --file`
-work the same way.
+the harness refuses a long `--reason "…"`. `air capture --file` works the same way.
 
-The close is refused unless a recorded green exists at a commit that contains `main` and every
-commit carrying the bead's `Bead:` trailer. Whose green it is does not matter. Where the repo
+`air close` runs the hand-over check before it closes, and refuses unless a recorded green exists
+at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Whose green it is does not matter. Where the repo
 sets `"verify_key": "tree"`, a green at another commit with the identical tree also counts.
 `air handover` names whatever is missing and the command that fixes it, so run it before you
 close.
@@ -156,7 +155,7 @@ and the Stop hook cover the rest.
 What you can look up: `air holdings` (who is in which file), `air status`, `air lease status`
 and `air handover`. When a peer holds a file you open, Air warns you once per session.
 
-Denied to a worker in every permission mode: `air land`, `air close`, `git push`, `bd create`,
+Denied to a worker in every permission mode: `air land`, `git push`, `bd create`,
 `bd sync`, `bd update --claim`, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
 `air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's

@@ -222,8 +222,9 @@ enum Cmd {
         #[arg(long)]
         drop: Option<String>,
     },
-    /// Coordinator: close landed beads in ONE bd process and release their claims in one
-    /// ledger transaction. `bd` costs ~1.4 s per process whatever it is asked (air-869).
+    /// Close beads in ONE bd process and release their claims in one ledger transaction. `bd`
+    /// costs ~1.4 s per process whatever it is asked (air-869). For a worker or the lane it
+    /// first runs the hand-over gate on each bead and closes nothing if any fails.
     Close {
         #[arg(required = true)]
         bead: Vec<String>,

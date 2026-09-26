@@ -109,9 +109,11 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
         class: "refusal",
-        what: "`awaiting_review`/close needs a recorded green at HEAD that contains main.",
-        added: "2026-08-22 (air-i59)",
-        source: "docs/rules/roles.md, Worker section",
+        what: "`awaiting_review`/close needs a recorded green at HEAD that contains main. A \
+               worker's `air close` runs it itself; the PreToolUse match on raw `bd close` is \
+               the backstop.",
+        added: "2026-08-22 (air-i59); in `air close` 2026-09-26",
+        source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/close.rs, gate",
         // `hook.handover` is what the first slice called the same gate before hook events
         // were dispatched by name (2026-08-18). It is not a second mechanism and never was, so
         // it is a second entry point here rather than a row of its own — which is exactly what
@@ -121,6 +123,10 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.PreToolUse", "refuse"),
             ("handover", "refuse"),
             ("hook.handover", "refuse"),
+            // A worker's `air close` refused by the same gate (owner, 2026-09-26). Until then
+            // this line was `close-refusal`, the role refusal of a worker's `air close`, which
+            // that ruling removed.
+            ("close", "refuse"),
         ]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },
@@ -512,17 +518,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         // (air-bp0), which is why this is a retry and not a longer wait.
         removal: Removal::ZeroFirings(
             "a round passes with zero `timeout-retry` events, meaning bd no longer times out under load and air-bp0's reduction did the job",
-        ),
-    },
-    Mechanism {
-        id: "close-refusal",
-        class: "refusal",
-        what: "`air close` is the coordinator's; a worker asking for it is refused and told so.",
-        added: "2026-08-20 (decisions: the worker closes its own bead with bd, not with air close)",
-        source: "crates/cli/src/cmd/close.rs, may_close",
-        fires: Fires::Decisions(&[("close", "refuse")]),
-        removal: Removal::ZeroFirings(
-            "a round passes with zero close refusals, meaning no worker reaches for `air close` and the deny list alone covers it",
         ),
     },
     // The audit is not exempt from its own instrument: it carries a removal condition and

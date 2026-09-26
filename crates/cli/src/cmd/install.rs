@@ -2213,6 +2213,19 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "worker-air-close",
+        since: "2026-09-26 (owner ruling, 0.4.5 live trial)",
+        headline: "Workers and the lane close with `air close <id> --reason-file <proof>`, which \
+                   runs the hand-over gate on each bead before it closes and closes nothing if \
+                   one fails, whether or not AIR_ENFORCE is set. It is no longer on the worker \
+                   deny list. The hook's check on a raw `bd close` stays as a backstop, because \
+                   it reads the command text and missed a close on its own line in the trial; \
+                   its refusal now names `air close`.",
+        silent_break: false,
+        action: "Replace `bd close` with `air close` in your repo's own prose, prompts and \
+                 scripts that tell a worker how to close a bead.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3258,6 +3271,10 @@ mod tests {
             "roles.md must not prescribe a bead-status step"
         );
         assert!(has("You close your own bead, with proof"));
+        // Owner, 2026-09-26: a worker closes with `air close`, which runs the gate itself; the
+        // text matcher on a raw `bd close` missed a multi-line call in the 0.4.5 live trial.
+        assert!(has("air close <id> --reason-file <proof>"));
+        assert!(!has("bd close"));
         assert!(has("You need not merge main to stay batch-ready"));
         assert!(has("commit forward and never amend"));
         // The worktree fence is Air's hook, not the harness's; the harness claim stays absent

@@ -55,7 +55,7 @@ pub fn may_land(role: &str) -> Result<(), String> {
         ),
         _ => Err(
             "refused: `air land` is not a worker's. Close your own bead instead: `air handover` \
-             names anything missing, then `bd close <id> --reason \"<proof>\"` (owner ruling, \
+             names anything missing, then `air close <id> --reason-file <proof>` (owner ruling, \
              2026-08-22). The role comes from AIR_ROLE, which the launcher sets."
                 .to_string(),
         ),

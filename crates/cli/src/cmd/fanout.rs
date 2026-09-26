@@ -449,7 +449,7 @@ pub fn batch_result_notes(
                     "batch-green",
                     format!(
                         "batch green at {} contains your {} ({list}). Close them now with \
-                         `bd close <id> --reason-file <proof>`; the proof is the lane's green at \
+                         `air close <id> --reason-file <proof>`; the proof is the lane's green at \
                          {}. `air handover` says whether the close will pass.",
                         short(&run.sha),
                         short(&m.sha),

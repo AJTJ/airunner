@@ -657,9 +657,20 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
             o.insert("batch".to_string(), serde_json::json!(b));
         }
     }
+    // Owner, 2026-09-26: a worker closes with `air close`, which runs this same check, so a pass
+    // names the command it clears.
+    let verdict = if v.pass {
+        format!(
+            "{}\nthe close would pass: `air close {} --reason-file <proof>`",
+            v.message,
+            bead.unwrap_or("<id>")
+        )
+    } else {
+        v.message.clone()
+    };
     emit(json, &out, || match &batch {
-        Some(b) => format!("{}\n{landing}\n{b}", v.message),
-        None => format!("{}\n{landing}", v.message),
+        Some(b) => format!("{verdict}\n{landing}\n{b}"),
+        None => format!("{verdict}\n{landing}"),
     });
     if v.block { 2 } else { 0 }
 }
