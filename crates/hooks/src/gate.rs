@@ -90,6 +90,10 @@ pub struct GateFacts {
     pub digest_dir: Option<String>,
     /// Advisory mode: report what would be refused but allow (first round).
     pub advisory: bool,
+    /// The repo runs a verify lane: `verify_lane: true` in `.claude/air.json`, or a session
+    /// row with role `lane`. The lane's batch green contains main by construction, so a
+    /// worker there is never the one to merge main (0.4.8 trial).
+    pub under_lane: bool,
 }
 
 /// A landing that moved main (air-4up). The adopter, 2026-08-30: eight refusals in one
@@ -145,8 +149,8 @@ pub struct Missing {
     /// contradicts it. A fix that failed outright would have been found in one use.
     ///
     /// So a `flow_dependent` fix now states **what must become true**, not which command a
-    /// particular flow uses to make it true. The gate does not read `verify_lane`, and since
-    /// air-rr98 no code does: Air names the condition either way.
+    /// particular flow uses to make it true. Since the 0.4.8 trial the gate reads one flow fact,
+    /// `under_lane`, and only to leave out `main-merged` while the lane has not yet run.
     pub flow_dependent: bool,
 }
 
@@ -224,7 +228,12 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     // one: a worker keeps working while its last bead is verified (owner, 2026-09-26). With no
     // `Bead:` trailer and no landing row, `batch_green` is None and this is the head check.
     let bead_covered = f.batch_green.is_some();
-    if !f.main_is_ancestor && !f.work_in_main && !bead_covered {
+    // 0.4.8 trial: under a lane, a bead with no green yet waits on the lane's batch, which
+    // contains main; "merge main" there was the one repair roles.md says a worker need not
+    // make, and it was said at every close refusal and every Stop. Under a lane the check is
+    // reported only when a green at head exists and lacks main.
+    let lane_waits = f.under_lane && !f.green_at_head;
+    if !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {
         // air-4up: the cause is outside the worker's tree, so say so. "main is not an
         // ancestor of HEAD" stays in every form: the adopter's counts refusals by that phrase.
         // The fix is unchanged; this is wording, not behaviour.
@@ -594,7 +603,32 @@ mod tests {
             held_beads: vec!["zz-o5fi".into()],
             carried_beads: vec![],
             advisory: false,
+            under_lane: false,
         }
+    }
+
+    /// 0.4.8 trial: under a lane, a bead with no green is told only that it lacks one, not to
+    /// merge main; a green at head that lacks main still names `main-merged`, and without a
+    /// lane nothing changes.
+    #[test]
+    fn under_a_lane_main_merged_is_named_only_beside_a_green_at_head() {
+        let checks = |f: &GateFacts| -> Vec<&'static str> {
+            handover_verdict(f)
+                .missing
+                .iter()
+                .map(|m| m.check)
+                .collect()
+        };
+        let mut f = facts();
+        f.main_is_ancestor = false;
+        f.green_at_head = false;
+        f.under_lane = true;
+        assert_eq!(checks(&f), ["verify-green-at-head"]);
+        f.green_at_head = true;
+        assert_eq!(checks(&f), ["main-merged"]);
+        f.green_at_head = false;
+        f.under_lane = false;
+        assert_eq!(checks(&f), ["verify-green-at-head", "main-merged"]);
     }
 
     /// air-80x.1: a batch green is a second way to be green; a batch that predates the last

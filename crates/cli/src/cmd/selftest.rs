@@ -502,7 +502,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "claim: the assignee refusal says Air has no claim behind that assignee and offers a reopen as the cause, and live work is refused earlier by name",
         Mutation {
             file: "crates/cli/src/cmd/claim.rs",
-            from: "Air has no open claim behind that assignee, so it may be left over rather than live work: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. ",
+            from: "Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. ",
             to: "",
             also_red: &[],
         },
@@ -1216,7 +1216,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: main-merged",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.main_is_ancestor && !f.work_in_main && !bead_covered {",
+            from: "if !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {",
             to: "if false {",
             also_red: &[
                 // Its red half is this refusal, with the next bead's commit on top.
@@ -1238,8 +1238,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: a branch whose head main already contains is not refused as behind main; one main does not contain still is",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: " && !f.work_in_main && !bead_covered {",
-            to: " && !bead_covered {",
+            from: " && !f.work_in_main && !bead_covered && !lane_waits {",
+            to: " && !bead_covered && !lane_waits {",
             also_red: &[],
         },
     ),
@@ -5562,9 +5562,10 @@ fn probe_nothing_unverified_reaches_main() -> Probe {
 /// coordinator a branch was ready, and it learned by polling `air status`. The worker
 /// signalling on close is the intent (roles.md, owner 2026-08-29); this is the failsafe.
 ///
-/// Red: a landable branch produces exactly one push, naming the beads and `air land --all`.
+/// Red: a landable branch produces exactly one push, naming the beads and `air land --worker`.
 /// Green: it does not repeat while it sits, however long — age is not a change (air-s7c) — and
-/// a moved head is a real change that pushes again.
+/// a moved head is a real change that pushes again. The lane's own branch never pushes: landing
+/// it is the lane's next step (0.4.8 trial).
 fn probe_landable_pushes_once_per_branch() -> Probe {
     use crate::cmd::mcp::{Pushed, select_new};
     use crate::cmd::status::{Landing, Snapshot, Thresholds, attention};
@@ -5593,7 +5594,7 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
         && landable.first().is_some_and(|a| {
             a.worker == "alpha"
                 && a.detail.contains("air-1 air-2")
-                && a.detail.contains("air land --all")
+                && a.detail.contains("air land --worker alpha")
                 && a.detail.contains("abcdef12")
         });
 
@@ -5614,7 +5615,18 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
         && !sitting.iter().any(|a| a.kind == "landable")
         && moved.iter().filter(|a| a.kind == "landable").count() == 1
         // Nothing landable is silent.
-        && !at(&snap("x", &[], 0)).iter().any(|a| a.kind == "landable");
+        && !at(&snap("x", &[], 0)).iter().any(|a| a.kind == "landable")
+        // The lane's branch is the lane's to land.
+        && !at(&Snapshot {
+            workers: vec![crate::cmd::status::WorkerView {
+                worker: "alpha".into(),
+                role: "lane".into(),
+                ..Default::default()
+            }],
+            ..snap("abcdef1234", &["air-1"], 5)
+        })
+        .iter()
+        .any(|a| a.kind == "landable");
     Probe {
         name: "landable: a branch green with main merged pushes once per head, not while it sits",
         red_fires: red,
@@ -6979,6 +6991,7 @@ fn probe_status_warns_of_a_session_in_the_main_checkout() -> Probe {
         elapsed_secs: Some(60),
         command: "claude".into(),
         session: true,
+        cwd: String::new(),
     };
     let r = TreeReaders {
         examined: 2,
@@ -7366,6 +7379,7 @@ fn base_facts() -> GateFacts {
         held_beads: vec![],
         carried_beads: vec![],
         advisory: false,
+        under_lane: false,
     }
 }
 
@@ -9626,8 +9640,8 @@ fn probe_verify_in_flight() -> Probe {
 /// opposite. Separately, a land killed by a closed pipe merged, verified, and wrote no row at
 /// all, leaving main green at a sha no landing mentioned.
 ///
-/// Red: an in-flight landing is named, and one whose process is gone says so and names the sha
-/// to rewind to. Green: no in-flight landing is silent, and reporting an outcome retires the
+/// Red: an in-flight landing is named, and one whose process is gone says so and names main
+/// before it. Green: no in-flight landing is silent, and reporting an outcome retires the
 /// row without counting as a second attempt.
 fn probe_landing_state() -> Probe {
     use crate::cmd::status::{LandingInFlight, Snapshot, landing_in_flight_line, render_for_probe};
@@ -9669,12 +9683,12 @@ fn probe_landing_state() -> Probe {
     let shown = render_for_probe(&snap(vec![running.clone()]));
     let killed_line = landing_in_flight_line(&killed, at);
     let red = shown.contains("landing in flight: alpha (air-1) merged at cccccccc")
-        && shown.contains("verifying now")
-        // "in main" is not "survived": the line has to name the armed rollback target, which
-        // is the thing `git merge-base --is-ancestor` cannot tell anyone.
-        && shown.contains("rollback armed to bbbbbbbb")
+        && shown.contains("landing now")
+        // "in main" is not "survived": the line names where main was before the landing,
+        // which `git merge-base --is-ancestor` cannot tell anyone.
+        && shown.contains("main was bbbbbbbb")
         && killed_line.contains("GONE")
-        && killed_line.contains("git reset --hard bbbbbbbb99");
+        && killed_line.contains("still at bbbbbbbb99");
 
     // The row retires when the outcome is written, and updating it is not a new attempt.
     let lifecycle = (|| -> Result<bool, String> {
@@ -12239,12 +12253,13 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let stale = claim()?;
         let red = names_the_basics(&stale)
             && stale.contains("Air has no open claim behind that assignee")
-            && stale.contains("may be left over rather than live work")
+            && stale.contains("another worker just took this one")
+            && stale.contains("may also be left over")
             && stale.contains("reopened bead can come back pencilled in");
 
         // GREEN: the precedence that makes the red sentence TRUE rather than a guess. With a
         // real claim recorded, the ledger check at step 1 refuses first and names the holder
-        // and `air release` — so the assignee refusal is only ever reached when Air has no
+        // and `air reclaim` — so the assignee refusal is only ever reached when Air has no
         // claim behind the assignee, and it never describes live work as leftover.
         //
         // This is why the sentence is unconditional. The first version branched on whether the
@@ -12256,8 +12271,8 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         drop(l);
         let live = claim()?;
         let green = live.contains("is claimed by alerts")
-            && live.contains("air release zz-6wv2 --worker alerts")
-            && !live.contains("may be left over")
+            && live.contains("air reclaim zz-6wv2 --worker alerts")
+            && !live.contains("left over")
             && !live.contains("reopened bead");
 
         let _ = std::fs::remove_dir_all(&dir);

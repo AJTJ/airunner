@@ -51,8 +51,7 @@ pub fn denial(path: &Path, worktree: &Path, shared: &[PathBuf]) -> Option<String
     (leaves(&resolved, worktree) && !into_shared).then(|| {
         format!(
             "air: refusing an edit outside this session's worktree: {} resolves to {}, which \
-             is not under {}. A worker edits its own worktree only (air-8gj); the main \
-             checkout is the coordinator's.",
+             is not under {}. A worker edits its own worktree only (air-8gj).",
             path.display(),
             resolved.display(),
             worktree.display()

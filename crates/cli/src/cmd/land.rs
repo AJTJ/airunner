@@ -772,8 +772,9 @@ pub fn run(
     // adopter's landing was about to move main under a lane 1m41s into an unrecorded run
     // (2026-09-07), and the in-flight refusal cannot see one. Silent when there is none; the
     // event line carries how many processes were examined either way.
-    let readers = main_readers(repo, &ledger);
+    let mut readers = main_readers(repo, &ledger);
     let main_path = super::readers::resolved(repo);
+    super::readers::drop_ignored(&mut readers, &main_path);
     if let Some(w) = super::readers::main_warning(&readers, &main_path) {
         // Its own event line, so `air audit` counts it (`mechanisms.rs` `land-main-readers`).
         log_event(
@@ -893,6 +894,48 @@ pub fn run(
         || msg.clone(),
     );
     code
+}
+
+/// The landing commit's title: `Land <branch>: <beads>`, or `Land <branch>` with none.
+fn landing_title(branch: &str, beads: &[String]) -> String {
+    if beads.is_empty() {
+        format!("Land {branch}")
+    } else {
+        format!("Land {branch}: {}", beads.join(" "))
+    }
+}
+
+/// Record the landing commit as green when its tree is byte-identical to the verified
+/// commit's: the same run, at the new sha. Otherwise record nothing. Every trial from 0.4.5 to
+/// 0.4.8 read main as "not green" after each landing, because under `verify_key: commit` the
+/// new sha had no run of its own.
+fn record_landing_green(
+    repo: &Path,
+    ledger: &air_ledger::Ledger,
+    verified: &str,
+    landed: &str,
+    main_before: &str,
+) {
+    let tree = |c: &str| git::run(repo, &["rev-parse", &format!("{c}^{{tree}}")]).ok();
+    let (Some(t), Some(l)) = (tree(verified), tree(landed)) else {
+        return;
+    };
+    if t != l {
+        return;
+    }
+    let Ok(Some(green)) = ledger.green_at(verified, Some(&t), Kind::Verify) else {
+        return;
+    };
+    let run = air_ledger::verify::VerifyRun {
+        id: new_id(),
+        sha: landed.to_string(),
+        trigger: "land".to_string(),
+        tree: Some(l),
+        members: Vec::new(),
+        main_sha: Some(main_before.to_string()),
+        ..green.run().clone()
+    };
+    let _ = ledger.record_verify(&run);
 }
 
 /// Land one branch: build the merge commit off main and fast-forward onto it. No verify
@@ -1048,7 +1091,7 @@ fn land_one(
             return Outcome::Refused(why);
         }
     };
-    let message = format!("Land {branch}: {}", batch.beads.join(" "));
+    let message = landing_title(&branch, &batch.beads);
     let tree = match git::run(repo, &["rev-parse", &format!("{head}^{{tree}}")]) {
         Ok(t) => t,
         Err(e) => return Outcome::Refused(format!("cannot read `{branch}`'s tree: {e}")),
@@ -1119,6 +1162,7 @@ fn land_one(
         }
         Err(e) => return Outcome::Refused(format!("cannot read main's tree after landing: {e}")),
     }
+    record_landing_green(repo, ledger, head, &merge, &tip_now);
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
     // Layer 1, the part that is true under either closure model: read every bead's acceptance
     // and print it beside Air's verdict, so a wrong close is visible at the moment it lands.
@@ -1189,6 +1233,57 @@ fn land_one(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// 0.4.8 trial: the landing commit is green only when its tree is the verified one's.
+    #[test]
+    fn a_landing_commit_is_green_only_over_the_verified_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let g = |args: &[&str]| git::run(repo, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.name", "air"]);
+        g(&["config", "user.email", "air@example.invalid"]);
+        std::fs::write(repo.join("a"), "a\n").unwrap();
+        g(&["add", "a"]);
+        g(&["commit", "-q", "-m", "a"]);
+        let verified = g(&["rev-parse", "HEAD"]);
+        let tree = g(&["rev-parse", "HEAD^{tree}"]);
+        let same = g(&["commit-tree", &tree, "-p", &verified, "-m", "same tree"]);
+        std::fs::write(repo.join("a"), "b\n").unwrap();
+        g(&["commit", "-q", "-am", "b"]);
+        let other = g(&["rev-parse", "HEAD"]);
+        let ledger = air_ledger::Ledger::open_in_memory().unwrap();
+        ledger
+            .record_verify(&air_ledger::verify::VerifyRun {
+                id: new_id(),
+                worker: "lane".into(),
+                sha: verified.clone(),
+                kind: Kind::Verify,
+                exit_code: 0,
+                trigger: "manual".into(),
+                failing_step: None,
+                started_at: "2026-09-26T00:00:00Z".into(),
+                finished_at: "2026-09-26T00:00:01Z".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: Some(tree),
+                members: Vec::new(),
+                main_sha: None,
+            })
+            .unwrap();
+        record_landing_green(repo, &ledger, &verified, &other, &verified);
+        assert_eq!(ledger.runs_at(&other, Kind::Verify).unwrap(), (0, 0));
+        record_landing_green(repo, &ledger, &verified, &same, &verified);
+        assert_eq!(ledger.runs_at(&same, Kind::Verify).unwrap(), (1, 0));
+        assert_eq!(landing_title("worktree-lane", &[]), "Land worktree-lane");
+        assert_eq!(
+            landing_title("worktree-lane", &["zz-1".into()]),
+            "Land worktree-lane: zz-1"
+        );
+    }
 
     fn here() -> Site {
         Site { on_main: true }

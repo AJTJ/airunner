@@ -616,6 +616,11 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         .iter()
         .filter(|n| n.check == "no-precheck" && n.worker != lane)
     {
+        // 0.4.8 trial: the branch's worker was never told; it waited on a cut that would not
+        // take it. Once per head, like a drop.
+        if !dry_run {
+            super::fanout::batch_held(&ledger, &lane, n);
+        }
         super::log_event(
             &ledger,
             &lane,

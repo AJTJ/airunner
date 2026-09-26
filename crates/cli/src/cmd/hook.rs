@@ -388,7 +388,11 @@ fn dispatch(
             // air-avj: the Stop hook's own rendering, not the CLI's. Under a verify lane the
             // CLI's repairs are the two things the lane exists to prevent, and this arrives
             // with the authority of tooling at the moment a worker picks what to do next.
-            let context = if v.pass || !has_work || !speak {
+            // 0.4.8 trial: under a lane, a Stop whose every missing check is the lane's to
+            // satisfy says nothing; 33 such texts reached three workers waiting on a batch.
+            // `air close` still names them in full when it is run.
+            let lane_only = f.under_lane && v.missing.iter().all(|m| m.flow_dependent);
+            let context = if v.pass || !has_work || !speak || lane_only {
                 None
             } else {
                 Some(format!(
@@ -820,6 +824,19 @@ pub fn lease_gate(
             .inputs(inputs)
             .denominator(denominator),
         ));
+    }
+    // 0.4.7 and 0.4.8 trials: `air lease take X && <cmd>` is refused as a whole, because the
+    // line is checked before any of it runs.
+    if super::lease::segments(cmd)
+        .iter()
+        .any(|s| s.starts_with("air lease take"))
+    {
+        missing.push(
+            "This line also runs `air lease take`, and this check reads the whole line before \
+             any of it runs: run `air lease take <name> --reason \"<why>\"` as its own Bash call \
+             first, then this command."
+                .to_string(),
+        );
     }
     let msg = format!("air: {}", missing.join("\n"));
     let (outcome, decision) = if enforce {

@@ -791,6 +791,24 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
     );
 }
 
+/// After `air batch cut` left a branch out for a missing precheck: tell its worker, once per head.
+pub fn batch_held(ledger: &Ledger, lane: &str, n: &super::status::NotBatchReady) {
+    let note = MemberNote {
+        to: n.worker.clone(),
+        kind: "batch-held",
+        key: n.head.clone(),
+        beads: String::new(),
+        content: n.detail.clone(),
+    };
+    queue_notes(
+        ledger,
+        lane,
+        std::slice::from_ref(&note),
+        &format!("{} held out of the batch: {}", n.worker, n.check),
+        &super::now(),
+    );
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {

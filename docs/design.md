@@ -257,7 +257,7 @@ git, the clock, and a set of thresholds.
 | landed not closed | A bead's commits are on main but the bead is still open. |
 | closed not landed | A bead is closed but its commits are only in one worktree's branch. |
 | rewound and carried | A merge that was rewound off main is still carried by a worker's branch. This is history only; no new rewind can happen. |
-| landable | A branch is green and contains main. |
+| landable | A branch other than the lane's is green and contains main. |
 | lease held by dead session | A shared resource is held by a process that has gone. |
 | lease stale | A shared resource's holder has not refreshed it in time. |
 
@@ -866,9 +866,10 @@ built is described in sections 4 and 6.
 - [x] A launch command for the verification lane, air lane. It sets AIR_ROLE to lane and the
       lane's deny list, so the lane can land and nothing else can. The repository's verify
       scope was not built: nothing asked for it yet. (air-jc2p.2)
-- [x] The verification lane key in the config is a boolean that picks the closing sequence,
-      and no code reads it. The stop nudge reads the role, and air batch cut's refusal names
-      air lane's worktree (air-rr98; section 8.1).
+- [x] The verification lane key in the config is a boolean that picks the closing sequence.
+      Since the 0.4.8 trial the close gate also reads it, or a lane session row, to leave out
+      main-merged while the lane has not run. The stop nudge reads the role, and air batch
+      cut's refusal names air lane's worktree (air-rr98; section 8.1).
 - [x] Prove with a test that a bead can close after its commits land on main, then drop the
       adopter's rule to wait for every close before landing. Settled 2026-09-25:
       `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the

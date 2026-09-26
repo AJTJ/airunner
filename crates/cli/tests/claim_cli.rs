@@ -1930,6 +1930,38 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
         "{s}"
     );
 
+    // 0.4.8 trial: the lane's cut tells the held-out worker, once per head.
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    for _ in 0..2 {
+        let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+        assert_eq!(code, 0, "{out}{err}");
+    }
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let held: Vec<(String, String, String)> = conn
+        .prepare("SELECT to_worker, key, content FROM deliveries WHERE kind='batch-held'")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(
+        (held[0].0.as_str(), held[0].1.as_str()),
+        ("alpha", head.as_str())
+    );
+    assert!(held[0].2.contains("air record precheck --"), "{held:?}");
+
     // A red precheck is not enough; a green one at this head is.
     assert_eq!(
         air(&alpha, &bd, &["record", "precheck", "--", "false"]).0,
@@ -3299,7 +3331,8 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(land_verifies, 0, "landing re-verifies nothing");
+    // 0.4.8 trial: one row, the verified green copied to the landing commit; nothing ran.
+    assert_eq!(land_verifies, 1, "landing re-verifies nothing");
 }
 
 /// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
@@ -3801,6 +3834,18 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     // advice. The directory never decides a role (owner ruling, 2026-09-14).
     let out = stop("bare", &[]);
     assert!(!out.contains("handover"), "{out}");
+
+    // 0.4.8 trial: under a lane, a Stop missing only what the lane will produce says nothing.
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "verify_lane": true}"#,
+    )
+    .unwrap();
+    let out = stop(
+        "w-lane",
+        &[("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")],
+    );
+    assert!(!out.contains("handover"), "{out}");
 }
 
 /// air-ob0, narrowed by air-odv: a rewound merge that a worktree still carries is still named.
@@ -3931,7 +3976,8 @@ fn land_merges_verifies_closes_and_records() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(land_verifies, 0);
+    // 0.4.8 trial: the green copied to the landing commit, not a run.
+    assert_eq!(land_verifies, 1);
     assert_eq!(
         git(&main, &["rev-parse", "HEAD^{tree}"]),
         git(&main, &["rev-parse", "worktree-alpha^{tree}"]),
@@ -4323,6 +4369,12 @@ fn a_bead_already_in_main_closes_on_its_landing() {
         "",
         "the landing leaves the worker nothing main does not have"
     );
+    // The landing commit is now green itself; without that row (a landing whose tree was not
+    // the verified one records none) the bead still closes on the landing row.
+    rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .execute("DELETE FROM verify_runs WHERE trigger='land'", [])
+        .unwrap();
     let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-1"], dead);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let msg = v["message"].as_str().unwrap().to_string();
@@ -4703,4 +4755,19 @@ fn a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead() {
         "the coordinator's commits land with no bead: {out}{err}"
     );
     assert!(main.join("helper.sh").exists(), "{out}");
+    // 0.4.8 trial: no ": " with no bead, and main is green at the landing commit it built.
+    assert_eq!(
+        git(&main, &["log", "-1", "--format=%s"]),
+        "Land worktree-lane"
+    );
+    let landed = git(&main, &["rev-parse", "HEAD"]);
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let greens: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM verify_runs WHERE sha=?1 AND exit_code=0",
+            [&landed],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(greens, 1, "{out}");
 }

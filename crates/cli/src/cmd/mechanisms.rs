@@ -206,8 +206,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "landable",
         class: "attention",
-        what: "A branch `air land --all` would take right now: green at its head with main \
-               merged, naming the beads it carries. Once per branch head, never while it sits.",
+        what: "A branch other than the lane's that `air land --all` would take right now: \
+               green at its head with main merged, naming the beads it carries. Once per \
+               branch head, never while it sits.",
         added: "2026-08-29 (air-03w)",
         source: "crates/cli/src/cmd/status.rs",
         fires: Fires::Condition("landable"),
@@ -869,10 +870,10 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "Each member worker hears its batch's result at once: close on a green or a \
                landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it. A killed run says \
-               nothing.",
+               other side and the paths when `air batch cut` drops it, the missing precheck \
+               when it holds it out. A killed run says nothing.",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped, batch_held; a landing is main_moved",
         // Same trial: a worker learned the lane's green, and could close, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(
