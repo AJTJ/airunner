@@ -97,7 +97,6 @@ structure. No unnecessary terseness or shortness." Section order follows the com
 design-doc shape (context, goals and non-goals, overview, detailed design, alternatives,
 cross-cutting concerns), with the proposal-only parts removed and interfaces, data, flows,
 invariants and failure model made explicit because they are what a reader of an operating
-system needs. Diagram guidance draws on the `mermaid-diagrams` and `artifact-diagramming`
-skills. Removed when the repo has no `docs/design.md` to keep, or when the doc has gone two
+system needs. Diagrams are Mermaid, checked by rendering them with `mmdc`. Removed when the repo has no `docs/design.md` to keep, or when the doc has gone two
 releases without being re-read against the tree, at which point the rule is not being kept
 and should be dropped rather than pretended.
