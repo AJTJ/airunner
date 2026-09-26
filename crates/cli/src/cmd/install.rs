@@ -2339,6 +2339,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // stop and resume, lease free) and workers no longer message the coordinator on close. 0.4.1
     // was not tagged: its second trial was stopped by the owner after scenario 1 to build these.
     ("0.4.2", 32, 120),
+    // 2026-09-26: 0.4.2's trial stalled: a freshly launched worker was never idle, so the ready
+    // fan-out reached no one (air-ludo). One notice: fresh-session-idle.
+    ("0.4.3", 33, 121),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
