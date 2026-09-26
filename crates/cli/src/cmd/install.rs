@@ -2629,6 +2629,17 @@ pub fn run(repo: &Path, write: bool, json: bool) -> i32 {
             for name in &plan.retired_skills {
                 let dir = skills_dir.join(name);
                 std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                // air-hqj8: counted by `retired-skill-removal`.
+                if let Ok((ledger, me)) = super::open(&repo) {
+                    super::log_event(
+                        &ledger,
+                        &me,
+                        super::decisions::INSTALL_RETIRE_SKILL,
+                        &serde_json::json!({"skill": name}),
+                        "removed a skill Air no longer ships",
+                        "1 skill",
+                    );
+                }
             }
             // Last: the repo has now been told everything above, so record it. Written after
             // the files so a failed install does not claim the surface was delivered.

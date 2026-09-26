@@ -55,6 +55,10 @@ macro_rules! traces {
 traces! {
     AUDIT_REPORTED = "audit" / "reported";
 
+    LAUNCH_REFUSE_INSTALL_UNCOMMITTED = "launch" / "refuse-install-uncommitted";
+    FLEET_UP = "fleet" / "up";
+    INSTALL_RETIRE_SKILL = "install" / "retire-skill";
+
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
     BATCH_CUT_DROP = "batch-cut" / "drop";
     BATCH_CUT_NO_PRECHECK = "batch-cut" / "no-precheck";
