@@ -582,6 +582,20 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
+        id: "pin-delegation",
+        class: "action",
+        what: "In a repo pinned at `<main>/.air/bin/air`, any other `air` re-executes the pin \
+               with the same arguments before running a command (`air install` excepted).",
+        added: "2026-09-25 (air-qyrm)",
+        source: "crates/cli/src/cmd/delegate.rs",
+        fires: Fires::Decisions(&[("pin", "delegated")]),
+        // The 0.4.0 live trial: every launched session's bare `air` ran the 0.2.19 on PATH,
+        // because the shell the Bash tool starts re-orders the PATH Air gave the session.
+        removal: Removal::Judgement(
+            "the air every pinned repo's shells find is the pin (the harness keeps the PATH Air gives a session), or pinning goes",
+        ),
+    },
+    Mechanism {
         id: "retired-skill-removal",
         class: "action",
         what: "`air install --write` removes each `air-*` skill Air once shipped and no longer \
