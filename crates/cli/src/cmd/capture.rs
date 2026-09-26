@@ -159,6 +159,8 @@ pub fn capture(
         eprintln!("air capture: {e}");
         return 1;
     }
+    // air-1vri.5: the coordinator hears it now rather than on its next wake.
+    super::fanout::capture_to_coordinator(&ledger, &worker, &id, text, &at);
     let depth = ledger.inbox().map(|v| v.len()).unwrap_or(0);
     let msg = format!("captured {id} (inbox depth {depth}); keep working");
     log_event(
