@@ -49,6 +49,18 @@ Then commit, record the first green and start the fleet:
 A yes starts the verification lane and the workers, each in its own worktree and tmux session,
 the same as `air fleet up`. `air lane` and `air worker` start one session by hand.
 
+Each session can stop at start-up, and the launcher prints once which prompts to expect:
+
+- "Is this a project you created or one you trust?" until Claude Code has been trusted in the
+  main checkout. Answer yes; the default exits. One yes covers every worktree, so running
+  `claude` once in the main checkout before the first fleet avoids it.
+- "Loading development channels", on the coordinator only, because the Air channel is a local
+  server. Choose "I am using this for local development".
+
+The "New MCP server found in this project: air" question no longer appears: every launch
+approves the `air` server in its own settings. The lane is allowed `air land` in its own
+settings too, so auto mode's classifier does not refuse its landings.
+
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.
 
@@ -104,7 +116,8 @@ lease stores that disagree refuse commands while reporting success, so drain the
 it so a reader you missed fails loudly.
 
 To add environment variables to a worker, pass inline JSON: `air worker <name> -- --settings
-'{"env":{…}}'`. Air merges it into its own settings and its own four values win. A `--settings
+'{"env":{…}}'`. Air merges it into its own settings: objects merge key by key, lists such as
+`permissions.allow` are combined, and Air's four env values win. A `--settings
 <file>` there is refused. `AIR_BD_TIMEOUT_MS` replaces Air's whole bd budget with one flat
 figure; leave it unset unless a bd call times out.
 

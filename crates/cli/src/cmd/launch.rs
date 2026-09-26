@@ -266,12 +266,119 @@ fn with_pin(repo: &Path, mut env: Vec<(String, String)>) -> Vec<(String, String)
     env
 }
 
-fn settings_blob(env: &[(String, String)]) -> String {
+/// Allow rules for the verification lane: `air land`, and the pinned binary's absolute path
+/// when the repo is pinned, which is how the lane ran it in the 0.4.0 trial.
+///
+/// air-8cdh (2026-09-25 trial): in auto mode the classifier denied the lane's
+/// `.air/bin/air land --worker worker-1` with "[Modify Shared Resources]", so nothing landed
+/// without the owner. An allow rule is the documented route past it: "Actions matching your
+/// allow, ask, or deny rules resolve immediately" before "Everything else goes to the
+/// classifier", and "narrow Bash and PowerShell allow rules such as `Bash(npm test)` stay in
+/// effect in auto mode. Claude Code resolves them before the classifier runs"
+/// (https://code.claude.com/docs/en/permission-modes.md "How the classifier evaluates
+/// actions"; https://code.claude.com/docs/en/auto-mode-config.md "Route all shell commands
+/// through the classifier"; both accessed 2026-09-25). A PreToolUse hook `"allow"` is
+/// documented only as skipping "the permission prompt", not the classifier, so it is not used.
+///
+/// On the lane's `--settings` rather than the project's `.claude/settings.json`: the project
+/// file is every role's, and its allow rules wait for the folder-trust dialog
+/// (https://code.claude.com/docs/en/permissions.md "Project allow rules and workspace trust",
+/// accessed 2026-09-25). Workers keep their `Bash(air land *)` deny, which beats any allow.
+///
+/// Removal: when the lane is removed, or when a round shows the lane's `air land` reaching the
+/// classifier anyway (a `PermissionDenied` event line naming it).
+pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
+    std::iter::once("Bash(air land *)".to_string())
+        .chain(pin.map(|p| format!("Bash({} land *)", p.display())))
+        .collect()
+}
+
+/// The one project MCP server Air installs (`.mcp.json`, and `server:air` for the channel).
+///
+/// air-oe9k (2026-09-25 trial): every session stopped at "New MCP server found in this project:
+/// air", whose default ("Continue without using this MCP server") drops the channel.
+/// `enabledMcpjsonServers` approves named `.mcp.json` servers "so Claude Code connects them
+/// without asking", and in a folder whose trust dialog is not yet accepted it is still
+/// honored "from user settings, managed settings, and `--settings`"
+/// (https://code.claude.com/docs/en/settings-reference.md `enabledMcpjsonServers`, accessed
+/// 2026-09-25). So it goes on each session's `--settings`, not in the project file, where an
+/// untrusted folder ignores it. Removal: when `air install` stops shipping `.mcp.json`.
+pub const MCP_SERVERS: &[&str] = &["air"];
+
+/// What Claude Code will still ask each session Air starts, and the answer, said once before
+/// sessions start where nobody is watching them (air-oe9k: eleven answers for five sessions in
+/// the 0.4.0 trial).
+///
+/// Folder trust stays a prompt. Claude Code has no flag or settings key that accepts it: the
+/// documented way is by hand, `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`
+/// (https://code.claude.com/docs/en/permissions.md "What runs before you trust a folder"),
+/// a file "that it writes for itself; you don't need to edit it"
+/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so Air
+/// does not write it. Trust in a worktree is keyed on the main checkout's root
+/// (permissions.md "Project allow rules and workspace trust"), so one accept covers every
+/// session Air starts; the trial asked five times because five sessions started at once in a
+/// fresh copy. The development-channels warning has no documented skip either: the flag works
+/// "after a confirmation prompt" (https://code.claude.com/docs/en/channels-reference.md "Test
+/// during the research preview"). All accessed 2026-09-25.
+///
+/// Removal: when Claude Code offers a supported way to pre-accept trust for a directory the
+/// owner already trusted, and the channel leaves the research preview.
+pub fn startup_prompts_note(main: &Path, coordinator: bool) -> String {
+    let mut note = format!(
+        "If Claude Code has not been trusted in {} yet, each session asks \"Is this a project \
+         you created or one you trust?\": answer Yes; the default exits. One accept covers \
+         every worktree; running `claude` there once first avoids the question.",
+        main.display()
+    );
+    if coordinator {
+        note.push_str(
+            " The coordinator also warns about loading development channels (the Air \
+             channel): choose \"I am using this for local development\"; Exit quits.",
+        );
+    }
+    note
+}
+
+fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
     let env: serde_json::Map<String, serde_json::Value> = env
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
-    serde_json::json!({ "env": env }).to_string()
+    let mut blob = serde_json::Map::new();
+    blob.insert("env".into(), serde_json::Value::Object(env));
+    blob.insert(
+        "enabledMcpjsonServers".into(),
+        serde_json::json!(MCP_SERVERS),
+    );
+    if !allow.is_empty() {
+        blob.insert("permissions".into(), serde_json::json!({ "allow": allow }));
+    }
+    serde_json::Value::Object(blob).to_string()
+}
+
+/// Merge `src` into `dst`: objects key by key, arrays as a union, anything else replaced.
+fn merge_value(dst: &mut serde_json::Value, src: &serde_json::Value) {
+    use serde_json::Value;
+    match (dst, src) {
+        (Value::Object(d), Value::Object(s)) => {
+            for (k, v) in s {
+                match d.get_mut(k) {
+                    Some(dv) => merge_value(dv, v),
+                    None => {
+                        d.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (Value::Array(d), Value::Array(s)) => {
+            for x in s {
+                if !d.contains(x) {
+                    d.push(x.clone());
+                }
+            }
+        }
+        (d, s) => *d = s.clone(),
+    }
 }
 
 /// Pure: pull every `--settings <v>` / `--settings=<v>` out of pass-through args. Inline JSON
@@ -309,7 +416,8 @@ pub fn split_settings(extra: &[String]) -> Result<(Vec<String>, Vec<serde_json::
 
 /// Pure: merge pass-through settings objects into the `--settings` blob already in `argv`,
 /// so the command line carries ONE. Theirs first, ours on top: every key of theirs survives,
-/// `env` is merged as a map, and Air's four env values win.
+/// objects (`env`, `permissions`) merge key by key, lists (an allow list) are unioned, and
+/// Air's env values win.
 pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
     let Some(i) = argv.iter().position(|a| a == "--settings") else {
         return;
@@ -318,34 +426,14 @@ pub fn merge_settings(argv: &mut [String], theirs: &[serde_json::Value]) {
         return;
     };
     let ours: serde_json::Value = serde_json::from_str(slot).unwrap_or_default();
-    let mut merged = serde_json::Map::new();
-    for t in theirs {
-        if let Some(o) = t.as_object() {
-            for (k, v) in o {
-                if k == "env" {
-                    let env = merged.entry("env").or_insert_with(|| serde_json::json!({}));
-                    if let (Some(dst), Some(src)) = (env.as_object_mut(), v.as_object()) {
-                        dst.extend(src.iter().map(|(k, v)| (k.clone(), v.clone())));
-                    }
-                } else {
-                    merged.insert(k.clone(), v.clone());
-                }
-            }
-        }
+    let mut merged = serde_json::json!({});
+    for t in theirs.iter().filter(|t| t.is_object()) {
+        merge_value(&mut merged, t);
     }
-    if let Some(o) = ours.as_object() {
-        for (k, v) in o {
-            if k == "env" {
-                let env = merged.entry("env").or_insert_with(|| serde_json::json!({}));
-                if let (Some(dst), Some(src)) = (env.as_object_mut(), v.as_object()) {
-                    dst.extend(src.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
-            } else {
-                merged.insert(k.clone(), v.clone());
-            }
-        }
+    if ours.is_object() {
+        merge_value(&mut merged, &ours);
     }
-    *slot = serde_json::Value::Object(merged).to_string();
+    *slot = merged.to_string();
 }
 
 /// Pure: the Claude Code session name (`claude --name`, "Set a display name for this
@@ -376,7 +464,8 @@ pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) ->
     role_argv("worker", name, project, roles, WORKER_DENY, extra)
 }
 
-/// Pure: the lane's argv, a worker's with `AIR_ROLE=lane` and [`lane_deny`] (air-jc2p.2).
+/// Pure: the lane's argv, a worker's with `AIR_ROLE=lane`, [`lane_deny`] (air-jc2p.2), and
+/// [`lane_allow`] on its settings (air-8cdh).
 pub fn lane_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
     role_argv("lane", name, project, roles, &lane_deny(), extra)
 }
@@ -389,7 +478,12 @@ fn role_argv(
     deny: &[&str],
     extra: &[String],
 ) -> Vec<String> {
-    let settings = settings_blob(&role_env(role, name, project));
+    let allow = if role == "lane" {
+        lane_allow(None)
+    } else {
+        Vec::new()
+    };
+    let settings = settings_blob(&role_env(role, name, project), &allow);
     let mut v: Vec<String> = vec![
         "--append-system-prompt-file".into(),
         roles.display().to_string(),
@@ -423,6 +517,15 @@ fn worker_argv_for(
         worker_argv(name, &project, roles, &[])
     };
     merge_settings(&mut base, &theirs);
+    // The pinned binary by absolute path, which is how the lane ran it in the trial (air-8cdh).
+    let pin = super::install::pin_path(&super::worktree::main_checkout(repo).join(".air"));
+    if role == "lane" && pin.is_file() {
+        let allow = lane_allow(Some(&pin));
+        merge_settings(
+            &mut base,
+            &[serde_json::json!({ "permissions": { "allow": allow } })],
+        );
+    }
     base.extend(repo_deny(repo, "worker_deny"));
     base.extend(extra);
     Ok(base)
@@ -443,7 +546,7 @@ pub fn coordinator_argv(
 ) -> Vec<String> {
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
     // the coordinator is the one that can see every fleet on the machine.
-    let settings = settings_blob(&coordinator_env(project));
+    let settings = settings_blob(&coordinator_env(project), &[]);
     let mut v: Vec<String> = vec![
         channels_flag.into(),
         "server:air".into(),
@@ -936,10 +1039,19 @@ pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
 /// the fleet comes up from it). A session already running is left running and named. Every
 /// member is tried, and the exit is 1 if any failed.
 pub fn fleet_up(repo: &Path, print: bool) -> i32 {
+    fleet_up_noting(repo, print, true)
+}
+
+/// `note` false when `air coordinator` has already said what the sessions will ask.
+fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
         eprintln!("{refusal}");
         log_install_refusal(repo, "air fleet up", &refusal, print);
         return 1;
+    }
+    if note && !print {
+        let main = super::worktree::main_checkout(repo);
+        eprintln!("air fleet up: {}", startup_prompts_note(&main, false));
     }
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
@@ -1094,8 +1206,14 @@ fn launch_role(
 pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<bool>) -> i32 {
     let start_fleet =
         fleet.unwrap_or_else(|| std::io::stdin().is_terminal() && ask_fleet(fleet_workers(repo)));
+    // Said once for every session about to start (air-oe9k), before the launch below replaces
+    // this process on a terminal.
+    if !print {
+        let main = super::worktree::main_checkout(repo);
+        eprintln!("air coordinator: {}", startup_prompts_note(&main, true));
+    }
     // Before the coordinator: on a terminal its launch replaces this process.
-    if start_fleet && fleet_up(repo, print) != 0 {
+    if start_fleet && fleet_up_noting(repo, print, false) != 0 {
         eprintln!("air coordinator: the fleet did not fully start; starting the coordinator");
     }
     // Metis first, because its split paragraph goes into the file the next line writes
@@ -1195,6 +1313,80 @@ mod tests {
         }
         // And a worker cannot start one.
         assert!(WORKER_DENY.contains(&"Bash(air lane *)"));
+    }
+
+    fn settings_of(v: &[String]) -> serde_json::Value {
+        let i = v.iter().position(|a| a == "--settings").unwrap();
+        serde_json::from_str(v.get(i.saturating_add(1)).unwrap()).unwrap()
+    }
+
+    /// air-8cdh: in auto mode the classifier denied the lane's `air land` ("[Modify Shared
+    /// Resources]"). A narrow allow rule resolves before the classifier runs, so the lane's
+    /// settings carry one, and no other role's do.
+    #[test]
+    fn only_the_lane_is_allowed_air_land_past_the_classifier() {
+        let roles = Path::new("/r/.air/roles.md");
+        let lane = settings_of(&lane_argv("lane", "air", roles, &[]));
+        let allow = lane["permissions"]["allow"].as_array().unwrap();
+        assert!(allow.iter().any(|r| r == "Bash(air land *)"), "{lane}");
+        let worker = settings_of(&worker_argv("w", "air", roles, &[]));
+        assert!(worker.get("permissions").is_none(), "{worker}");
+        let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
+        assert!(coord.get("permissions").is_none(), "{coord}");
+        // A pinned repo's lane may run the pin by absolute path, as it did in the trial.
+        let pin = lane_allow(Some(Path::new("/m/.air/bin/air")));
+        assert!(
+            pin.contains(&"Bash(/m/.air/bin/air land *)".to_string()),
+            "{pin:?}"
+        );
+        assert!(pin.contains(&"Bash(air land *)".to_string()));
+        // A pass-through allow list is kept beside Air's, not replaced by it.
+        let mut argv = lane_argv("lane", "air", roles, &[]);
+        merge_settings(
+            &mut argv,
+            &[serde_json::json!({"permissions": {"allow": ["Bash(ls *)"]}})],
+        );
+        let allow = settings_of(&argv)["permissions"]["allow"].clone();
+        assert!(allow.as_array().unwrap().iter().any(|r| r == "Bash(ls *)"));
+        assert!(
+            allow
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "Bash(air land *)")
+        );
+    }
+
+    /// air-oe9k: every session stopped at "New MCP server found in this project: air", whose
+    /// default drops the channel. `enabledMcpjsonServers` from `--settings` approves it, and is
+    /// honored there even in a folder not yet trusted.
+    #[test]
+    fn every_role_approves_the_air_mcp_server() {
+        let roles = Path::new("/r/.air/roles.md");
+        for v in [
+            worker_argv("w", "air", roles, &[]),
+            lane_argv("lane", "air", roles, &[]),
+            coordinator_argv("air", roles, "--ch", &[], &[]),
+        ] {
+            let s = settings_of(&v);
+            assert_eq!(
+                s["enabledMcpjsonServers"],
+                serde_json::json!(["air"]),
+                "{s}"
+            );
+        }
+    }
+
+    /// air-oe9k: the prompts that remain are named once, with the answer, before sessions
+    /// start detached.
+    #[test]
+    fn the_startup_note_names_each_remaining_prompt_and_its_answer() {
+        let fleet = startup_prompts_note(Path::new("/m"), false);
+        assert!(fleet.contains("trust") && fleet.contains("Yes") && fleet.contains("/m"));
+        assert!(!fleet.contains("development channels"));
+        let coord = startup_prompts_note(Path::new("/m"), true);
+        assert!(coord.contains("development channels"));
+        assert!(coord.contains("I am using this for local development"));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
