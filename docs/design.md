@@ -813,6 +813,9 @@ Code sessions.
    the log. An independent observer, a background agent started with the fleet, watches the run
    and checks that report against the events, git and bd, because the coordinator can be wrong
    about its own round (owner, 2026-09-26).
+   The observer also runs `scripts/trial/count.py <copy>` and puts its counts in the report:
+   agent-to-agent messages, Air's refusals (the scenarios ask for four), and Air's notices. The
+   0.4.9 baseline: 0 messages during the work, 24 refusals the scenarios did not ask for.
    Both look for retries, workarounds, hand steps, second-try passes and confusion, not only
    pass or fail, and trace each to its cause in the code before a fix is proposed: a symptom
    fixed alone comes back in the next trial (the lane's leftover red batch, 0.4.6 and 0.4.8).
