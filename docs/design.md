@@ -707,6 +707,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
 | Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
 | Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release`, `air reclaim` |
+| Air gets out of the way and tells agents facts as soon as they are true. Workarounds will always exist; a trial workaround is fixed only when Air caused it, and by removing or correcting that part of Air, not by adding a rule. | 2026-09-26 | trial reports (§9.1) |
 | Taking back another worker's bead never forces bd; it waits for bd's lease to run out. | 2026-09-26 | `air reclaim` |
 | A new project's beads runs in server mode, on one Dolt server per project with its data in `.air/dolt`, kept up by Air. Air never moves an existing project's beads; an embedded project stays embedded and is only reported. | 2026-09-26 | `air init`, `air bd-server` |
 | A worker cannot claim a bead labelled `owner`. | 2026-08-22 | `OWNER_LABEL` |
