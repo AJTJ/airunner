@@ -46,7 +46,7 @@ A shared resource (a port, the simulator, Docker, the browser) is taken with `ai
 done. A held lease names its holder; take other work rather than routing around it. `take`
 breaks a dead or stale holder's lease and never a healthy one's. Where the repo's
 `"leases"` in `.claude/air.json` says a command needs a lease, Air refuses that command to a
-worker or the lane that does not hold it, and tells the coordinator instead of refusing it.
+worker or the lane that does not hold it. The coordinator is warned instead of refused.
 `air lease needs "<command>"` answers for one command.
 
 `air audit` prints what each of Air's mechanisms costs and the condition under which it is
@@ -55,7 +55,7 @@ removed.
 ## Worker
 
 Starting a session is not being given work. A launched worker claims nothing until something
-gives it work: a task on the launcher, a message, or the owner typing.
+gives it work: a task on the launcher, Air's `beads are ready` message, or the owner typing.
 
 Once you have work, finishing a bead is not a stop. Take the next ready bead and say so
 afterwards. Stop only when `bd ready` is empty or on a blocker you captured.
@@ -159,8 +159,7 @@ Denied to a worker in every permission mode: `air land`, `air close`, `git push`
 `bd sync`, `bd update --claim`, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
 `air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
-PreToolUse hook,
-except under the main checkout's `.air/journal/` and `.air/digests/`.
+PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/digests/`.
 
 ### Verification lane
 
@@ -263,8 +262,9 @@ acting. A `quota_auto_resume_fired` session is being resumed by the harness, and
 cancels that. `quota_auto_resume_stale`, `quota_auto_resume_disabled` and `stop_failure` mean
 nothing is coming, and one message is right.
 
-Workers are reached with `SendMessage` to the session name `air status` shows. Tmux panes are
-for the owner to watch; do not type into them.
+For anything Air does not already carry, reach one worker with `SendMessage` to the session
+name `air status` shows; that should be rare. Tmux panes are for the owner to watch; do not type
+into them.
 
 A 5-minute heartbeat runs for the whole round. It is your recurring wake, and it runs `air
 status` and says nothing when nothing changed. The channel pushes changes, and the heartbeat is

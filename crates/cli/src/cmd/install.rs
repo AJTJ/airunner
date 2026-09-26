@@ -3114,7 +3114,8 @@ mod tests {
         // given any. Both halves, because dropping either reverses the rule (air-7q5).
         assert!(has("Once you have work, finishing a bead is not a stop."));
         assert!(has("Starting a session is not being given work."));
-        assert!(has("Workers are reached with `SendMessage`"));
+        // 2026-09-26: SendMessage is for what Air does not already carry (air-uzh2, air-1vri).
+        assert!(has("reach one worker with `SendMessage`"));
         // The heartbeat is the failsafe, and roles.md promises no `stuck` condition (air-12k).
         assert!(has("the heartbeat is the failsafe"));
         assert!(!has("the channel (stuck,"));
