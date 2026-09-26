@@ -591,7 +591,9 @@ pub const MECHANISMS: &[Mechanism] = &[
         fires: Fires::Decisions(&[("install", "retire-skill")]),
         // An adopter kept air-phase-transitions, which contradicted the roles text, because
         // install never removed what it had stopped shipping.
-        removal: Removal::Judgement("RETIRED_SKILLS is empty and every adopter has installed since"),
+        removal: Removal::Judgement(
+            "RETIRED_SKILLS is empty and every adopter has installed since",
+        ),
     },
     Mechanism {
         id: "land-role-refusal",
