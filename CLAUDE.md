@@ -129,7 +129,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
 | Decomposing a feature, sizing beads, epic and bead states | skills `decomposition`, `phase-transitions` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
-| Writing prose, docs, commits, PRs, tests, reviews | skill `plain-language` owns voice; also `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-pr-descriptions`, `writing-rust-tests`, `review`, `rust-safety`, `beads` |
+| Writing prose, docs, commits, PRs, tests, reviews | skill `plain-language` owns voice; also `writing-readmes`, `writing-style`, `writing-docs`, `commits`, `writing-rust-tests`, `rust-safety`, `beads`; `/code-review` for reviewing a change |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
 | What a round left behind (session journals and round logs; records, not reading) | `.air/journal/` in the main checkout (gitignored) |
 
