@@ -1,831 +1,124 @@
-# Adopting Air in a target repository
-
-> **Read when:** you are the agent (or person) integrating Air into a repo that runs a fleet.
-> This is the whole package: what to install, what to change in the repo's own rules and
-> scripts, what Air now does that the repo's prose or scripts used to do, and how the repo keeps
-> itself current afterwards. The README says what Air *is*; this says what *you* do.
-> The adopter-specific items are marked **[an adopter]** and come from its coordinator's report of
-> 2026-08-21 (`../decisions.md`, same date). Those are the **worked example**: a real fleet on a
-> real product, kept because the incidents behind Air's mechanisms are more useful than a
-> summary of them. Nothing in them is a requirement, and a fresh repo needs none of it.
-
-## Start here: a fresh repo
-
-Everything after this section assumes a repo that already runs a fleet and has its own scripts
-and habits. If yours does not, this is the whole procedure.
-
-    brew install beads && brew pin beads          # bd, pinned at 1.2.2
-    cargo install --path crates/cli               # in the Air checkout; `which air` must be it
-    cd <your repo>
-    air init                                      # reads the repo, prints what it would do
-    air init --write                              # applies it
-    $EDITOR Makefile                              # put your real check in the `verify` target
-    air record verify -- make verify              # the first proof
-    air coordinator                               # worktree + tmux <project>-coordinator, channel
-    air worker --tmux --task "<a complete task>"   # worktree worker-1, tmux <project>-worker-1
-    air lane --tmux                               # the verification lane; only it lands
-
-`air init --write` gates on bd and Claude Code being present, then does the rest: `git init` if
-needed, `bd init`, `.air/` in `.gitignore`, `.claude/air.json` with deny patterns proposed from
-a scan of the repo, hooks, `.mcp.json`, `.air/roles.md`, the `air-*` skills, and four
-empty-but-ready items Air assumes a repo has (air-ej4): a `Makefile` `verify` target, a
-`.worktreeinclude`, and in the `CLAUDE.md` stub the hand-over sequence and the `Bead: <id>`
-trailer rule. Each is created only when absent and never edited, so re-running it is safe and a
-repo that already has any of them keeps what it has.
-
-**The editor step is not optional.** The scaffolded `verify` target exits 1 on purpose. Air's
-one refusal reads a recorded green, so a placeholder that passed would let the first
-`air record verify` record a green for a check nobody had written, and the close gate would
-pass it.
-
-Need by need, what Air ships against what a repo supplies is the table in
-[`../notes/2026-09-05-open-source-analysis.md`](../notes/2026-09-05-open-source-analysis.md) §7.
-Its "fresh repo" column is this section. The one item there that `air init` does NOT write is
-the digest directory: the front-matter gate is off until `.claude/air.json` names a
-`digest_dir`, and a repo can hand over without digests, so turning it on is a choice rather
-than a default (§1, step 4). Everything else in that table is one adopter's own tooling around
-its product, which Air deliberately does not replace.
-
-Then read §5 (keeping the integration current). The rest is for a repo that already has a
-fleet, and §1 below is the install for one.
-
-## 0. The bd gate comes first
-
-A repo whose gates read bd inherits every breaking change in bd. **[an adopter, 2026-08-21]**
-bd 1.2.1 had silently corrupted the Dolt schema; 1.2.2 refused it and `bd list` returned 4 of
-144 beads, breaking every bd-reading make target (recovered via bd's `RECOVERY-1.2.1.md`).
-1.2.2 also removed `bd events`, which an adopter's script depended on. So, before anything
-else: `air doctor`. It reports the installed bd version against the pin (1.2.2) and whether
-`bd list --json` actually answers, and exits 2 when it does not. Fix bd first; then install.
-`air record verify` is what made the corruption visible (a recorded red at HEAD), which is why
-it is the first proof below.
-
-## 0b. No WIP cap
-
-**[owner, 2026-08-21]** "There is no cap; we set our goals and finish them." Air measures the
-`awaiting_review` count and the review wait per bead in `air status`; it never raises a
-condition on them and roles.md carries no two-units-then-stop rule. A cap condition was built
-and removed the same day; do not reintroduce it.
-
-## 0c. Lessons from the first round (the adopter, 2026-08-21), one line each
-
-- Cheap checks first: doc rules moved ahead of cargo in `make verify` cut a red from ~10 min to
-  4 s. A gate that reports ten minutes after the edit is a throttle; at the edit it is a fact.
-- Write the digest and commit it with the work; run `air record verify` last. Otherwise the
-  digest commit moves HEAD past the green and every hand-over costs two verifies.
-- Deny the verb, not the tool (`Bash(eas build *)`, not `Bash(eas *)`), and match command
-  tokens, never substrings: a prose guard denied an edit because a note contained the word.
-- Do not set `assignee` on an open bead: in bd 1.2.x it blocks every other worker's claim.
-- One label for "awaiting the owner": `owner` (ruled 2026-08-22; `human` was the earlier name, migration in §5b). `air claim` refuses it to workers.
-- Workers request beads (including friction beads) with `air capture`; they never `bd create`.
-  The round's captures deduplicated 11 → 5 beads.
-- Cut beads so no shared doc is touched by two at once; that was the only real overlap shape.
-- Three workers plus a coordinator plus verify on one machine saturates it (load 22-25); bd
-  writes time out. Size the fleet to the machine.
-- Read before decomposing: three epics were already done on main.
-- A label can be a schema when a fitness check parses it; check the documented set first.
-- Closed is closed: never reopen a bead; unfinished work is a new bead referencing the old.
-
-## 0a. Flakiness becomes load-bearing
-
-**[an adopter, 2026-08-21]** Once a machine gates on "green at HEAD", a flaky test is no
-longer a nuisance: a real green can record red and hold a hand-over, and a flake can mask a
-real red. Air does not retry (a retry hides real reds); it makes the disagreement visible:
-`air record` flags `flaky-at-head: N green / M red` when runs at one sha disagree, and
-`air handover` names it with the fix "fix or quarantine the flaky test, then re-run". Before
-adopting, run the repo's verify three times at one commit; every disagreement is a bug to file
-first. Whether the gate should require N-of-M agreement is an owner policy, not built.
-
-## 0f. Your round log is being assembled from somebody's memory
-
-**[air-3xww, 2026-09-06]** Count what a round already records before adding anything: on the day
-this was written one round had **40 digests** (one per bead, what it did and the proof), **37
-captures** (things noticed outside the bead you hold, triaged by the coordinator) and **196
-agent-to-agent messages**. Three surfaces, and most of what happened is in them.
-
-The gap is narrower than "agents should keep logs", and it is real. **A finding that is not about
-the bead you hold and not worth the coordinator's inbox has nowhere to go**, so it lives in a
-message and survives only while the recipient's session does. That round's best material — four
-checks that were passing while examining nothing; a claim "true where it was used and false as
-stated"; a lookup wearing the clothes of a judgement — was messages, and reached the round log
-only because a coordinator hand-copied it. The same night, a coordinator hit an account limit.
-
-So: **one file per session, appended, in the main checkout's `.air/journal/`** (gitignored;
-a `journal_dir` in `.claude/air.json` puts them in your tree instead). `air init` scaffolds the
-directory with a README. The distinction to hold onto, because "put it
-in a capture" is the obvious advice and it is wrong here: a capture says somebody should act, and
-every one is triaged; these entries say **nobody** should act. Routing them to captures fills the
-inbox with things that need no triage.
-
-**Nothing gates on it and Air reads none of it.** No template, no required entry per bead, no
-check that a session wrote one. Those turn a habit into a chore, and the measure of whether it
-works is simply whether your next round log can be assembled from the files rather than from
-someone's memory.
-
-## 0e. A check that has never had an input is not a passing check
-
-**[air-jsz, 2026-09-06]** `air adopter-check` refuses a tracked line that names an adopter. It
-reads the names from `private/adopters.md`, which is gitignored so the names are never
-published — and for a whole round that file existed nowhere, so the check skipped under every
-green verify, including the one that landed the sweep it exists to guard. A count of zero
-refusals said nothing about the repository, because the check had never been handed anything.
-
-The lesson generalises past this one check, and it is worth reading before you trust any
-mechanism of your own: **ask what the mechanism's input is and whether it has ever arrived.**
-A zero is evidence only when the subject occurred and the mechanism stayed silent.
-
-What Air does about it now: the repo DECLARES the answer in tracked config. `"adopters": true`
-in `.claude/air.json` with no `private/adopters.md` is a refusal naming the file; the default,
-`false`, skips exactly as before, which is what a repo that quotes nobody wants. The names stay
-private; only the yes-or-no is tracked. The list is read from the main checkout, beside the
-declaration, so a worktree copy cannot disagree with it.
-
-## 0d. What an account limit does to your fleet, and what does not save you from it
-
-**[measured on one machine, 2026-09-06, seven sessions, two projects; air-1n3 and
-`../notes/2026-09-06-limit-reset-recovery.md`]**
-
-An account usage limit stops every session at once and **no hook fires at the limit or at the
-reset**. What happens next is not uniform, and the difference decides whether your round
-continues:
-
-- The harness arms its own wait for **some** sessions, recorded in the transcript as
-  `Usage limit reached · continuing automatically at <time>`. Those resume by themselves within
-  about a minute of the reset. Five of the seven did.
-- For the rest it does not, and nothing in the session is coming back. Two of the seven.
-- **A scheduled task inside a session keeps firing while the session is limited**, and its first
-  firing after the reset is a recovery. That is why one of those two was working four seconds
-  into the reset window and the other, which had no such task, sat dead for 79 minutes.
-
-Three consequences for a repo adopting Air:
-
-1. **Give every session a recurring wake.** `.air/roles.md` says so and Air's SessionStart hook
-   says it once per session, but only the session itself can create one: there is no settings
-   key, no launcher flag, and no file. If your launcher wraps Air's, this is the thing to make
-   sure the first prompt establishes.
-2. **A keepalive that watches for a missing or dead pane does not cover this.** A limited
-   session is neither. If you have one, it will report everything healthy through the whole
-   outage.
-3. **Never nudge on silence alone.** The pane says `esc or type to cancel`: typing at a session
-   whose wait is armed cancels the recovery the harness was about to perform. `air status` prints
-   the kind (`quota_auto_resume_fired` versus `..._stale` / `..._disabled` / `stop_failure`), and
-   that is what to branch on.
-
-## 1. Install (owner runs; Air never writes into the target repo on its own)
-
-1. `cargo install --path crates/cli` in the Air checkout. `which air` must be that binary.
-2. `brew upgrade beads && brew pin beads`; `bd --version` reads 1.2.2; `air doctor` exits 0.
-3. In the target's main checkout: `air install` (read it), then `air install --write`. It adds
-   `air hook` under every event in `hook_entries()` (`crates/cli/src/cmd/install.rs`; nine as of
-   2026-08-22), the `air` server in `.mcp.json`, `.air/roles.md`, and the `air-*` skills. Add
-   `.air/` to `.gitignore`.
-4. Create `.claude/air.json` (tracked):
-   ```json
-   {
-     "digest_dir": "docs/log.d",
-     "worker_deny": ["Bash(make deploy*)", "Bash(eas *)", "Bash(expo publish*)"],
-     "coordinator_deny": []
-   }
-   ```
-   `digest_dir` turns on the fourth hand-over check, with the digest tracked in that directory;
-   `"digests": true` turns it on with the digest in the gitignored `.air/digests/` instead
-   (air-1qnp). Neither key, no digest check. Deny entries are *patterns* so a new
-   publish target is covered the day it exists (**[an adopter]** `make deploy-site` shipped
-   outside an enumerated list).
-
-   A fourth field, `"verify_key": "tree"`, is **opt-in and off by default** (air-7wf). A
-   recorded green is looked up by commit, by whichever worker ran it. `air land` builds the
-   landing commit from the branch's tree, so main is a new sha over a verified tree and reads
-   `not green` until somebody re-verifies it; with the tree key that green is found again and
-   no re-verify runs. **Declare it only if your verify is a function of the tree alone.** A
-   suite that reads history verifies differently at two commits with one tree: the adopter's
-   `make verify` runs `git log main..HEAD` to choose which beads to check
-   (`scripts/lib/bead_citations.py:140`), so a tree-keyed gate there would pass beads it never
-   checked. The ten-minute check is to grep the verify for `git log`, `rev-list`, `describe`
-   and anything reading commit messages; ai_runner's own passes (its only real-repo git calls
-   in `make verify` are `git status --porcelain` and `git checkout --`), which is why this
-   repo's `.claude/air.json` declares it. Either way `air status` names a tree green honestly:
-   `green (same tree as <sha> verified by <worker>)` when it counts, and `not green (this
-   exact tree is green at <sha> by <worker>, but this repo keys green by commit)` when it
-   does not.
-
-   `"leases"` is **opt-in**: which commands need which lease, in the same `Bash(...)` pattern
-   syntax as `worker_deny` (the wrapper is optional), e.g.
-   `"leases": {"runtime": ["make api*", "adb *", "docker compose up*"]}`. Matched as the
-   harness matches a deny rule: per `&&`/`;`/`|` segment, anchored at the command, leading
-   assignments and `timeout`/`nice`/`nohup` stripped; quoted text and heredoc bodies are data.
-   Air's PreToolUse hook then refuses a matching command from a worker that does not hold the
-   lease (under `AIR_ENFORCE=1`, which worker launches set), advises the coordinator, and never
-   asks the owner. `air lease needs "<command>"` says what a command needs and whether you hold
-   it. A repo with its own lease guard moves its patterns here and retires the guard's matching
-   half; running both only duplicates the refusal (2026-09-25).
-
-   A fifth field, `"precheck": true`, is **opt-in and off by default** (2026-09-25). Under a
-   verification lane workers run a cheap precheck instead of the full verify; with the key, a
-   branch is batch-ready only with a green `air record precheck -- <your precheck command>` at
-   its head, matched by the same key as a verify green. `air status --json` names a branch
-   without one as `no-precheck`. A precheck green never counts as a verify green: the close
-   gate, the landable list and `air land` ignore it. **[an adopter]** built the same gate from
-   a log file its lane script parsed and "checked at <sha>" messages; a worker was cut before
-   its check finished, and a hand-over that died before its precheck left the previous run's
-   green trailer naming a head two commits back. Record the precheck with or without the key:
-   a running one keeps `air status` from calling the worker idle.
-
-5. **Set the harness's Bash timeout above the repo's longest verify, or run verifies
-   detached.** Claude Code's Bash tool defaults to a 10-minute cap and kills the command at
-   it; `BASH_MAX_TIMEOUT_MS` raises it (the adopter sets 900000, 15 minutes). A verify killed at
-   the cap is not a red, it is nothing: the run leaves no green, the worker cannot close, and
-   the reason does not appear in Air's record because Air never saw the process end.
-   The adopter's verification lane hit exactly this on 2026-09-06 — a batch verify of 1622 s against a
-   900 s cap. Take the repo's longest recent verify from `air record`'s durations, double it,
-   and set the cap there; if that is beyond what the harness will allow, the lane runs
-   `air record verify` detached and reads the result back rather than waiting on it. This is
-   the one budget in Air's world that Air does not own (air-d75).
-
-6. **Decide whether the coordinator plans in Metis.** `air init` writes `"metis": true`, which
-   makes `air coordinator` attach [Metis](https://github.com/colliery-io/metis) (its MCP server,
-   and its plugin when you set `metis_plugin_dir` to the `plugins/metis` directory of a metis
-   checkout). Workers never get it: the coordinator plans, workers work. If `metis` is not on
-   `PATH` the launch proceeds and prints one line, so this costs a repo that ignores it nothing;
-   set `"metis": false` if you plan elsewhere.
-
-   Two things to know before you leave it on. Metis's own plugin text declares Metis the system
-   of record and says plans do not live outside it, which is false in a repo that tracks tasks
-   in beads, so Air appends a paragraph to the coordinator's prose stating the split (vision and
-   initiatives in Metis, tasks in beads, decisions in `docs/`). And a bead names where it came
-   from in a **declared field** — a line reading `initiative: <CODE>` in its description — which
-   `air status` counts and nothing refuses (air-g5o). Air reads that line and nothing else: an
-   initiative mentioned in prose declares nothing.
-
-## 2. Coexistence, not retirement (default adoption model)
-
-**[an adopter, owner reframing 2026-08-21]** Do not retire the repo's make targets and
-scripts; map the boundary. bd stays truth for ownership; `.air` becomes truth for evidence
-(verify-at-sha, sessions, claims history, leases); make targets read both and write neither.
-A script that depended on something bd no longer provides (`bd events`) should say "moved to
-`air status`" rather than error. Retire a target only when its Air replacement has a passed
-check beside it in the adoption log.
-
-### The repo owns its work flow; Air does not
-
-`.air/roles.md` is generated from Air's `ROLES_MD` and overwritten on every install, so a
-target repo cannot edit it and should not try. What it says is therefore deliberately limited
-to **what Air records and what Air refuses**:
-
-| Air says | The repo says |
-|---|---|
-| `air claim` is the claim path; a claim is a commitment to finish now | Whether a finished bead is handed over for review, closed with proof, or something else |
-| The recorded green must be at the commit you hand on, and that commit must contain `main` | Which command counts as verify |
-| A digest must be newer than the claim, where `digest_dir` is set | Where digests live and what goes in one |
-| The one refusal: the `bd` write that ends work on a bead is denied without a green at HEAD | Which `bd` status that write sets |
-| `air handover` names what is missing | When in the loop to run it |
-| Landing is the coordinator's, not a worker's; a landing needs a recorded green at a head containing `main`; Air records the landings it performs | **Which command lands, and everything it does on the way** |
-| Decomposing an epic with no open child is the coordinator's standing duty, and `air status` names each such epic with its closed count (air-84u) | How to split one, and when the queue is deep enough not to bother |
-| A bead blocked by one of its own ancestors can never become ready; `air status` names it with the edge and the `bd dep remove` that clears it (air-btz) | Nothing — but read the note below before filing a wave with `bd create --graph` |
-
-**[an adopter, 2026-09-06, air-btz] `bd create --graph` can build a deadlock bd will not warn
-about.** A bead blocked by one of its own ancestors waits forever: the ancestor cannot finish
-until its descendants do, which is bd's hierarchy rather than an edge, so `bd dep cycles`
-reports nothing and the tracker shows it as "not ready yet". An adopter lost a night to it —
-every P1 unreachable, 42 beads offered and not one of them a P1.
-
-bd 1.2.2 refuses this on nine routes but not on all of them, measured 2026-09-06
-([the note](../notes/2026-09-06-bd-refuses-the-ancestor-edge.md)). Its guard is an existing
-`parent-child` row on the same pair, which always covers the direct parent, plus a dotted-id
-prefix test, which covers deeper ancestors only when the id encodes the chain. `bd create
---graph` assigns flat ids and links by `parent_key`, so a wave filed from a plan file slips
-both silently. After any `--graph` file, read `bd dep tree <epic> --json` for an edge from a
-child to ANY ancestor; `bd dep cycles` will not tell you. `air status` names the shape as a
-failsafe, which is not a substitute for looking.
-
-**[an adopter, 2026-08-22, air-8zu]** roles.md used to prescribe
-`bd update <id> -s awaiting_review` as the closing step. The adopter's owner had ruled that step
-out of existence — a worker there closes its own bead with proof — so its workers were told one
-flow by Air at session start and another by their own CLAUDE.md, and could not fix the file.
-The fix was for Air to stop saying it, not to add per-repo configuration: config is a
-mechanism, and the smaller version is Air not saying what it has no business saying.
-
-Put the repo's own sequence in its CLAUDE.md (this repo keeps ai_runner's under "This repo's
-work flow"). The one refusal still covers both shapes: it matches `bd close` as well as
-`bd update -s closed` / `-s awaiting_review`, so a close-with-proof repo is gated exactly as a
-hand-over repo is.
-
-**[owner ruling 2026-08-29, air-97z] The same applies to landing, and it did not used to.**
-roles.md said hand-over was the repo's in as many words and then prescribed the landing command
-three lines later. **A repo with its own lander keeps it.** Air does not ask for it to be
-replaced, and nothing `air init` or `air install` writes names a landing command.
-
-The worked case is the adopter's `make land`: 685 lines, hardened over four separate blockers, and
-carrying repo knowledge Air does not have and has no business acquiring — which generated files
-are safe to discard on a rewind, that their verify must run `SCOPE=full`, digest tiers, a bead
-index, a friction query, and a refusal when a branch adds no `docs/log.d/` entry. It does not
-call `air` at all, and their Makefile already calls `air land` "the other path". Replacing it
-with `air land` would trade four blockers' worth of hardening for uniformity nobody asked for.
-
-What Air keeps saying about landing names no command: it is the coordinator's and not a
-worker's (the worker deny list and the role check enforce that), a landing needs a recorded green
-at a head containing `main`, and Air records the landings it performs. `air land` is offered to a
-repo that has no lander, and offered is the whole of it.
-
-### Find the repo's existing lease store, and collapse to one
-
-**[an adopter, 2026-08-23, air-uae]** Coexistence has one exception, and it is the only place
-where leaving the repo's own machinery running is worse than retiring it: **two lease stores that
-disagree deny work while reporting success.**
-
-The adopter ran both. `make lease-take` called `air lease take`, which writes the ledger, and
-reported success; their PreToolUse guard read `$(git --git-common-dir)/<prefix>-leases/runtime/`. So
-`make api` was refused with *"take it first: `make lease-take`"* — naming the command that had
-just succeeded. Every worker hit it, twice recorded; capture
-`01M0NM3YSE05GTNPNGVDQB24FW`).
-
-This is worse than an ordinary overlap because of its failure direction. A lease store that fails
-to record leaves two agents in one file, which someone notices; a second store that disagrees
-denies a command and tells the agent to run the command it just ran, which reads as a bug in the
-agent. Nobody suspects the lock.
-
-### Migrating a repo's own lease store to `air lease`
-
-A repo keeping its own store needs none of this: `air lease` simply goes unused there and Air
-records nothing about leases. **A fine outcome, not a loss.** What follows is for a repo that has
-decided to switch, and it is written to be followed on cutover day without asking Air anything.
-
-**Which store wins is not a preference. It is whichever one the guard reads**, because a store
-nothing enforces is a record and the store that refuses commands is the lock. So the migration is
-not "start calling `air lease take`" — that is what the adopter already did, and it is precisely how
-they ended up with two.
-
-#### 1. Find every reader, not just the guard
-
-Grep for **the lock path**, not for the guard, and not for the make target. The path is the one
-thing every reader must name:
-
-    $ git grep -n '<prefix>-leases'            # substitute the repo's lock directory
-    $ git grep -rn 'git --git-common-dir'  # where lock paths are usually built
-
-Expect more than one kind of hit, and treat a single hit as a sign you grepped the wrong string:
-
-| pattern | the adopter's instance |
-|---|---|
-| the guard that refuses | PreToolUse guard — but it *calls out* rather than reading the path itself |
-| the script the guard calls | `scripts/lease.sh check`, which is the actual reader |
-| the documented take/release commands | `make lease-take`, `make lease-status` |
-| **targets that refuse on their own, inside the recipe** | `make reseed`, `make seed-demo` — they write over HTTP to a fixed port and would otherwise split a seed across two databases |
-
-That last row is the one that makes this a procedure rather than a line. The adopter corrected an
-earlier draft of this section that said "change the guard to read `air lease status --json`":
-**it is not one call site**, and sizing it as one is how a cutover half-lands and leaves exactly
-the two-store state it was meant to end.
-
-#### 2. Drain the old store before switching, not after
-
-Air's `leases` table starts empty. A lock held in the old store at the moment of cutover is
-**invisible to Air**, so the resource it protects can be taken by a second agent immediately —
-the two-store failure inverted, and worse, because now nothing refuses at all.
-
-So, with the fleet stopped:
-
-    $ ls -la "$(git --git-common-dir)"/<lock-dir>/*/     # every held resource, and its age
-
-Release each one through the repo's own release path while it still works. Expect debris rather
-than a clean list: the adopter's directory held a `log` file last written days earlier with no lock
-beside it, and nothing documented that this was normal. A file that is not a lock is not a held
-lease; a lock whose holder is gone is released, not preserved. Then **move the directory aside**
-(`mv <lock-dir> <lock-dir>.pre-air`) rather than deleting it, so a reader you missed in step 1
-fails loudly instead of silently reading an empty store and permitting everything.
-
-#### 3. Verify with a command whose output settles it
-
-Two checks. The first is that Air's store is the only one anything names:
-
-    $ air lease status
-    no leases held
-    lease store: /path/to/repo/.air/ledger.db (leases table)
-
-    $ git grep -n '<old-lock-dir>'
-    (no output outside documentation and history)
-
-The second is the incident itself, reproduced and passing. This is the check that matters, because
-the failure being prevented is a *gated command refusing after a successful take*:
-
-    $ air lease take runtime --reason "cutover check"
-    $ make <the-target-that-used-to-refuse>     # must RUN, not refuse
-    $ air lease release runtime
-
-If the gated command still refuses while `air lease status` shows the lease held, step 1 missed a
-reader. That is the whole diagnostic, and it is the one adopter's did not have: their disagreement
-had to be inferred from a contradiction, because neither side ever said where it was looking.
-
-**The adopter is switching to `air lease`**, effective the next time Air is built there (owner,
-2026-08-29). Their `make land` stays theirs — see the landing note above; this is the lease store
-only. Note the ordering trap on their side and anyone's: `air lease status` only names its store
-in a build that has that change, so a repo checking with an older binary sees nothing new and
-concludes wrongly. A tool is only true where it is installed.
-
-`air lease` itself stays. The 2026-08-24 audit proposed deleting it on zero rows in this repo's
-ledger, and the adopter's round contradicted that: a worker read `air lease status`, saw `runtime`
-held by a peer, and took different work rather than routing around it (owner ruling 2026-08-29;
-`decisions.md`). A verdict from an absence in one repo is not a verdict about a mechanism.
-
-**The adopter's repo is theirs to change.** Air's part is this procedure and saying where its own
-store is; the collapse is their call, and the finding was sent to them rather than committed to
-their tree.
-
-## 3. Rules to change in the repo (prose that Air replaces or that is wrong)
-
-| Today | Change to | Why |
+# Adopting Air in a repository
+
+This covers installing Air into a repo, configuring it, and upgrading it. How the fleet works
+(claiming, closing, the verification lane, landing) is in `.air/roles.md`, which Air writes
+into the repo and gives every session at start. This file does not restate it.
+
+## Install
+
+You need git 2.38 or later, tmux, Claude Code, and bd 1.2.2 (`brew install beads && brew pin
+beads`). Build Air from its checkout with `cargo install --path crates/cli` and check that
+`which air` is that binary. Then run `air doctor`: it compares bd against the pinned version,
+checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.
+
+In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs
+`git init` if needed and `bd init --skip-agents --skip-hooks`, adds `.air/` to `.gitignore`, and
+writes `.claude/air.json` with deny patterns proposed from a scan of the repo. It also writes
+the hooks, `.mcp.json`, `.air/roles.md`, the `air-*` skills, a `Makefile` with a `verify`
+target, a `.worktreeinclude`, and a `CLAUDE.md` stub. It creates each only when absent and
+never edits one, so re-running it is safe.
+
+In a repo that already has its own setup, run `air install` to read what it would do and `air
+install --write` to apply it. It merges `air hook` into every hook event in
+`.claude/settings.json`, adds the `air` server to `.mcp.json`, and writes `.air/roles.md` and
+the `air-*` skills. Add `.air/` to `.gitignore` yourself. Commit `.mcp.json`: the coordinator
+runs in a worktree and needs the channel server there.
+
+Air does not install bd's agent setup, because `bd prime` tells agents to run commands Air
+denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, delete that
+entry from `.claude/settings.json`.
+
+Then record the first green and start the fleet:
+
+    air record verify -- make verify
+    air coordinator                                   # tmux session <project>-coordinator
+    air lane --tmux                                   # the verification lane; only it lands
+    air worker --tmux --task "<a complete task>"      # worker-1, worker-2, …
+
+A session started before the install has no hooks and no channel. Restart it through these
+launchers.
+
+## What the repo provides
+
+A verify command. Air records its exit code, and the close gate reads that record. The
+`verify` target `air init` writes exits 1 until you replace it with the repo's real check, so
+a placeholder can never record a green. Run the verify three times at one commit before you
+rely on it: `air record` flags runs that disagree at one sha, and a flaky test will hold closes.
+
+Claude Code's Bash tool stops a command after 10 minutes by default, and a verify killed that
+way records nothing. Set `BASH_MAX_TIMEOUT_MS` above your longest verify, or have the lane run
+its verify detached.
+
+Optionally, the repo also provides:
+
+- a precheck command, which workers run under a lane with `air record precheck -- <cmd>`;
+- a test-state reset the lane runs after a cut;
+- `"leases"` in `.claude/air.json` for commands that need a shared resource;
+- a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
+  copies into each new worktree.
+
+The repo's `CLAUDE.md` holds its domain rules, its verify and precheck commands, its worktree
+setup and its shared resources. It does not restate the protocol in `.air/roles.md`.
+
+## Configure: `.claude/air.json`
+
+This file is tracked, read from the main checkout, and never written by `air install`. Every
+key is optional.
+
+| Key | What it does | Default |
 |---|---|---|
-| `bd update <id> --claim` in worker rules | `air claim <id> [--files a,b]`; release with `air release <id> --reason …` | The launcher denies raw `--claim`; Air keeps the claim history bd does not |
-| `bd human <id>` (**[an adopter]** CLAUDE.md tells agents to run it 4×) | Delete. It does not exist in bd 1.2.x; it prints help and no-ops | Replace with `air capture "<question>"`; the coordinator files a bead labelled `owner` with its recommendation, and those beads are the owner's queue (air-uef) |
-| `make note` / a tracked intake file (**[an adopter]** `intake.jsonl` dirtied main and blocked `make land`) | `air capture "<one line>"` | `.air/` is gitignored; capture never touches a tracked file |
-| Workers file beads | Workers never run `bd create` (denied). Coordinator: `air inbox` → `bd create --validate --estimate <min>` → `air triage <id> --bead <new>` | bd `--validate` refuses a task/feature without `## Acceptance Criteria`, a bug without that and `## Steps to Reproduce`, an epic without `## Success Criteria` (roles.md has the sourced list) |
-| Per-worktree `settings.local.json` env (`BEADS_ACTOR`, `CARGO_TARGET_DIR`) | Set nothing in files; `air worker <name>` sets `BEADS_ACTOR=<name>`, `AIR_ROLE`, `AIR_PROJECT` and `AIR_ENFORCE` on the spawned process (air-9dg: they used to ride only in a `--settings` blob, and a second `--settings` replaced it silently). Add repo env via `air worker <name> -- --settings '{"env":{…}}'`: inline JSON is merged into Air's, one flag on the line, Air's four values winning; a `--settings <file>` in pass-through is refused. `air status` marks a worker whose hooks do not see `AIR_ENFORCE=1` as UNENFORCED | **[an adopter]** renamed worktrees kept old values: beads misattributed, `make test` built into another worktree's target dir, `make land` refused |
-| `scripts/lease.sh` / `make lease-*` | `air lease take|release|status|break [<resource>]`; resources: `runtime` (ports, device, Docker), `:8080`, `simulator`, `chrome`, … | Same semantics (worktree identity, pid liveness, stale heartbeat), plus dead-holder attention pushed to the coordinator. Keep the make targets as aliases for one round |
-| Heartbeat cron that wakes the coordinator | Delete it. `air coordinator` attaches the channel; conditions arrive when they hold | `air status --attention` is the same list on demand |
-| `make fleet` (live agents, overlap) | Alias to `air status` / `air holdings` | One source; no drift between scripts |
-| `make verify` run bare | `air record verify -- make verify` (also `fitness`, `docs-check`, `precheck`) | The gate needs the fact; Air flags suspicious (under 2 s, silent), changed-command, dirty-tree, and refuses backgrounded runs |
-| Generated-files exclusion list duplicated in `land.sh` and `fleet.sh` **[an adopter]** | One file sourced by both | Drift |
-| "Verify is complete" assumed **[an adopter]** (jest silently skipped; a deleted generated `router.d.ts` silenced tsc) | Add a fitness check: verify invokes every test runner the repo has; land regenerates generated inputs before verify | Air records the exit honestly; completeness is the repo's |
-
-## 4. What Air now does that the repo's rules used to say
-
-| Prose rule | Machinery |
-|---|---|
-| "Say which checkout you are in" | Hook records `role` (main = coordinator, worktree = worker) on every session and event |
-| "Announce before touching a shared file" | `PreToolUse(Edit\|Write)` warns with the peer's name from the edit journal |
-| "Do not set awaiting_review without green" | Hand-over gate: green at HEAD, main merged, claim held, digest present (advisory; `AIR_ENFORCE=1` refuses) |
-| "Workers do not land, push, create beads, or leave the worktree" | Launcher deny list, held in every permission mode. Since air-8gj workers are started IN their worktree without `claude --worktree`, so they no longer see the harness's worktree refusals (the adopter: 455 in five days, 88% with no git token, none of them a write to main); the one denial left is Air's PreToolUse hook on an Edit/Write whose resolved path leaves the worktree |
-| "Coordinator does not commit on main" | Coordinator launcher denies `git commit`/`git push` |
-| "Check on the fleet every N minutes" | Channel push: idle/silent/gone with a claim, hand-over not green, inbox waiting, owner decision waiting, lease held by a dead or stale session |
-| "The owner merges every green branch at the end of the round" | Landing is the verification lane's (`air lane`; air-jc2p.2): `air land` is refused to workers and the coordinator, and the owner's own shell may still run it. A branch is landable when it carries a recorded green at a head containing `main`. **Which command does it stays the repo's** (air-97z): a repo with its own lander keeps it, and `air land <bead>` / `air land --all` is there for one that has none (air-3pz) |
-| "Close the landed beads one by one" | `air close <id>… --reason "<why>"`: one `bd` process for the whole pass, and the matching claims released in one ledger transaction. `bd` costs ~1.4 s per process here whatever it is asked, so the count of processes IS the cost (air-869) |
-| "Do not set awaiting_review without green" (advisory) | Refused, not advised: worker launches set `AIR_ENFORCE=1` and the hook denies the `bd` write, naming the fixing command (air-i59) |
-| "Say which fleet a pane belongs to" | tmux sessions and Claude session names (`claude --name`, what `ListAgents` shows) are `<project>-<name>`, and names carry the role: `worker-<N>`, `lane`, `coordinator` (air-5lg, air-jc2p.4). `<project>` is `"project"` in `.claude/air.json`, else the beads prefix; a launch whose tmux session name another checkout already uses is refused, naming that checkout. Existing `w<N>` worktrees keep working as workers |
-| "Say why the tracker feels slow" | Event lines carry `bd_ms`/`bd_calls` when the command shelled out to bd, and `air status` prints the median cost of one bd process (air-869) |
-| "A bead awaiting the owner is labelled `human`" | The label is `owner`; `human` is presence and gates nothing. See §5b before upgrading a repo that used `human` (air-5hw) |
-
-Delete the prose once the machinery is installed (CLAUDE.md rule: machinery over Markdown).
-
-## 4a. Your repository is never named in Air's
-
-Air is developed alongside the repositories that adopt it, and everything it learned came from
-one of them. None of that arrives in Air's tracked text under your name (air-bpj, owner ruling
-2026-09-06): Air's prose says **"an adopter"**, an incident keeps its date, its count and Air's
-own bead id, and your name, your paths, your bead ids and anything that quotes your files live
-in an ignored `private/` directory on the machine that wrote them. `make verify` runs
-`air adopter-check`, which reads the names from `private/adopters.md` and refuses a tracked
-line that matches one; it skips cleanly where that file does not exist. Nothing is deleted,
-because a mechanism whose evidence has been thrown away is a mechanism nobody can retire.
-
-## 5. Keeping the integration current
-
-- **Air version**: `air selftest` after every `cargo install`; every check proves it fires.
-  `air doctor` shows the ledger version (schema migrates forward automatically), and both it
-  and `air status` print one line when `.air/installed.json` lags the binary the hooks run
-  (air-d61: the versions, the unread notice count, `air install --write`). When Air's own
-  surface has moved — new commands, changed `--json` shapes, a default that became a refusal —
-  §5c is the checklist to run, §5a the detail behind it, and `air install` prints the diff.
-- **Repo changes**: a new publish or destructive target goes into `.claude/air.json` deny
-  patterns; a new exclusive resource is just a new lease name; a new digest location is
-  `digest_dir`.
-- **Claude Code upgrades**: `air worker <name> --print` shows the exact `claude` invocation;
-  if a flag is rejected, that line is the bug report.
-- **bd upgrades**: Air uses only `update --claim --actor`, `update -s`, `list/show/ready
-  --json`, `comment`, `close`. Anything else bd adds is not assumed. Run `air doctor` after
-  every bd upgrade; a version or a schema it refuses is reported before any gate sees it.
-- **Air owns the loop; the repo owns the craft.** A worker reads both `.air/roles.md` (claim,
-  verify, hand over, capture) and the repo's CLAUDE.md (domain rules). Keep domain rules out of
-  roles.md and loop mechanics out of CLAUDE.md.
-- **A role carries its drive, not just its commands.** **[the adopter §9]** A worker that knows
-  `air claim` and `air handover` but is not told "work it to completion now" claims and waits.
-  roles.md opens the Worker section with the run-to-completion loop; the launch prompt should
-  also be a complete task, not a bead id.
-- **bd's agent setup is not installed.** `air init` runs `bd init --skip-agents --skip-hooks`:
-  no AGENTS.md, no `bd prime` SessionStart hook. `bd prime` injects a command reference that
-  tells agents to `bd update --claim` and `bd create`, which Air denies; Air's roles text is
-  the only agent-facing instruction. **[an adopter]** `air install` reports a leftover
-  `bd prime --hook-json` hook as `STALE HOOK` on every run until it is gone (air-b5k); delete
-  the entry it names.
-- **Air records friction it did not cause.** `PermissionDenied` and `PostToolUseFailure` hooks
-  log, per worker, the tool, the command, and who or what refused, so the repo's own guards
-  and declined prompts land in the same event stream as Air's.
-- **Hooks are quiet unless actionable, and quiet unless changed.** A human reads every line
-  a Stop hook prints. Air's hooks say nothing on the ok path (the event line records it), speak
-  once when a gap appears, and again only when something moved (HEAD, the set of missing
-  checks, a new verify run; for peer warnings, the set of peers on that path). A blocked
-  worker is not nagged every turn about a blocker it cannot clear. **[an adopter, 2026-08-21]**
-  The channel applies the same rule (new or escalated conditions only). **[the adopter §9]** "handover ok" on every turn was noise in a happier
-  costume; fixed 2026-08-21.
-- **Sessions started before install** have the CLI but no channel and no hooks; restart them
-  through `air coordinator` / `air worker`.
-- **Round review**: `jq` over `.air/events/*.ndjson` and `air status --json`; `air audit` says what
-  each mechanism counted. What still had to be relayed by hand is the next thing Air builds.
-
-## 5a. Upgrading an existing installation (Air's own surface moved)
-
-Releases are cut per round (air-mir, owner 2026-09-06): a change that alters the surface
-appends a notice to `SURFACE` and nothing else; the coordinator appends one `RELEASES` row at
-round end covering every notice since the last, and `make release` runs `air release-check`,
-which refuses until the notice count and `Cargo.toml` agree with that row. So a repo sees
-notices arrive in batches, one release per round, rather than one release per notice.
-
-§5 keeps the integration current against *bd* and *Claude Code* upgrades. This is the other
-direction: **Air changed under a repo that already has it installed.** That happened for the
-first time on 2026-08-22, when one round added two commands, changed a JSON shape, turned a
-warning into a refusal, and redefined a label — under the adopter, which had Air installed and
-was told none of it (air-6g1).
-
-**Running an upgrade rather than reading about one? §5c is the checklist, top to bottom.**
-This section and §5b are the detail behind its steps.
-
-### The one command
-
-    air install            # dry run: prints the SURFACE DIFF, writes nothing, exits 0
-    air install --write    # applies, and records that this repo has been told
-
-`air install` was always a dry run. It now also answers "what moved since this repo last
-installed Air": a list of surface changes, each with what to do about it, and `!!` against the
-ones that **change behaviour without erroring** — the ones a repo discovers by getting a wrong
-answer rather than a stack trace.
-
-The baseline lives in `.air/installed.json`, written by `--write`:
-
-```json
-{ "air_version": "0.0.1", "installed_at": "…", "surface": ["land", "close", "…"] }
-```
-
-The diff is computed against those recorded **ids**, not against `air_version`. A version
-string does not move on its own, so a comparison keyed to one reports nothing the first time
-somebody forgets to bump it, which is the same silence this section exists to end. Adding an
-entry to `SURFACE` in `crates/cli/src/cmd/install.rs` is the whole job: every repo installed
-before it then sees it, and `air selftest` proves an older recorded surface produces a
-non-empty diff and a current one produces nothing.
-
-A repo with no `.air/installed.json` and no Air wiring is a **first install**, not an upgrade,
-and gets no diff: nothing has changed under a repo that never had Air.
-
-### What `air install --write` re-runs safely
-
-| | |
-|---|---|
-| `.claude/settings.json` | Merges the `air hook` entries (`hook_entries()`; nine as of 2026-08-22). Idempotent, and other hooks, permissions and settings are preserved — proved by `merge_hooks_is_idempotent_and_preserves_others` |
-| `.mcp.json` | Adds the `air` server; leaves other servers alone |
-| `.air/roles.md` | **Overwritten** with the version embedded in the binary. Never hand-edit it; it is `include_str!` of `docs/rules/roles.md` and a test asserts the two are identical |
-| `.claude/skills/air-*/SKILL.md` | **Overwritten**, same reason: coordinator procedures are versioned with `air` |
-| `.air/installed.json` | Rewritten with the current surface |
-
-### What it will never touch
-
-`.claude/air.json` (yours: `digest_dir`, deny patterns), `.gitignore` (it advises, you edit),
-the ledger and its events, anything under `.beads/`, and every other file in the repo. It also
-refuses to write at all when the `air` on `PATH` is not the binary being run, so a stale
-install cannot quietly wire a repo to a different Air.
-
-### Order of operations for an upgrade
-
-1. `cargo install --path crates/cli` in the Air checkout; `which air` must be that binary.
-2. `air selftest` — every check proves it fires — then `air doctor`.
-3. In the target's main checkout, `air install` and **read the surface diff**. Do the `!!`
-   items first: those are the ones that are already wrong and not saying so.
-4. `air install --write`.
-5. Restart every agent session. Sessions started before the upgrade hold the old roles text
-   and the old hooks; they do not pick it up.
-
-### Anything the diff cannot know
-
-The surface diff reports what Air changed. It cannot know what the *repo* built on top —
-scripts parsing `air … --json`, make targets wrapping `air` commands, prose in CLAUDE.md
-naming a flag. Grep for `air ` in the repo's Makefile, `scripts/`, and CLAUDE.md after every
-upgrade; that is a judgement call Air does not have the standing to make.
-
-## 5b. Migration: `human` → `owner` (a repo that used `human` as its gate)
-
-Air's authority label is `owner` (2026-08-22, air-5hw). Two words, two meanings: `human` is
-about **presence** (a person is in the loop and can watch and type into every session);
-`owner` is about **authority** (a worker may not decide or finish this). `air claim` refuses a
-bead labelled `owner`, and `human` now gates nothing.
-
-**This is the dangerous one.** A repo that used `human` as its gate does not get an error when
-it upgrades. Its owner queue simply stops being fenced: beads that were held back become
-claimable, and workers start finishing decisions that were the owner's. The adopter is exactly
-that repo — its `make ready` is `bd ready --exclude-label owner,runtime,human`
-(`private/research/adopter-as-built.md:91`, citing its `Makefile:395-411`), and its beads and
-CLAUDE.md read `human` as the gate.
-
-### The transition, in order
-
-**Exclude both labels for the whole migration.** Nothing unfences mid-flight, and the order
-below stops mattering:
-
-    bd ready --exclude-label owner,runtime,human      # keep `human` here until step 4
-
-1. **Makefile `ready` target** — already excludes both if it looks like the adopter's. Leave it
-   alone until the end. A repo excluding only `human` adds `owner` *first*, before anything
-   else.
-2. **CLAUDE.md label list** — document both: `owner` is the gate, `human` is being retired.
-3. **Existing beads** — relabel. `bd list --label human --json` finds them; each one is either
-   a real owner gate or was never a gate at all, which is the common case and the reason the
-   word rotted. Several ids in one process:
-
-       bd update <id> <id> … --add-label owner
-
-   `--add-label` is repeatable and `--remove-label` is its companion (verified against bd
-   1.2.2; `bd update [id...] [flags]`). `bd label add <id> <id> … owner` is equally valid and
-   is *not* used here only because its argument order reads correctly either way to a skimmer.
-   `-l` is **not** valid on `bd update` and is silently dropped — it belongs to `bd create`.
-   One process rather than one per bead is the difference between a second and most of a
-   minute on a 27-bead queue (air-869). The adopter's own triage note has a category C
-   for beads that "carry `human` but need no owner ruling — ordinary agent work"
-   (`human-queue-triage.md`), and 27 of 152 beads in one 11-hour round carried
-   `human`/`owner` (`adopter-as-built.md:204`).
-4. **Only when `bd list --label human` is empty**: drop `human` from the exclude list and from
-   CLAUDE.md.
-
-### Do not skip step 3 by relabelling in bulk
-
-`human` was applied to two different things. Copying every `human` onto `owner` moves the rot
-across rather than clearing it, and makes the owner queue longer than it ever needed to be.
-Read each one.
-
-## 5c. The transition checklist (run this top to bottom)
-
-For a repo already running an older Air. **This section is the order**; §5a explains what
-`air install` does and §5b explains the label migration, but neither has to be read first.
-Everything below is run by the owner, in the target repo, except where it says otherwise.
-
-Written for the adopter as the first customer (air-5tu). Every adopter-specific fact here is
-cited from this repo's `private/research/adopter-as-built.md`; nothing in this repo reads or
-writes that fleet.
-
-### Before anything: five checks, and what skipping each costs
-
-These come first because `air install --write` cannot answer them and will not warn you.
-
-Every command below has been run against bd 1.2.2 and its **argument order** checked, not only
-its flag names. Those are two different claims, and a checklist is read under time pressure by
-someone who will not notice that `bd label add owner <ids>` parses `owner` as the first issue
-id — its real usage is `bd label add [issue-id...] [label]`, label **last**. Where a form reads
-correctly either way to a skimmer, this section uses the one that names its argument
-(`bd update <ids…> --add-label owner`) even when the other is also valid.
-**[an adopter, 2026-08-22]** that exact inversion was sent and caught before it ran; it would
-have applied a bead id as a label to eight real beads.
-
-**1. Does anything parse `air inbox --json` as a bare array?**
-
-It now returns `{"captures": [...], "landings": [...]}` — with **or without** `--owner`. A
-caller that indexes the top level as a list does not error. It reads zero captures and reports
-an empty queue.
-
-```sh
-# in the target repo
-grep -rn "air inbox" --include=Makefile --include=*.sh --include=*.py --include=*.js .
-```
-
-For each hit, look at what consumes the JSON: `[0]`, `.[]`, `len(...)`, `for x in ...`, or a
-jq filter starting `.[]`. Each becomes `.captures[]` or `["captures"]`.
-
-*Skipping it:* the owner queue silently reads empty. Decisions that were waiting stop being
-reported, and nothing anywhere says so. **This is the only check here whose failure produces no
-signal at all**, which is why it is first: 2 shows up as a bead being offered and then refused,
-4 as a target going red, 3 as a visibly wrong `bd list`, 5 as agents told to run denied
-commands. This one produces a shorter list and no error.
-
-**2. Does the repo's ready target exclude `owner`?**
-
-```sh
-grep -n "exclude-label" Makefile
-```
-
-Check for the **new** label, not just that the old one is still there. A repo that never had
-`owner` in its filter is the dangerous case, because its owner-fence rests entirely on a label
-that nothing gates on after the upgrade.
-
-**[an adopter, 2026-08-22]** this is not hypothetical. `adopter-as-built.md:91` recorded
-`--exclude-label owner,runtime,human` from its `Makefile:395-411`, but by the time of the
-migration its `make ready` (`Makefile:464`) filtered `human,runtime,research` and excluded
-`owner` **not at all**. Read the Makefile as it is now; a recorded reading from a previous
-round is not the current state.
-
-*Skipping it:* the moment Air's gate becomes `owner`, beads held back for the owner's decision
-become claimable, and workers start finishing decisions that were never theirs.
-
-*What actually degrades, measured 2026-08-22, and it is three surfaces rather than one:*
-`air claim` refuses an `owner` bead as soon as the label is applied, so that fence works
-immediately. Raw `bd ready` lists the unfenced beads, because the exclusion lives in the
-repo's own target and not in bd. And the Stop hook's offer list **does not degrade at all** if
-`.air/ready.json` predates the relabel: the hook reads that cache rather than bd, and a stale
-cache is still offered, annotated `(ready list may be stale)` — verified in
-`crates/hooks/src/gate.rs`, `stop_nudge`. So a worker can be handed an `owner` bead by the
-Stop hook and refused by `air claim` in the same minute, which reads as Air contradicting
-itself and is really one stale file.
-
-**3. Which `human` beads are real owner gates?**
-
-```sh
-bd list --label human --json
-```
-
-Read each one. The adopter's own triage note records a whole category that "carries `human` but
-needs no owner ruling — ordinary agent work", and 27 of 152 beads in one 11-hour round carried
-`human`/`owner` (`adopter-as-built.md:204`).
-
-*Skipping it:* relabelling in bulk moves the rot onto `owner` instead of clearing it, and the
-owner queue stays permanently longer than it needs to be.
-
-**4. Does the repo's own label vocabulary include `owner`?**
-
-Wherever the repo documents its labels — an intake guide, CONTRIBUTING, CLAUDE.md, a lint
-fixture:
-
-```sh
-grep -rn "runtime" --include=*.md docs/ CLAUDE.md 2>/dev/null   # find the list, whatever it is called
-```
-
-Add `owner` to it **before** relabelling any bead.
-
-*The symptom, so it is recognisable when it happens:* a fitness, lint or docs-check target
-starts failing with **"undocumented label"** on several beads at once, immediately after a
-relabel that itself looks fine. It is a green-to-red with nothing to do with the labels'
-meaning.
-
-**[an adopter, 2026-08-22]** exactly this. It had *retired* `owner` from its documented list on
-2026-08-21 when it consolidated on `human`, so adding `owner` to nine beads broke
-`make fitness` and produced four undocumented-label failures at once. Fixed by putting `owner`
-back in its `docs/guides/intake.md`.
-
-**5. Is the stale `bd prime --hook-json` hook still in `.claude/settings.json`?**
-
-`air install` (dry run or `--write`) answers this: a leftover entry prints as
-
-```
-STALE HOOK: SessionStart runs `bd prime --hook-json`, which contradicts Air
-        do: `bd prime` injects a command reference telling agents to run `bd update --claim` ...
-```
-
-and keeps printing on every install until the entry is gone (air-b5k). The adopter had exactly
-one hook, `SessionStart → bd prime --hook-json` (`adopter-as-built.md:50`). `air install
---write` **merges**, so it adds Air's hooks alongside that one and leaves it in place; it will
-not remove another tool's hook. Delete the entry the report names. Only on an installer older
-than 0.2.13, which does not report it, fall back to `grep -n "bd prime" .claude/settings.json`.
-
-*Skipping it:* `bd prime` injects a command reference telling agents to run `bd update --claim`
-and `bd create`, both of which Air denies. Agents get instructions that contradict their deny
-list, and the failure looks like the agent being wrong.
-
-### The run, in order
-
-1. **In the Air checkout**, not the target: `cargo install --path crates/cli`, then
-   `which air` — it must be that binary. `air install --write` refuses if it is not.
-2. `air selftest` — every check proves it fires — then `air doctor`.
-3. Do the five checks above. Fix 2, 4 and 5 now; 1 can be fixed now or immediately after; 3
-   runs across the migration in step 7.
-4. **In the target repo**, `air install`. It writes nothing. Read the SURFACE DIFF: it lists
-   what moved since this repo last installed Air, with `!!` against changes that alter
-   behaviour without erroring. Do those first.
-5. `air install --write`. This records the baseline, so the next `air install` is quiet.
-6. **Restart every agent session** through `air coordinator` / `air worker <name>`. Sessions
-   started before the upgrade hold the old roles text and the old hooks and do not pick the
-   new ones up.
-7. Run the `human` → `owner` migration (§5b). Keep **both** labels excluded from `make ready`
-   for the whole migration so nothing unfences mid-flight; drop `human` only when
-   `bd list --label human` is empty.
-
-### Verify afterwards
-
-```sh
-bd list --label owner --json          # the gate's beads
-air status                            # sessions, claims, review waits, owner queue
-air audit                             # every mechanism, and what it costs
-```
-
-Three things to confirm:
-
-- **The owner queue is still fenced.** `air claim <an owner-labelled bead>` as a worker is
-  refused, naming the label. If it succeeds, step 7 is incomplete.
-- **The ready set is unchanged** except for beads you deliberately relabelled. Compare
-  `make ready` against what you noted in check 2.
-- **The owner queue is not empty by accident.** The owner-labelled count on the `ready:` line
-  of `air status` and, if any script reads it, that script's output too. This is check 1
-  coming back to be confirmed rather than assumed.
-
-### If it goes wrong
-
-`air install --write` writes exactly five things and nothing else: it merges into
-`.claude/settings.json` and `.mcp.json`, and overwrites `.air/roles.md`,
-`.claude/skills/air-*/SKILL.md`, and `.air/installed.json` (verified against
-`crates/cli/src/cmd/install.rs`, 2026-08-22; §5a has the table). It never touches
-`.claude/air.json`, the ledger, `.beads/`, or any other file.
-
-Of those, the two JSON files and the skills are tracked, so `git diff` shows precisely what
-changed and `git checkout --` reverts it; `.air/` is gitignored and holds nothing you would
-want back. Nothing here needs an uninstall path.
-
-## 6. Day one, in order
-
-`air coordinator` (its own worktree and tmux session; nobody works in the main checkout), then `air lane --tmux`. `air worker <name>` per worktree terminal (re-enters an
-existing worktree). Workers: `bd ready` → `air claim` → work → `git merge main` →
-`air record verify -- <cmd>` (or wait for the lane's green) → `bd close <id> --reason-file <proof>`, which the gate refuses without a recorded green at a commit containing `main`. Coordinator:
-reads `air status`, acts on channel events, triages every `air inbox` capture into a bead
-(labelled `owner` when the decision is the owner's), and lands by whatever path this repo lands by — its own `make land`, or
-`air land <bead>` / `air land --all` where there is none (air-3pz, air-97z). Upgrading a repo
-that already has Air: §5a.
+| `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
+| `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
+| `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix |
+| `verify_lane` | Names the lane. It puts the with-lane closing sequence in force, and when `air batch cut` is refused in the main checkout, the refusal names the lane's worktree from it. | absent: no lane sequence |
+| `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
+| `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
+| `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
+| `digests` | `true`: the close gate needs a digest naming the bead in the main checkout's `.air/digests/`. | `false` |
+| `digest_dir` | A repo path: the close gate needs a digest naming the bead there, tracked by git. Wins over `digests`. | none |
+| `journal_dir` | A repo path for session journals, tracked in the repo instead of `.air/journal/`. | none |
+| `metis` | `true`: `air coordinator` attaches Metis's MCP server. Workers never get it. If `metis` is not on `PATH` the launch prints one line and goes on. | `false`; `air init` writes `true` |
+| `metis_plugin_dir` | The `plugins/metis` directory of a Metis checkout, attached as a plugin as well. | none |
+| `adopters` | `true`: `air adopter-check` refuses when `private/adopters.md` is missing instead of skipping. | `false` |
+
+A repo with its own lease guard moves its patterns into `leases` and retires the guard. Two
+lease stores that disagree refuse commands while reporting success, so drain the old store
+(release every held lock) before switching, and move its directory aside rather than deleting
+it so a reader you missed fails loudly.
+
+To add environment variables to a worker, pass inline JSON: `air worker <name> -- --settings
+'{"env":{…}}'`. Air merges it into its own settings and its own four values win. A `--settings
+<file>` there is refused. `AIR_BD_TIMEOUT_MS` replaces Air's whole bd budget with one flat
+figure; leave it unset unless a bd call times out.
+
+## Upgrading an existing installation
+
+Air changes under a repo that already has it, so each release carries notices in
+`install::SURFACE`, and `air install` shows the ones this repo has not seen. Releases are cut
+once per round, so notices arrive in batches.
+
+1. In the Air checkout, `cargo install --path crates/cli`, then check `which air`.
+2. `air selftest`, then `air doctor`.
+3. In the repo's main checkout, run `air install`. It writes nothing and prints the surface
+   diff against `.air/installed.json`, each change with what to do. Changes marked `!!` alter
+   behaviour without an error; do those first.
+4. `air install --write`. It merges into `.claude/settings.json` and `.mcp.json`, and
+   overwrites `.air/roles.md`, `.claude/skills/air-*/SKILL.md` and `.air/installed.json`. It
+   never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/` or any other file,
+   and it does not delete a skill Air no longer ships. It refuses to write when the `air` on
+   `PATH` is not the binary being run.
+5. Restart every session. A running session keeps the old roles text and hooks.
+6. Grep the repo's Makefile, scripts and `CLAUDE.md` for `air ` and check each use against the
+   notices. Air cannot see what the repo built on top of it.
+
+Between upgrades, `air doctor` and `air status` print one line when `.air/installed.json` lags
+the binary the hooks run.
+
+After a Claude Code upgrade, `air worker <name> --print` shows the exact `claude` command line,
+which is the thing to check if a flag is rejected. After a bd upgrade, run `air doctor`.
+
+A repo that used the label `human` to hold beads for the owner must move to `owner`, the only
+label `air claim` refuses to workers. Exclude both labels from the repo's ready target, relabel
+each `human` bead that is really an owner decision (`bd update <id> … --add-label owner`), and
+drop `human` from the exclusion only when `bd list --label human` is empty. Read each bead
+rather than relabelling in bulk, since `human` was often used for ordinary work.
