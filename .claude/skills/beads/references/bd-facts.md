@@ -2,7 +2,11 @@
 
 This is the single reference for beads as Air uses it: what the pinned `bd` does and does not do, the ready and claim semantics Air's gate and status line depend on, the one shape of dependency bd lets through silently, what Gas Town built on the same store and what Air copied from it, and what leaving bd would cost. It lived at `docs/research/beads.md` until 2026-09-25, when `docs/research/` was retired and it moved beside the `beads` skill; the decision to use bd, pinned, is one line in `docs/design.md` §11. It was assembled on 2026-09-14 from four documents that it replaces: `docs/research/beads-and-gastown.md` (2026-08-17/18), `docs/research/bd-alternatives.md` (air-6hl, 2026-09-06), `docs/research/verification/ticks/2026-08-18-0300-bd-1-2-x-facts.md` (tick 0300, 2026-08-18) and `docs/notes/2026-09-06-bd-refuses-the-ancestor-edge.md` (air-btz, 2026-09-06). Each claim keeps the source and date it had there; where a number has moved since, the current one is stated with its own date. Nothing here was re-fetched from upstream on 2026-09-14 except what is marked so.
 
-**Pinned version: bd 1.2.2.** `bd --version` on this machine printed `bd version 1.2.2 (Homebrew)` on 2026-09-14, and the pin is `pub const BD_PINNED: &str = "1.2.2"` at `crates/cli/src/cmd/doctor.rs:13`, compared against `bd --version` at `doctor.rs:27-37`.
+**Pinned version: bd 1.3.0**, by owner ruling 2026-09-26 (Homebrew stable became 1.3.0 and the adopter is migrating to it). The pin is `pub const BD_PINNED: &str = "1.3.0"` in `crates/cli/src/cmd/doctor.rs`, compared against `bd --version`. Before that it was 1.2.2 (`bd version 1.2.2 (Homebrew)`, 2026-09-14), and most of what follows was measured on 1.2.2 and keeps that date.
+
+### Re-checked on bd 1.3.0, 2026-09-26
+
+The surface in `crates/bd/src/lib.rs` was run side by side on 1.3.0 (`bd version 1.3.0 (f45b249ce)`) and 1.2.2 (Homebrew) in two throwaway `bd init` repos. Same on both: `bd ready --json` is a bare array (1.3.0 orders oldest first, 1.2.2 newest first); `bd show <id> --json` is an array of one; `bd show <id> <id> zz-nope --json` omits the unknown id, prints it on stderr and exits 0; `bd show zz-nope --json` alone exits 1 with an `error` object on stdout; `bd list --status open,in_progress -n 0 --json` returns both statuses, a repeated `-s` still keeps only the last, and the default limit is still 50; `bd list --parent <id> --all -n 0 --json`; `bd update --claim --actor` is idempotent for the holder and exits 1 when another actor holds it, or when a pencilled assignee is on an open bead (1.3.0's message adds lease advice); `bd comment`; `bd close <id> <id> --reason --actor`, `--reason-file`, and closing a closed bead again (exit 0); `bd dep list <id> <id> --json`; `bd dep add` refusing a child's edge on its parent and on a dotted-id grandparent. Changed: `bd update <id> -s open -a ""` on a bead another actor holds `in_progress` is **refused** on 1.3.0 ("cannot reassign … held by "w1" (in_progress) … pass --force only if their claim is abandoned"), where 1.2.2 accepted it; that is `reopen_argv`, the one process `air release` makes, and it is filed in `docs/design.md` §10. Also changed: `bd create --parent A --deps <ancestor>` is now refused with "cannot be blocked by its ancestor". `bd create --graph` with flat ids and a relates-to link were not re-checked for blocking beyond a fresh two-bead case, where relates-to did not block `bd ready`.
 
 ## Headline findings
 
@@ -187,7 +191,7 @@ Two properties Air does not need: distributed sync (one machine) and graph editi
 
 ### Candidates
 
-Stay on bd 1.2.2. Correct today. It satisfies every property except the second half of item 8, and the per-process cost is paid outside hooks. Its known defects are on file with workarounds built: the assignee lock on open beads (`reopen_unassigned`, air-0kk), `bd show --json` dropping comment text and `bd list --json` omitting closed beads (round note items 47 and 48), `bd ready` excluding custom statuses (#5831). Cost of staying: zero. Risk: bd is one author's 225k-line Go project whose last stable release is a retraction of the one before it.
+Stay on bd 1.2.2. Superseded 2026-09-26 by the owner's ruling to pin 1.3.0; the paragraph below it is the 2026-09-06 reasoning. It satisfies every property except the second half of item 8, and the per-process cost is paid outside hooks. Its known defects are on file with workarounds built: the assignee lock on open beads (`reopen_unassigned`, air-0kk), `bd show --json` dropping comment text and `bd list --json` omitting closed beads (round note items 47 and 48), `bd ready` excluding custom statuses (#5831). Cost of staying: zero. Risk: bd is one author's 225k-line Go project whose last stable release is a retraction of the one before it.
 
 bd 1.3.0 when it leaves rc. Watch, do not adopt while it is an rc. It gives CAS and a single serving process (items 2 and 8). Against it: 28 in-place schema migrations on first run, a daemon in tension with item 7, and the 1.2.1 precedent. The re-read trigger is the stable tag.
 
@@ -203,7 +207,7 @@ A new backend writes a second `impl WorkLedger` (estimated 150 to 250 lines by a
 
 ### Verdict
 
-Stay on bd. Change nothing. Watch one thing.
+Stay on bd. Change nothing. Watch one thing. (2026-09-06. On 2026-09-26 the owner moved the pin to 1.3.0, now stable; the `bd serve` and CAS questions below are still open.)
 
 The integration is deep in the sense the owner meant, seven subcommands, thirteen trait methods, 751k recorded processes, but it is deep through one file and one trait, and that is the shape that makes it cheap to leave. The measured cost of staying is 1.4 s per process, paid outside every hook path, in a repo whose ledger records no failure caused by bd.
 
