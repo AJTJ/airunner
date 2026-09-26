@@ -11,6 +11,7 @@ pub mod capture;
 pub mod claim;
 pub mod close;
 pub mod decisions;
+pub mod delegate;
 pub mod doctor;
 pub mod gc;
 pub mod green;

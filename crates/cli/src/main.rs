@@ -474,7 +474,26 @@ fn foreign_repo(repo: &std::path::Path) -> Option<String> {
 }
 
 fn main() -> ExitCode {
+    // air-qyrm: before parsing, because the pin may know subcommands this binary does not.
+    cmd::delegate::maybe_exec();
     let cli = Cli::parse();
+    if let Some(from) = cmd::delegate::delegated_from() {
+        let repo = cli
+            .repo
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if let Ok((ledger, me)) = cmd::open(&repo) {
+            cmd::log_event(
+                &ledger,
+                &me,
+                cmd::decisions::PIN_DELEGATED,
+                &serde_json::json!({"from": from}),
+                "this repo is pinned; the air a shell found handed the command to the pin",
+                "1 invocation",
+            );
+        }
+    }
     // air-dwq5: before anything that needs a repo, because "what binary is this" is a question
     // about the binary and must answer outside a checkout too.
     if cli.version {

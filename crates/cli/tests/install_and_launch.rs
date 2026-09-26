@@ -1128,3 +1128,58 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
         serde_json::from_str(&std::fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
     assert_eq!(mcp["mcpServers"]["air"]["command"], "air");
 }
+
+/// air-qyrm: in a pinned repo, an `air` that is not the pin hands the command to the pin,
+/// whatever PATH order the shell produced. The 0.4.0 trial's sessions ran a 0.2.19 on PATH
+/// although the launcher put `.air/bin` first. The pin here is a stub that says it ran; this
+/// test binary is invoked by its own path, from the main checkout, from a linked worktree and
+/// with `--repo` from outside. `air install` runs where it was found. A pin that is a real copy
+/// runs once (no loop) and writes the `pin / delegated` line.
+#[cfg(unix)]
+#[test]
+fn a_pinned_repo_hands_every_air_to_its_pin() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let pin = repo.join(".air/bin/air");
+    std::fs::create_dir_all(pin.parent().unwrap()).unwrap();
+    std::fs::write(&pin, "#!/bin/sh\necho \"PINNED $*\"\n").unwrap();
+    std::fs::set_permissions(&pin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let wt = repo.join(".claude/worktrees/w");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["worktree", "add", "-q"])
+        .arg(&wt)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let outside = tempfile::tempdir().unwrap();
+    let run = |cwd: &Path, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+            .args(args)
+            .current_dir(cwd)
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(run(&repo, &["--version"]), "PINNED --version");
+    assert_eq!(run(&wt, &["status", "--json"]), "PINNED status --json");
+    let r = repo.display().to_string();
+    assert_eq!(
+        run(outside.path(), &["--repo", &r, "holdings"]),
+        format!("PINNED --repo {r} holdings")
+    );
+    assert!(!run(&repo, &["install"]).contains("PINNED"));
+
+    // A real copy as the pin: it runs the command itself rather than handing it on again.
+    std::fs::copy(env!("CARGO_BIN_EXE_air"), &pin).unwrap();
+    assert!(run(&wt, &["--version"]).starts_with("air "));
+    let events = std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(events.contains("\"decision\":\"delegated\""), "{events}");
+}

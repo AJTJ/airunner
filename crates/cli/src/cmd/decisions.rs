@@ -58,6 +58,7 @@ traces! {
     LAUNCH_REFUSE_INSTALL_UNCOMMITTED = "launch" / "refuse-install-uncommitted";
     FLEET_UP = "fleet" / "up";
     INSTALL_RETIRE_SKILL = "install" / "retire-skill";
+    PIN_DELEGATED = "pin" / "delegated";
 
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
     BATCH_CUT_DROP = "batch-cut" / "drop";
