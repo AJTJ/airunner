@@ -12,16 +12,20 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 bin="$here/target/release"
 [ -x "$bin/air" ] || { echo "trial: build first (cargo build --release -p air)"; exit 1; }
 
-# Clear the previous trial first, so `make trial` never collides with it: its Dolt server holds
-# a tmux session named `<project>-dolt`, which the new copy's server would also want. Only
+# Clear the previous trial first, so `make trial` never collides with it: its sessions are named
+# `<project>-*`, which the new copy's would also want. Only
 # copies this script made are touched: a directory under $TMPDIR named air-trial.* holding
 # minimal/ with a pinned air.
 for old in "${TMPDIR:-/tmp}"/air-trial.*; do
     [ -x "$old/minimal/.air/bin/air" ] || continue
     project=$(sed -n 's/^ *"project": *"\([^"]*\)".*/\1/p' "$old/minimal/.claude/air.json" 2>/dev/null | head -n 1)
-    if [ -n "$project" ] && tmux has-session -t "=$project-dolt" 2>/dev/null; then
-        tmux kill-session -t "=$project-dolt"
-        echo "trial: stopped the previous trial's tmux session $project-dolt"
+    # Every session of the old trial: its fleet as well as its Dolt server. A fleet left running
+    # on a deleted copy took the new fleet's session names once (0.4.9 trial, 2026-09-26).
+    if [ -n "$project" ]; then
+        for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep "^$project-"); do
+            tmux kill-session -t "=$s"
+            echo "trial: stopped the previous trial's tmux session $s"
+        done
     fi
     rm -rf "$old"
     echo "trial: removed the previous trial copy $old"
