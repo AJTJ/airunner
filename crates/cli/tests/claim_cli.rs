@@ -4147,15 +4147,17 @@ fn a_batch_green_still_covers_its_bead_after_main_moves_and_after_the_next_bead_
     std::fs::write(main.join("PROSE.md"), "coordinator prose\n").unwrap();
     git(&main, &["add", "PROSE.md"]);
     git(&main, &["commit", "-q", "-m", "docs: prose"]);
-    // Before merging it, the refusal is about main not being an ancestor and NOTHING else:
-    // the batch green is still the batch green.
+    // D1 (0.4.7 trial): before merging it, the close still passes. The bead is judged by its
+    // own commits, which the batch covers over the main it was recorded on; the head being
+    // behind main, with the next bead on top, is no reason to refuse. Before the fix this was
+    // a `main-merged` refusal. The ok line says where main is, not that the head contains it.
     let v = ask();
     let msg = v["message"].as_str().unwrap().to_string();
-    assert_eq!(v["pass"], false, "{msg}");
-    assert!(msg.contains("main-merged"), "{msg}");
-    assert!(!msg.contains("verify-green-at-head"), "{msg}");
+    assert_eq!(v["pass"], true, "{msg}");
+    assert!(msg.contains(&batch), "{msg}");
+    assert!(msg.contains(", main at "), "{msg}");
 
-    // Merge it, as the roles flow says to, and the close passes on the batch cut before it.
+    // Merging it changes nothing: the close passes on the batch cut before it.
     git(&alpha, &["merge", "-q", "main", "-m", "merge main"]);
     let v = ask();
     let msg = v["message"].as_str().unwrap().to_string();

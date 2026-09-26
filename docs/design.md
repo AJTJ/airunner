@@ -420,6 +420,15 @@ head: a merge would then bring in only work that has landed. The 0.4.6 live tria
 correct closes that way, each seconds after the worker's own batch landed. The green is still
 required.
 
+It also does not refuse a bead whose own commits are covered, whatever the head carries after
+them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when Air
+landed them and main still contains the merge, or when a recorded green contains all of them
+and the main it ran over (`batch::describe`, which the green check already reads). In the
+0.4.7 live trial a worker whose bead had just landed committed its next bead and was then
+refused as behind main; a worker keeps working while its last bead is verified (owner,
+2026-09-26). A bead with no trailer and no landing row gets the head check as before
+(`crates/hooks/src/gate.rs`, `bead_covered`).
+
 A green means a successful recorded run at the exact commit, or, if the repository matches by
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a
 batch commit that contains both the worker's commit and main also counts. That lets workers
