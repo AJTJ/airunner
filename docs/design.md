@@ -522,7 +522,14 @@ green, the exit and the kept output on a red, nothing on a kill), and air land q
 moved to <sha>: landed <beads>; files changed: <paths>" once per landing for every worktree's
 session except the main checkout, the lane and the session that ran it. A member's copy also
 says its beads may be closed, so a member gets one landing message. It asks for no reply
-(fanout.rs, main_moved; air-1vri.4). air land and a red batch's air record end with the branches
+(fanout.rs, main_moved; air-1vri.4). The coordinator gets two notices of its own. air capture
+queues "capture from <worker>: <first line>" for it once per capture, unless the capture was
+written in the coordinator's or the main checkout. The tick queues "the ready queue is empty:
+<n> worker(s) idle; epics with no open child: <ids or none>" when the claimable set is empty
+and a worker holds no claim. A bd cache row records that it was sent and is cleared when the
+set has a bead again, so it goes once per emptying. The epics are asked of bd only when it is
+about to be sent (fanout.rs, capture_to_coordinator and queue_empty; air-1vri.5). air land and a
+red batch's air record end with the branches
 batch-ready now and the next command, or with "nothing is batch-ready", and when the lane ran
 the command that output counts as telling it. air status prints two loop times from these rows
 for the last 24 hours: from batch-ready to the start of the batch verify that took the branch,
@@ -812,6 +819,9 @@ fans it out).
       (air-1vri.3)
 - [x] Tell the coordinator and every worker when air land moves main, with the beads and the
       files changed, once per landing (crates/cli/src/cmd/fanout.rs, main_moved). (air-1vri.4)
+- [x] Tell the coordinator at once when a worker captures, and once per emptying when the
+      ready queue is empty while a worker is idle (crates/cli/src/cmd/fanout.rs,
+      capture_to_coordinator, queue_empty). (air-1vri.5)
 - [ ] The next live trial shows batch-ready to its batch and batch green to close each under a
       minute plus the verify's own duration (the loops line in air status). (air-1vri.2)
 - [ ] The next live trial shows a bead fan-out and a fleet stop each reaching every intended

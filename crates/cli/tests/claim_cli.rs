@@ -593,6 +593,64 @@ fn a_capture_records_the_head_it_was_written_at() {
     assert!(!out.contains("no head"), "{out}{err}");
 }
 
+/// air-1vri.5: a worker's capture reaches the coordinator's channel once, and no one else's;
+/// the coordinator's own capture is not sent back to it.
+#[test]
+fn a_capture_is_delivered_to_the_coordinator_once() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let wt = tempfile::tempdir().unwrap();
+    let w1 = wt.path().canonicalize().unwrap().join("w1");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-w1",
+            w1.to_str().unwrap(),
+        ],
+    );
+    let (code, out, err) = air_env(
+        &w1,
+        &bd,
+        &["--json", "capture", "blocked on the schema\nmore detail"],
+        &[("AIR_ROLE", "worker")],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let id = serde_json::from_str::<serde_json::Value>(&out).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, out, err) = air_env(
+        &repo,
+        &bd,
+        &["capture", "a note to self"],
+        &[("AIR_ROLE", "coordinator")],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+
+    let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+    let rows: Vec<(String, String, String, String)> = conn
+        .prepare("SELECT to_worker, kind, key, content FROM deliveries")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let (to, kind, key, content) = &rows[0];
+    assert_eq!((to.as_str(), kind.as_str()), ("coordinator", "capture"));
+    assert_eq!(key, &id);
+    assert!(
+        content.starts_with("capture from w1: blocked on the schema ("),
+        "{content}"
+    );
+    assert!(!content.contains("more detail"), "{content}");
+}
+
 #[test]
 fn capture_inbox_triage_round_trip() {
     let dir = scratch_repo();

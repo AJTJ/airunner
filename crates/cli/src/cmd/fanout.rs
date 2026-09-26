@@ -124,20 +124,19 @@ pub fn fan_out_ready(
     told
 }
 
-/// The claimable ready list, refreshed from bd when the cache is older than a minute.
-fn ready_now(repo: &Path, at: &str) -> Vec<String> {
+/// The claimable ready list, refreshed from bd when the cache is older than a minute. `None`
+/// when bd did not answer and nothing was cached, so a silence is never read as "empty".
+fn ready_now(repo: &Path, at: &str) -> Option<Vec<String>> {
     let cached = super::ready_cache::read(repo);
     let fresh = cached
         .as_ref()
         .and_then(|c| super::status::seconds_between(&c.at, at))
         .is_some_and(|age| age < READY_REFRESH_SECS);
     if fresh {
-        return cached.map(|c| c.ids).unwrap_or_default();
+        return cached.map(|c| c.ids);
     }
     let bd = super::claim::bd_for(repo);
-    super::ready_cache::refresh(repo, &bd, at)
-        .or_else(|| cached.map(|c| c.ids))
-        .unwrap_or_default()
+    super::ready_cache::refresh(repo, &bd, at).or_else(|| cached.map(|c| c.ids))
 }
 
 /// One pass of every producer, after the coordinator's channel gathered `s`.
@@ -148,8 +147,155 @@ pub fn tick(repo: &Path, ledger: &Ledger, worker: &str, s: &Snapshot) {
     }
     let at = super::now();
     let ready = ready_now(repo, &at);
-    fan_out_ready(ledger, worker, s, &ready, &at);
+    fan_out_ready(ledger, worker, s, ready.as_deref().unwrap_or_default(), &at);
+    if let Some(ready) = &ready {
+        queue_empty(
+            ledger,
+            worker,
+            s,
+            ready,
+            &|| epics_to_decompose_now(repo),
+            &at,
+        );
+    }
     batch_ready_to_lane(ledger, worker, s, &at);
+}
+
+// ---------- the coordinator's two waits (air-1vri.5) ----------
+
+/// The coordinator's delivery name: its session's identity since air-jc2p.1.
+const COORDINATOR: &str = "coordinator";
+
+/// The bd cache key holding when the coordinator was last told the queue is empty, or `""`
+/// once the queue has had a bead again. It makes the notice once per emptying.
+const QUEUE_EMPTY_TOLD: &str = "fanout_queue_empty_told";
+
+/// What the coordinator reads when a worker captures: the first line; `air inbox` has the rest.
+pub fn capture_text(from: &str, id: &str, text: &str) -> String {
+    let first = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    format!(
+        "capture from {from}: {first} (`air inbox` has it in full; `air triage {id}` with \
+         `--bead <id>` or `--drop <why>` once decided)"
+    )
+}
+
+/// After `air capture` recorded capture `id`: tell the coordinator once. A capture written in
+/// the coordinator's checkout or the main one is the coordinator's or the owner's, and neither
+/// needs it pushed. Returns whether a message was queued.
+pub fn capture_to_coordinator(ledger: &Ledger, from: &str, id: &str, text: &str, at: &str) -> bool {
+    if super::hook::role_for(from) == "coordinator" {
+        return false;
+    }
+    let content = capture_text(from, id, text);
+    let queued = ledger
+        .enqueue_delivery(
+            &Outgoing {
+                to: COORDINATOR,
+                kind: "capture",
+                key: id,
+                subject: from,
+                content: &content,
+                supersede: false,
+            },
+            at,
+        )
+        .unwrap_or(false);
+    if queued {
+        super::log_event(
+            ledger,
+            from,
+            super::decisions::FANOUT_CAPTURE,
+            &json!({"id": id, "to": COORDINATOR}),
+            &format!("capture {id} from {from}; told the coordinator"),
+            "1 capture",
+        );
+    }
+    queued
+}
+
+pub fn queue_empty_text(idle: usize, epics: Option<&[String]>) -> String {
+    let epics = match epics {
+        None => "unknown (bd did not answer)".to_string(),
+        Some([]) => "none".to_string(),
+        Some(v) => v.join(" "),
+    };
+    format!(
+        "the ready queue is empty: {idle} worker(s) idle; epics with no open child: {epics}. \
+         File the next wave, or decompose one of those epics."
+    )
+}
+
+/// The ready epics with no open child, asked of bd now. Called only when the queue-empty
+/// notice is about to go out, so an ordinary tick pays nothing for it.
+fn epics_to_decompose_now(repo: &Path) -> Option<Vec<String>> {
+    let bd = super::claim::bd_for(repo);
+    let ready = air_bd::WorkLedger::ready(&bd).ok()?;
+    let mut v = Vec::new();
+    for e in &super::ready_cache::split(&ready).epics {
+        let kids = air_bd::WorkLedger::children(&bd, e).ok()?;
+        if let Some(d) = super::status::to_decompose(e, &kids) {
+            v.push(d.epic);
+        }
+    }
+    Some(v)
+}
+
+/// Tell the coordinator the claimable set is empty while a worker holds no claim: once per
+/// emptying, and not again until the set has had a bead. An empty set with every worker busy
+/// says nothing yet; it speaks when the first of them comes free. Returns whether a message
+/// was queued.
+pub fn queue_empty(
+    ledger: &Ledger,
+    worker: &str,
+    s: &Snapshot,
+    ready: &[String],
+    epics: &dyn Fn() -> Option<Vec<String>>,
+    at: &str,
+) -> bool {
+    let told = ledger
+        .bd_cache_get(QUEUE_EMPTY_TOLD)
+        .ok()
+        .flatten()
+        .is_some_and(|(v, _)| !v.is_empty());
+    if !ready.is_empty() {
+        if told {
+            let _ = ledger.bd_cache_put(QUEUE_EMPTY_TOLD, "", at);
+        }
+        return false;
+    }
+    let idle = without_claim(s);
+    if told || idle.is_empty() {
+        return false;
+    }
+    let epics = epics();
+    let content = queue_empty_text(idle.len(), epics.as_deref());
+    let queued = ledger
+        .enqueue_delivery(
+            &Outgoing {
+                to: COORDINATOR,
+                kind: "queue-empty",
+                key: at,
+                subject: &idle.join(" "),
+                content: &content,
+                supersede: true,
+            },
+            at,
+        )
+        .unwrap_or(false);
+    let _ = ledger.bd_cache_put(QUEUE_EMPTY_TOLD, at, at);
+    super::log_event(
+        ledger,
+        worker,
+        super::decisions::FANOUT_QUEUE_EMPTY,
+        &json!({"idle": idle, "epics": epics, "queued": queued}),
+        &content,
+        "1 emptying of the ready set",
+    );
+    queued
 }
 
 // ---------- the lane and its members (air-1vri.2) ----------
@@ -652,6 +798,123 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// air-1vri.5: the coordinator hears "the ready queue is empty" once per emptying while a
+    /// worker holds no claim, never while every worker is busy, and again after a refill.
+    #[test]
+    fn queue_empty_is_told_to_the_coordinator_once_per_emptying() {
+        use super::super::status::{Session, WorkerView};
+        let ledger = Ledger::open_in_memory().unwrap();
+        let worker = |name: &str, claims: &[&str]| WorkerView {
+            worker: name.to_string(),
+            role: "worker".to_string(),
+            claims: claims
+                .iter()
+                .map(|c| air_ledger::claims::Claim {
+                    bead: c.to_string(),
+                    worker: name.to_string(),
+                    claimed_at: String::new(),
+                    declared_files: Vec::new(),
+                    first_handover_at: None,
+                    last_handover_at: None,
+                    handover_attempts: 0,
+                    released_at: None,
+                    release_reason: None,
+                })
+                .collect(),
+            session: Some(Session::default()),
+            ..Default::default()
+        };
+        let busy = Snapshot {
+            workers: vec![worker("w1", &["zz-1"])],
+            ..Default::default()
+        };
+        let idle = Snapshot {
+            workers: vec![worker("w1", &[]), worker("w2", &["zz-2"])],
+            ..Default::default()
+        };
+        let epics = || Some(names(&["zz-9"]));
+        let step = |s: &Snapshot, ready: &[&str], at: &str| {
+            queue_empty(&ledger, "coordinator", s, &names(ready), &epics, at)
+        };
+        let told = || -> Vec<(String, String)> {
+            ledger
+                .conn()
+                .prepare("SELECT to_worker, content FROM deliveries WHERE kind='queue-empty'")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        // Empty, every worker busy: nothing yet.
+        assert!(!step(&busy, &[], "2026-09-26T10:00:00Z"));
+        // A worker comes free: told once.
+        assert!(step(&idle, &[], "2026-09-26T10:00:30Z"));
+        // Still empty: not again.
+        assert!(!step(&idle, &[], "2026-09-26T10:01:00Z"));
+        assert!(!step(&idle, &[], "2026-09-26T10:01:30Z"));
+        let rows = told();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, "coordinator");
+        assert_eq!(
+            rows[0].1,
+            "the ready queue is empty: 1 worker(s) idle; epics with no open child: zz-9. \
+             File the next wave, or decompose one of those epics."
+        );
+        // The coordinator's channel takes it; an undelivered one would be replaced instead.
+        assert_eq!(
+            ledger
+                .take_deliveries("coordinator", "2026-09-26T10:01:40Z")
+                .unwrap()
+                .len(),
+            1
+        );
+        // Refilled, then empty again: told again.
+        assert!(!step(&idle, &["zz-3"], "2026-09-26T10:02:00Z"));
+        assert!(step(&idle, &[], "2026-09-26T10:02:30Z"));
+        let rows = told();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.iter().all(|(to, _)| to == "coordinator"), "{rows:?}");
+        assert_eq!(
+            queue_empty_text(2, None),
+            "the ready queue is empty: 2 worker(s) idle; epics with no open child: unknown \
+             (bd did not answer). File the next wave, or decompose one of those epics."
+        );
+        assert!(queue_empty_text(1, Some(&[])).contains("no open child: none."));
+    }
+
+    #[test]
+    fn capture_notice_skips_the_coordinators_own() {
+        let ledger = Ledger::open_in_memory().unwrap();
+        let at = "2026-09-26T10:00:00Z";
+        assert!(!capture_to_coordinator(
+            &ledger,
+            "coordinator",
+            "c1",
+            "x",
+            at
+        ));
+        assert!(capture_to_coordinator(
+            &ledger,
+            "w1",
+            "c2",
+            "\n  first\nsecond",
+            at
+        ));
+        assert!(
+            !capture_to_coordinator(&ledger, "w1", "c2", "first", at),
+            "once"
+        );
+        let n: i64 = ledger
+            .conn()
+            .query_row("SELECT count(*) FROM deliveries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(
+            capture_text("w1", "c2", "\n  first\nsecond").starts_with("capture from w1: first (")
+        );
     }
 
     #[test]
