@@ -6,25 +6,16 @@ Multi-agent accountability and verification system. Lighter than air.
 
 ## Philosophy
 
-Do less. Most agentic systems try to do too much. The model knows how to do the work and keeps
-getting better at it, so Air does not tell agents how to write the code. It holds one opinion,
-on how to break work into beads, because a fleet goes wrong fastest when the work is badly cut.
-The rest is practical: a merge queue, a few checks, and help keeping a fleet of sessions running.
+Do less. Most agentic systems try to do too much. The models knows how to do the work and they keep
+getting better at doing it. Our goals are practical: transform goals into tasks, create a merge queue, spin up multiple sessions to work, and help keep the fleet of sessions running.
 
 ## The roles
 
-A fleet is three kinds of session. Each is a full Claude Code session, and each has one job.
+A fleet is three kinds of sessions. Each is a full Claude Code harness (other harnesses incoming), and each has one job.
 
-- **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into
-  beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it
-  free of implementation work means it is always available to you.
-- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree,
-  and closes it with proof. Separate worktrees mean workers never edit each other's files. The
-  default is three, because returns from more parallel agents fall off quickly beyond that.
-- **Verification lane** (`air lane`). It merges finished branches into a batch, runs your check
-  once for the whole batch, and lands the batch on `main`. It is the only session that moves
-  `main`. Checking once per batch costs far less than once per branch, and a single owner of
-  `main` means `main` only ever moves to a commit that passed.
+- **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it free of implementation work means it is always available to you.
+- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because returns from more parallel agents fall off quickly beyond that.
+- **Verification lane** (`air lane`). It merges finished branches into a batch, runs your tests suite/validation checks... once for the whole batch, and lands the batch on `main`. It is the only session that moves `main`. Checking once per batch costs far less than once per branch, and a single owner of `main` means `main` only ever moves to a commit that passed.
 
 ## What Air is
 
@@ -77,12 +68,12 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 ## Upcoming
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
-- Messaging between agents, managed by Air.
+- Notices from Air to the fleet: ready work, batch results, and stop.
 - Fleets spread across several machines, with every agent still working through Air.
 
 ## How to install it
 
-Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.2.2).
+Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
 
 ```sh
 cargo install --path crates/cli     # from a checkout of this repository
