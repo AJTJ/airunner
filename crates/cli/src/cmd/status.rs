@@ -246,6 +246,8 @@ pub struct Snapshot {
     /// How bd reaches its data here and, in server mode, whether the port answered.
     pub bd_mode: Option<super::bd_server::Mode>,
     pub bd_server_up: bool,
+    /// Who answers the port: a process that is not this project's server is not "up".
+    pub bd_listener: super::bd_server::Listener,
     /// The binary this repo is pinned to, when it is (air-4usc).
     pub pin: Option<super::install::PinState>,
     /// Rewound merges that some worktree still carries (air-ob0). A rollback un-lands a branch
@@ -2289,7 +2291,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         .collect();
     let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
     let loops = super::loops::measure(&ledger, &day_before(&at));
-    let bd_mode = super::bd_server::mode(&super::worktree::main_checkout(repo));
+    let bd_main = super::worktree::main_checkout(repo);
+    let bd_mode = super::bd_server::mode(&bd_main);
+    let bd_listener = super::bd_server::view(&bd_main, &bd_mode);
     Ok(Snapshot {
         main_checkout_sessions,
         at,
@@ -2321,7 +2325,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         install_lag: super::install::lag(ledger.dir()),
         fleet_stop: ledger.fleet_stop().ok().flatten(),
         bd_mode: Some(bd_mode.clone()),
-        bd_server_up: super::bd_server::view(&bd_mode),
+        bd_server_up: super::bd_server::is_up(&bd_listener),
+        bd_listener,
         pin: super::install::pin_state(ledger.dir()),
         // air-i6fd, third site: the parameter is named `main_head` and was fed the running
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
@@ -2587,7 +2592,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         ));
     }
     if let Some(m) = &s.bd_mode {
-        out.push_str(&format!("{}\n", super::bd_server::line(m, s.bd_server_up)));
+        out.push_str(&format!("{}\n", super::bd_server::line(m, &s.bd_listener)));
     }
     for w in &s.workers {
         let sess = w

@@ -93,10 +93,11 @@ pub fn answers(port: u16) -> bool {
 /// Who answers on the project's port. "Something answers" is not "the project's server is
 /// up": with Air's server down, bd started its own with an empty database on the same port,
 /// twice on 2026-09-26, and every bd command then saw an empty task store.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(tag = "listener", rename_all = "kebab-case")]
 pub enum Listener {
     /// Nothing answers.
+    #[default]
     None,
     /// A server whose data directory is this project's `.air/dolt/data`.
     Ours,
@@ -179,15 +180,21 @@ pub fn other_text(port: u16, main: &Path, what: &str) -> String {
 }
 
 /// One line for `air doctor`, `air status` and `air bd-server status`.
-pub fn line(m: &Mode, up: bool) -> String {
-    match m {
-        Mode::None => "bd: no .beads here".to_string(),
-        Mode::Embedded => "bd: embedded".to_string(),
-        Mode::Server { port: None, .. } => {
+pub fn line(m: &Mode, who: &Listener) -> String {
+    match (m, who) {
+        (Mode::None, _) => "bd: no .beads here".to_string(),
+        (Mode::Embedded, _) => "bd: embedded".to_string(),
+        (Mode::Server { port: None, .. }, _) => {
             "bd: server mode, but .beads/dolt-server.port is missing".to_string()
         }
-        Mode::Server { port: Some(p), .. } if up => format!("bd: server 127.0.0.1:{p}, up"),
-        Mode::Server { port: Some(p), .. } => {
+        (Mode::Server { port: Some(p), .. }, Listener::Ours | Listener::Unknown) => {
+            format!("bd: server 127.0.0.1:{p}, up")
+        }
+        (Mode::Server { port: Some(p), .. }, Listener::Other { what }) => format!(
+            "bd: server 127.0.0.1:{p}, NOT this project's ({what}); stop that process, then \
+             `air bd-server up`"
+        ),
+        (Mode::Server { port: Some(p), .. }, Listener::None) => {
             format!("bd: server 127.0.0.1:{p}, DOWN; `air bd-server up` starts it")
         }
     }
@@ -450,15 +457,24 @@ pub fn status_cmd(repo: &Path, json: bool) -> i32 {
                     other_text(*p, &main, what)
                 )
             }
-            _ => line(&m, up),
+            _ => line(&m, &who),
         },
     );
     0
 }
 
-/// Whether the configured port answers; false when there is none.
-pub fn view(m: &Mode) -> bool {
-    matches!(m, Mode::Server { port: Some(p), .. } if answers(*p))
+/// Who answers the configured port, judged as `air bd-server up` judges it; `None` when there
+/// is no port. For `air status` and `air doctor`, which said "up" for any process on the port.
+pub fn view(main: &Path, m: &Mode) -> Listener {
+    match m {
+        Mode::Server { port: Some(p), .. } => listener(main, *p),
+        _ => Listener::None,
+    }
+}
+
+/// Whether `who` counts as this project's server being up.
+pub fn is_up(who: &Listener) -> bool {
+    matches!(who, Listener::Ours | Listener::Unknown)
 }
 
 /// A free port for a new project's server, in 3400..3900, which keeps clear of bd's defaults
@@ -552,12 +568,15 @@ pub fn failed_text(why: &str) -> String {
 
 /// One keep-alive pass: nothing while the server answers or the project is not in server mode.
 /// When it is down, start it; tell the coordinator once that it was restarted, or once per
-/// outage that it could not be. `start` is the start to run, so the probe can pass its own.
+/// outage that it could not be. A port answered by another process is not restarted over: the
+/// coordinator is told once, as for a failed restart. `who` says who answers a port and `start`
+/// is the start to run, so the probe can pass its own.
 pub fn keep_alive(
     ledger: &Ledger,
     worker: &str,
     mode: &Mode,
     at: &str,
+    who: &mut dyn FnMut(u16) -> Listener,
     start: &mut dyn FnMut(u16, &str) -> Outcome,
 ) -> Option<Outcome> {
     let Mode::Server {
@@ -572,13 +591,20 @@ pub fn keep_alive(
         .ok()
         .flatten()
         .is_some_and(|(v, _)| !v.is_empty());
-    if answers(*port) {
-        if told {
-            let _ = ledger.bd_cache_put(OUTAGE_TOLD, "", at);
+    let o = match who(*port) {
+        Listener::Ours | Listener::Unknown => {
+            if told {
+                let _ = ledger.bd_cache_put(OUTAGE_TOLD, "", at);
+            }
+            return None;
         }
-        return None;
-    }
-    let o = start(*port, database);
+        Listener::Other { what } => Outcome::Failed {
+            why: format!(
+                "port {port} is answered by another process ({what}); Air started nothing"
+            ),
+        },
+        Listener::None => start(*port, database),
+    };
     let (content, trace) = match &o {
         Outcome::Started { port, session } => {
             let _ = ledger.bd_cache_put(OUTAGE_TOLD, "", at);
@@ -617,6 +643,7 @@ pub fn keep_alive_tick(repo: &Path, ledger: &Ledger, worker: &str) {
         worker,
         &mode(&main),
         &super::now(),
+        &mut |port| listener(&main, port),
         &mut |port, db| match bins() {
             Ok(b) => start(&main, &session, port, db, false, &b, START_WAIT),
             Err(why) => Outcome::Failed { why },
@@ -659,6 +686,47 @@ mod tests {
         );
         let meta = std::fs::read_to_string(m.join(".beads/metadata.json")).unwrap();
         assert!(!meta.contains("dolt_server_port"), "{meta}");
+    }
+
+    /// A port another process answers is "not ours" in status and doctor, and the keep-alive
+    /// starts nothing on it and tells the coordinator once (2026-09-26).
+    #[test]
+    fn a_port_someone_else_answers_is_not_up_and_not_started_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = Ledger::open_in(&dir.path().join(".air")).unwrap();
+        let m = Mode::Server {
+            port: Some(3999),
+            database: "zz".into(),
+        };
+        let other = Listener::Other {
+            what: "pid 1: dolt sql-server".into(),
+        };
+        assert!(!is_up(&other));
+        assert!(
+            line(&m, &other).contains("NOT this project's"),
+            "{}",
+            line(&m, &other)
+        );
+        let mut starts = 0;
+        for at in ["2026-09-26T10:00:00Z", "2026-09-26T10:00:30Z"] {
+            let o = keep_alive(
+                &l,
+                "coordinator",
+                &m,
+                at,
+                &mut |_| other.clone(),
+                &mut |_, _| {
+                    starts += 1;
+                    Outcome::Failed { why: "x".into() }
+                },
+            );
+            assert!(matches!(o, Some(Outcome::Failed { .. })));
+        }
+        assert_eq!(starts, 0);
+        let told = l
+            .take_deliveries("coordinator", "2026-09-26T10:01:00Z")
+            .unwrap();
+        assert_eq!(told.len(), 1);
     }
 
     #[test]
