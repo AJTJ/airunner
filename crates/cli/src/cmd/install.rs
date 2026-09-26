@@ -2430,6 +2430,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // an empty ready queue (air-1vri.4, air-1vri.5). 0.4.3's trial was stopped by the owner to
     // add them.
     ("0.4.4", 34, 123),
+    // 2026-09-26: the coordinator's own commits land with no bead, bd 1.3.0 pin, air reclaim,
+    // air bd-server and server mode for new projects. 0.4.4's trial found the first.
+    ("0.4.5", 35, 128),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
