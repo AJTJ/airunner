@@ -119,7 +119,11 @@ launcher with the lane's role. The coordinator launcher does the same in
 its own worktree, coordinator, always in a tmux session, with the channel attached; run again,
 it attaches to the session already running. Nothing is launched in the main checkout. The
 channel server comes from the tracked .mcp.json, so it is present in every worktree, and the
-ledger resolves to the main checkout's .air from any of them.
+ledger resolves to the main checkout's .air from any of them. Every launch approves that server
+in its own settings, so no session stops to ask whether to use it. Two start-up prompts
+remain, because Claude Code has no supported way to answer them: the folder-trust question,
+asked until the main checkout is trusted once, and the coordinator's development-channels
+warning. The coordinator launcher and air fleet up say once which to expect and the answer.
 
 Names carry the role and the project. Worktrees are worker-1, worker-2 and so on, lane, and
 coordinator, each on a branch named worktree- and the worktree's name. The tmux session and the
@@ -282,7 +286,7 @@ repository:
 ```
 AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air claude
   --append-system-prompt-file .air/roles.md
-  --settings '{"env":{...}}'
+  --settings '{"env":{...},"enabledMcpjsonServers":["air"]}'
   --name air-worker-9
   --disallowed-tools 'Bash(air land *)' 'Bash(air close *)' 'Bash(git push *)'
     'Bash(bd create *)' 'Bash(bd sync *)' 'Bash(bd update *--claim*)' 'Bash(claude *)'
