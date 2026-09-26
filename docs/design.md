@@ -789,15 +789,19 @@ Code sessions.
    `examples/minimal` to a scratch directory outside this repository, runs `air init --write`
    and `air install --write --pin` with that binary, sets `"verify_lane": true` in
    `.claude/air.json` (the fleet starts a lane, and the scenarios below assume the with-lane
-   sequence), and commits. The `air` on PATH, which the fleet building Air runs, is not touched;
+   sequence), commits, and copies the fixed scenario request, `scripts/trial/request.md`, to
+   `.air/trial-request.md`. The `air` on PATH, which the fleet building Air runs, is not touched;
    an `air` on PATH released after 0.4.0 hands every command in the copy to the pin (air-qyrm).
-2. In the scratch directory, check that `air status` names the pin.
-3. Start `air coordinator` and say yes to starting the fleet: the lane and three workers.
-4. Ask the coordinator to file the beads each scenario below needs, and let the fleet work. The
-   person running the trial only types what a scenario says to type.
-5. Record what happened: each scenario's outcome, every condition and refusal that fired, the
-   time taken, and anything that needed a person. Save `air status` and `air audit` at the end.
-6. File every defect as a bead. Do not fix anything during the trial. Stop every session and
+   It prints the next two steps.
+2. Start the coordinator with the fleet: `.air/bin/air coordinator --fleet` in the copy.
+3. Tell it to read `.air/trial-request.md` and do what it says. The request sets up every
+   scenario below and lets the fleet work; the person running the trial only types what a
+   scenario says to type. Change the request file, not the message, when a scenario changes.
+4. Wait until every bead is closed. The coordinator then writes one short report,
+   `.air/trial-report.md`: each scenario's outcome, and every workaround, refusal someone had to
+   get around, and anything confusing, from what the fleet saw. It spawns no agent to re-read
+   the log. Whoever runs the trial reads that report rather than re-deriving each outcome.
+5. File every defect as a bead. Do not fix anything during the trial. Stop every session and
    keep the scratch directory until the report is read.
 
 The release is tagged only if every scenario ends as expected.

@@ -1,7 +1,8 @@
 #!/bin/sh
 # `make trial` (air-4usc): prepare the live trial (docs/design.md §9.1). Copies examples/minimal
 # to a scratch directory outside this repo, adopts it with this tree's release build, and pins
-# that build into the copy with `air install --write --pin`. The `air` on PATH, which the fleet
+# that build into the copy with `air install --write --pin`, and copies in the fixed scenario
+# request (scripts/trial/request.md). The `air` on PATH, which the fleet
 # building Air runs, is not touched. Starts no session; it prints how to start one.
 #
 # Needs bd and claude on PATH, like `air init` itself. TRIAL_DIR picks the parent directory.
@@ -55,8 +56,13 @@ grep -q '"verify_lane": true' "$cfg" || { echo "trial: $cfg has no verify_lane";
 git add -A
 git commit -qm "Adopt Air, pinned to the candidate, with the verification lane"
 
+# The scenario request is fixed, so nobody rewrites it per run. .air is ignored by git.
+cp "$here/scripts/trial/request.md" .air/trial-request.md
+
 echo "trial copy: $repo"
 echo "pinned:     $("$repo/.air/bin/air" --version)"
-echo "start it:   cd $repo && .air/bin/air coordinator"
+echo "start it:   cd $repo && .air/bin/air coordinator --fleet"
+echo "then say:   Read $repo/.air/trial-request.md and do what it says."
+echo "report:     $repo/.air/trial-report.md, once every bead is closed"
 echo "Start with the pinned copy: an older air on PATH does not know about the pin and would"
 echo "start sessions without it. Every session Air starts there runs the pin."
