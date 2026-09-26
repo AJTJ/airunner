@@ -693,7 +693,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | Proof is a command's output, a `file:line` or a test; a remainder only the owner can do becomes a successor bead. | 2026-08-22 | `roles.md` |
 | Landing attributes beads by the `Bead:` trailers in the merged range; workers pull work, nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
 | An acceptance clause names what settles it and what changes; no regex checks it. | 2026-08-29 | `decomposition` skill |
-| bd is the task store, pinned at 1.2.2; Air wraps it and never watches it. | 2026-08-20 | `air claim`, `air doctor` |
+| bd is the task store, pinned at 1.3.0; Air wraps it and never watches it. | 2026-08-20 | `air claim`, `air doctor` |
 | Beads are created with `bd create --validate`, so bd checks that acceptance exists. | 2026-08-18 | bd |
 | An epic's end-to-end check comes before its children. | 2026-09-06 | `decomposition` skill |
 | One release row per round. | 2026-09-06 | `air release-check` |
@@ -910,8 +910,11 @@ Docs:
 
 - [ ] bd 1.3.0 left release candidate on 2026-09-15 (GitHub releases API, read 2026-09-25). Ask
       whether bd serve removes enough of the per-process cost to be worth a daemon, and whether
-      upstream compare-and-set lets the claims table stop being the authority. The pin is still
-      1.2.2. (Section 11.)
+      upstream compare-and-set lets the claims table stop being the authority. The pin moved to
+      1.3.0 on 2026-09-26 (owner ruling). (Section 11.)
+- [ ] `air release` on bd 1.3.0: `bd update <id> -s open -a ""` on a bead another actor holds
+      in_progress is refused ("cannot reassign … pass --force"), where 1.2.2 accepted it
+      (throwaway repos, 2026-09-26). `reopen_argv` needs a fix, likely `--force`, not yet tried.
 - [ ] Turn the two findings indexes about the adopter (`private/adopter-corpus/`) into beads.
       No bead names them yet.
 
@@ -927,7 +930,7 @@ section 8.1.
 |---|---|---|
 | Rust, one binary, no async runtime. Edition 2024 on stable, one error enum per crate, no anyhow in libraries, tests on in-memory SQLite and temporary git repositories with no sleeps and no network. | Air is installed into other repositories, so it ships as a binary and a target repo never depends on Air's build. The hook starts on every tool call and has a tenth of a second to answer. | CLAUDE.md, "Rust" and "Tests"; section 6.7 |
 | One SQLite file in WAL mode for current state, beside one NDJSON event file per day for history, both in the main checkout's .air and shared by every worktree. No daemon, no server. | One machine and many short-lived writer processes. With six writers the lock waited at most 131 ms (2026-09-06). Rows hold only what git and beads cannot rebuild, and nothing expires on a timer. | crates/ledger; section 6.7; section 8.1 |
-| beads (bd) is the task store, pinned at 1.2.2 and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so the pin is the only line upstream stands behind; Air's ledger does the compare-and-set that 1.2.2 lacks. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
+| beads (bd) is the task store, pinned at 1.3.0 (from 1.2.2 by owner ruling 2026-09-26, when Homebrew stable became 1.3.0) and checked by air doctor. Air calls it only as `bd --json` behind one trait, never from a hook. | It supplies the one thing Air cannot compute cheaply, a dependency-aware ready list, and an atomic claim. 1.2.0 and 1.2.1 were published by accident and 1.2.2 re-released the tested 1.1 code, so 1.2.2 was the only line upstream stood behind until 1.3.0, the first tested release off main (released 2026-09-15); Air's ledger does the compare-and-set. A bd process costs about 1.4 s (median over 751,673 processes, 2026-09-06). | https://github.com/steveyegge/beads/blob/main/docs/recovery/accidental-1-2-1-release.md (2026-08-17); crates/cli/src/cmd/doctor.rs:13; crates/bd/src/lib.rs; `.claude/skills/beads/references/bd-facts.md` |
 | Stay on bd rather than switch to beads_rust or a table of Air's own. Watch bd 1.3.0. | beads_rust is store-incompatible with bd and ships no library, so Air would still pay per process. A table of Air's own means building a work tracker, and the ledger records no failure caused by bd. bd 1.3.0-rc.1 (2026-08-31) adds leases, compare-and-set, and bd serve. 1.3.0 was released on 2026-09-15, and the re-ask is a TODO in section 10. | https://github.com/Dicklesworthstone/beads_rust (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/tags/v1.3.0-rc.1 (2026-09-06); https://api.github.com/repos/steveyegge/beads/releases/latest (2026-09-25) |
 | Gas Town is prior art, not a runtime. | It supervises with LLM agents, costs about $100 an hour, and was seen merging a pull request over failing integration tests. Air copied its batch-then-bisect queue and its rule to cross-check a heartbeat against the real process before calling anything stuck. | https://www.dolthub.com/blog/2026-01-15-a-day-in-gas-town/ (2026-08-17); https://github.com/steveyegge/gastown (2026-08-17) |
 | Claude Code is the harness. | Its deny rules hold in every permission mode, including bypass. Its PreToolUse hook sees a close before it runs, and exit 2 is the one outcome nothing overrides. Sessions stay interactive terminals the owner can watch. The gate itself ports to any harness with a pre-tool hook, such as OpenCode's tool.execute.before; Codex was not checked. | https://code.claude.com/docs/en/permission-modes (2026-09-05); https://code.claude.com/docs/en/hooks.md (2026-08-17); https://opencode.ai/docs/plugins/ (2026-08-24) |
