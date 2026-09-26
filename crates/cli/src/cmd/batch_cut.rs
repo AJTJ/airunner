@@ -33,7 +33,7 @@
 //!    a merge that fails with no conflicting paths stops the cut, because it is not the member's
 //!    doing (the adopter's exit 3, `lane-merge.sh:136-150`).
 //!
-//! Every drop is an event line (`command: batch-cut`, `decision: dropped`, the member, the
+//! Every drop is an event line (`command: batch-cut`, `decision: drop`, the member, the
 //! other side, the paths). An event line and not a ledger table: nothing reads drops back yet,
 //! and a table with no reader is the do-less failure. The table the fleet design asks for (docs/design.md §10) is
 //! added when a second red or a retry needs to be told from a first by a program.
@@ -348,9 +348,8 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         super::log_event(
             &ledger,
             &lane,
-            "batch-cut",
+            super::decisions::BATCH_CUT_REFUSE,
             &serde_json::json!({"dry_run": dry_run}),
-            "refuse",
             &why,
             "0 members",
         );
@@ -409,7 +408,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         }
     }
 
-    let (ready, _not, errors) = status::batch_ready_for(&ledger, repo);
+    let (ready, not_ready, errors) = status::batch_ready_for(&ledger, repo);
     for e in &errors {
         eprintln!("air batch cut: {e}");
     }
@@ -503,9 +502,8 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         super::log_event(
             &ledger,
             &lane,
-            "batch-cut",
+            super::decisions::BATCH_CUT_DROP,
             d,
-            "dropped",
             &format!(
                 "dropped from batch: {} at {} conflicts with {} at {} in {}",
                 d.worker,
@@ -517,12 +515,31 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
             &format!("{considered} member(s) considered"),
         );
     }
+    // The precheck requirement acts here: a branch the repo's `precheck` key kept out of this
+    // batch is one line, so `air audit` counts what the requirement cost (air-hqj8). The other
+    // not-ready reasons are the ordinary state of a branch still in work and write nothing.
+    for n in not_ready
+        .iter()
+        .filter(|n| n.check == "no-precheck" && n.worker != lane)
+    {
+        super::log_event(
+            &ledger,
+            &lane,
+            super::decisions::BATCH_CUT_NO_PRECHECK,
+            &serde_json::json!({"member": n.worker, "head": n.head, "dry_run": dry_run}),
+            &n.detail,
+            &format!("{considered} batch-ready member(s)"),
+        );
+    }
     super::log_event(
         &ledger,
         &lane,
-        "batch-cut",
+        if dry_run {
+            super::decisions::BATCH_CUT_DRY_RUN
+        } else {
+            super::decisions::BATCH_CUT_CUT
+        },
         &serde_json::json!({"dry_run": dry_run, "members": cut.members, "head": cut.head}),
-        if dry_run { "dry-run" } else { "cut" },
         &format!(
             "{} member(s), {} dropped",
             cut.members.len(),

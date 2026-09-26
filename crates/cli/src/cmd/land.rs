@@ -577,7 +577,14 @@ pub fn run(
         "beads": beads, "workers": workers, "all": all, "role": role, "repo_worker": worker
     });
     if let Err(msg) = may_land(role) {
-        log_event(&ledger, &worker, "land", &inputs, "refuse", &msg, "role");
+        log_event(
+            &ledger,
+            &worker,
+            super::decisions::LAND_REFUSE_ROLE,
+            &inputs,
+            &msg,
+            "role",
+        );
         emit(
             json,
             &serde_json::json!({"ok": false, "reason": msg}),
@@ -606,9 +613,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "land",
+            super::decisions::LAND_ERROR,
             &inputs,
-            "error",
             &msg,
             "selection",
         );
@@ -643,9 +649,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "land",
+            super::decisions::LAND_NONE_LANDABLE,
             &inputs,
-            "none-landable",
             &msg,
             &format!("{} branch(es) checked", sel.skipped.len()),
         );
@@ -665,9 +670,8 @@ pub fn run(
                 log_event(
                     &ledger,
                     &worker,
-                    "land",
+                    super::decisions::LAND_REFUSE,
                     &inputs,
-                    "refuse",
                     &msg,
                     "selection",
                 );
@@ -708,9 +712,8 @@ pub fn run(
             log_event(
                 &ledger,
                 &worker,
-                "land",
+                super::decisions::LAND_REFUSE_IN_FLIGHT,
                 &inputs,
-                "refuse-in-flight",
                 &msg,
                 &format!("{} verify(ies) in flight", flights.len()),
             );
@@ -732,9 +735,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "land",
+            super::decisions::LAND_DESPITE_INFLIGHT,
             &inputs,
-            "despite-inflight",
             &note,
             &format!("{} verify(ies) in flight", flights.len()),
         );
@@ -755,9 +757,8 @@ pub fn run(
         log_event(
             &ledger,
             &worker,
-            "land",
+            super::decisions::LAND_MAIN_READERS,
             &inputs,
-            "main-readers",
             &w,
             &format!("{} process(es) examined", readers.examined),
         );
@@ -811,9 +812,12 @@ pub fn run(
     log_event(
         &ledger,
         &worker,
-        "land",
+        if code == 0 {
+            super::decisions::LAND_LANDED
+        } else {
+            super::decisions::LAND_STOPPED
+        },
         &inputs,
-        if code == 0 { "landed" } else { "stopped" },
         &msg,
         &format!(
             "{} bead(s) merged, {} with clauses Air could not discharge",
