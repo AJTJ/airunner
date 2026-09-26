@@ -2196,6 +2196,12 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // question a checker would ask. Nothing here substitutes for a notice; the notices are the
     // notices. The round-end sweep is now part of the coordinator's review.
     ("0.3.5", 29, 82),
+    // 2026-09-25/26: the fleet protocol moved into Air (roles.md carries it; the adopting repo
+    // keeps its commands), the lane lands and has its own launcher, every role has a worktree
+    // and a role-named tmux session, the coordinator asks to start the fleet, and a repo can be
+    // pinned to its own binary. Twenty-nine notices, each written with its change; the sweep
+    // read every landing of the round against them.
+    ("0.4.0", 30, 111),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
