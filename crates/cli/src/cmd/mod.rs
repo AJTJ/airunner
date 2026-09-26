@@ -6,6 +6,7 @@ pub mod audit;
 pub mod batch;
 pub mod batch_cut;
 pub mod bd_latency;
+pub mod bd_server;
 pub mod budgets;
 pub mod capture;
 pub mod claim;

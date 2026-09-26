@@ -57,6 +57,10 @@ traces! {
 
     LAUNCH_REFUSE_INSTALL_UNCOMMITTED = "launch" / "refuse-install-uncommitted";
     FLEET_UP = "fleet" / "up";
+    BD_SERVER_STARTED = "bd-server" / "started";
+    BD_SERVER_FAILED = "bd-server" / "failed";
+    BD_SERVER_RESTARTED = "bd-server.keep-alive" / "restarted";
+    BD_SERVER_RESTART_FAILED = "bd-server.keep-alive" / "restart-failed";
     INSTALL_RETIRE_SKILL = "install" / "retire-skill";
     PIN_DELEGATED = "pin" / "delegated";
 

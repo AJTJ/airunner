@@ -111,7 +111,22 @@ enum FleetOp {
 }
 
 #[derive(Debug, Subcommand)]
+enum BdServerOp {
+    /// Start this project's Dolt server for bd if it does not answer: `dolt sql-server` on
+    /// 127.0.0.1 and the port in `.beads/dolt-server.port`, data in `.air/dolt/data`, in the
+    /// tmux session `<project>-dolt`. Does nothing for a project whose bd is embedded.
+    Up,
+    /// Which mode bd is in here and, for server mode, whether the port answers.
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
 enum Cmd {
+    /// The project's Dolt server for bd, when bd runs in server mode.
+    BdServer {
+        #[command(subcommand)]
+        op: BdServerOp,
+    },
     /// The fleet the coordinator works with: the lane and the workers.
     Fleet {
         #[command(subcommand)]
@@ -664,6 +679,10 @@ fn main() -> ExitCode {
         Cmd::Fleet {
             op: FleetOp::Resume,
         } => cmd::fleet::resume(&repo, cli.json),
+        Cmd::BdServer { op: BdServerOp::Up } => cmd::bd_server::up_cmd(&repo, cli.json),
+        Cmd::BdServer {
+            op: BdServerOp::Status,
+        } => cmd::bd_server::status_cmd(&repo, cli.json),
         Cmd::Hook => cmd::hook::run(&repo),
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),

@@ -97,7 +97,7 @@ pub fn session_name(project: &str, worker: &str) -> String {
 }
 
 /// `-L <socket>` when `AIR_TMUX_SOCKET` is set, so tests never touch the user's tmux server.
-fn socket_args() -> Vec<String> {
+pub(crate) fn socket_args() -> Vec<String> {
     match std::env::var("AIR_TMUX_SOCKET") {
         Ok(s) if !s.is_empty() => vec!["-L".into(), s],
         _ => Vec::new(),

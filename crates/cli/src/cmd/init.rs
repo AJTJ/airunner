@@ -176,7 +176,7 @@ struct Plan {
     claude: Option<String>,
     bd: doctor::BdCheck,
     gate_ok: bool,
-    beads: &'static str,
+    beads: String,
     /// The bead prefix: `--prefix` when given, else the directory name, which is bd's own
     /// default when init passes none (air-gn5o: init used to cut it to four letters).
     prefix: String,
@@ -479,7 +479,19 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     // bd list only answers inside an initialised workspace; before init, presence + version
     // is the gate.
     let bd_present = bd.version.is_some();
-    let gate_ok = bd_present && claude.is_some();
+    // A new project's bd runs on its own Dolt server (owner, 2026-09-26), so a new project
+    // also needs dolt and tmux, and a free port. An existing `.beads/` is left as it is.
+    let server = (!has_beads).then(|| {
+        let bins = crate::cmd::bd_server::bins();
+        let port = crate::cmd::bd_server::free_port(&dir);
+        (bins, port)
+    });
+    let server_why: Option<String> = match &server {
+        Some((Err(why), _)) => Some(format!("{why}. ")),
+        Some((Ok(_), None)) => Some("No free port in 3400..3900 for the bd server. ".into()),
+        _ => None,
+    };
+    let gate_ok = bd_present && claude.is_some() && server_why.is_none();
     // The directory name: bd's own default prefix when none is passed, and the project name.
     let dir_name = dir
         .file_name()
@@ -530,7 +542,14 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         claude: claude.clone(),
         bd,
         gate_ok,
-        beads: if has_beads { "present" } else { "will bd init" },
+        beads: match &server {
+            None => "present (not touched)".to_string(),
+            Some((_, Some(p))) => format!(
+                "will start a Dolt server on 127.0.0.1:{p} (data in .air/dolt) and bd init in \
+                 server mode"
+            ),
+            Some((_, None)) => "will bd init in server mode (no free port found)".to_string(),
+        },
         prefix: prefix.clone(),
         project: dir_name.clone(),
         verify: verify.clone(),
@@ -562,17 +581,18 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     if !gate_ok {
         emit(json, &plan, || render(&plan));
         eprintln!(
-            "air init: gate failed. {}{}",
+            "air init: gate failed. {}{}{}",
             if !bd_present {
                 "Install bd: `brew install beads && brew pin beads` (pinned 1.3.0). "
             } else {
                 ""
             },
             if claude.is_none() {
-                "Install Claude Code: https://code.claude.com/docs/en/setup"
+                "Install Claude Code: https://code.claude.com/docs/en/setup. "
             } else {
                 ""
-            }
+            },
+            server_why.as_deref().unwrap_or("")
         );
         return 2;
     }
@@ -605,7 +625,20 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         if let Some(why) = super::install::ignore_refusal(super::install::air_ignored(&dir)) {
             return Err(format!("refusing to continue: {why}"));
         }
-        if !has_beads {
+        if let Some((Ok(bins), Some(port))) = &server {
+            // The server first: `bd init --server` connects to it and creates the database.
+            let o = crate::cmd::bd_server::start(
+                &dir,
+                &crate::cmd::bd_server::session(&dir),
+                *port,
+                "",
+                true,
+                bins,
+                crate::cmd::bd_server::START_WAIT,
+            );
+            if let crate::cmd::bd_server::Outcome::Failed { why } = o {
+                return Err(format!("bd server: {why}"));
+            }
             // --skip-agents: no AGENTS.md and no `bd prime`; its command reference tells agents
             // to `bd update --claim` and `bd create`, which Air denies. --skip-hooks: no bd git
             // hooks; Air's hooks are the ones installed here.
@@ -620,10 +653,20 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                 "--skip-agents",
                 "--skip-hooks",
             ];
+            let port_s = port.to_string();
+            args.extend([
+                "--server",
+                "--external",
+                "--server-host",
+                "127.0.0.1",
+                "--server-port",
+                &port_s,
+            ]);
             if let Some(p) = given_prefix.as_deref() {
                 args.extend(["--prefix", p]);
             }
             run_in(&dir, &bdbin.to_string_lossy(), &args)?;
+            crate::cmd::bd_server::move_port_out_of_metadata(&dir, *port)?;
         }
         if !air_json_exists {
             std::fs::create_dir_all(dir.join(".claude")).map_err(|e| format!(".claude: {e}"))?;
