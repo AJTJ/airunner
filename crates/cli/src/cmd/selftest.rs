@@ -220,7 +220,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     ),
     // air-dkm1: a worker holding a claim is told about new beads too. Seen red 2026-09-26.
     (
-        "fanout: new ready beads are queued once for each live idle worker without a claim, never for the lane or a worker holding one",
+        "fanout: new ready beads are queued once for each live worker without a claim, whatever its state, never for the lane or a worker holding one",
         Mutation {
             file: "crates/cli/src/cmd/fanout.rs",
             from: "                && w.claims.is_empty()\n",
