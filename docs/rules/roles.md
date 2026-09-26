@@ -142,6 +142,8 @@ from `air`:
 - `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
   branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
   again.
+- `<lease> is free` arrives when a lease you were refused is released or broken. If you still
+  need it, take it with `air lease take`; the first take wins.
 - `fleet stop from the coordinator` means all work stops. Finish the step you are on, commit
   your work in progress, and claim nothing new; `air claim` refuses until the resume. Keep your
   claim and your session, and wait.

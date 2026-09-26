@@ -154,6 +154,14 @@ impl Ledger {
         )?)
     }
 
+    /// Forget that `worker` waits for `resource`: it was told the lease is free (air-1vri.3).
+    pub fn clear_lease_want(&self, resource: &str, worker: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM lease_wants WHERE resource=?1 AND worker=?2",
+            params![resource, worker],
+        )? > 0)
+    }
+
     /// Who is waiting for `resource`.
     pub fn lease_wants(&self, resource: &str) -> Result<Vec<(String, Option<String>, String)>> {
         let mut st = self.conn.prepare(

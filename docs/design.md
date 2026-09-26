@@ -520,6 +520,10 @@ for the last 24 hours: from batch-ready to the start of the batch verify that to
 and from "batch green" to the member's close. The 5-minute wakes stay as the backstop for a
 push that is missed.
 
+air lease release and air lease break queue "<lease> is free" for each worker the lease_wants
+table records as waiting, oldest first. Delivering it removes that worker's want, and taking
+the lease removes it too.
+
 ### 6.6 Session states
 
 ```mermaid
@@ -790,6 +794,9 @@ fans it out).
 - [x] The coordinator stops and resumes all work with one command to Air, and every role's
       section of the roles text says what a stop means for it (crates/cli/src/cmd/fleet.rs).
       (air-1vri.1)
+- [x] Tell each worker that was refused a lease when it is released or broken, oldest want
+      first, and clear the want on delivery (crates/cli/src/cmd/fanout.rs, lease_free).
+      (air-1vri.3)
 - [ ] The next live trial shows batch-ready to its batch and batch green to close each under a
       minute plus the verify's own duration (the loops line in air status). (air-1vri.2)
 - [ ] The next live trial shows a bead fan-out and a fleet stop each reaching every intended

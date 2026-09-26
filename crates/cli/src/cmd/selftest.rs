@@ -178,6 +178,16 @@ impl Probe {
 /// below names ONE branch of `handover_verdict`, so a mutation cannot pass by taking out the
 /// whole guard.
 const MUTATIONS: &[(&str, Mutation)] = &[
+    // air-1vri.3: the want is kept after the worker was told. Seen red 2026-09-26.
+    (
+        "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
+        Mutation {
+            file: "crates/cli/src/cmd/fanout.rs",
+            from: "        let _ = ledger.clear_lease_want(&d.subject, me);",
+            to: "        let _ = (&d.subject, me);",
+            also_red: &[],
+        },
+    ),
     // air-1vri.1: any role may stop the fleet. Seen red 2026-09-26.
     (
         "fleet: a stop refuses new work naming the stop and who set it; only the coordinator and the owner stop or resume",
@@ -2626,6 +2636,7 @@ fn all_probes() -> Vec<Probe> {
         messaging::probe_the_lane_and_members_hear_batch_events_at_once(),
         messaging::probe_loop_times_are_measured_from_rows(),
         messaging::probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_it(),
+        messaging::probe_a_freed_lease_reaches_those_who_wanted_it(),
     ]
 }
 
