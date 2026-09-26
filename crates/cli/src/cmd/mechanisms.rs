@@ -873,4 +873,19 @@ pub const MECHANISMS: &[Mechanism] = &[
             "a round in which a worker or the lane tried `air fleet` (a PreToolUse event naming it) and the deny rule stopped every attempt before this refusal could",
         ),
     },
+    Mechanism {
+        id: "lease-free-to-waiters",
+        class: "nudge",
+        what: "When a lease is released or broken, each worker recorded as wanting it hears \
+               \"<lease> is free\" once, oldest want first; the want is cleared on delivery or \
+               when that worker takes the lease.",
+        added: "2026-09-26 (air-1vri.3)",
+        source: "crates/cli/src/cmd/fanout.rs, lease_free and after_delivery",
+        // Owner, 2026-09-26: a worker refused a lease went to other work and had to poll to
+        // learn it was free, though the ledger already recorded who wanted it.
+        fires: Fires::Decisions(&[("fanout", "lease-free")]),
+        removal: Removal::Judgement(
+            "`air lease` is removed, or a round shows no waiting worker taking a lease after being told it was free",
+        ),
+    },
 ];

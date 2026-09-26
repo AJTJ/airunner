@@ -661,6 +661,7 @@ pub fn deliver_once(repo: &Path, out: &mut dyn FnMut(&Value)) -> Result<usize, S
         .map_err(|e| e.to_string())?;
     for d in &taken {
         out(&delivery_event(d));
+        crate::cmd::fanout::after_delivery(&ledger, &me, d);
         crate::cmd::log_event(
             &ledger,
             &me,

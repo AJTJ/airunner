@@ -207,6 +207,8 @@ pub fn release(repo: &Path, resource: &str, json: bool) -> i32 {
     match ledger.lease_release(resource, &worker) {
         Ok(true) => {
             let msg = format!("{resource} lease released by {worker}");
+            // air-1vri.3: whoever was refused it hears it is free.
+            super::fanout::lease_free(&ledger, &worker, resource, &now());
             log_event(
                 &ledger,
                 &worker,
@@ -278,6 +280,7 @@ pub fn break_lease(repo: &Path, resource: &str, force: bool, json: bool) -> i32 
         return 1;
     }
     let _ = ledger.lease_break(resource);
+    super::fanout::lease_free(&ledger, &worker, resource, &t);
     let msg = format!(
         "{resource} lease broken (was {}: {})",
         cur.worker,

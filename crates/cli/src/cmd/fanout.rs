@@ -426,6 +426,57 @@ pub fn batch_landed(
     );
 }
 
+/// A lease came free (released, or broken): tell each worker recorded as wanting it, oldest
+/// want first, once (air-1vri.3). The want is cleared when the message is delivered
+/// ([`after_delivery`]) or when that worker takes the lease. Returns the workers queued for.
+pub fn lease_free(ledger: &Ledger, worker: &str, resource: &str, at: &str) -> Vec<String> {
+    let wants = ledger.lease_wants(resource).unwrap_or_default();
+    let text = format!(
+        "{resource} is free. If you still need it, take it with `air lease take {resource} \
+         --reason \"<why>\"`; the first take wins."
+    );
+    let key = format!("{resource}@{at}");
+    let told: Vec<String> = wants
+        .iter()
+        .filter(|(w, _, _)| w != worker)
+        .filter(|(w, _, _)| {
+            ledger
+                .enqueue_delivery(
+                    &Outgoing {
+                        to: w,
+                        kind: "lease-free",
+                        key: &key,
+                        subject: resource,
+                        content: &text,
+                        supersede: true,
+                    },
+                    at,
+                )
+                .unwrap_or(false)
+        })
+        .map(|(w, _, _)| w.clone())
+        .collect();
+    if !told.is_empty() {
+        super::log_event(
+            ledger,
+            worker,
+            super::decisions::FANOUT_LEASE_FREE,
+            &json!({"resource": resource, "to": told}),
+            &format!("{resource} is free; told {} waiting worker(s)", told.len()),
+            &format!("{} want(s)", wants.len()),
+        );
+    }
+    told
+}
+
+/// What delivering a message changes besides the row: a worker told a lease is free no longer
+/// waits for it.
+pub fn after_delivery(ledger: &Ledger, me: &str, d: &air_ledger::deliveries::Delivery) {
+    if d.kind == "lease-free" {
+        let _ = ledger.clear_lease_want(&d.subject, me);
+    }
+}
+
 /// After `air batch cut` dropped a branch: tell its worker at once.
 pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped) {
     let note = MemberNote {

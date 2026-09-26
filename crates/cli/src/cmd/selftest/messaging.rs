@@ -442,3 +442,60 @@ pub(super) fn probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_
         green_passes: green,
     }
 }
+
+/// air-1vri.3: a released lease is told to each worker that was refused it, oldest want first,
+/// once, and the want goes when the message is delivered.
+///
+/// Red: `b` then `c` are refused `runtime` while `a` holds it; `a` releases and both are queued
+/// "runtime is free", `b` first; delivering `b`'s message clears `b`'s want. Green: the releaser
+/// is not told, a second pass for the same release queues nothing, and `c` still waits until
+/// its own message is delivered.
+pub(super) fn probe_a_freed_lease_reaches_those_who_wanted_it() -> Probe {
+    use crate::cmd::fanout::{after_delivery, lease_free};
+    use air_ledger::leases::Holder;
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let e = |x: air_ledger::LedgerError| x.to_string();
+        let h = |w: &'static str| Holder {
+            worker: w,
+            session_id: Some("s"),
+            pid: Some(1),
+            pid_started: Some("x"),
+        };
+        let healthy = |_: &air_ledger::leases::Lease| None;
+        l.lease_take("runtime", &h("a"), "api", "2026-09-26T00:00:00Z", healthy)
+            .map_err(e)?;
+        l.lease_take("runtime", &h("b"), "sim", "2026-09-26T00:00:01Z", healthy)
+            .map_err(e)?;
+        l.lease_take("runtime", &h("c"), "sim", "2026-09-26T00:00:02Z", healthy)
+            .map_err(e)?;
+        l.lease_release("runtime", "a").map_err(e)?;
+        let told = lease_free(&l, "a", "runtime", "2026-09-26T00:01:00Z");
+        let again = lease_free(&l, "a", "runtime", "2026-09-26T00:01:00Z");
+        let b_rows = l.take_deliveries("b", "2026-09-26T00:01:05Z").map_err(e)?;
+        for d in &b_rows {
+            after_delivery(&l, "b", d);
+        }
+        let waiting: Vec<String> = l
+            .lease_wants("runtime")
+            .map_err(e)?
+            .into_iter()
+            .map(|(w, _, _)| w)
+            .collect();
+        let red = told == ["b", "c"]
+            && b_rows.len() == 1
+            && b_rows
+                .first()
+                .is_some_and(|d| d.content.starts_with("runtime is free"))
+            && !waiting.contains(&"b".to_string());
+        let green = again.is_empty() && waiting == ["c"] && !told.contains(&"a".to_string());
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
+        red_fires: red,
+        green_passes: green,
+    }
+}
