@@ -1,5 +1,6 @@
 {
   "coordinator_deny": [],
   "metis": false,
+  "project": "minimal",
   "worker_deny": []
 }
