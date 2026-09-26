@@ -27,6 +27,20 @@ fn main() {
     println!("cargo::rerun-if-changed=../../.git");
     println!("cargo::rerun-if-env-changed=AIR_BUILD");
 
+    // Every skill this repo carries, for the selftest probe that refuses an installed skill
+    // naming one `air install` does not ship (air-rr98). Read from the directory rather than
+    // typed into a list, so a skill added here is covered without anyone remembering to.
+    println!("cargo::rerun-if-changed=../../.claude/skills");
+    let skills: Vec<String> = std::fs::read_dir("../../.claude/skills")
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    println!("cargo::rustc-env=AIR_SKILL_NAMES={}", skills.join(","));
+
     // An explicit override wins, for a packager that builds outside a checkout.
     if let Ok(v) = std::env::var("AIR_BUILD")
         && !v.trim().is_empty()

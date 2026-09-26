@@ -57,8 +57,9 @@ afterwards. Stop only when `bd ready` is empty or on a blocker you captured.
 
 Claiming a bead commits you to finishing it now: `air claim <id> [--files a,b]`, then the work.
 You close your own bead, with proof. There is no review step and no `awaiting_review`. Which of
-the two sequences below applies is set by `verify_lane` in `.claude/air.json`, which names the
-lane's worktree: with the key the lane sequence applies, and without it the other one does.
+the two sequences below applies is set by `"verify_lane": true` in `.claude/air.json`: with it
+the lane sequence applies, and without it the other one does. An older value that is a
+worktree name counts as `true`. The lane itself is whichever session `air lane` started.
 
 Without a lane:
 
@@ -168,7 +169,7 @@ is batch-ready once it has a commit main lacks.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
 `blocks` edges where two beads share a file. When an epic has no open child, decompose it with
-the `decomposition` skill; `air status` names each such epic with its closed count. The
+the `air-decomposition` skill; `air status` names each such epic with its closed count. The
 reading may be delegated to a background agent, but the filing and deciding are yours. Workers
 pull work and there is no cap on work in flight. Never set `assignee` on an open bead: in bd
 1.2.x it blocks every other worker's claim.

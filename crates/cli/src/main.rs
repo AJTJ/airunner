@@ -184,8 +184,8 @@ enum Cmd {
         #[arg(long)]
         reason_file: Option<PathBuf>,
     },
-    /// Coordinator: land a green branch on main. The one allowed path onto main; it pushes
-    /// nothing.
+    /// The lane: land a green branch on main. The one allowed path onto main; it pushes
+    /// nothing. Refused to workers and the coordinator; the owner's own shell may land too.
     ///
     /// **Main is never moved to a commit that has not been verified** (air-odv). The landing
     /// commit is built off main with `git commit-tree` and main is fast-forwarded onto it, so

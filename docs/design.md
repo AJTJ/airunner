@@ -187,10 +187,10 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
 | air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. It closes nothing, and it always updates main in the main checkout, wherever it is run from. |
 | air close | Closes beads that have already landed, in one beads process, and releases their claims. |
-| air worker | Starts a worker session, or prints the command it would run. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
-| air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. |
+| air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
+| air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
 | air coordinator | Starts the coordinator session. |
-| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
+| air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. |
 | air init | Sets up a new repository: checks for beads and Claude Code, initialises git and beads, writes the ignore file and Air's config, then installs. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
@@ -615,8 +615,8 @@ protocol. It replaces plan 0009, retired 2026-09-25; what that plan proposed and
 built is described in sections 4 and 6.
 
 - [ ] Describe the fleet everywhere as three workers, a verification lane, and the coordinator.
-      The roles text still introduces the lane as a worker named by the `verify_lane` key, and
-      CLAUDE.md still says "the workers and the coordinator".
+      CLAUDE.md still says "the workers and the coordinator". The roles text no longer names
+      the lane by the `verify_lane` key (air-rr98).
 - [x] Air creates every tmux session, including the coordinator's. `claude --tmux` still
       needs `--worktree` (2.1.272, 2026-09-14), so Air's detached start stays. (air-jc2p.1)
 - [x] The coordinator works in its own worktree on its own branch, and nobody works in the main
@@ -631,9 +631,9 @@ built is described in sections 4 and 6.
 - [x] A launch command for the verification lane, air lane. It sets AIR_ROLE to lane and the
       lane's deny list, so the lane can land and nothing else can. The repository's verify
       scope was not built: nothing asked for it yet. (air-jc2p.2)
-- [x] The verification lane key in the config was read by no code. The stop nudge now reads
-      the role instead, and only air batch cut reads the key, to name the lane's worktree
-      (crates/cli/src/cmd/batch_cut.rs).
+- [x] The verification lane key in the config is a boolean that picks the closing sequence,
+      and no code reads it. The stop nudge reads the role, and air batch cut's refusal names
+      air lane's worktree (air-rr98; decisions 2026-09-25).
 - [x] Prove with a test that a bead can close after its commits land on main, then drop the
       adopter's rule to wait for every close before landing. Settled 2026-09-25:
       `a_bead_already_in_main_closes_on_its_landing` in crates/cli/tests/claim_cli.rs, and the
@@ -694,8 +694,8 @@ Surface, added 2026-09-14 and 2026-09-25:
 - [ ] The channel server answers three lease tools it does not list (crates/cli/src/cmd/mcp.rs).
       List them or remove them. Its instructions string names eight of the eleven conditions.
       (2026-09-25.)
-- [ ] The help line for air land still calls it the coordinator's (crates/cli/src/main.rs).
-      Landing is the lane's. (2026-09-25.)
+- [x] The help line for air land said it was the coordinator's. It now says the lane lands
+      (crates/cli/src/main.rs, air-rr98).
 - [ ] Cut the source comments down to what a maintainer needs: what a piece is responsible for,
       its invariants, and its contract. Incident stories move to the decisions log. Go crate by
       crate and run verify after each. The self-test file alone is 13,670 lines.
