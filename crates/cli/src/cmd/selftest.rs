@@ -361,6 +361,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // 0.4.8 live trial, workaround 1: skip the reset (it targets HEAD), and a red batch's merges
+    // carry into the next cut.
+    (
+        "batch cut: every batch starts from main; a red head is reset away and an unlanded green is refused",
+        Mutation {
+            file: "crates/cli/src/cmd/batch_cut.rs",
+            from: "&[\"reset\", \"--hard\", main]",
+            to: "&[\"reset\", \"--hard\", \"HEAD\"]",
+            also_red: &[],
+        },
+    ),
     // air-vuwx: the installed decomposition skill named `air next` for a year of rounds while
     // no such subcommand existed. The anchor puts that line back, so only the new probe falls.
     (
@@ -2726,6 +2737,7 @@ fn all_probes() -> Vec<Probe> {
         probe_batch_ready_wants_a_precheck_where_declared(),
         probe_a_precheck_green_is_never_a_verify_green(),
         probe_batch_cut_drops_by_the_order_rule(),
+        probe_batch_cut_starts_from_main(),
         probe_lease_defect_reaches_the_waiter(),
         probe_yesterdays_repo_is_told_and_a_current_one_is_not(),
         probe_install_goes_forward_only(),
@@ -7209,6 +7221,107 @@ fn probe_batch_cut_drops_by_the_order_rule() -> Probe {
         name: "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
         red_fires,
         green_passes,
+    }
+}
+
+/// 0.4.8 live trial, workaround 1: a red batch's merges stayed on the lane's branch and the next
+/// cut would have carried them; the lane reset by hand. Every cut now starts from main.
+///
+/// Red: a lane at a recorded-red head not in main is reset to main by [`lane_start`], and the red
+/// commit is no longer in its history. Green: a dry run names the head and moves nothing; a
+/// recorded green not in main is refused (dry run or not) and moves nothing; the same head once
+/// main contains it resets with nothing to report.
+///
+/// The mutation that makes it red: the reset targets `HEAD` instead of main.
+fn probe_batch_cut_starts_from_main() -> Probe {
+    use crate::cmd::batch_cut::{LaneStart, lane_start};
+    const NAME: &str = "batch cut: every batch starts from main; a red head is reset away and an unlanded green is refused";
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let main = g(&["rev-parse", "HEAD"])?;
+        g(&["checkout", "-q", "-b", "lane"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "red batch"])?;
+        let red = g(&["rev-parse", "HEAD"])?;
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let record = |sha: &str, exit_code: i32| -> Result<(), String> {
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "lane".into(),
+                sha: sha.to_string(),
+                kind: Kind::Verify,
+                exit_code,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: None,
+                members: vec![],
+                main_sha: None,
+            })
+            .map_err(|e| e.to_string())
+        };
+        record(&red, 1)?;
+
+        let dry = lane_start(&dir, &l, &main, true)?;
+        let dry_ok =
+            dry == LaneStart::Reset {
+                from: Some(red.clone()),
+            } && g(&["rev-parse", "HEAD"])? == red;
+
+        let cut = lane_start(&dir, &l, &main, false)?;
+        let red_fires =
+            cut == LaneStart::Reset {
+                from: Some(red.clone()),
+            } && g(&["rev-parse", "HEAD"])? == main
+                && g(&["merge-base", "--is-ancestor", &red, "HEAD"]).is_err();
+
+        g(&["commit", "-q", "--allow-empty", "-m", "green batch"])?;
+        let green = g(&["rev-parse", "HEAD"])?;
+        record(&green, 0)?;
+        let refused = |dry_run: bool| -> Result<bool, String> {
+            Ok(lane_start(&dir, &l, &main, dry_run)?
+                == LaneStart::LandFirst {
+                    head: green.clone(),
+                }
+                && g(&["rev-parse", "HEAD"])? == green)
+        };
+        let unlanded = refused(true)? && refused(false)?;
+        g(&["branch", "-f", "main", &green])?;
+        let landed = lane_start(&dir, &l, &green, false)? == LaneStart::Reset { from: None }
+            && g(&["rev-parse", "HEAD"])? == green;
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red_fires, dry_ok && unlanded && landed))
+    })()
+    .unwrap_or_else(blocked);
+    Probe {
+        name: NAME,
+        red_fires: res.0,
+        green_passes: res.1,
     }
 }
 
