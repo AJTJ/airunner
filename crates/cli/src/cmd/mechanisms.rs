@@ -797,8 +797,8 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "beads-ready-fanout",
         class: "nudge",
         what: "When the claimable ready set gains a bead, Air queues \"beads are ready: <ids>\" \
-               for every live, idle worker holding no claim, once per change of the set; never \
-               for the lane or a worker holding a claim.",
+               for every worker with a live session holding no claim, whatever its state, once \
+               per change of the set; never for the lane or a worker holding a claim.",
         added: "2026-09-26 (air-dkm1)",
         source: "crates/cli/src/cmd/fanout.rs, fan_out_ready",
         // Owner, 2026-09-26: the coordinator should send one message to Air and Air fan it
