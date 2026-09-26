@@ -317,6 +317,16 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // D4, 0.4.6 live trial: no redirection is recognised, so it stays in the segment.
+    (
+        "lease: a leased command followed by a redirection still needs its lease",
+        Mutation {
+            file: "crates/cli/src/cmd/lease.rs",
+            from: ".find_map(|o| rest.strip_prefix(o))",
+            to: ".find_map(|o| rest.strip_prefix(o).filter(|_| false))",
+            also_red: &[],
+        },
+    ),
     // Precheck (2026-09-25): the one arm that reads the precheck, inverted rather than deleted, so the
     // undeclared path (the green half) is untouched and only the declared refusal falls.
     (
@@ -1197,7 +1207,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: main-merged",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.main_is_ancestor {",
+            from: "if !f.main_is_ancestor && !f.work_in_main {",
             to: "if false {",
             also_red: &[
                 "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
@@ -1210,6 +1220,16 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // legitimately. Undeclared it made this mutation VACUOUS.
                 "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
+        },
+    ),
+    (
+        // D1, 0.4.6 live trial: main being ahead refuses again when main contains the head.
+        "gate: a branch whose head main already contains is not refused as behind main; one main does not contain still is",
+        Mutation {
+            file: "crates/hooks/src/gate.rs",
+            from: " && !f.work_in_main {",
+            to: " {",
+            also_red: &[],
         },
     ),
     (
@@ -2481,6 +2501,37 @@ fn probe_lease_needed_gate() -> Probe {
     }
 }
 
+/// D4 of the 0.4.6 live trial: `sh serve.sh 2>&1; echo x` ran with no lease while another
+/// worker held `serve`, because the redirect stayed in the segment and the pattern
+/// `sh serve.sh` no longer matched. Red: the leased command followed by each common
+/// redirection still needs the lease. Green: the bare command still needs it, and a different
+/// command with the same redirections, or one that only reads the script, needs none.
+fn probe_lease_sees_through_redirects() -> Probe {
+    use crate::cmd::lease::{declared_from, needs};
+    let decl = declared_from(&serde_json::json!({"serve": ["sh serve.sh"]}));
+    let need = |cmd: &str| !needs(&decl, cmd).is_empty();
+    let red = [
+        "sh serve.sh 2>&1; echo \"exit $?\"",
+        "sh serve.sh > out.txt",
+        "sh serve.sh >out.txt 2>&1",
+        "sh serve.sh >> log 2> err",
+        "sh serve.sh &> log",
+        "sh serve.sh >&2",
+        "sh serve.sh < in.txt",
+    ]
+    .iter()
+    .all(|c| need(c));
+    let green = need("sh serve.sh")
+        && !need("sh other.sh 2>&1")
+        && !need("cat serve.sh > copy.sh")
+        && !need("echo sh serve.sh >> notes");
+    Probe {
+        name: "lease: a leased command followed by a redirection still needs its lease",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-air: "which model is this worker on" was a question the coordinator had to ASK, and a
 /// wrong model that is invisible costs the round while a visible one costs a relaunch.
 ///
@@ -2605,6 +2656,7 @@ fn all_probes() -> Vec<Probe> {
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
         probe_lease_needed_gate(),
+        probe_lease_sees_through_redirects(),
         probe_no_task_no_prompt(),
         probe_gate_verify(),
         probe_gate_main(),
@@ -2700,6 +2752,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_journal_only_branch_needs_no_bead(),
         probe_a_coordinator_only_range_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
+        probe_a_landed_branch_is_not_behind_main(),
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
@@ -7376,6 +7429,7 @@ fn base_facts() -> GateFacts {
         batch_absent_fix: None,
         last_green_sha: None,
         main_is_ancestor: true,
+        work_in_main: false,
         main_sha: "fedcba9876543210".into(),
         main_moved: None,
         bead_claimed_or_carried: true,
@@ -9907,6 +9961,78 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// D1 of the 0.4.6 live trial: a worker told "batch green, close now" had its close refused as
+/// behind main, because its own batch had just landed and moved main past it. Five correct
+/// closes were refused in eleven minutes. Red: a branch whose work main does not contain is
+/// still refused as behind main. Green: once main contains the branch's head, the same close
+/// passes without a merge. Both run the real `handover::facts` over a real history.
+fn probe_a_landed_branch_is_not_behind_main() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let g = |args: &[&str]| probe_git(&dir, args);
+        let out = (|| -> Result<(bool, bool), String> {
+            g(&["init", "-q", "-b", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work\n\nBead: ad-1\n",
+            ])?;
+            let head = g(&["rev-parse", "HEAD"])?;
+            let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+            l.record_claim("ad-1", "w1", &[], "t0")
+                .map_err(|e| e.to_string())?;
+            l.record_verify(&VerifyRun {
+                id: new_id(),
+                worker: "w1".into(),
+                sha: head,
+                kind: Kind::Verify,
+                exit_code: 0,
+                trigger: "selftest".into(),
+                failing_step: None,
+                started_at: "t".into(),
+                finished_at: "t".into(),
+                log_path: None,
+                command: None,
+                duration_ms: None,
+                output_bytes: None,
+                dirty: false,
+                tree: None,
+                members: vec![],
+                main_sha: None,
+            })
+            .map_err(|e| e.to_string())?;
+            let verdict = || -> Result<air_hooks::Verdict, String> {
+                let f = crate::cmd::handover::facts(&l, "w1", &dir, Some("ad-1"), false)?;
+                Ok(handover_verdict(&f))
+            };
+            // Main moves by someone else's work: this branch really is behind.
+            g(&["checkout", "-q", "main"])?;
+            g(&["commit", "-q", "--allow-empty", "-m", "other work"])?;
+            g(&["checkout", "-q", "w"])?;
+            let behind = verdict()?;
+            let red = behind.block && behind.missing.iter().any(|m| m.check == "main-merged");
+            // The lane lands this branch; the worker has not merged main.
+            g(&["checkout", "-q", "main"])?;
+            g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
+            g(&["checkout", "-q", "w"])?;
+            let green = verdict()?.pass;
+            Ok((red, green))
+        })();
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "gate: a branch whose head main already contains is not refused as behind main; one main does not contain still is",
         red_fires: red,
         green_passes: green,
     }

@@ -139,6 +139,42 @@ impl Landing {
 }
 
 impl Ledger {
+    /// Record the members `air batch cut` merged into the lane's `head` (schema v24, 0.4.6
+    /// trial D2). A second cut that leaves the same head replaces the row.
+    pub fn record_batch_cut(
+        &self,
+        head: &str,
+        lane: &str,
+        main_sha: &str,
+        members: &[Member],
+        at: &str,
+    ) -> Result<()> {
+        let members = serde_json::to_string(members)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO batch_cuts (head, lane, main_sha, members, cut_at) \
+             VALUES (?1,?2,?3,?4,?5)",
+            params![head, lane, main_sha, members, at],
+        )?;
+        Ok(())
+    }
+
+    /// The members a cut by `lane` recorded at `head`, when one did.
+    pub fn batch_cut_members(&self, head: &str, lane: &str) -> Result<Option<Vec<Member>>> {
+        use rusqlite::OptionalExtension;
+        let text: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT members FROM batch_cuts WHERE head=?1 AND lane=?2",
+                params![head, lane],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match text {
+            Some(t) => Ok(Some(serde_json::from_str(&t)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Write one landing attempt. `attempt_no` is derived: how many times this worker's
     /// branch has been tried before, plus one.
     ///

@@ -29,11 +29,6 @@ from `air`. Your role's section lists every one and what to do about it. The coo
 and resumes the whole fleet with one command to Air, and each section says what a stop means
 for that role.
 
-Create one recurring wake when you start: `CronCreate` every 5 minutes, with the prompt "if you
-owe work, continue it; otherwise say nothing". An account limit stops a session without any
-hook firing, and the wake's first firing after the limit resets is what brings the session
-back. Say nothing when there is nothing to do.
-
 Keep a journal: one file per session in the main checkout's `.air/journal/`, or in the repo's
 `journal_dir` where `.claude/air.json` names one. Append a timestamp and a line as you go. It
 is for things nothing else carries: a bug you hit and how it showed, a wrong turn and what
@@ -95,6 +90,7 @@ Proof is a command and its output, a `file:line`, or a passing test. A descripti
 approach is not proof. Use `--reason-file` once the proof is more than a line or two, because
 the harness refuses a long `--reason "…"`. `air capture --file` works the same way.
 
+Close with `air close`; closing through bd directly is denied to workers and the lane.
 `air close` runs the hand-over check before it closes, and refuses unless a recorded green exists
 at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Whose green it is does not matter. Where the repo
 sets `"verify_key": "tree"`, a green at another commit with the identical tree also counts.
@@ -149,14 +145,16 @@ from `air`:
   claim and your session, and wait.
 - `fleet resumed` means continue: take up your claim, or claim a ready bead.
 
-You do not need to ask anyone for work: Air tells you when beads are ready, and your own wake
-and the Stop hook cover the rest.
+You do not need to ask anyone for work: Air tells you when beads are ready, and the Stop hook
+covers the rest.
 
 What you can look up: `air holdings` (who is in which file), `air status`, `air lease status`
 and `air handover`. When a peer holds a file you open, Air warns you once per session.
 
-Denied to a worker in every permission mode: `air land`, `git push`, `bd create`,
-`bd sync`, `bd update --claim`, a nested `claude`, `air worker`, `air lane`, `air fleet`,
+You read beads and add comments with `bd comment`; every other change to a bead goes through
+`air` (`air claim`, `air close`, `air capture`), and bd's write commands are denied to you.
+Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
+changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
 `air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
 PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/digests/`.
@@ -288,8 +286,11 @@ For anything Air does not already carry, reach one worker with `SendMessage` to 
 name `air status` shows; that should be rare. Tmux panes are for the owner to watch; do not type
 into them.
 
-A 5-minute heartbeat runs for the whole round. It is your recurring wake, and it runs `air
-status` and says nothing when nothing changed. The channel pushes changes, and the heartbeat is
+A 5-minute heartbeat runs for the whole round. Create it when you start: `CronCreate` every 5
+minutes, with the prompt "run `air status`; if you owe work, continue it; otherwise say
+nothing". An account limit stops a session without any hook firing, and the heartbeat's first
+firing after the limit resets is what brings the session back. It says nothing when nothing
+changed. The channel pushes changes, and the heartbeat is
 the failsafe: a wedged worker reaches nobody by itself.
 
 Landing is the lane's, not a worker's or the coordinator's. The lane lands its green batch with
