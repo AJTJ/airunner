@@ -41,7 +41,7 @@ use crate::git;
 /// the lane's landing. The failures behind it (docs/design.md §10): a coordinator's commit on
 /// main invalidated four workers' landability at an adopter on 2026-09-06, and landing order
 /// was the round's throughput limit while the coordinator landed by hand. Removed when the
-/// lane goes (roles.md, its removal condition); landing then returns to whoever lands a
+/// lane goes (docs/decisions.md, 2026-09-25, roles.md rewrite); landing then returns to whoever lands a
 /// worker's branch.
 pub fn may_land(role: &str) -> Result<(), String> {
     match role {
