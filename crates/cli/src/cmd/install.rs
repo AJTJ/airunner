@@ -2153,6 +2153,27 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "If the repo's own prose tells the coordinator to poll `air inbox` or the ready \
                  queue on a timer for these, it can rely on the notices instead.",
     },
+    SurfaceChange {
+        id: "coordinator-commits-land-with-no-bead",
+        since: "2026-09-26 (0.4.4 live trial)",
+        headline: "`air land --worker <lane>` lands a batch whose only non-merge commits are \
+                   the coordinator's (its `coordinator` worktree branch) carrying no bead, as \
+                   the batch-ready rule already took them. Any other commit with no `Bead:` \
+                   trailer is still refused, and the lane is now told to have the member add \
+                   a trailer and cut again rather than to `git commit --amend`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "coordinator-does-not-implement",
+        since: "2026-09-26 (0.4.4 live trial)",
+        headline: "`.air/roles.md` tells the coordinator it does not implement: anything to \
+                   build, fix or write, a helper script included, goes to a worker as a bead, \
+                   and it commits in its own worktree only when no worker can make the change.",
+        silent_break: false,
+        action: "If the repo's own prose has the coordinator doing implementation work, move \
+                 that to beads.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

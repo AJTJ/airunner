@@ -4328,3 +4328,85 @@ fn a_fleet_stop_refuses_new_work_until_resumed() {
         "{told:?}"
     );
 }
+
+/// The 0.4.4 live trial: the coordinator committed on its own branch with no `Bead:` trailer,
+/// the lane cut it as batch-ready (that rule takes the coordinator's branch with no bead) and
+/// recorded a green, and `air land --worker lane` refused it for naming no bead, telling the
+/// lane to `git commit --amend`, which would discard the sha its green is at.
+///
+/// A lane batch of a worker's commit with no trailer is still refused, and the lane is told
+/// what works rather than to amend. A batch of only the coordinator's commits lands carrying
+/// no bead.
+#[test]
+fn a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    let add = |name: &str| -> PathBuf {
+        let p = main.parent().unwrap().join(name);
+        let branch = format!("worktree-{name}");
+        git(
+            &main,
+            &["worktree", "add", "-q", "-b", &branch, p.to_str().unwrap()],
+        );
+        p.canonicalize().unwrap()
+    };
+    let coordinator = add("coordinator");
+    std::fs::write(coordinator.join("helper.sh"), "echo hi\n").unwrap();
+    git(&coordinator, &["add", "-A"]);
+    git(&coordinator, &["commit", "-q", "-m", "chore: a helper"]);
+    let lane = add("lane");
+
+    // A worker's commit with no trailer, batched: refused, and the lane is not told to amend.
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    let refusal = format!("{out}{err}");
+    assert_ne!(
+        code, 0,
+        "a worker's commit with no bead is refused: {refusal}"
+    );
+    assert!(refusal.contains("no-bead-named"), "{refusal}");
+    assert!(
+        !refusal.contains("--amend"),
+        "the lane is not told to amend: {refusal}"
+    );
+    assert!(refusal.contains("air batch cut"), "{refusal}");
+
+    // The coordinator's commit alone, batched: lands, carrying no bead.
+    git(&lane, &["reset", "-q", "--hard", "main"]);
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-coordinator",
+            "-m",
+            "batch: coordinator",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    assert_eq!(
+        code, 0,
+        "the coordinator's commits land with no bead: {out}{err}"
+    );
+    assert!(main.join("helper.sh").exists(), "{out}");
+}

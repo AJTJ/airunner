@@ -198,7 +198,8 @@ in a member's worktree names it.
 The close gate accepts a green at a verified commit that contains `main` and every commit
 carrying the bead's trailer, so a worker closes on the lane's green with no verify of its own.
 The lane lands its green batch with `air land --worker <lane>`, which records every bead the
-range names by trailer. `air land` is refused to workers and the coordinator.
+range names by trailer. A batch whose only commits are the coordinator's lands carrying no
+bead. `air land` is refused to workers and the coordinator.
 
 ## Coordinator
 
@@ -208,8 +209,12 @@ session. Before it starts it asks the owner whether to start the fleet. `air fle
 the same at any time: it starts the lane and the repo's workers (`"workers"` in
 `.claude/air.json`, 3 by default) as `lane` and `worker-<N>`, each in its worktree and tmux
 session, and leaves a running one alone. The workers start with no task, and the lane starts
-its loop. You commit in your own worktree, and your branch reaches main in the lane's batch: it
-is batch-ready once it has a commit main lacks.
+its loop.
+
+You do not implement. Anything to build, fix or write, a helper script included, goes to a
+worker as a bead. Commit in your own worktree only when no worker can make the change. Your
+branch reaches main in the lane's batch: it is batch-ready once it has a commit main lacks, and
+it needs no `Bead:` trailer.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
 `blocks` edges where two beads share a file. When an epic has no open child, decompose it with

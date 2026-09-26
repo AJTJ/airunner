@@ -58,6 +58,8 @@ missing notices, which are fixed or added below.
   longer hands out beads by message.
 - `--print` on the launchers writes nothing.
 - Every decision Air makes writes an event line and is counted by `air audit`.
+- The coordinator does not implement. Its roles text says to file the work as a bead for a
+  worker and to commit in its own worktree only when no worker can make the change.
 
 ### Removed
 
@@ -73,3 +75,6 @@ missing notices, which are fixed or added below.
 - Every session stopped at the MCP server approval prompt.
 - A freshly started worker was never counted as idle, so it was never told that beads were
   ready and the fleet stalled.
+- `air land` refused a lane batch of only the coordinator's commits because they named no
+  bead, after the lane had cut and verified it. It now lands carrying no bead. The lane is no
+  longer told to `git commit --amend` a refused batch, which would discard its green.

@@ -502,7 +502,7 @@ pub fn landing_line(sel: &crate::cmd::status::Selection, worker: &str) -> String
                 l.head.get(..8).unwrap_or(&l.head)
             ),
             None => format!(
-                "landing: landable at {}, carrying no bead (journal-only branch)",
+                "landing: landable at {}, carrying no bead (journal entries or the coordinator's commits)",
                 l.head.get(..8).unwrap_or(&l.head)
             ),
         };
