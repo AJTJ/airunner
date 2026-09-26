@@ -13,11 +13,11 @@
 //! is exactly two things: attach it to the coordinator's session, and count what is filed
 //! without it.
 //!
-//! **check-resources (CLAUDE.md), 2026-09-06.** Metis's MCP server and Claude Code plugin
+//! **Checked first (CLAUDE.md), 2026-09-06.** Metis's MCP server and Claude Code plugin
 //! already exist (colliery-io/metis, Apache-2.0): `plugins/metis/.mcp.json` declares
 //! `{"command": "metis", "args": ["mcp"]}` and `plugins/metis/` is a plugin directory with its
 //! own `.claude-plugin/`. The harness carries `--mcp-config` and `--plugin-dir`
-//! (`.claude/skills/check-resources/references/harness-facts.md` §1,
+//! (`claude --help`,
 //! Claude Code 2.1.241), but no per-ROLE configuration: a `.mcp.json` in the repo reaches every session,
 //! including the workers, and nothing in the field attaches a server to one role. That gap is
 //! what this fills, and nothing more is built.
@@ -44,7 +44,7 @@ pub struct Config {
     pub on: bool,
     /// `"metis_plugin_dir": "<path>"`, when the repo declared one.
     ///
-    /// **Declared, never guessed** (the `anti-brittleness` skill). Metis's plugin lives inside
+    /// **Declared, never guessed.** Metis's plugin lives inside
     /// a checkout of metis, whose location is somebody's choice and not derivable from the
     /// `metis` binary on `PATH`. A `--plugin-dir` pointing at nothing is a silent no-op — the
     /// session comes up with no plugin and says nothing — which is the direction this must not
@@ -153,7 +153,7 @@ pub fn attach(cfg: &Config, on_path: bool) -> (Vec<String>, Vec<String>) {
 
 /// The declared field a bead uses to name its initiative: a line reading `initiative: <CODE>`.
 ///
-/// **Declared, not inferred** (`anti-brittleness`). The alternative was to look for an
+/// **Declared, not inferred.** The alternative was to look for an
 /// initiative code anywhere in the description, which reads a fact out of prose somebody wrote
 /// freely and fails toward COUNTING a bead as compliant because its text happened to mention
 /// one. A line with the key on it is a field; a mention is not.

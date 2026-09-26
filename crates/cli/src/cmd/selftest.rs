@@ -1768,7 +1768,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Read the initiative out of prose instead of off a declared line: any description
             // containing the word counts as declaring one. It compiles, the count still runs,
             // and a bead that merely mentions an initiative stops being counted — the
-            // permitting direction, and the one the anti-brittleness skill names.
+            // permitting direction.
             file: "crates/cli/src/cmd/metis.rs",
             from: "        let rest = l.trim().strip_prefix(\"initiative:\")?;",
             to: "        let rest = l.trim().split_once(\"initiative\").map(|(_, r)| r)?;",
@@ -3778,7 +3778,7 @@ fn probe_landed_but_open() -> Probe {
     let changed = vec!["docs/rules/roles.md".to_string()];
     let tree = vec![
         "docs/rules/roles.md".to_string(),
-        ".claude/skills/writing-docs/references/registers.md".to_string(),
+        "docs/rules/adopting-air.md".to_string(),
         "docs/absent.md".to_string(),
     ];
     let ev = Evidence {
@@ -3789,7 +3789,7 @@ fn probe_landed_but_open() -> Probe {
     // A clause the merge CONTRADICTS: the bead names a file it did not touch.
     let refutable = judge_clauses(
         "zz-2",
-        vec![".claude/skills/writing-docs/references/registers.md names the rule.".into()],
+        vec!["docs/rules/adopting-air.md names the rule.".into()],
         &ev,
     );
     // A clause Air simply cannot read. Not a defect, and not the wrong-close signal.
@@ -3836,11 +3836,9 @@ fn probe_landed_but_open() -> Probe {
         let open = l.landed_open().map_err(|e| e.to_string())?;
         // Reported, with the clause, and the closable bead is NOT in the held-open set.
         let reported = open.len() == 1
-            && open.first().is_some_and(|o| {
-                o.bead == "zz-2"
-                    && o.why
-                        .contains(".claude/skills/writing-docs/references/registers.md")
-            });
+            && open
+                .first()
+                .is_some_and(|o| o.bead == "zz-2" && o.why.contains("docs/rules/adopting-air.md"));
         // air-dlw: the claim's lifetime must NOT decide this. Under close-with-proof the
         // worker closes at once and the reconcile releases the claim on the next tick, so a
         // report keyed on the claim could never fire. Claim it, release it as the reconcile
@@ -3991,7 +3989,7 @@ fn probe_contradicts_names_only_the_refuted() -> Probe {
     let changed = vec!["docs/rules/roles.md".to_string()];
     let tree = vec![
         "docs/rules/roles.md".to_string(),
-        ".claude/skills/writing-docs/references/registers.md".to_string(),
+        "docs/rules/adopting-air.md".to_string(),
         "docs/absent.md".to_string(),
     ];
     let ev = Evidence {
@@ -10159,7 +10157,7 @@ fn probe_metis_is_the_coordinators_and_never_a_workers() -> Probe {
 /// about it refuses nothing.
 ///
 /// The alternative was to look for an initiative code anywhere in the description. That reads
-/// a fact out of prose somebody wrote freely (the `anti-brittleness` skill), and it fails
+/// a fact out of prose somebody wrote freely, and it fails
 /// toward counting a bead as compliant because its text happened to mention one — the
 /// permitting direction.
 ///

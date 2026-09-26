@@ -488,7 +488,7 @@ Something happened. See docs/rules/roles.md for the rule.
         let changed = vec!["docs/rules/roles.md".to_string()];
         let tree = vec![
             "docs/rules/roles.md".to_string(),
-            ".claude/skills/writing-docs/references/registers.md".to_string(),
+            "docs/rules/adopting-air.md".to_string(),
         ];
         let ev = Evidence {
             green_at_landed: true,
@@ -496,12 +496,9 @@ Something happened. See docs/rules/roles.md for the rule.
             tree: &tree,
         };
         assert!(judge("docs/rules/roles.md names the rule.", &ev).discharged());
-        let v = judge(
-            ".claude/skills/writing-docs/references/registers.md names the rule.",
-            &ev,
-        );
+        let v = judge("docs/rules/adopting-air.md names the rule.", &ev);
         assert!(
-            matches!(&v, Verdict::Unevidenced { how } if how.contains(".claude/skills/writing-docs/references/registers.md")),
+            matches!(&v, Verdict::Unevidenced { how } if how.contains("docs/rules/adopting-air.md")),
             "{v:?}"
         );
     }
