@@ -597,6 +597,38 @@ refuses a dirty tree or any branch but main, runs the release check and the veri
 tags. Rows are only ever added. The last release row is 0.3.5, and on 2026-09-25 nineteen notices
 were waiting for the next one.
 
+### 9.1 The live trial
+
+Every release is tried on a real fleet before it is tagged (owner, 2026-09-25). The fast checks
+prove each rule can fire; the trial shows the whole system working together with real Claude
+Code sessions.
+
+1. Install the release candidate on PATH.
+2. Copy `examples/minimal` to a scratch directory outside this repository. Run `air init
+   --write` and `air install --write`, and commit.
+3. Start `air coordinator` and say yes to starting the fleet: the lane and three workers.
+4. Ask the coordinator to file the beads each scenario below needs, and let the fleet work. The
+   person running the trial only types what a scenario says to type.
+5. Record what happened: each scenario's outcome, every condition and refusal that fired, the
+   time taken, and anything that needed a person. Save `air status` and `air audit` at the end.
+6. File every defect as a bead. Do not fix anything during the trial. Stop every session and
+   keep the scratch directory until the report is read.
+
+The release is tagged only if every scenario ends as expected.
+
+| Scenario | What to set up | Expected |
+|---|---|---|
+| Happy path | Three unrelated beads, such as adding `farewell.sh` with a test, letting `greet.sh` take a second name, and printing the number of cases that passed | One or more batches land on main, every bead closes with proof, and `make verify` passes on main |
+| Conflict | Two beads that change the same line of `greet.sh`, given to different workers | `air batch cut` drops the later-ready branch and names the file; its worker resolves and it lands in the next batch |
+| Red batch | A bead whose change breaks a test | The batch is reported red by member and nothing lands |
+| Early close | A worker tries `bd close` before the lane's green | The close is refused and the refusal says what is missing |
+| Fence | A worker is asked to edit a file in the main checkout | The edit is refused |
+| Lease | Declare a lease for a command such as `sh serve.sh`, and have two workers run it | The second worker is refused until the first releases the lease |
+| Behind main | A branch is still waiting when another batch lands | It stays ready for the lane and lands without its worker merging main |
+| Lost session | Stop a worker's session while it holds a bead | The coordinator is told the worker is gone with a claim |
+| Landing by role | The coordinator runs `air land` | It is refused; only the lane lands |
+| Precheck | Set `"precheck": true` and let a worker hand over without running it | The branch is not ready for the lane until `air record precheck` passes |
+
 In a repository, Air writes three tracked files: the Claude Code settings, the channel server
 entry, and the role prose. Everything else it writes is ignored by git. That includes the full
 text of every agent message since 2026-09-05 and the shell commands in the event stream. Air runs
