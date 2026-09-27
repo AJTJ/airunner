@@ -2349,9 +2349,9 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
         leases,
         lease_wants,
-        // A ledger read, so it survives an absent bd (air-ayp). A bead bd shows back in the
-        // work queue has been dealt with: somebody reopened it. Deriving it from the claim row
-        // instead is what made this silent under close-with-proof (air-dlw).
+        // A ledger read, so it survives an absent bd (air-ayp). The ledger already drops a
+        // bead whose claim was released as closed (0.4.10 trial); a bead bd shows back in the
+        // work queue has been dealt with too: somebody reopened it.
         landed_open: ledger
             .landed_open()
             .unwrap_or_default()

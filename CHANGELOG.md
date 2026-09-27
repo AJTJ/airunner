@@ -110,6 +110,8 @@ missing notices, which are fixed or added below.
   commits, not the branch head.
 - A batch of one sent its member no result, because its members were read from merge commits
   and it made none. `air batch cut` now records its members.
+- `landed-not-closed` was raised for a bead `air close` had already closed, and stayed. A bead
+  whose claim the ledger records as closed is no longer reported.
 - A branch whose batch went red at its current commit stayed ready, so the lane cut it again.
 - The lease check missed a leased command followed by a redirection such as `2>&1`.
 - `air record precheck` flagged a correct precheck `suspicious` when it printed nothing.
