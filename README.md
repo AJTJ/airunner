@@ -88,7 +88,11 @@ air coordinator
 ```
 
 Say yes to starting the fleet. Air creates the worktrees, starts the beads server and opens a
-tmux session per role. Then tell the coordinator what to build.
+tmux session per role. Each new session asks two things once: whether you trust the folder, and
+whether to load the Air channel ("I am using this for local development"). Accept both. Then
+tell the coordinator what to build; it runs everything from there.
+
+You never need these, but they are there:
 
 - `air status`: the whole fleet on one screen.
 - `air fleet stop` and `air fleet resume`.
