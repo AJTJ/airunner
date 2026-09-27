@@ -83,21 +83,16 @@ and every file Air adds.
 
 ## How you use it
 
-From your repo's main checkout, in a terminal:
-
 ```sh
 air coordinator
 ```
 
-That is the whole start. The coordinator asks whether to start the fleet; say yes, and Air
-creates a worktree for each role, starts the beads server, and opens a tmux session for the
-lane and each worker with the roles text and the channel attached. Then you talk to the
-coordinator: say what you want built. It files the work as beads, the workers claim them, the
-lane verifies and lands them, and the notices keep everyone moving. You check the results, and
-you can attach to any session (`tmux attach -t <project>-worker-1`) and type into it.
+Say yes to starting the fleet. Air creates the worktrees, starts the beads server and opens a
+tmux session per role. Then tell the coordinator what to build.
 
-`air status` shows the whole fleet on one screen. `air fleet stop` pauses all work with one
-command, and `air fleet resume` restarts it.
+- `air status`: the whole fleet on one screen.
+- `air fleet stop` and `air fleet resume`.
+- `tmux attach -t <project>-worker-1`: watch or type into any session.
 
 ## The pieces
 
