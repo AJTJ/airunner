@@ -82,6 +82,11 @@ missing notices, which are fixed or added below.
   checkout's directory name.
 - `make trial` stops the previous trial copy's `<project>-dolt` tmux session and removes that
   copy before making a new one.
+- `air release --reason` and `air reclaim --reason` take any text. The fixed words are now
+  the documented common values.
+- The `beads are ready` notice lists the same beads to every idle worker, rotated within each
+  priority group by the recipient's position, so idle workers do not all try the same first
+  bead. The text says when the order was changed.
 
 ### Removed
 
@@ -151,3 +156,15 @@ missing notices, which are fixed or added below.
   main checkout the coordinator's, the claim refusal names `air reclaim` instead of the removed
   `air release --worker`, and an in-flight landing no longer reads as verifying with a rollback
   armed.
+- A branch `air batch cut` dropped for a conflict was offered to the lane again before its
+  worker had committed, and dropped again. A dropped head is not batch-ready until it moves.
+- The drop notice said "merge main" for a conflict with a branch not on main yet, and a worker
+  merged the peer's unlanded commit. It now names the branch and its sha and says to wait for
+  it to land, then merge main. The cut's output says the same, and no longer tells the lane to
+  name each drop itself.
+- `air batch cut` wrote a `batch-held` notice for a head whose precheck had just been recorded
+  green. It re-reads the record before writing the hold.
+- `air handover` printed "NOT landable" beside "the close would pass" for work already on
+  main. It now says the head is already on main.
+- `air land` settled no acceptance clause naming a bare filename such as `serve.sh`. A bare
+  filename counts as a path when the landed tree has it.

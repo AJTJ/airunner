@@ -170,7 +170,8 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
             ..Default::default()
         };
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
-        let tick = |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), at);
+        let tick =
+            |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), &[], at);
         let seeded = tick(&["zz-1"], "2026-09-26T00:00:00Z");
         let grew = tick(&["zz-1", "zz-2"], "2026-09-26T00:00:30Z");
         let same = tick(&["zz-1", "zz-2"], "2026-09-26T00:01:00Z");
@@ -178,11 +179,16 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         let rows = l
             .deliveries_since("2026-09-26T00:00:00Z")
             .map_err(|e| e.to_string())?;
-        let red = grew == ["idle", "busy"]
+        // Recipients are told in name order, and the second reads the same beads rotated
+        // by one (0.4.9 trial), so the two rows start with the two orders.
+        let red = grew == ["busy", "idle"]
             && rows.len() == 2
             && rows
                 .iter()
-                .all(|d| d.content.starts_with("beads are ready: zz-1 zz-2"));
+                .any(|d| d.content.starts_with("beads are ready: zz-1 zz-2."))
+            && rows
+                .iter()
+                .any(|d| d.content.starts_with("beads are ready: zz-2 zz-1 ("));
         let green = seeded.is_empty()
             && same.is_empty()
             && shrank.is_empty()

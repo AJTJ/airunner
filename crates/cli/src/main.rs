@@ -171,7 +171,8 @@ enum Cmd {
     /// Give your own bead back: bd in_progress → open (never a closed bead), ledger claim closed with a reason.
     Release {
         bead: String,
-        /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
+        /// Why, in your own words. Common values: landed | abandoned | reassigned | superseded |
+        /// false-premise | owner-gated | unknown
         #[arg(long)]
         reason: String,
     },
@@ -183,7 +184,8 @@ enum Cmd {
         /// The worker that holds it.
         #[arg(long)]
         worker: String,
-        /// landed | abandoned | reassigned | superseded | false-premise | owner-gated | unknown
+        /// Why, in your own words. Common values: landed | abandoned | reassigned | superseded |
+        /// false-premise | owner-gated | unknown
         #[arg(long)]
         reason: String,
     },

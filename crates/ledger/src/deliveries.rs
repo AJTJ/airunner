@@ -132,6 +132,29 @@ impl Ledger {
             .collect())
     }
 
+    /// Every `(worker, head)` a `batch-dropped` row names, delivered or not (0.4.9 trial). The
+    /// drop row's key is `<head>@<against sha>`, written by the cut; this is the durable record
+    /// the batch-ready rule reads so a dropped head is not offered to the lane again before its
+    /// worker commits.
+    pub fn batch_dropped_heads(&self) -> Result<Vec<(String, String)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT to_worker, key FROM deliveries WHERE kind='batch-dropped'")?;
+        let v = st
+            .query_map([], |r| {
+                let worker: String = r.get(0)?;
+                let key: String = r.get(1)?;
+                Ok((worker, key))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v.into_iter()
+            .map(|(w, key)| {
+                let head = key.split('@').next().unwrap_or("").to_string();
+                (w, head)
+            })
+            .collect())
+    }
+
     /// Every row created at or after `since`, oldest first, delivered or not.
     pub fn deliveries_since(&self, since: &str) -> Result<Vec<Delivery>> {
         let mut st = self.conn.prepare(&format!(

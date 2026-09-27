@@ -1558,7 +1558,7 @@ mod tests {
         };
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
         let fan = |set: &[&str], at: &str| {
-            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), at)
+            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), &[], at)
         };
         assert!(
             fan(&[], "2026-09-26T22:20:00Z").is_empty(),

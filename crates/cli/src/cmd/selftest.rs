@@ -14010,6 +14010,7 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
                 "alerts is green at de0f19cf but no commit in main..de0f19cf declares a bead",
             ),
         ],
+        in_main: Vec::new(),
         errors: vec!["alerts: git rev-parse HEAD: boom".to_string()],
     };
     let snap = Snapshot {
@@ -14037,8 +14038,9 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
         std::fs::write(main.join("f"), "x").ok()?;
         g(&["add", "-A"])?;
         g(&["commit", "-qm", "seed"])?;
-        // A worktree with no recorded green: `select` must skip it with `green-at-head`, and
-        // the JSON must carry that.
+        // A worktree with a commit main lacks and no recorded green: `select` must skip it
+        // with `green-at-head`, and the JSON must carry that. (A head main already contains
+        // is silent since the 0.4.9 trial, so the branch needs its own commit.)
         g(&[
             "worktree",
             "add",
@@ -14047,6 +14049,7 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
             "alpha",
             &wt.to_string_lossy(),
         ])?;
+        crate::git::run(&wt, &["commit", "-q", "--allow-empty", "-m", "ahead"]).ok()?;
         let out = air_command(&exe, &wt)
             .args(["--json", "status"])
             .output()
@@ -14186,6 +14189,7 @@ fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
                 "beta has no recorded green at its head bbbb1111",
             ),
         ],
+        in_main: vec![("delta".into(), "dddd2222eeee".into())],
         errors: vec!["gamma: git rev-parse HEAD: boom".to_string()],
     };
 
@@ -14206,13 +14210,19 @@ fn probe_handover_says_what_the_landing_gate_would_say() -> Probe {
     let absent = landing_line(&sel, "nobody");
     // "Cannot tell" outranks both: an error must never read as a verdict.
     let broke = landing_line(&sel, "gamma");
+    // 0.4.9 trial: a head already on main has nothing to land, and is told that rather than
+    // "NOT landable", which read as a failure beside "the close would pass".
+    let landed = landing_line(&sel, "delta");
     let green = ok.contains("landable at aaaaaaaa")
         && ok.contains("air-1")
         && !ok.contains("NOT landable")
         && absent.contains("not a landing candidate")
         && !absent.contains("NOT landable")
         && broke.contains("cannot tell")
-        && broke.contains("boom");
+        && broke.contains("boom")
+        && landed.contains("already on main")
+        && landed.contains("dddd2222")
+        && !landed.contains("NOT landable");
 
     Probe {
         name: "handover: a worker is told what the landing gate would say about its own branch, read from select rather than recomputed",
