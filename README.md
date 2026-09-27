@@ -62,11 +62,42 @@ fleet spends its time on the work instead of on talking.
 
 Air supports Claude Code only, for now.
 
+## How to install it
+
+Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
+
+```sh
+cargo install --path crates/cli     # from a checkout of this repository
+cd /path/to/your/repo
+air init --write
+```
+
+`air init` finds your check (a Makefile `verify` or `test` target, `cargo test`, or `npm test`)
+and prints the next steps: commit, run `air record verify --` with that check, and run `air
+coordinator`. If it finds no check, it writes a `make verify` that fails until you fill it in. If
+agents share a port or a device, list the commands that use it under `leases` in
+`.claude/air.json`.
+
+[examples/minimal](examples/minimal) is a three-file project after `air init`. It shows a check
+and every file Air adds.
+
 ## How you use it
 
-You talk to the coordinator. It writes the beads, the workers do them, and you check their results.
-Every session is a full harness running in its own worktree, in a tmux session you can
-interact with.
+From your repo's main checkout, in a terminal:
+
+```sh
+air coordinator
+```
+
+That is the whole start. The coordinator asks whether to start the fleet; say yes, and Air
+creates a worktree for each role, starts the beads server, and opens a tmux session for the
+lane and each worker with the roles text and the channel attached. Then you talk to the
+coordinator: say what you want built. It files the work as beads, the workers claim them, the
+lane verifies and lands them, and the notices keep everyone moving. You check the results, and
+you can attach to any session (`tmux attach -t <project>-worker-1`) and type into it.
+
+`air status` shows the whole fleet on one screen. `air fleet stop` pauses all work with one
+command, and `air fleet resume` restarts it.
 
 ## The pieces
 
@@ -89,25 +120,6 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
 - Fleets spread across several machines, with every agent still working through Air.
-
-## How to install it
-
-Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
-
-```sh
-cargo install --path crates/cli     # from a checkout of this repository
-cd /path/to/your/repo
-air init --write
-```
-
-`air init` finds your check (a Makefile `verify` or `test` target, `cargo test`, or `npm test`)
-and prints the next steps: commit, run `air record verify --` with that check, and run `air
-coordinator`. If it finds no check, it writes a `make verify` that fails until you fill it in. If
-agents share a port or a device, list the commands that use it under `leases` in
-`.claude/air.json`.
-
-[examples/minimal](examples/minimal) is a three-file project after `air init`. It shows a check
-and every file Air adds.
 
 ## Inspired by
 
