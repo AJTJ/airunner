@@ -33,6 +33,10 @@ flowchart LR
 Air sends the messages on the arrows; nobody polls and nobody relays. The lane is the only
 thing that moves main.
 
+The sessions can also message each other directly, and sometimes that is the right way to
+coordinate. Air's aim is to make it rarely necessary: when the facts arrive on their own, the
+fleet spends its time on the work instead of on talking.
+
 ## What Air is
 
 - **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
@@ -84,7 +88,6 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 ## Upcoming
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
-- Notices from Air to the fleet: ready work, batch results, and stop.
 - Fleets spread across several machines, with every agent still working through Air.
 
 ## How to install it
