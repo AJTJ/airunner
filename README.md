@@ -7,14 +7,14 @@ Multi-agent accountability and verification system. Lighter than air.
 ## Philosophy
 
 Do less. Most agentic systems try to do too much. The models knows how to do the work and they keep
-getting better at doing it. Our goals are practical: transform goals into tasks, create a merge queue, spin up multiple sessions to work, and help keep the fleet of sessions running.
+getting better at doing it. Our goals are practical: transform objectives into tasks, create a merge queue, spin up multiple sessions to work, and help keep the fleet of sessions running.
 
 ## The roles
 
-A fleet is three kinds of sessions. Each is a full Claude Code harness (other harnesses incoming), and each has one job.
+A fleet is three kinds of sessions. Each is a full Claude Code harness (support for other harnesses incoming), and each has one job.
 
 - **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it free of implementation work means it is always available to you.
-- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because returns from more parallel agents fall off quickly beyond that.
+- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because the returns from more parallel harnesses falls off quickly beyond that.
 - **Verification lane** (`air lane`). It merges finished branches into a batch, runs your tests suite/validation checks... once for the whole batch, and lands the batch on `main`. It is the only session that moves `main`. Checking once per batch costs far less than once per branch, and a single owner of `main` means `main` only ever moves to a commit that passed.
 
 ## What Air is
@@ -104,10 +104,22 @@ and every file Air adds.
   list Air was checked against.
 - [Metis](https://github.com/colliery-io/metis): how to break work into epics and beads.
 
+## How Air is tested
+
+- `make verify` runs the unit tests and then `air selftest`: one probe per check Air makes,
+  each shown failing without the check and passing with it
+  ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
+- Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
+  coordinator, a lane and three workers work through nine scenarios on a copy of
+  [examples/minimal](examples/minimal), from a fixed
+  [request](scripts/trial/request.md). The coordinator writes a report of what happened,
+  including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the
+  messages and refusals the run needed.
+
 ## Docs
 
-- [Design](docs/design.md)
-- [Roles](docs/rules/roles.md)
+- [Design](docs/design.md): the whole system as it is today, kept current with the code.
+- [Roles](docs/rules/roles.md): what each role does, shipped to adopters as `.air/roles.md`.
 - [Adopting Air](docs/rules/adopting-air.md)
 
 ## Status
