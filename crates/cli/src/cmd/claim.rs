@@ -33,6 +33,11 @@ use crate::cmd::{emit, log_event, now, open};
 /// decides claimability reads this constant, never a literal (air-5hw).
 pub const OWNER_LABEL: &str = "owner";
 
+/// The one wording of the claim race, printed wherever it is the likeliest cause: the
+/// assignee refusal (bd shows an assignee Air has no claim behind) and bd's own `--claim`
+/// refusal (another actor won the atomic write). Two paths, one race, one sentence.
+const RACE: &str = "Most likely another worker just took this one: `air claim` writes bd first and records its claim a moment later. Take another ready bead.";
+
 /// Actor string passed to bd: `BEADS_ACTOR` if set, else the worker name.
 fn actor_for(worker: &str) -> String {
     std::env::var("BEADS_ACTOR")
@@ -366,7 +371,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 // a REOPEN is the observed instance that filed this bead (air-vsvt came back
                 // carrying `alerts`), not a property anyone has tested in isolation.
                 let msg = format!(
-                    "refused by bd's rule: {bead} has assignee `{a}`, and in bd 1.2.x a pencilled assignee blocks every other worker's --claim. Take another ready bead. Most likely another worker just took this one: `air claim` writes bd first and records its claim a moment later. Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. If `air status` still shows no claim on it later, the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
+                    "refused by bd's rule: {bead} has assignee `{a}`, and a pencilled assignee blocks every other worker's --claim (bd 1.3.0, as on 1.2.2). {RACE} Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. If `air status` still shows no claim on it later, the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
                 );
                 return fail(
                     &ledger,
@@ -535,7 +540,15 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             decision = super::decisions::CLAIM_CLAIMED_LATE;
         }
         Err(e) => {
-            let msg = format!("bd refused the claim; nothing recorded: {e}");
+            // A non-zero exit is bd's atomic write refusing: another actor holds it (exit 1
+            // on bd 1.3.0, as on 1.2.2). The same race as the assignee refusal above, worded
+            // the same. A spawn or JSON failure is not a race and gets no such sentence.
+            let msg = match &e {
+                BdError::Failed { .. } => {
+                    format!("bd refused the claim; nothing recorded: {e}. {RACE}")
+                }
+                _ => format!("bd refused the claim; nothing recorded: {e}"),
+            };
             return fail(
                 &ledger,
                 &worker,
@@ -648,7 +661,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
     }
     if status == "in_progress" && reason != "landed" {
         // air-0kk: open AND unassigned, in ONE bd process. Reopening alone left the assignee
-        // pencilled in, and in bd 1.2.x that blocks every other worker's `--claim`: the bead
+        // pencilled in, and that blocks every other worker's `--claim` (bd 1.3.0, as on 1.2.2): the bead
         // sat in `bd ready` claimable by nobody but the worker that had just released it
         // (the adopter; here air-an9 after gate's session was gone). One process, so
         // the status and the assignee cannot be left half-applied. `--actor` is the one Air

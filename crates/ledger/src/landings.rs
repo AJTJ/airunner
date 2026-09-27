@@ -249,18 +249,24 @@ impl Ledger {
     /// nothing and "merged but not closed" is not by itself a defect. What is worth carrying
     /// past the print is a REFUTED clause: a bead claiming a file the merge did not touch.
     ///
-    /// **This is derived from the landing and the acceptance verdict, never from the lifetime
-    /// of a claim row (air-dlw).** It used to clear when the claim was released, which worked
-    /// under hand-over because `awaiting_review` kept the claim open for a while (air-3eu).
-    /// Close-with-proof deleted that window: the worker closes immediately, the status
-    /// reconcile releases the claim on the next tick, and the condition could never fire —
-    /// silently, in exactly the case air-ayp exists to catch. A claim being reconciled away is
-    /// now normal and says nothing about whether the close was justified.
+    /// The verdict is the landing's: a refuted bead is reported from its newest landing until
+    /// that landing stops refuting it. Whether the bead is *closed* is the claim's: a bead whose
+    /// newest claim the ledger released as closed (`closed_in_ledger`: what `air close` writes,
+    /// and what the reconcile writes when bd holds it closed) is not landed-and-not-closed, and
+    /// is not reported. 0.4.10 trial: the condition was raised six seconds after `air close`
+    /// had closed the bead and was still shown six minutes later, because the claim's release
+    /// was ignored here and `air status` cleared only beads back in the work queue.
     ///
-    /// So a refuted bead is reported from its newest landing until that landing stops refuting
-    /// it. Deciding it has been *dealt with* needs bd (reopened, or a successor filed) and is
-    /// the caller's: `air status` clears one bd shows back in the work queue, using lists it
-    /// already fetches. Nothing here calls bd, so this stays askable on every tick.
+    /// The claim's release was ignored on purpose (air-dlw): under close-with-proof the worker
+    /// closes before the branch lands, so a report that clears on the close can never fire for
+    /// such a bead. That is now the intended reading: `air close` checked the proof, and a
+    /// clause the merge does not touch is a lookup that did not answer, not a contradiction
+    /// (air-k6uh). What is left to report is a bead that landed while still open.
+    ///
+    /// Deciding a still-open bead has been *dealt with* needs bd (reopened, or a successor
+    /// filed) and is the caller's: `air status` clears one bd shows back in the work queue,
+    /// using lists it already fetches. Nothing here calls bd, so this stays askable on every
+    /// tick.
     ///
     /// Nothing here writes a bd status. A bead named by one of these rows is exactly as open
     /// in bd as it was before the merge, so the merge did not change what it blocks.
@@ -286,7 +292,7 @@ impl Ledger {
                 let Some(ob) = l.open_beads.iter().find(|o| &o.bead == bead) else {
                     continue;
                 };
-                if !ob.refuted {
+                if !ob.refuted || self.closed_in_ledger(bead)? {
                     continue;
                 }
                 out.push(LandedOpen {
@@ -459,30 +465,93 @@ mod tests {
         // It round-trips through the row, so the reason survives a restart.
         assert_eq!(l.landings().unwrap()[0].open_beads, r.open_beads);
 
-        // air-dlw: the claim's lifetime decides nothing here. Under close-with-proof the
-        // worker closes at once and the reconcile releases the claim on the next tick, so a
-        // report keyed on the claim could never fire — which is how this went silent.
+        // An open claim changes nothing: the bead is held, not closed.
         l.record_claim("zz-3", "alpha", &[], "t0").unwrap();
         assert_eq!(
             l.landed_open().unwrap().len(),
             1,
             "an open claim changes nothing"
         );
-        l.release_claim("zz-3", "alpha", "closed", "t2").unwrap();
+        // A release for any other reason is not a close either.
+        l.release_claim("zz-3", "alpha", "abandoned", "t2").unwrap();
         assert_eq!(
             l.landed_open().unwrap().len(),
             1,
-            "and a released one changes nothing: the report is the landing's, not the claim's"
+            "an abandoned claim leaves the bead open"
         );
 
-        // A LATER landing that names the bead without refuting it is what clears it: newest
-        // landing wins, and an older row saying otherwise is history.
+        // A LATER landing that names the bead without refuting it clears it: newest landing
+        // wins, and an older row saying otherwise is history.
         let mut again = row("2", "landed");
         again.beads = vec!["zz-3".into()];
         again.open_beads = vec![];
         again.finished_at = "t9".into();
         l.record_landing(&again).unwrap();
         assert!(l.landed_open().unwrap().is_empty());
+    }
+
+    /// 0.4.10 trial: `landed-not-closed` was raised for a bead `air close` had already closed
+    /// and stayed for six minutes. Land with a refuted clause, close through the call `air
+    /// close` makes, and the report is gone.
+    #[test]
+    fn a_bead_the_ledger_records_as_closed_is_not_landed_open() {
+        let l = Ledger::open_in_memory().unwrap();
+        let refuted = OpenBead {
+            bead: "zz-1".into(),
+            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+            refuted: true,
+            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
+                .into(),
+        };
+        l.record_claim("zz-1", "alpha", &[], "t0").unwrap();
+        let mut r = row("1", "landed-refuted");
+        r.open_beads = vec![refuted.clone()];
+        l.record_landing(&r).unwrap();
+        assert_eq!(
+            l.landed_open().unwrap().len(),
+            1,
+            "landed, held, refuted: reported"
+        );
+
+        // The order in the trial: closed BEFORE the landing is also closed.
+        assert_eq!(
+            l.release_claims_on(&["zz-1".into()], "closed", "t2")
+                .unwrap(),
+            vec![("zz-1".to_string(), "alpha".to_string())]
+        );
+        assert!(
+            l.landed_open().unwrap().is_empty(),
+            "closed is not landed-not-closed"
+        );
+
+        // The coordinator's `air close` writes "landed"; same answer.
+        l.record_claim("zz-1", "beta", &[], "t3").unwrap();
+        let mut r2 = row("2", "landed-refuted");
+        r2.open_beads = vec![refuted];
+        r2.finished_at = "t4".into();
+        l.record_landing(&r2).unwrap();
+        assert_eq!(
+            l.landed_open().unwrap().len(),
+            1,
+            "claimed again and re-refuted"
+        );
+        l.release_claims_on(&["zz-1".into()], "landed", "t5")
+            .unwrap();
+        assert!(l.landed_open().unwrap().is_empty());
+
+        // A bead never claimed is not closed here.
+        let mut r3 = row("3", "landed-refuted");
+        r3.beads = vec!["zz-9".into()];
+        r3.open_beads = vec![OpenBead {
+            bead: "zz-9".into(),
+            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
+            refuted: true,
+            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
+                .into(),
+        }];
+        r3.finished_at = "t6".into();
+        l.record_landing(&r3).unwrap();
+        assert_eq!(l.landed_open().unwrap().len(), 1);
     }
 
     /// air-8zn: a refused attempt carries the branch's beads (kept on purpose: it says what the

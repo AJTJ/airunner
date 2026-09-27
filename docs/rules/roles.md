@@ -221,8 +221,8 @@ While workers are online, keep the ready list full of claimable beads, set prior
 `blocks` edges where two beads share a file. When an epic has no open child, decompose it with
 the `air-decomposition` skill; `air status` names each such epic with its closed count. The
 reading may be delegated to a background agent, but the filing and deciding are yours. Workers
-pull work and there is no cap on work in flight. Never set `assignee` on an open bead: in bd
-1.2.x it blocks every other worker's claim.
+pull work and there is no cap on work in flight. Never set `assignee` on an open bead: it
+blocks every other worker's claim (bd 1.3.0, as on 1.2.2).
 
 Naming a bead at a worker reserves nothing. `air claim` is the only reservation, and a bead
 named in a message is still any worker's to take. Put the craft notes on the bead, not in the

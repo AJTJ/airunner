@@ -3980,11 +3980,11 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
 /// CONTRADICTS. As a `landings` row, never as a bd status.
 ///
 /// Red: a bead naming a file the merge did not touch is refuted, not discharged, the ledger
-/// reports it with the clause, and the report SURVIVES the claim being claimed and released —
-/// which is what air-dlw fixed, because close-with-proof reconciles the claim away at once and
-/// a report keyed on it could never fire. Green: a bead whose every clause is discharged says
-/// so; one Air merely cannot read is neither refuted nor discharged and is not reported; and a
-/// later landing that stops refuting the bead clears it.
+/// reports it with the clause, and the report survives the bead being claimed. Green: a bead
+/// whose every clause is discharged says so; one Air merely cannot read is neither refuted
+/// nor discharged and is not reported; a claim released as closed, which is what `air close`
+/// writes, ends the report (0.4.10 trial: it was raised after the close and stayed); and a
+/// later landing that stops refuting a still-open bead clears it.
 ///
 /// The no-blocking half is the second assertion: the whole representation is a ledger row, and
 /// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
@@ -4058,15 +4058,18 @@ fn probe_landed_but_open() -> Probe {
             && open
                 .first()
                 .is_some_and(|o| o.bead == "zz-2" && o.why.contains("docs/rules/adopting-air.md"));
-        // air-dlw: the claim's lifetime must NOT decide this. Under close-with-proof the
-        // worker closes at once and the reconcile releases the claim on the next tick, so a
-        // report keyed on the claim could never fire. Claim it, release it as the reconcile
-        // does, and the report has to survive both.
+        // An open claim is not a close: the report survives it.
         l.record_claim("zz-2", "alpha", &[], "t2")
             .map_err(|e| e.to_string())?;
+        let survives_the_claim = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
+        // 0.4.10 trial: releasing it as `air close` does IS a close, and the report goes.
         l.release_claims_on(&["zz-2".to_string()], "closed", "t3")
             .map_err(|e| e.to_string())?;
-        let survives_the_claim = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
+        let gone_once_closed = l.landed_open().map_err(|e| e.to_string())?.is_empty();
+        // Claimed again, so the bead is open here again and the later landing decides.
+        l.record_claim("zz-2", "beta", &[], "t3")
+            .map_err(|e| e.to_string())?;
+        let back_when_reclaimed = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
 
         // It clears when a LATER landing of the same bead stops refuting it.
         l.record_landing(&Landing {
@@ -4094,13 +4097,16 @@ fn probe_landed_but_open() -> Probe {
         })
         .map_err(|e| e.to_string())?;
         let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-        Ok((reported && survives_the_claim, cleared))
+        Ok((
+            reported && survives_the_claim && back_when_reclaimed,
+            gone_once_closed && cleared,
+        ))
     })()
     .unwrap_or_else(blocked);
     let (reported, cleared) = res;
 
     Probe {
-        name: "land: a contradicted clause is reported from the landing and survives the claim being reconciled away; one Air cannot read is not",
+        name: "land: a contradicted clause is reported from the landing while the bead is open here, and not once its claim is released as closed; one Air cannot read is not",
         red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
         green_passes: discharged.all_discharged()
             && !unreadable.refuted()
@@ -12168,7 +12174,8 @@ fn probe_close_takes_a_reason_file_whole() -> Probe {
 /// air-6wv2: the assignee refusal says whether that assignee is actually holding the bead.
 ///
 /// bd keeps an assignee through a close, so a reopened bead comes back pencilled in with nobody
-/// having assigned it — and in bd 1.2.x that blocks every other worker's `--claim`. The refusal
+/// having assigned it — and that blocks every other worker's `--claim` (bd 1.3.0, as on
+/// 1.2.2). The refusal
 /// named who was assigned and the fixing command, which only the coordinator can run, and said
 /// nothing about how a bead nobody assigned came to have an assignee. It cost the worker it
 /// blocked a round trip tonight (air-vsvt, reopened carrying `alerts`).
@@ -12245,7 +12252,7 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         // Every refusal must keep saying these, whichever branch it takes.
         let names_the_basics = |s: &str| {
             s.contains("has assignee `alerts`")
-                && s.contains("bd 1.2.x")
+                && s.contains("bd 1.3.0")
                 && s.contains("bd update zz-6wv2 -a \"\"")
         };
 
