@@ -511,6 +511,14 @@ pub fn landing_line(sel: &crate::cmd::status::Selection, worker: &str) -> String
     {
         return format!("landing: cannot tell — {e}");
     }
+    // 0.4.9 trial: a head main already contains has nothing to land, and saying "NOT landable"
+    // beside "the close would pass" read as a failure to two workers after every close.
+    if let Some((_, head)) = sel.in_main.iter().find(|(w, _)| w == worker) {
+        return format!(
+            "landing: nothing to land; your head {} is already on main",
+            head.get(..8).unwrap_or(head)
+        );
+    }
     if let Some(l) = sel.landings.iter().find(|l| l.worker == worker) {
         // air-kexg landed `bead: Option<String>` while this was being written: a journal-only
         // branch IS landable and carries no bead. Saying "carrying none" rather than printing

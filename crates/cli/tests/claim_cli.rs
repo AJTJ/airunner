@@ -221,11 +221,18 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
     std::fs::write(repo.join("bd.in_progress"), "zz-1\n").unwrap();
     assert_eq!(claims(&repo), vec![("zz-1".into(), "main".into(), None)]);
 
-    let (code, _, err) = air(&repo, &bd, &["release", "zz-1", "--reason", "bogus"]);
-    assert_eq!(code, 1);
-    assert!(err.contains("--reason must be one of"));
-
-    let (code, out, _) = air(&repo, &bd, &["release", "zz-1", "--reason", "abandoned"]);
+    // 0.4.9 trial: the reason is the worker's own words; the fixed words are common values,
+    // not a validation.
+    let (code, out, _) = air(
+        &repo,
+        &bd,
+        &[
+            "release",
+            "zz-1",
+            "--reason",
+            "abandoned: the owner has not ruled",
+        ],
+    );
     assert_eq!(code, 0, "{out}");
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
     // air-0kk: one process, status and assignee together (the empty `-a ""` logs as two
@@ -235,7 +242,10 @@ fn claim_runs_bd_then_writes_the_row_and_release_reopens() {
             .any(|l| l.trim() == "update zz-1 -s open -a  --actor tester"),
         "{log}"
     );
-    assert_eq!(claims(&repo)[0].2.as_deref(), Some("abandoned"));
+    assert_eq!(
+        claims(&repo)[0].2.as_deref(),
+        Some("abandoned: the owner has not ruled")
+    );
 }
 
 /// bd 1.3.0 refuses `bd update -s open -a ""` to anyone but the holder, and bd's default actor
@@ -2923,6 +2933,50 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
         told.iter()
             .any(|(w, c)| w == "beta" && c.contains("conflicts with gamma")),
         "{told:?}"
+    );
+    // 0.4.9 trial: the notice names the unlanded branch and says to wait for it; a dropped
+    // head is not offered to the lane again until its worker commits.
+    assert!(
+        told.iter().any(|(w, c)| w == "beta"
+            && c.contains("gamma's branch at")
+            && c.contains("is not on main yet")
+            && c.contains("Wait until it lands")),
+        "{told:?}"
+    );
+    // The fake bd must still hold the claims, or `air status` reconciles them away.
+    std::fs::write(main.join("bd.in_progress"), "zz-1\nzz-2\nzz-3\nzz-4\n").unwrap();
+    let (code, out, err) = air(&main, &bd, &["--json", "status"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let s = serde_json::from_str::<serde_json::Value>(&out).unwrap()["snapshot"].clone();
+    let ready: Vec<&str> = s["batch_ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["worker"].as_str())
+        .collect();
+    assert!(!ready.contains(&"beta") && !ready.contains(&"delta"), "{s}");
+    assert!(
+        s["not_batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["worker"] == "beta"
+                && n["check"] == "dropped-at-head"
+                && n["head"] == heads["beta"].as_str()),
+        "{s}"
+    );
+    // A new commit is a new head, and it is batch-ready again.
+    let beta = wts.iter().find(|(n, _)| *n == "beta").unwrap().1.clone();
+    git(&beta, &["commit", "-q", "--allow-empty", "-m", "resolve"]);
+    let (_, out, _) = air(&main, &bd, &["--json", "status"]);
+    let s = serde_json::from_str::<serde_json::Value>(&out).unwrap()["snapshot"].clone();
+    assert!(
+        s["batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["worker"] == "beta"),
+        "{s}"
     );
 }
 
