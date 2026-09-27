@@ -2420,6 +2420,66 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "dropped-head-not-batch-ready",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "A branch `air batch cut` dropped for a conflict is not batch-ready again at \
+                   that head (`dropped-at-head` in `air status --json`) until its worker commits. \
+                   The drop notice, and the cut's output, name the conflicting branch and its sha: \
+                   against main, `git merge main` now; against a peer's branch or the batch, \
+                   wait until it lands, then `git merge main` and resolve, or resolve against \
+                   main if it never lands. The cut no longer prints `Name each drop to its \
+                   worker`; the notice already does.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "precheck-hold-rereads",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "`air batch cut` re-reads the precheck record for a head immediately before \
+                   writing a `batch-held` notice, so a precheck recorded green while the cut was \
+                   running is not reported as missing.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "handover-already-on-main",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "`air handover` says `nothing to land; your head <sha> is already on main` for \
+                   a branch main contains, instead of `NOT landable`, and `air status --json` no \
+                   longer lists such a branch under `land_skipped` as `green-at-head`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "release-reason-free-text",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "`air release --reason` and `air reclaim --reason` take any text. The former \
+                   fixed words (landed, abandoned, reassigned, superseded, false-premise, \
+                   owner-gated, unknown) are the documented common values; `air audit` still \
+                   reads `owner-gated` by substring.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "acceptance-bare-filename",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "`air land` settles an acceptance clause that names a bare filename (`serve.sh`) \
+                   when a file of that name exists in the landed tree; before, only a path with \
+                   a slash counted, and every clause of the trial's twelve beads was prose.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "beads-ready-rotated",
+        since: "2026-09-26 (0.4.9 live trial)",
+        headline: "The `beads are ready` notice lists the same beads to every idle worker, but \
+                   rotates each run of equal priority by the recipient's position, so three idle \
+                   workers do not all claim the same first bead. One bead at the top priority is \
+                   still first for everyone. The text says when the order was changed.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

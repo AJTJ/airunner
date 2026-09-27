@@ -17,7 +17,6 @@
 use std::path::Path;
 
 use air_bd::{BdCli, BdError, Issue, WorkLedger};
-use air_ledger::claims::RELEASE_REASONS;
 
 use crate::cmd::{emit, log_event, now, open};
 
@@ -582,14 +581,10 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     0
 }
 
+// The reason is free text (0.4.9 trial: a worker's own words were refused, and in the end
+// nothing was released). `RELEASE_REASONS` are the common values the help text names; `air
+// audit` reads `owner-gated` by substring, so they still count.
 pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
-    if !RELEASE_REASONS.contains(&reason) {
-        eprintln!(
-            "air release: --reason must be one of {}",
-            RELEASE_REASONS.join("|")
-        );
-        return 1;
-    }
     let (ledger, me) = match open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -747,13 +742,6 @@ pub const BD_LEASE_MINUTES: u32 = 5;
 /// expired, it reopens the bead and clears the assignee. So a count of 0 on an in_progress
 /// bead is bd declining, and this says when bd will agree and exits non-zero.
 pub fn reclaim(repo: &Path, bead: &str, worker: &str, reason: &str, json: bool) -> i32 {
-    if !RELEASE_REASONS.contains(&reason) {
-        eprintln!(
-            "air reclaim: --reason must be one of {}",
-            RELEASE_REASONS.join("|")
-        );
-        return 1;
-    }
     if super::is_worker_like(super::caller_role()) {
         eprintln!(
             "air reclaim: the coordinator takes back a gone worker's bead; a worker gives back its own with `air release`"

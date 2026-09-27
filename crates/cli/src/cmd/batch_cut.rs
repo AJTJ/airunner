@@ -220,6 +220,7 @@ pub fn render(c: &Cut) -> String {
             d.paths.join(", "),
             d.stage
         ));
+        out.push_str(&format!("    {}\n", drop_advice(d)));
     }
     if let Some(r) = &c.reset_from {
         out.push_str(&format!(
@@ -239,13 +240,34 @@ pub fn render(c: &Cut) -> String {
     if let Some(n) = &c.next {
         out.push_str(&format!("next: {n}\n"));
     }
-    if !c.dropped.is_empty() {
-        out.push_str(
-            "Name each drop to its worker; resolving it is theirs, in their worktree, never the \
-             lane's.\n",
+    out.trim_end().to_string()
+}
+
+/// What a dropped member's worker does about it, the same words in the cut's output and in the
+/// notice `fanout::batch_dropped` sends (0.4.9 trial). Against main, the fix is `git merge
+/// main` now. Against a peer's branch or the batch so far, the conflicting side is NOT on main
+/// yet: the notice used to say "merge main" for both, and a worker resolved by merging the
+/// peer's unlanded branch instead.
+pub fn drop_advice(d: &Dropped) -> String {
+    if d.against == "main" {
+        return format!(
+            "Resolve it in your worktree: `git merge main`, fix the conflict in {}, commit, and \
+             your branch is batch-ready again.",
+            d.paths.join(", ")
         );
     }
-    out.trim_end().to_string()
+    let side = if d.against == "batch" {
+        "the lane's batch".to_string()
+    } else {
+        format!("{}'s branch", d.against)
+    };
+    format!(
+        "{side} at {} is not on main yet. Wait until it lands (you will hear `main moved`), \
+         then `git merge main` and resolve the conflict in {}; if it never lands, resolve \
+         against main instead. Commit, and your branch is batch-ready again.",
+        short(&d.against_sha),
+        d.paths.join(", ")
+    )
 }
 
 /// What the cut does with the lane's branch before merging anything.
@@ -397,6 +419,47 @@ fn merge(repo: &Path, sha: &str) -> Result<Merged, String> {
         ));
     }
     Ok(Merged::Conflict(marked))
+}
+
+/// Tell each worker whose branch a declared precheck kept out of this cut, once per head
+/// (0.4.8 trial), and write the audit line. `precheck_green_now` re-reads the precheck record
+/// for that head immediately before the hold is written (0.4.9 trial: a hold went out at
+/// 21:09:28.795 for a head whose green precheck was recorded at .725, because the batch-ready
+/// read was taken before the record landed); a head that passes now is neither held nor
+/// counted. Returns the heads held.
+pub fn hold_out<F>(
+    ledger: &Ledger,
+    lane: &str,
+    not_ready: &[status::NotBatchReady],
+    dry_run: bool,
+    considered: usize,
+    mut precheck_green_now: F,
+) -> Vec<String>
+where
+    F: FnMut(&status::NotBatchReady) -> bool,
+{
+    let mut held = Vec::new();
+    for n in not_ready
+        .iter()
+        .filter(|n| n.check == "no-precheck" && n.worker != lane)
+    {
+        if precheck_green_now(n) {
+            continue;
+        }
+        if !dry_run {
+            super::fanout::batch_held(ledger, lane, n);
+        }
+        super::log_event(
+            ledger,
+            lane,
+            super::decisions::BATCH_CUT_NO_PRECHECK,
+            &serde_json::json!({"member": n.worker, "head": n.head, "dry_run": dry_run}),
+            &n.detail,
+            &format!("{considered} batch-ready member(s)"),
+        );
+        held.push(n.head.clone());
+    }
+    held
 }
 
 pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
@@ -612,24 +675,15 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     // The precheck requirement acts here: a branch the repo's `precheck` key kept out of this
     // batch is one line, so `air audit` counts what the requirement cost (air-hqj8). The other
     // not-ready reasons are the ordinary state of a branch still in work and write nothing.
-    for n in not_ready
-        .iter()
-        .filter(|n| n.check == "no-precheck" && n.worker != lane)
-    {
-        // 0.4.8 trial: the branch's worker was never told; it waited on a cut that would not
-        // take it. Once per head, like a drop.
-        if !dry_run {
-            super::fanout::batch_held(&ledger, &lane, n);
-        }
-        super::log_event(
-            &ledger,
-            &lane,
-            super::decisions::BATCH_CUT_NO_PRECHECK,
-            &serde_json::json!({"member": n.worker, "head": n.head, "dry_run": dry_run}),
-            &n.detail,
-            &format!("{considered} batch-ready member(s)"),
-        );
-    }
+    let worktrees = git::worktrees(repo).unwrap_or_default();
+    hold_out(&ledger, &lane, &not_ready, dry_run, considered, |n| {
+        worktrees
+            .iter()
+            .find(|(p, _)| air_ledger::paths::worker_name_for(p).is_ok_and(|w| w == n.worker))
+            .is_some_and(|(p, _)| {
+                super::green::at(&ledger, p, &n.head, Kind::Precheck).is_ok_and(|e| e.holds())
+            })
+    });
     super::log_event(
         &ledger,
         &lane,
@@ -648,4 +702,83 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     );
     super::emit(json, &cut, || render(&cut));
     0
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    fn dropped(against: &str) -> Dropped {
+        Dropped {
+            worker: "w2".into(),
+            head: "2d2ea33dd9cc".into(),
+            beads: vec!["zz-2".into()],
+            against: against.into(),
+            against_sha: "d7bc5106209c".into(),
+            paths: vec!["greet.sh".into()],
+            stage: "pre-check",
+        }
+    }
+
+    /// 0.4.9 trial: the drop notice said "merge main" for a conflict with a peer's branch
+    /// that was not on main yet, and the worker merged the peer's unlanded commit instead.
+    /// Against a peer or the batch, the advice names the branch and its sha and says to
+    /// wait for it to land; against main, `git merge main` now. The cut's own output carries
+    /// the same words and no longer tells the lane to name each drop itself.
+    #[test]
+    fn drop_advice_names_the_unlanded_branch_and_says_to_wait() {
+        let peer = drop_advice(&dropped("w1"));
+        assert!(
+            peer.starts_with("w1's branch at d7bc5106 is not on main yet."),
+            "{peer}"
+        );
+        assert!(peer.contains("Wait until it lands"), "{peer}");
+        assert!(peer.contains("then `git merge main`"), "{peer}");
+        assert!(
+            peer.contains("if it never lands, resolve against main"),
+            "{peer}"
+        );
+        assert!(!peer.contains("merge w1's branch"), "{peer}");
+        let batch = drop_advice(&dropped("batch"));
+        assert!(
+            batch.starts_with("the lane's batch at d7bc5106 is not on main yet."),
+            "{batch}"
+        );
+        let main = drop_advice(&dropped("main"));
+        assert!(
+            main.starts_with("Resolve it in your worktree: `git merge main`"),
+            "{main}"
+        );
+        assert!(!main.contains("Wait"), "{main}");
+        let out = render(&Cut {
+            dropped: vec![dropped("w1")],
+            ..Default::default()
+        });
+        assert!(out.contains(&peer), "{out}");
+        assert!(!out.contains("Name each drop"), "{out}");
+    }
+
+    /// 0.4.9 trial: a `no-precheck` hold was written for a head whose green precheck had
+    /// been recorded 70 ms earlier. The hold re-reads the record first; a head green now is
+    /// neither told nor counted, and one that is not is told once.
+    #[test]
+    fn a_hold_is_skipped_when_the_precheck_passes_on_the_re_read() {
+        let ledger = Ledger::open_in_memory().unwrap();
+        let not = |worker: &str, head: &str| status::NotBatchReady {
+            worker: worker.into(),
+            head: head.into(),
+            check: "no-precheck",
+            detail: format!("{worker} at {head}: no green precheck at this head"),
+        };
+        let not_ready = vec![not("w1", "f914b150"), not("w2", "a76d562e")];
+        let held = hold_out(&ledger, "lane", &not_ready, false, 0, |n| n.worker == "w1");
+        assert_eq!(held, vec!["a76d562e".to_string()]);
+        let rows = ledger.deliveries_since("1970").unwrap();
+        let held_rows: Vec<&air_ledger::deliveries::Delivery> =
+            rows.iter().filter(|d| d.kind == "batch-held").collect();
+        assert_eq!(held_rows.len(), 1, "{rows:?}");
+        assert_eq!(held_rows[0].to_worker, "w2");
+        assert_eq!(held_rows[0].key, "a76d562e");
+    }
 }

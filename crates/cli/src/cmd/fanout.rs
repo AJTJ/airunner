@@ -54,11 +54,55 @@ pub fn added(before: &[String], now: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub fn beads_ready_text(ids: &[String]) -> String {
+/// `ids` with each run of equal priority rotated left by `by`, so each recipient reads a
+/// different bead first (0.4.9 trial: nine claim refusals, every one a race after a single
+/// notice put the same first bead in front of every idle worker). bd's priority order is kept:
+/// the groups stay where they are, and only where each group starts moves, so one P0 bead is
+/// still first for everyone (they collide, which is correct) and three P0 beads give three
+/// workers three different first beads. `priorities` is bd's per id; a length that does not
+/// match `ids` (a cache from before it was recorded) reads as one group.
+pub fn rotated(ids: &[String], priorities: &[i64], by: usize) -> Vec<String> {
+    let known = priorities.len() == ids.len();
+    let pairs: Vec<(&String, Option<i64>)> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            (
+                id,
+                if known {
+                    priorities.get(i).copied()
+                } else {
+                    None
+                },
+            )
+        })
+        .collect();
+    let mut out = Vec::with_capacity(ids.len());
+    for run in pairs.chunk_by(|a, b| a.1 == b.1) {
+        let by = by.checked_rem(run.len()).unwrap_or(0);
+        out.extend(
+            run.iter()
+                .skip(by)
+                .chain(run.iter().take(by))
+                .map(|(id, _)| (*id).clone()),
+        );
+    }
+    out
+}
+
+pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -> String {
+    let listed = rotated(ids, priorities, rotated_by);
+    let order = if listed == ids {
+        String::new()
+    } else {
+        " (the same beads every worker was told, in a different order so you do not all try \
+         the same one first)"
+            .to_string()
+    };
     format!(
-        "beads are ready: {}. If you hold no claim, claim one with `air claim <id>`; the first \
-         claim wins, and a refused claim means someone else took it.",
-        ids.join(" ")
+        "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
+         first claim wins, and a refused claim means someone else took it.",
+        listed.join(" ")
     )
 }
 
@@ -69,6 +113,7 @@ pub fn fan_out_ready(
     worker: &str,
     s: &Snapshot,
     ready: &[String],
+    priorities: &[i64],
     at: &str,
 ) -> Vec<String> {
     let seen: Option<Vec<String>> = ledger
@@ -89,9 +134,12 @@ pub fn fan_out_ready(
         return Vec::new();
     }
     let key = ready.join(" ");
-    let text = beads_ready_text(ready);
     let mut told = Vec::new();
-    for w in without_claim(s) {
+    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
+    let mut recipients = without_claim(s);
+    recipients.sort();
+    for (i, w) in recipients.into_iter().enumerate() {
+        let text = beads_ready_text(ready, priorities, i);
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
@@ -126,17 +174,23 @@ pub fn fan_out_ready(
 
 /// The claimable ready list, refreshed from bd when the cache is older than a minute. `None`
 /// when bd did not answer and nothing was cached, so a silence is never read as "empty".
-fn ready_now(repo: &Path, at: &str) -> Option<Vec<String>> {
+fn ready_now(repo: &Path, at: &str) -> Option<(Vec<String>, Vec<i64>)> {
     let cached = super::ready_cache::read(repo);
     let fresh = cached
         .as_ref()
         .and_then(|c| super::status::seconds_between(&c.at, at))
         .is_some_and(|age| age < READY_REFRESH_SECS);
     if fresh {
-        return cached.map(|c| c.ids);
+        return cached.map(|c| (c.ids, c.priorities));
     }
     let bd = super::claim::bd_for(repo);
-    super::ready_cache::refresh(repo, &bd, at).or_else(|| cached.map(|c| c.ids))
+    // The refresh wrote the cache with priorities; read them back from it.
+    super::ready_cache::refresh(repo, &bd, at)
+        .and_then(|ids| {
+            let c = super::ready_cache::read(repo)?;
+            Some((ids, c.priorities))
+        })
+        .or_else(|| cached.map(|c| (c.ids, c.priorities)))
 }
 
 /// One pass of every producer, after the coordinator's channel gathered `s`.
@@ -147,8 +201,9 @@ pub fn tick(repo: &Path, ledger: &Ledger, worker: &str, s: &Snapshot) {
     }
     let at = super::now();
     let ready = ready_now(repo, &at);
-    fan_out_ready(ledger, worker, s, ready.as_deref().unwrap_or_default(), &at);
-    if let Some(ready) = &ready {
+    let (ids, priorities) = ready.clone().unwrap_or_default();
+    fan_out_ready(ledger, worker, s, &ids, &priorities, &at);
+    if let Some((ready, _)) = &ready {
         queue_empty(
             ledger,
             worker,
@@ -767,19 +822,13 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
         key: format!("{}@{}", d.head, d.against_sha),
         beads: d.beads.join(" "),
         content: format!(
-            "dropped from batch: your {} ({}) conflicts with {} at {} in {}. Resolve it in your \
-             worktree (merge {} and fix the conflict), commit, and your branch is batch-ready \
-             again.",
+            "dropped from batch: your {} ({}) conflicts with {} at {} in {}. {}",
             short(&d.head),
             d.beads.join(" "),
             d.against,
             short(&d.against_sha),
             d.paths.join(", "),
-            if d.against == "main" || d.against == "batch" {
-                "main".to_string()
-            } else {
-                format!("{}'s branch", d.against)
-            }
+            super::batch_cut::drop_advice(d)
         ),
     };
     queue_notes(
@@ -816,6 +865,44 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 0.4.9 trial: nine claim refusals, all races on the first bead of one notice. Each
+    /// recipient's list starts one bead further along within a priority group; the beads and
+    /// bd's order are the same.
+    #[test]
+    fn beads_ready_is_rotated_within_a_priority_group_per_recipient() {
+        let ids = names(&["b-1", "b-2", "b-3"]);
+        // Three P0: three recipients, three different first beads.
+        let p0 = [0, 0, 0];
+        let firsts: Vec<String> = (0..3)
+            .map(|i| rotated(&ids, &p0, i).swap_remove(0))
+            .collect();
+        assert_eq!(firsts, ids);
+        assert_eq!(rotated(&ids, &p0, 1), names(&["b-2", "b-3", "b-1"]));
+        assert_eq!(rotated(&ids, &p0, 3), ids);
+        // One P0 and two P1: every recipient sees the P0 first; the P1s rotate among themselves.
+        let mixed = [0, 1, 1];
+        assert!((0..3).all(|i| rotated(&ids, &mixed, i)[0] == "b-1"));
+        assert_eq!(rotated(&ids, &mixed, 1), names(&["b-1", "b-3", "b-2"]));
+        // No priorities recorded: one group.
+        assert_eq!(rotated(&ids, &[], 1), names(&["b-2", "b-3", "b-1"]));
+        assert!(rotated(&[], &[], 2).is_empty());
+        let first = beads_ready_text(&ids, &p0, 0);
+        let third = beads_ready_text(&ids, &p0, 2);
+        assert!(
+            first.starts_with("beads are ready: b-1 b-2 b-3."),
+            "{first}"
+        );
+        assert!(!first.contains("different order"), "{first}");
+        assert!(
+            third.starts_with("beads are ready: b-3 b-1 b-2 ("),
+            "{third}"
+        );
+        assert!(third.contains("same beads"), "{third}");
+        // A single P0 bead alone rotates nowhere, so nothing claims it was reordered.
+        let alone = beads_ready_text(&names(&["b-1"]), &[0], 2);
+        assert!(!alone.contains("different order"), "{alone}");
     }
 
     /// air-1vri.5: the coordinator hears "the ready queue is empty" once per emptying while a

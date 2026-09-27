@@ -533,7 +533,8 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `no-claimed-bead` | `no-precheck` | `nothing-ahead` (the coordinator)
+    /// `green-at-head` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` | `no-precheck` |
+    /// `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
 }
@@ -565,6 +566,8 @@ pub struct BatchFacts {
     /// A red batch was recorded at this exact head and took it as a member (0.4.6
     /// trial D3).
     pub red_batch_at_head: bool,
+    /// A cut dropped this exact head for a conflict and told its worker (0.4.9 trial).
+    pub dropped_at_head: bool,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -615,6 +618,19 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             format!(
                 "{} at {short} went red as a batch at this head; it is batch-ready again after \
                  a new commit",
+                f.worker
+            ),
+        ));
+    }
+    // 0.4.9 trial: a head a cut dropped for a conflict was offered to the lane again ten
+    // seconds later, before its worker had committed anything, and dropped again. Same shape
+    // as the red: the record says this head conflicts, and only a new commit changes that.
+    if f.dropped_at_head {
+        return Err(not(
+            "dropped-at-head",
+            format!(
+                "{} at {short} was dropped from a batch for a conflict at this head; it is \
+                 batch-ready again after a new commit",
                 f.worker
             ),
         ));
@@ -709,6 +725,7 @@ pub fn batch_ready_for(
     };
     let claims = ledger.open_claims().unwrap_or_default();
     let red_batches = ledger.red_batches(Kind::Verify).unwrap_or_default();
+    let dropped = ledger.batch_dropped_heads().unwrap_or_default();
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
@@ -755,8 +772,10 @@ pub fn batch_ready_for(
         let red_batch_at_head = red_batches
             .iter()
             .any(|r| r.sha == head && r.members.iter().any(|m| m.sha == head));
+        let dropped_at_head = dropped.iter().any(|(w, h)| *w == worker && *h == head);
         let facts = BatchFacts {
             red_batch_at_head,
+            dropped_at_head,
             precheck_required,
             precheck_green_at_head,
             coordinator,
@@ -896,6 +915,11 @@ pub struct Skipped {
 pub struct Selection {
     pub landings: Vec<Landing>,
     pub skipped: Vec<Skipped>,
+    /// Worktree branches whose head main already contains, as `(worker, head)`: nothing to
+    /// land and nothing to fix (0.4.9 trial). Read by `air handover`, which used to say "NOT
+    /// landable" beside "the close would pass" for work already on main, because a head merged
+    /// by a lane's batch carries no green at its own sha.
+    pub in_main: Vec<(String, String)>,
     /// Real failures — git or the ledger — as distinct from "does not qualify". An error here
     /// must never read as an empty queue.
     pub errors: Vec<String>,
@@ -974,6 +998,13 @@ pub fn select(repo: &Path) -> Selection {
                 continue;
             }
         };
+        // Already in main: nothing waiting, nothing to say, and asked BEFORE the green, since
+        // a head a lane's batch merged has no green at its own sha and used to be reported as
+        // not landable for want of one (0.4.9 trial).
+        if git::is_ancestor(repo, &head, &main_tip).unwrap_or(false) {
+            out.in_main.push((worker.clone(), head.clone()));
+            continue;
+        }
         match super::green::at(&ledger, &path, &head, Kind::Verify).map(|e| e.holds()) {
             Ok(true) => {}
             Ok(false) => {
@@ -1005,8 +1036,8 @@ pub fn select(repo: &Path) -> Selection {
         // from a worktree and has no business asserting where a future `air land` will run.
         let facts = super::land::Facts {
             worker: &worker,
-            branch_exists: true, // the head above came from this worktree
-            already_in_main: git::is_ancestor(repo, &head, &main_tip).unwrap_or(false),
+            branch_exists: true,    // the head above came from this worktree
+            already_in_main: false, // left above
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
             branch_head: &head,
             green_at: Some(&head), // established by the green check above
@@ -2207,7 +2238,12 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             ancestor_deadlocks = deadlock_scan(&bd, &mut bd_slow, &mut errors);
             let _ = ledger.bd_cache_put("claimable_depth", &ids.len().to_string(), &at);
             let _ = ledger.bd_cache_put("epic_depth", &split.epics.len().to_string(), &at);
-            super::ready_cache::write(repo, &ids, &super::now());
+            super::ready_cache::write_with(
+                repo,
+                &ids,
+                &super::ready_cache::priorities_of(&v, &ids),
+                &super::now(),
+            );
             let _ = ledger.bd_cache_put("ready_depth", &v.len().to_string(), &at);
             Some(v.len())
         }
@@ -3008,6 +3044,43 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds
+    /// later and dropped again. Like a red at the head, a recorded drop holds the head out
+    /// until it moves; the worker's next commit is a new head and is ready as before.
+    #[test]
+    fn a_dropped_head_is_not_batch_ready_until_it_moves() {
+        let base = BatchFacts {
+            worker: "w2".into(),
+            head: "2d2ea33dd9cc3571".into(),
+            carried: vec!["zz-2".into()],
+            held: vec!["zz-2".into()],
+            ..Default::default()
+        };
+        assert!(batch_ready_rule(&base).is_ok());
+        let dropped = batch_ready_rule(&BatchFacts {
+            dropped_at_head: true,
+            ..base.clone()
+        })
+        .unwrap_err();
+        assert_eq!(dropped.check, "dropped-at-head");
+        assert!(
+            dropped.detail.contains("w2 at 2d2ea33d"),
+            "{}",
+            dropped.detail
+        );
+        assert!(
+            dropped.detail.contains("after a new commit"),
+            "{}",
+            dropped.detail
+        );
+        // The record names the old head; a new head is not it.
+        let moved = BatchFacts {
+            head: "c413fb4a00000000".into(),
+            ..base
+        };
+        assert!(batch_ready_rule(&moved).is_ok());
+    }
 
     fn claim(bead: &str, worker: &str, at: &str, attempts: i64) -> Claim {
         Claim {

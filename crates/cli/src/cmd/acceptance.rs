@@ -218,8 +218,25 @@ fn path_like(tok: &str) -> bool {
     t.contains('/') && t.rsplit('/').next().is_some_and(|f| f.contains('.')) && !t.ends_with('/')
 }
 
-/// The path-like tokens in a clause, in order, deduplicated.
+/// A bare filename (a dot, no slash, no spaces) is a path only when it exists in the landed
+/// tree (0.4.9 trial): `serve.sh` in "`serve.sh` exists on main" was prose to [`path_like`],
+/// so every one of the trial's twelve beads came back "could not discharge". The tree keeps
+/// the check exact: `v1.2.3` or `e.g.` is a path only if a file of that name is there.
+fn bare_file_in_tree(tok: &str, tree: &[String]) -> bool {
+    !tok.contains('/')
+        && tok.contains('.')
+        && !tok.starts_with('.')
+        && tree.iter().any(|t| t == tok)
+}
+
+/// The path-like tokens in a clause, in order, deduplicated; [`paths_named_in`] with no tree.
+#[cfg(test)]
 pub fn paths_named(clause: &str) -> Vec<String> {
+    paths_named_in(clause, &[])
+}
+
+/// [`paths_named`], plus bare filenames that exist in `tree` (see [`bare_file_in_tree`]).
+pub fn paths_named_in(clause: &str, tree: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in clause.split_whitespace() {
         // `path.rs:277` and `path.rs:12-30` are how this repo cites code; the path is the
@@ -232,7 +249,7 @@ pub fn paths_named(clause: &str) -> Vec<String> {
                 !c.is_ascii_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
             })
             .trim_end_matches('.');
-        if path_like(t) && !out.iter().any(|p| p == t) {
+        if (path_like(t) || bare_file_in_tree(t, tree)) && !out.iter().any(|p| p == t) {
             out.push(t.to_string());
         }
     }
@@ -260,7 +277,7 @@ pub fn judge(clause: &str, ev: &Evidence<'_>) -> Verdict {
             }
         };
     }
-    let paths = paths_named(clause);
+    let paths = paths_named_in(clause, ev.tree);
     if paths.is_empty() {
         return Verdict::Undecidable { how: PROSE.into() };
     }
@@ -777,6 +794,34 @@ Something happened. See docs/rules/roles.md for the rule.
                 if how == "the merge did not change crates/cli/tests/install_and_launch.rs"),
             "{v:?}"
         );
+    }
+
+    /// 0.4.9 trial: "`serve.sh` exists on main" was prose, so no clause of twelve beads was
+    /// settled. A bare filename counts when the landed tree has it; a dotted token the tree
+    /// lacks is still prose, so the check stays exact.
+    #[test]
+    fn a_bare_filename_is_a_path_when_the_landed_tree_has_it() {
+        let changed = vec!["serve.sh".to_string()];
+        let tree = vec!["serve.sh".to_string(), "greet.sh".to_string()];
+        let ev = Evidence {
+            green_at_landed: true,
+            changed: &changed,
+            tree: &tree,
+        };
+        let v = judge("`serve.sh` exists on main.", &ev);
+        assert!(
+            matches!(&v, Verdict::Discharged { how } if how == "the merge changed serve.sh"),
+            "{v:?}"
+        );
+        let v = judge("greet.sh prints a greeting on line 2", &ev);
+        assert!(
+            matches!(&v, Verdict::Unevidenced { how } if how == "the merge did not change greet.sh"),
+            "{v:?}"
+        );
+        // Not in the tree: prose, as before.
+        let v = judge("out-N.txt is written per run, e.g. v1.2.3", &ev);
+        assert_eq!(v, Verdict::Undecidable { how: PROSE.into() });
+        assert!(paths_named("`serve.sh` exists on main").is_empty());
     }
 
     #[test]
