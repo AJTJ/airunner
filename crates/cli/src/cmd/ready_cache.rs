@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 pub struct ReadyCache {
     pub at: String,
     pub ids: Vec<String>,
+    /// bd's priority per id, same order (0.4.9 trial: the ready notice is rotated within a
+    /// priority group). Empty on a cache written before this existed, which reads as one group.
+    #[serde(default)]
+    pub priorities: Vec<i64>,
 }
 
 fn path(repo: &Path) -> Option<std::path::PathBuf> {
@@ -31,10 +35,16 @@ fn path(repo: &Path) -> Option<std::path::PathBuf> {
 
 /// Best effort; a cache that cannot be written is the same as no cache.
 pub fn write(repo: &Path, ids: &[String], now: &str) {
+    write_with(repo, ids, &[], now);
+}
+
+/// [`write`] with bd's priority per id, from [`priorities_of`].
+pub fn write_with(repo: &Path, ids: &[String], priorities: &[i64], now: &str) {
     let Some(p) = path(repo) else { return };
     let c = ReadyCache {
         at: now.to_string(),
         ids: ids.to_vec(),
+        priorities: priorities.to_vec(),
     };
     if let Ok(s) = serde_json::to_string(&c) {
         let _ = std::fs::write(p, s);
@@ -91,6 +101,19 @@ pub fn claimable(ready: &[air_bd::Issue]) -> Vec<String> {
     split(ready).claimable
 }
 
+/// bd's priority for each of `ids`, in order, read from the same answer `ids` came from.
+pub fn priorities_of(ready: &[air_bd::Issue], ids: &[String]) -> Vec<i64> {
+    ids.iter()
+        .map(|id| {
+            ready
+                .iter()
+                .find(|i| i.id == *id)
+                .map(|i| i.priority)
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// The claimable list as bd has it *now*, for the one caller that must not be wrong: the Stop
 /// nudge (air-ouw). Returns `None` when bd does not answer inside the budget, and the nudge
 /// then says nothing rather than naming a list it cannot vouch for.
@@ -110,15 +133,17 @@ pub fn confirm(repo: &Path) -> Option<Vec<String>> {
         .unwrap_or(3000);
     bd.timeout = std::time::Duration::from_millis(ms);
     bd.label = air_ledger::budgets::BD_NUDGE;
-    let ids = claimable(&air_bd::WorkLedger::ready(&bd).ok()?);
-    write(repo, &ids, &crate::cmd::now());
+    let ready = air_bd::WorkLedger::ready(&bd).ok()?;
+    let ids = claimable(&ready);
+    write_with(repo, &ids, &priorities_of(&ready, &ids), &crate::cmd::now());
     Some(ids)
 }
 
 /// Refresh the cache from bd; swallow errors (callers report bd failures themselves).
 pub fn refresh(repo: &Path, bd: &air_bd::BdCli, now: &str) -> Option<Vec<String>> {
-    let ids = claimable(&air_bd::WorkLedger::ready(bd).ok()?);
-    write(repo, &ids, now);
+    let ready = air_bd::WorkLedger::ready(bd).ok()?;
+    let ids = claimable(&ready);
+    write_with(repo, &ids, &priorities_of(&ready, &ids), now);
     Some(ids)
 }
 
