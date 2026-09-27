@@ -17,6 +17,22 @@ A fleet is three kinds of sessions. Each is a full Claude Code harness (support 
 - **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because the returns from more parallel harnesses falls off quickly beyond that.
 - **Verification lane** (`air lane`). It merges finished branches into a batch, runs your tests suite/validation checks... once for the whole batch, and lands the batch on `main`. It is the only session that moves `main`. Checking once per batch costs far less than once per branch, and a single owner of `main` means `main` only ever moves to a commit that passed.
 
+## How it works
+
+```mermaid
+flowchart LR
+    C[Coordinator<br/>files beads] --> Q[(beads)]
+    Q -- "beads are ready" --> W[Workers<br/>one worktree each]
+    W -- "hand over a branch" --> L[Lane<br/>cuts a batch, runs the check]
+    L -- "green: lands" --> M[main]
+    L -- "red or conflict: names the worker" --> W
+    M -- "main moved" --> C
+    M -- "batch green: air close" --> W
+```
+
+Air sends the messages on the arrows; nobody polls and nobody relays. The lane is the only
+thing that moves main.
+
 ## What Air is
 
 - **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
