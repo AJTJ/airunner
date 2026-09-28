@@ -66,7 +66,6 @@ traces! {
 
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
     BATCH_CUT_DROP = "batch-cut" / "drop";
-    BATCH_CUT_NO_PRECHECK = "batch-cut" / "no-precheck";
     BATCH_CUT_CUT = "batch-cut" / "cut";
     BATCH_CUT_DRY_RUN = "batch-cut" / "dry-run";
 
@@ -139,10 +138,7 @@ traces! {
     POST_TOOL_USE_JOURNALED = "hook.PostToolUse" / "journaled";
     STOP_OBSERVED = "hook.Stop" / "observed";
     STOP_NUDGE = "hook.Stop" / "nudge";
-    STOP_PASS = "hook.Stop" / "pass";
     STOP_NO_CLAIM = "hook.Stop" / "no-claim";
-    STOP_WOULD_REFUSE = "hook.Stop" / "would-refuse";
-    STOP_WOULD_REFUSE_REPEAT = "hook.Stop" / "would-refuse-repeat";
     SUBAGENT_STOP_OBSERVED = "hook.SubagentStop" / "observed";
     NOTIFICATION_STOPPED = "hook.Notification" / "stopped";
     NOTIFICATION_OBSERVED = "hook.Notification" / "observed";

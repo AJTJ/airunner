@@ -2,11 +2,12 @@
 //!
 //! The exit is the fact. Around it Air records what the adopter's captures 4d1e52/9de453/38b0c1
 //! showed a human cannot see in a log: the exact command, how long it took, how much it
-//! printed, and whether the tree was dirty. A run is flagged `suspicious` when it printed
-//! nothing (a precheck excepted) or ran far faster than this worker's last green of the same command (see
-//! [`suspicious`]), and `command-changed` when this worker's previous run of the same kind used
-//! a different command line. Backgrounded commands (`&`) are refused: Air spawns
-//! the check itself and must see it finish.
+//! printed, and whether the tree was dirty. Two facts are named beside the exit:
+//! `command-changed` when this worker's previous run of the same kind used a different command
+//! line, and the green and red counts at the commit when it has more than one run. Air states
+//! these and draws no conclusion from them (air-qlx3: the `suspicious` and `flaky-at-head`
+//! labels were opinions, and both were wrong in an adopter's round). Backgrounded commands
+//! (`&`) are refused: Air spawns the check itself and must see it finish.
 //!
 //! Every kind goes through this one path. `precheck` is a worker's cheap check under a
 //! verification lane (2026-09-25): recorded like a verify, and read only by the batch-ready
@@ -103,11 +104,6 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     let command_line = command.join(" ");
     let previous_run = ledger.latest_run_any(&worker, kind).ok().flatten();
     let previous = previous_run.as_ref().and_then(|r| r.command.clone());
-    // The last GREEN of this same command, for the too-fast half of `suspicious`.
-    let previous_green_ms = previous_run
-        .as_ref()
-        .filter(|r| r.is_green() && r.command.as_deref() == Some(command_line.as_str()))
-        .and_then(|r| r.duration_ms);
     // Air's own directory never counts as dirt (it is gitignored in a configured repo).
     let dirty = git::dirty_files(repo)
         .map(|v| v.iter().any(|p| !p.starts_with(".air/")))
@@ -179,40 +175,30 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         air_ledger::verify::Verdict::Red => super::decisions::RECORD_RED,
         air_ledger::verify::Verdict::Killed => super::decisions::RECORD_KILLED,
     };
-    let mut flags: Vec<&str> = Vec::new();
-    if run.is_green() && suspicious(kind, duration_ms, output_bytes, previous_green_ms) {
-        flags.push("suspicious");
-    }
+    let mut flags: Vec<String> = Vec::new();
     if previous.as_deref().is_some_and(|p| p != command_line) {
-        flags.push("command-changed");
+        flags.push("command-changed".to_string());
     }
     if dirty {
-        flags.push("dirty-tree");
+        flags.push("dirty-tree".to_string());
     }
     // Counted at the commit, every worker (air-7wf): a peer's red at this sha and my green
-    // are two verdicts on one commit, which is the disagreement this flag exists to show.
+    // are two verdicts on one commit. Stated as counts only (air-qlx3): the label that used to
+    // go with them blamed "the repo's test" for an adopter's missing build directory.
     let (greens, reds) = ledger.runs_at(&head, kind).unwrap_or((0, 0));
-    let flaky = greens > 0 && reds > 0;
-    let flaky_note = if flaky {
-        format!(
-            "; flaky at HEAD: {greens} green / {reds} red (the repo's test is the bug; file it, then re-run)"
-        )
-    } else {
-        String::new()
-    };
-    if flaky {
-        flags.push("flaky-at-head");
+    if greens.saturating_add(reds) > 1 {
+        flags.push(format!("at this commit: {greens} green / {reds} red"));
     }
     let reason = if flags.is_empty() {
         format!("exit {exit_code} in {duration_ms} ms, {output_bytes} bytes")
     } else {
         format!(
-            "exit {exit_code} in {duration_ms} ms, {output_bytes} bytes; {}{flaky_note}",
+            "exit {exit_code} in {duration_ms} ms, {output_bytes} bytes; {}",
             flags.join(", ")
         )
     };
     if !flags.is_empty() {
-        eprintln!("air record: {}{flaky_note}", flags.join(", "));
+        eprintln!("air record: {}", flags.join(", "));
     }
     // air-80x.4: a red at a batch head is reported by member, so the lane can split by hand.
     // Nothing else changes on a red: no landing, no close, no claim. A batch is a verify; a
@@ -291,30 +277,6 @@ fn after_batch(
         vec!["nothing lands on this batch; split it by its members, then cut again".to_string()];
     v.extend(super::fanout::next_cut_lines(&ready));
     v
-}
-
-/// Is this green suspicious? It printed nothing, or it ran in under a fifth of the time this
-/// worker's last green of the same command took.
-///
-/// The incident is the adopter's capture 38b0c1 (2026-08-21): `make verify`
-/// silently skipped its jest suite and still exited 0, so a check that had taken minutes took
-/// seconds. That was first encoded as "under 2 s", which is that adopter's suite speaking: a
-/// tiny project's whole check runs in 50 ms, and every green it recorded, the first one
-/// included, was flagged (air-gn5o, found building examples/minimal). A drop against the same
-/// command's own history is the thing the capture actually saw, and a first run has no history
-/// to drop from, so it is never flagged on speed. Removed when a verify reports what it ran
-/// (a test count) and Air can compare that instead.
-///
-/// A precheck that printed nothing is not flagged: a syntax check such as `sh -n` prints
-/// nothing when it passes, and the 0.4.6 live trial flagged every correct precheck (D5).
-pub fn suspicious(
-    kind: Kind,
-    duration_ms: i64,
-    output_bytes: i64,
-    previous_green_ms: Option<i64>,
-) -> bool {
-    (output_bytes == 0 && kind != Kind::Precheck)
-        || previous_green_ms.is_some_and(|prev| duration_ms.saturating_mul(5) < prev)
 }
 
 /// Run the check, streaming its output to ours while counting bytes. Returns (exit, bytes).
@@ -422,43 +384,4 @@ pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
 #[cfg(not(unix))]
 pub fn exit_of(status: &std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::suspicious;
-    use air_ledger::verify::Kind;
-
-    /// air-gn5o. Red under the old 2 s floor: a tiny project's first green, 40 ms with output,
-    /// was flagged. Green: it is not, while the two cases the flag exists for still are.
-    #[test]
-    fn a_fast_green_is_suspicious_only_against_its_own_history() {
-        let v = Kind::Verify;
-        assert!(
-            !suspicious(v, 40, 17, None),
-            "a first fast green with output"
-        );
-        assert!(!suspicious(v, 40, 17, Some(60)), "as fast as it always was");
-        assert!(suspicious(v, 40, 0, None), "printed nothing");
-        assert!(
-            suspicious(v, 3_000, 900, Some(240_000)),
-            "a suite that dropped from minutes to seconds (capture 38b0c1)"
-        );
-    }
-
-    /// D5, 0.4.6 live trial: every correct `sh -n` precheck was flagged, because it prints
-    /// nothing. Red before: a silent precheck green was suspicious. Green: it is not, a silent
-    /// verify still is, and a precheck that dropped far below its own history still is.
-    #[test]
-    fn a_precheck_that_prints_nothing_is_not_suspicious() {
-        assert!(
-            !suspicious(Kind::Precheck, 40, 0, None),
-            "sh -n, silent and green"
-        );
-        assert!(suspicious(Kind::Verify, 40, 0, None), "a silent verify");
-        assert!(
-            suspicious(Kind::Precheck, 40, 0, Some(10_000)),
-            "far faster than before"
-        );
-    }
 }

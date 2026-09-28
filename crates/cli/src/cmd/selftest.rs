@@ -722,7 +722,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // `--prove` caught three times an hour before this bead (air-e21v).
             also_red: &[
                 "gate: a refusal after a landing names the landing that moved main, when and from whom, and its fix asserts no repair a verify lane forbids",
-                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
         },
     ),
@@ -771,26 +770,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // stream reaches its own sink and not the other's) and leaves the reader intact.
             from: "        out_sink.clone(),\n        err_sink.clone(),",
             to: "        out_sink.clone(),\n        out_sink.clone(),",
-            also_red: &[],
-        },
-    ),
-    // air-avj. The anchor is the branch that decides what a Stop advisory prints, and nothing
-    // else: the facts, the pointer, the flow-free fix and `air handover`'s own message all
-    // survive it. Under it every repair is printed again, including the two a verify lane
-    // exists to stop a worker doing — which is the defect exactly, so a probe that stayed
-    // green under this was checking that the hook says SOMETHING rather than that it stopped
-    // saying the wrong thing. Anchor taken from the file AFTER rustfmt, per air-gei.
-    (
-        "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
-        Mutation {
-            file: "crates/hooks/src/gate.rs",
-            // Re-anchored (air-155w): the refusal renderer gained its own
-            // `if m.flow_dependent {` when flow-dependent fixes became conditions, so the
-            // one-line anchor matched twice and read as ambiguous. This one names the arm that
-            // is unique to `stop_message` — the check-and-detail with no fix, which is exactly
-            // what the Stop advisory drops the repair for.
-            from: "                format!(\"{}: {}\", m.check, m.detail)",
-            to: "                format!(\"{}: {} — run `{}`\", m.check, m.detail, m.fix)",
             also_red: &[],
         },
     ),
@@ -1009,7 +988,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "gate: a refusal names the command it refused, and the Stop message, which refused nothing, does not",
+        "gate: a refusal names the command it refused, and `air handover`, which refused nothing, does not",
         Mutation {
             // Back to naming the gate whatever it matched, which is the sentence that told a
             // worker its successful hand-over had failed.
@@ -1128,18 +1107,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "hook: the gate reads digest_dir from the worktree root, so a Stop from a subdirectory says what the root says",
-        Mutation {
-            // Keep the cwd as the tool gave it: the root is looked up and thrown away, which
-            // is the code before air-1r6. The probe's subdirectory run then differs from the
-            // root run.
-            file: "crates/cli/src/cmd/hook.rs",
-            from: "    let cwd = git::toplevel(&cwd).unwrap_or(cwd);",
-            to: "    let cwd = git::toplevel(&cwd).map(|_| cwd.clone()).unwrap_or(cwd);",
-            also_red: &[],
-        },
-    ),
-    (
         "hook: no session ever reads stuck; a permission request changes no state and nothing is named for it",
         Mutation {
             // Bring the deleted arm back: a PermissionRequest writes `stuck` again. The probe's
@@ -1205,10 +1172,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // Its "with neither digest nor green it is still refused" half is this rule
                 // (air-60x; declared by air-8d7).
                 "handover: a superseding branch hands over by its `Bead:` trailer; with neither digest nor green it is still refused, and never told to claim",
-                // air-e21v, declared from a `--prove` run rather than by reading: the
-                // Stop advisory (air-avj) renders this same refusal, so it falls with the
-                // rule legitimately. Undeclared it made this mutation VACUOUS.
-                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
         },
     ),
@@ -1226,10 +1189,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
                 // by air-8d7).
                 "hook: a session is who its launcher says, not where its shell sits; a refusal names whose tree it is about",
                 "handover: the ok line names the main it checked against, and a refusal after main moves names the new one",
-                // air-e21v, declared from a `--prove` run rather than by reading: the Stop
-                // advisory (air-avj) renders the same refusal, so it goes red with this rule
-                // legitimately. Undeclared it made this mutation VACUOUS.
-                "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
             ],
         },
     ),
@@ -2781,7 +2740,6 @@ fn all_probes() -> Vec<Probe> {
         probe_epic_with_no_open_children_is_named(),
         probe_ancestor_deadlock_is_named(),
         probe_a_red_runs_output_is_kept(),
-        probe_stop_never_advises_a_lane_worker_to_merge_or_verify(),
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
@@ -2794,7 +2752,6 @@ fn all_probes() -> Vec<Probe> {
         probe_red_batch_is_reported_by_member_and_lands_nothing(),
         probe_install_lag_is_named(),
         probe_no_session_reads_stuck(),
-        probe_hook_reads_from_the_worktree_root(),
         probe_acceptance_budget_scales_with_ids(),
         probe_mcp_tool_budget_and_group_kill(),
         probe_contradicts_names_only_the_refuted(),
@@ -5361,10 +5318,10 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
 /// so it must not name one.
 ///
 /// Red: `air close` refused by the gate names `air close` and does not call itself a
-/// hand-over. Green: `air handover`, which has no command, keeps the old subject, and the Stop
-/// message names no command.
+/// hand-over. Green: `air handover`, which has no command, keeps the old subject. (The Stop
+/// hook's message was the other surface here until air-wau8 deleted it.)
 fn probe_refusal_names_the_command_it_refused() -> Probe {
-    use air_hooks::{handover_verdict, stop_message};
+    use air_hooks::handover_verdict;
 
     let res = (|| -> Result<(bool, bool), String> {
         let dir = probe_repo()?;
@@ -5383,16 +5340,14 @@ fn probe_refusal_names_the_command_it_refused() -> Probe {
         // No command to name: `air handover` IS the hand-over query, so the subject stands.
         let f = crate::cmd::handover::facts(&l, "w3", &dir, Some("zz-1"), true)?;
         let v = handover_verdict(&f);
-        let stop = stop_message(&v, "w3", &f.head);
         let green = v.message.starts_with("handover would refuse for w3 at")
-            && !stop.contains("air close refused")
-            && stop.contains("handover would refuse");
+            && !v.message.contains("air close refused");
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "gate: a refusal names the command it refused, and the Stop message, which refused nothing, does not",
+        name: "gate: a refusal names the command it refused, and `air handover`, which refused nothing, does not",
         red_fires: red,
         green_passes: green,
     }
@@ -6288,6 +6243,7 @@ fn probe_attention() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -6356,6 +6312,7 @@ fn probe_standstill() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -6438,6 +6395,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -9374,127 +9332,6 @@ fn probe_acceptance_budget_scales_with_ids() -> Probe {
     }
 }
 
-/// air-1r6: the hook joins `digest_dir` (and every other repo-relative path) to the worktree
-/// ROOT, not to the Bash tool's cwd. A persisted `cd crates` made the gate refuse "no digest"
-/// for a digest that was there; the adopter's w1 hit it three times on 2026-09-06.
-///
-/// Red: a real `air hook` Stop advisory from a subdirectory says exactly what the same run
-/// from the root says, and neither names a missing digest while the digest exists.
-/// Green: with the digest removed, both runs name it missing, so the refusal for a truly
-/// absent digest is unchanged.
-fn probe_hook_reads_from_the_worktree_root() -> Probe {
-    let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
-        let g = |args: &[&str]| -> Result<(), String> {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).to_string());
-            }
-            Ok(())
-        };
-        g(&["init", "-q", "-b", "main"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
-        let wt = dir.join(".claude").join("worktrees").join("w");
-        g(&[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "w",
-            &wt.display().to_string(),
-        ])?;
-        // `.claude/air.json` is read from the MAIN checkout (`handover::air_json`); the digest
-        // itself is joined to the worker's own tree.
-        let digests = wt.join("docs").join("log.d");
-        std::fs::create_dir_all(&digests).map_err(|e| e.to_string())?;
-        std::fs::write(
-            dir.join(".claude").join("air.json"),
-            r#"{"digest_dir": "docs/log.d"}"#,
-        )
-        .map_err(|e| e.to_string())?;
-        let digest = digests.join("2026-09-06-w-zz-1r6.md");
-        std::fs::write(&digest, "---\nbead: zz-1r6\n---\n# ours\n").map_err(|e| e.to_string())?;
-        let sub = wt.join("crates");
-        std::fs::create_dir_all(&sub).map_err(|e| e.to_string())?;
-        // The Stop advisory speaks only for a worker with work in hand.
-        Ledger::open_for_repo(&dir)
-            .map_err(|e| e.to_string())?
-            .record_claim("zz-1r6", "w", &[], "t0")
-            .map_err(|e| e.to_string())?;
-        let script = fake_bd_script(&dir)?;
-        let calls = std::cell::Cell::new(0u32);
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        // The gate's answer at Stop: stdout carries the context, stderr anything the hook says
-        // on its own. A fresh session each call, because the advisory speaks once per session.
-        let gate = |cwd: &Path| -> Result<String, String> {
-            use std::io::Write;
-            calls.set(calls.get().saturating_add(1));
-            let input = serde_json::json!({
-                "hook_event_name": "Stop",
-                "session_id": format!("air-1r6-probe-{}", calls.get()),
-                "cwd": cwd.display().to_string(),
-            });
-            let mut child = air_command(&exe, cwd)
-                .arg("hook")
-                .env("AIR_ROLE", "worker")
-                .env("BEADS_ACTOR", "w")
-                .env("AIR_BD_BIN", &script)
-                // air-g7e: the nudge's bd budget is 3 s by default and this hook spawns
-                // a shell stub inside it. At load 186 that budget becomes the thing under
-                // test's enemy rather than its subject: `confirm` returns None, the nudge
-                // stays silent BY DESIGN, and the probe reads a correct silence as the
-                // rule failing. The rule is what is under test, so the wait comes out.
-                .env("AIR_NUDGE_BD_TIMEOUT_MS", "60000")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(input.to_string().as_bytes())
-                    .map_err(|e| e.to_string())?;
-            }
-            let out = child.wait_with_output().map_err(|e| e.to_string())?;
-            Ok(format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ))
-        };
-        let from_root = gate(&wt)?;
-        let from_sub = gate(&sub)?;
-        let names_missing = |s: &str| s.contains("no digest in docs/log.d");
-        let red = !from_root.is_empty()
-            && from_sub == from_root
-            && !names_missing(&from_root)
-            && !names_missing(&from_sub);
-        std::fs::remove_file(&digest).map_err(|e| e.to_string())?;
-        let root_missing = gate(&wt)?;
-        let sub_missing = gate(&sub)?;
-        let green = names_missing(&root_missing) && names_missing(&sub_missing);
-        let _ = std::fs::remove_dir_all(&dir);
-        Ok((red, green))
-    })();
-    let (red, green) = res.unwrap_or_else(blocked);
-    Probe {
-        name: "hook: the gate reads digest_dir from the worktree root, so a Stop from a subdirectory says what the root says",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
 /// air-09i: a worker stopping with no claim while beads are ready is nudged once. Red: the
 /// gate fires on those facts (ready beads, no claim, fresh stop). Green: the block names the
 /// beads, then passes once `stop_hook_active` is set (the loop guard) and never for the
@@ -11112,7 +10949,8 @@ fn probe_ancestor_deadlock_is_named() -> Probe {
 ///
 /// Green: the two halves that separate a recorded fact from a guess. A
 /// `quota_auto_resume_fired` reads as "leave it alone" rather than as one more stopped session,
-/// and a `Notification` that is not about a stop at all (a permission prompt) marks NOTHING —
+/// and a `Notification` that is not about a stop at all (a permission prompt) is never a stop —
+/// it is recorded as waiting for the person (air-n9f3), never as stopped —
 /// the kind is read from the harness's declared field, so a type Air has never met is logged
 /// and reported as not-a-stop rather than invented into one.
 fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
@@ -11151,11 +10989,11 @@ fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
             && is_stop_kind(&stop_kind(&stale))
             && stop_kind(&api) == "stop_failure"
             && is_stop_kind(&stop_kind(&api))
-            && stopped_phrase("quota_auto_resume_stale", "T").contains("NOT resuming"),
+            && stopped_phrase("quota_auto_resume_stale", "T", "").contains("NOT resuming"),
         green_passes: is_stop_kind(&stop_kind(&fired))
-            && stopped_phrase(&stop_kind(&fired), "T").contains("leave it alone")
+            && stopped_phrase(&stop_kind(&fired), "T", "").contains("leave it alone")
             // Not every notification is a stop: a permission prompt, a bare one, and a type
-            // from a later harness all write nothing rather than a phantom stopped session.
+            // from a later harness never read as a phantom stopped session.
             && !is_stop_kind(&stop_kind(&perm))
             && !is_stop_kind(&stop_kind(&bare))
             && !is_stop_kind(&stop_kind(&unknown))
@@ -11909,7 +11747,8 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 /// tree.
 ///
 /// A conflicted tree makes the suite fail on conflict markers, and `air record` wrote that as a
-/// RED at the sha. The red is then read as evidence by everything downstream — `flaky-at-head`,
+/// RED at the sha. The red is then read as evidence by everything downstream — the green/red
+/// counts,
 /// the close gate, the landing gate, and any later question about whether this tree was ever
 /// green. A false red is the record being wrong about a fact nobody will re-derive, which is
 /// the same class as air-htmn, where a landing that happened was recorded as refused. I wrote
@@ -12849,83 +12688,6 @@ fn probe_the_peer_warning_dates_the_entry() -> Probe {
     }
 }
 
-/// air-avj (an adopter's coordinator, 2026-09-06, after it cost three workers in one round).
-/// The Stop hook fires when a worker is choosing what to do next, and it arrives with the
-/// authority of tooling. Under a verify lane its text told them to do the two things a lane
-/// exists to prevent: `git merge main`, which moves the head off the sha the lane cut its batch
-/// at, and `air record verify`, which is the lane's job. w1 obeyed and lost its membership, w2
-/// ignored it at a round trip's cost, w3 asked instead of obeying.
-///
-/// Red (declared mutation: `flow_dependent` is always false): the Stop hook prints both repairs
-/// again, which is the defect exactly. Green: the FACTS are unchanged — every check, every
-/// detail, still there, because a worker still has to know why it will be refused; a fix that
-/// does not depend on the flow (the `Bead:` trailer) is still printed in full; the pointer to
-/// `air handover` appears only when something flow-dependent was dropped; and `air handover`'s
-/// own message keeps both repairs, since the CLI is the surface that reads the repo's flow.
-fn probe_stop_never_advises_a_lane_worker_to_merge_or_verify() -> Probe {
-    use air_hooks::{handover_verdict, stop_message};
-
-    // A worker behind main with no green: both flow-dependent checks fire at once, which is
-    // the state the adopter's three workers were in.
-    let mut f = base_facts();
-    f.green_at_head = false;
-    f.main_is_ancestor = false;
-    f.main_sha = "aaaaaaaa".into();
-    let v = handover_verdict(&f);
-    let stop = stop_message(&v, &f.worker, &f.head);
-
-    // RED: neither repair reaches a worker at Stop.
-    let red = !stop.contains("git merge main")
-        && !stop.contains("air record verify")
-        && v.missing.iter().filter(|m| m.flow_dependent).count() == 2;
-
-    // The facts survive: a worker still has to know why it will be refused.
-    let facts_kept = v
-        .missing
-        .iter()
-        .all(|m| stop.contains(m.check) && stop.contains(&m.detail));
-    let points_at_the_command = stop.contains("air handover");
-    // air-155w: this asserted the CLI keeps printing `air record verify`, which was
-    // air-avj's design — Stop drops the flow-dependent fix, `air handover` keeps it. That left
-    // the refusal itself handing an adopter's lane worker the clause its flow forbids, so the
-    // half that survives is "the CLI prints every fix IN FULL", which is what distinguishes it
-    // from Stop, and the half that goes is the forbidden command being in the fix at all.
-    let cli_prints_every_fix_in_full = v.missing.iter().all(|m| v.message.contains(&m.fix))
-        && v.message.contains("git merge main")
-        && !v.message.contains("air record verify");
-
-    // A refusal with NOTHING flow-dependent keeps its fix in full and needs no pointer: the
-    // trailer is the trailer whatever the flow is.
-    let mut g = base_facts();
-    g.bead_claimed_or_carried = false;
-    g.bead = Some("ad-1".into());
-    let cv = handover_verdict(&g);
-    let cs = stop_message(&cv, &g.worker, &g.head);
-    let flow_free_fix_kept = cv
-        .missing
-        .iter()
-        .filter(|m| !m.flow_dependent)
-        .all(|m| cs.contains(&m.fix))
-        && !cs.contains("air handover");
-
-    // A pass says what it always said.
-    let mut ok = base_facts();
-    ok.green_at_head = true;
-    let pv = handover_verdict(&ok);
-    let pass_unchanged = stop_message(&pv, &ok.worker, &ok.head) == pv.message;
-
-    let green = facts_kept
-        && points_at_the_command
-        && cli_prints_every_fix_in_full
-        && flow_free_fix_kept
-        && pass_unchanged;
-    Probe {
-        name: "hook: the Stop advisory never tells a worker to merge main or record a verify, and names `air handover` instead; a flow-free fix is still printed in full",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
 /// air-cyf: `red_batch_standing` read `latest_runs(Kind::Verify, 20)` and picked the red batch
 /// out of that window. Past 20 further verify runs a standing red batch stopped being reported,
 /// with nothing said — **and a report that was dropped looked exactly like one that was fixed.**
@@ -13262,6 +13024,7 @@ fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
         enforce: None,
         has_transcript,
         stopped: None,
+        waiting: None,
     };
     let row = |id: &str, has_transcript: bool| {
         (

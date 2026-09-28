@@ -942,6 +942,7 @@ mod tests {
             enforce: None,
             has_transcript: true,
             stopped: None,
+            waiting: None,
         };
         let mut known = None;
         let a = vec![("main".to_string(), "coordinator".to_string(), sess("aaaa"))];

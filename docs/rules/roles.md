@@ -130,7 +130,8 @@ Air delivers these messages into your session through its channel, each once, ma
 from `air`:
 
 - `beads are ready: <ids>` arrives when new beads became claimable while you held no claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
-  refused claim means someone else took it; take another.
+  refused claim means someone else took it; take another from `bd ready`, since the list in the
+  notice is as of when it was sent.
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
   branch in it went green. Close each named bead now, with the lane's green as the proof.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane

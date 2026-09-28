@@ -2,13 +2,14 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod common;
+
 use std::path::Path;
-use std::process::Command;
 
 fn scratch_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let g = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -45,7 +46,7 @@ fn scratch_repo() -> tempfile::TempDir {
 /// a real `bd` in a non-beads directory cost 0.25 to 0.5 s per call (air-4vu, 2026-08-22).
 /// Tests that need a bd (doctor, init) build their own fake and set `AIR_BD_BIN` themselves.
 fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, String) {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_air"));
+    let mut c = common::command(env!("CARGO_BIN_EXE_air"));
     c.arg("--repo")
         .arg(repo)
         .args(args)
@@ -159,7 +160,7 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         );
     }
     let git = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(&repo)
             .args(args)
@@ -368,7 +369,7 @@ fn repo_flag_may_not_point_at_another_project() {
         b.path().canonicalize().unwrap(),
     );
     // From inside A, pointing at A: fine.
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo_a)
         .args(["holdings"])
@@ -378,7 +379,7 @@ fn repo_flag_may_not_point_at_another_project() {
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
     // From inside A, pointing at B: refused, naming the rule.
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo_b)
         .args(["holdings"])
@@ -412,7 +413,7 @@ fn repo_deny_rules_are_appended_from_claude_air_json() {
 }
 
 #[test]
-fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
+fn record_keeps_the_command_and_names_a_changed_one() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     // Refuses backgrounding.
@@ -423,10 +424,10 @@ fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
     );
     assert_eq!(code, 1);
     assert!(err.contains("backgrounded"));
-    // A silent, instant green is recorded and flagged.
+    // A silent, instant green is recorded, and Air draws no conclusion from it (air-qlx3).
     let (code, _, err) = air(&repo, None, &["record", "verify", "--", "true"]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("suspicious"), "{err}");
+    assert!(!err.contains("suspicious"), "{err}");
     // A different command next time is flagged as changed; output is counted.
     let (code, out, err) = air(
         &repo,
@@ -460,7 +461,7 @@ fn doctor_gates_on_bd_answering() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     // No bd on PATH: doctor reports and exits 2.
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .arg("doctor")
@@ -483,7 +484,7 @@ fn doctor_gates_on_bd_answering() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["--json", "doctor"])
@@ -499,7 +500,7 @@ fn doctor_gates_on_bd_answering() {
 }
 
 #[test]
-fn flaky_head_is_reported_by_record_and_handover() {
+fn green_and_red_at_one_head_are_counted_by_record_and_handover() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let (c, _, _) = air(
@@ -513,7 +514,9 @@ fn flaky_head_is_reported_by_record_and_handover() {
         None,
         &["record", "verify", "--", "sh", "-c", "echo boom; exit 1"],
     );
-    assert!(err.contains("flaky at HEAD: 1 green / 1 red"), "{err}");
+    // Counts, no diagnosis (air-qlx3).
+    assert!(err.contains("at this commit: 1 green / 1 red"), "{err}");
+    assert!(!err.contains("flaky") && !err.contains("file it"), "{err}");
     let (_, out, _) = air(&repo, None, &["--json", "handover"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let m = v["missing"]
@@ -522,7 +525,13 @@ fn flaky_head_is_reported_by_record_and_handover() {
         .iter()
         .find(|m| m["check"] == "verify-green-at-head")
         .unwrap();
-    assert!(m["detail"].as_str().unwrap().contains("flaky"), "{m}");
+    assert!(
+        m["detail"]
+            .as_str()
+            .unwrap()
+            .contains("1 green / 1 red recorded"),
+        "{m}"
+    );
 }
 
 #[test]
@@ -563,7 +572,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
     }
     let path_ok = format!("{bin_dir}:{}:/usr/bin:/bin", root.display());
     let run = |path: &str, args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&proj)
             .args(args)
@@ -700,7 +709,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
 /// launcher must not exec `claude --tmux` there; it starts a detached tmux session instead.
 #[test]
 fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
-    if Command::new("tmux").arg("-V").output().is_err() {
+    if common::command("tmux").arg("-V").output().is_err() {
         eprintln!("SKIP: tmux not installed; detached launch cannot be exercised");
         return;
     }
@@ -719,14 +728,14 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     }
     let socket = format!("air-test-{}", std::process::id());
     let tmux = |args: &[&str]| {
-        Command::new("tmux")
+        common::command("tmux")
             .args(["-L", &socket])
             .args(args)
             .output()
             .unwrap()
     };
 
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["worker", "w", "--task", "hello there"])
@@ -794,7 +803,7 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
 fn worker_print_with_no_tty_shows_the_tmux_command() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["worker", "w", "--task", "x", "--print"])
@@ -819,7 +828,7 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
 /// its pane. The session name shows on the worker's row when a session for it is live.
 #[test]
 fn status_names_the_workers_tmux_session() {
-    if Command::new("tmux").arg("-V").output().is_err() {
+    if common::command("tmux").arg("-V").output().is_err() {
         eprintln!("SKIP: tmux not installed");
         return;
     }
@@ -827,14 +836,14 @@ fn status_names_the_workers_tmux_session() {
     let repo = dir.path().canonicalize().unwrap();
     let socket = format!("air-test-status-{}", std::process::id());
     let tmux = |args: &[&str]| {
-        Command::new("tmux")
+        common::command("tmux")
             .args(["-L", &socket])
             .args(args)
             .output()
             .unwrap()
     };
     let status = || -> String {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .arg("status")
@@ -862,7 +871,7 @@ fn status_names_the_workers_tmux_session() {
 fn worker_with_no_name_picks_the_next_free_lane() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["worker", "--task", "x", "--print"])
@@ -915,7 +924,7 @@ fn fleet_up_starts_the_lane_and_workers_once() {
         std::env::var("PATH").unwrap_or_default()
     );
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -1056,7 +1065,7 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
         mcp["mcpServers"]["air"]["command"],
         pin.display().to_string()
     );
-    let v = Command::new(&pin).arg("--version").output().unwrap();
+    let v = common::command(&pin).arg("--version").output().unwrap();
     assert!(String::from_utf8_lossy(&v.stdout).starts_with("air "));
 
     // Pinned, a plain --write refuses even with this binary on PATH: which binary wins must
@@ -1069,7 +1078,7 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
 
     // A session: a stub claude records which `air` its PATH finds.
     for args in [&["add", "-A"][..], &["commit", "-qm", "install --pin"][..]] {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(&repo)
             .args([
@@ -1112,7 +1121,7 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
         )),
         "{out}"
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["worker", "w"])
@@ -1170,7 +1179,7 @@ fn a_pinned_repo_hands_every_air_to_its_pin() {
     std::fs::write(&pin, "#!/bin/sh\necho \"PINNED $*\"\n").unwrap();
     std::fs::set_permissions(&pin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let wt = repo.join(".claude/worktrees/w");
-    let out = Command::new("git")
+    let out = common::command("git")
         .arg("-C")
         .arg(&repo)
         .args(["worktree", "add", "-q"])
@@ -1180,7 +1189,7 @@ fn a_pinned_repo_hands_every_air_to_its_pin() {
     assert!(out.status.success(), "{out:?}");
     let outside = tempfile::tempdir().unwrap();
     let run = |cwd: &Path, args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .args(args)
             .current_dir(cwd)
             .env("AIR_BD_BIN", "/nonexistent/bd")
