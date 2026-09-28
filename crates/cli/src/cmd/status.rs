@@ -552,8 +552,11 @@ pub fn ancestor_deadlocks(
 pub struct BatchReady {
     pub worker: String,
     pub head: String,
-    /// The beads the branch names by `Bead:` trailer that this worker holds a claim on.
+    /// The beads the branch names by `Bead:` trailer that this worker holds a claim on, or that
+    /// are closed (air-voeb).
     pub beads: Vec<String>,
+    /// Of `beads`, the ones already closed: closed, waiting for the lane (air-voeb).
+    pub closed: Vec<String>,
 }
 
 /// Why a worker branch is not batch-ready: the one fact it lacks, first failing fact wins.
@@ -580,6 +583,9 @@ pub struct BatchFacts {
     pub carried: Vec<String>,
     /// Beads this worker holds an open claim on.
     pub held: Vec<String>,
+    /// Beads closed through `air close`, by anyone (air-voeb). A closed bead is not held, and
+    /// closed-and-unlanded is the state a lane exists to carry to main.
+    pub closed: Vec<String>,
     /// The repo declares a precheck (`"precheck": true` in `.claude/air.json`), so a branch
     /// needs a green one at its head to be batch-ready.
     pub precheck_required: bool,
@@ -678,17 +684,25 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             ),
         ));
     }
+    // air-voeb: a closed bead counts too. A worker that closed on a green and moved on held
+    // nothing its branch named, so when main moved before the lane landed it, the branch was
+    // neither landable (behind main) nor batch-ready, and only a hand merge and verify got it out.
     let beads: Vec<String> = f
         .carried
         .iter()
-        .filter(|b| f.held.contains(b))
+        .filter(|b| f.held.contains(b) || f.closed.contains(b))
+        .cloned()
+        .collect();
+    let closed: Vec<String> = beads
+        .iter()
+        .filter(|b| !f.held.contains(b) && f.closed.contains(b))
         .cloned()
         .collect();
     if beads.is_empty() && !f.coordinator {
         return Err(not(
             "no-claimed-bead",
             format!(
-                "{} at {short}: no commit in main..{short} names a bead {} holds a claim on (carried: {}; held: {})",
+                "{} at {short}: no commit in main..{short} names a bead {} holds a claim on or that is closed (carried: {}; held: {})",
                 f.worker,
                 f.worker,
                 if f.carried.is_empty() {
@@ -727,6 +741,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         worker: f.worker.clone(),
         head: f.head.clone(),
         beads,
+        closed,
     })
 }
 
@@ -798,6 +813,12 @@ pub fn batch_ready_for(
     let red_batches = ledger.red_batches(Kind::Verify).unwrap_or_default();
     let dropped = ledger.batch_dropped_heads().unwrap_or_default();
     let running = in_flight_members(ledger);
+    let closed_beads: Vec<String> = ledger
+        .closed_claims()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.bead)
+        .collect();
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
@@ -862,6 +883,7 @@ pub fn batch_ready_for(
                 .filter(|c| c.worker == worker)
                 .map(|c| c.bead.clone())
                 .collect(),
+            closed: closed_beads.clone(),
             worker,
             head,
         };
@@ -2938,7 +2960,18 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             if b.beads.is_empty() {
                 "no bead".to_string()
             } else {
-                b.beads.join(" ")
+                // air-voeb: a closed bead is named as waiting for the lane.
+                b.beads
+                    .iter()
+                    .map(|x| {
+                        if b.closed.contains(x) {
+                            format!("{x}: closed, waiting for the lane")
+                        } else {
+                            x.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }
         ));
     }
@@ -3239,6 +3272,43 @@ mod tests {
         assert!(batch_ready_rule(&moved).is_ok());
     }
 
+    /// air-voeb: a branch whose commits name a closed bead is batch-ready although its worker
+    /// holds nothing, and `air status` names the bead as waiting for the lane. A bead neither
+    /// held nor closed still leaves the branch out.
+    #[test]
+    fn a_closed_bead_not_on_main_is_batch_ready_and_named() {
+        let f = BatchFacts {
+            worker: "worker-2".into(),
+            head: "14863f40aaaa".into(),
+            carried: vec!["air-92o0".into()],
+            held: vec![],
+            closed: vec!["air-92o0".into()],
+            ..Default::default()
+        };
+        let b = batch_ready_rule(&f).unwrap();
+        assert_eq!(b.beads, ["air-92o0"]);
+        assert_eq!(b.closed, ["air-92o0"]);
+        let out = render(
+            &Snapshot {
+                batch_ready: vec![b],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            out.contains(
+                "batch-ready: worker-2 at 14863f40 (air-92o0: closed, waiting for the lane)"
+            ),
+            "{out}"
+        );
+        let neither = batch_ready_rule(&BatchFacts {
+            closed: vec![],
+            ..f
+        })
+        .unwrap_err();
+        assert_eq!(neither.check, "no-claimed-bead");
+    }
+
     /// air-ch9p: a head inside a batch being verified is `in-batch`, named with the batch, and
     /// the text render says so; the same head with no batch running is batch-ready.
     #[test]
@@ -3267,6 +3337,7 @@ mod tests {
                 worker: "coordinator".into(),
                 head: "c0c0c0c0c0".into(),
                 beads: vec![],
+                closed: vec![],
             }],
             ..Default::default()
         };

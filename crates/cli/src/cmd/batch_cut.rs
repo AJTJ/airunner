@@ -594,6 +594,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         worker,
         head,
         beads,
+        ..
     } in ready.into_iter().filter(|b| b.worker != lane)
     {
         let ready_at = git::run(repo, &["log", "-1", "--format=%ct", &head])
