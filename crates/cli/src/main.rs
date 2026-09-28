@@ -266,8 +266,9 @@ enum Cmd {
     /// merge carries or what the landing records (air-dnr). A bead no green branch names is
     /// still refused.
     ///
-    /// It closes nothing. The worker closes its own bead with proof before the branch lands
-    /// (owner ruling, 2026-08-22), so this prints every bead in the merge beside its
+    /// It closes no worker's bead: the worker closes its own with proof before the branch lands
+    /// (owner ruling, 2026-08-22). It closes an epic once every one of its children is closed
+    /// (air-92o0). It prints every bead in the merge beside its
     /// acceptance criteria and Air's verdict on each clause — the only external check on that.
     /// Air discharges a clause only by lookup: a green verify recorded at the landed sha, or a
     /// path the merge changed. Everything else it reports as unreadable rather than judging.

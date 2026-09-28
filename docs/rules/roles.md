@@ -223,8 +223,9 @@ branch reaches main in the lane's batch: it is batch-ready once it has a commit 
 it needs no `Bead:` trailer.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
-`blocks` edges where two beads share a file. When an epic has no open child, decompose it with
-the `air-decomposition` skill; `air status` names each such epic with its closed count. The
+`blocks` edges where two beads share a file. When an epic has no children, decompose it with
+the `air-decomposition` skill; `air status` names each such epic. An epic whose children are
+all closed is finished, and `air land` closes it after the landing that finishes it. The
 reading may be delegated to a background agent, but the filing and deciding are yours. Workers
 pull work and there is no cap on work in flight. Never set `assignee` on an open bead: it
 blocks every other worker's claim (bd 1.3.0, as on 1.2.2).
@@ -279,7 +280,7 @@ Air also sends you two notices that ask you to act:
 - `capture from <worker>: <first line>` arrives once when a worker runs `air capture`. The
   worker is blocked or needs a decision. Read it with `air inbox` and triage it with `air
   triage <id>`, filing a bead or dropping it with a reason.
-- `the ready queue is empty: <n> worker(s) idle; epics with no open child: <ids or none>`
+- `the ready queue is empty: <n> worker(s) idle; epics with no children: <ids or none>`
   arrives once when no bead is left to claim and a worker holds no claim. It is not repeated
   until the queue has had a bead again. File the next wave, or decompose one of the named
   epics.

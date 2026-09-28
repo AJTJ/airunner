@@ -336,7 +336,43 @@ pub struct BdCli {
     pub label: &'static str,
 }
 
+/// One open epic's completion, from `bd epic status --json` (bd 1.3.0): `{"epic": {...},
+/// "total_children", "closed_children", "eligible_for_close"}` (air-92o0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicStatus {
+    pub id: String,
+    pub total_children: u64,
+    pub closed_children: u64,
+    pub eligible_for_close: bool,
+}
+
+/// Parse `bd epic status --json`. Rows without an epic id are skipped.
+pub fn parse_epic_status(json: &str) -> Result<Vec<EpicStatus>> {
+    let v: serde_json::Value = serde_json::from_str(json.trim()).map_err(BdError::Json)?;
+    let rows = v.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let n = |k: &str| r.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+            Some(EpicStatus {
+                id: r.get("epic")?.get("id")?.as_str()?.to_string(),
+                total_children: n("total_children"),
+                closed_children: n("closed_children"),
+                eligible_for_close: r
+                    .get("eligible_for_close")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect())
+}
+
 impl BdCli {
+    /// Every open epic's completion (`bd epic status --json`), read-only.
+    pub fn epic_status(&self) -> Result<Vec<EpicStatus>> {
+        parse_epic_status(&self.run(&["epic", "status", "--json"])?)
+    }
+
     pub fn new(cwd: &Path) -> Self {
         Self {
             bin: PathBuf::from("bd"),

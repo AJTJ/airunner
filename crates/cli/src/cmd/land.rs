@@ -836,8 +836,13 @@ pub fn run(
             }
         }
     }
-    // Nothing is closed here. The worker closes its own bead with proof before the branch
-    // lands (owner ruling, 2026-08-22); this command merges, verifies, and reports.
+    // A worker's bead is never closed here: the worker closes its own with proof before the
+    // branch lands (owner ruling, 2026-08-22). An epic has no worker. Once a landing leaves one
+    // with every child closed, it is closed here (air-92o0, owner 2026-09-28: the coordinator
+    // was not reliable enough to, and an adopter's status listed three such epics on every run).
+    if !landed.is_empty() {
+        lines.extend(close_finished_epics(repo, &worker));
+    }
     // air-1vri.4: every other session hears that main moved, once per landing.
     if let (Some(before), Some(merge)) = (&moved.0, &moved.1) {
         super::fanout::main_moved(
@@ -879,6 +884,48 @@ pub fn run(
         || msg.clone(),
     );
     code
+}
+
+/// The open epics a landing may close: bd says every child is closed, and there is at least
+/// one child. A childless epic is work not yet decomposed, never finished work (air-92o0).
+pub fn finished_epics(epics: &[air_bd::EpicStatus]) -> Vec<String> {
+    epics
+        .iter()
+        .filter(|e| {
+            e.eligible_for_close && e.total_children > 0 && e.closed_children >= e.total_children
+        })
+        .map(|e| e.id.clone())
+        .collect()
+}
+
+/// Close [`finished_epics`] in one bd process and say which, or why not. bd's own
+/// `epic close-eligible` closes every eligible epic and cannot be narrowed, so Air reads
+/// `bd epic status` and closes the ones it chose.
+fn close_finished_epics(repo: &Path, worker: &str) -> Vec<String> {
+    use air_bd::WorkLedger;
+    let bd = super::claim::bd_for(repo);
+    let ids = match bd.epic_status() {
+        Ok(e) => finished_epics(&e),
+        Err(e) => return vec![format!("epics: could not read bd epic status: {e}")],
+    };
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let actor = std::env::var("BEADS_ACTOR")
+        .ok()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| worker.to_string());
+    match bd.close_all(
+        &ids,
+        "All children completed; closed by air land (air-92o0)",
+        &actor,
+    ) {
+        Ok(()) => vec![format!(
+            "closed epic(s) whose children are all closed: {}",
+            ids.join(" ")
+        )],
+        Err(e) => vec![format!("epics: could not close {}: {e}", ids.join(" "))],
+    }
 }
 
 /// The landing commit's title: `Land <branch>: <beads>`, or `Land <branch>` with none.

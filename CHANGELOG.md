@@ -53,6 +53,11 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air land` closes an epic once bd reports every one of its children closed, and never an
+  epic with no children. `air status` names an epic to decompose only when it has no
+  children, prints the beads-without-initiative count only when `"metis": true` is set, and
+  prints no empty parentheses after a branch that carries no bead. The decomposition skill
+  puts an epic's "Done when" in its last child and files children with their `--deps`.
 - `air audit` prints, for every budget, the recorded median and maximum beside the budget and
   ten times the maximum, which the next release sets Air's numbers from; each budget names the
   measurement or the ceiling behind it. A wait that reaches its budget reads `over budget`.

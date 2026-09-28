@@ -283,12 +283,12 @@ pub fn queue_empty_text(idle: usize, epics: Option<&[String]>) -> String {
         Some(v) => v.join(" "),
     };
     format!(
-        "the ready queue is empty: {idle} worker(s) idle; epics with no open child: {epics}. \
+        "the ready queue is empty: {idle} worker(s) idle; epics with no children: {epics}. \
          File the next wave, or decompose one of those epics."
     )
 }
 
-/// The ready epics with no open child, asked of bd now. Called only when the queue-empty
+/// The ready epics with no children, asked of bd now. Called only when the queue-empty
 /// notice is about to go out, so an ordinary tick pays nothing for it.
 fn epics_to_decompose_now(repo: &Path) -> Option<Vec<String>> {
     let bd = super::claim::bd_for(repo);
@@ -384,7 +384,12 @@ pub fn lanes(s: &Snapshot) -> Vec<String> {
 }
 
 fn batch_ready_line(b: &BatchReady) -> String {
-    format!("{} at {} ({})", b.worker, short(&b.head), b.beads.join(" "))
+    format!(
+        "{} at {}{}",
+        b.worker,
+        short(&b.head),
+        super::status::beads_suffix(&b.beads)
+    )
 }
 
 /// What the lane does next, given the batch-ready set as of now: the set and `air batch cut`,
@@ -959,7 +964,7 @@ mod tests {
         assert_eq!(rows[0].0, "coordinator");
         assert_eq!(
             rows[0].1,
-            "the ready queue is empty: 1 worker(s) idle; epics with no open child: zz-9. \
+            "the ready queue is empty: 1 worker(s) idle; epics with no children: zz-9. \
              File the next wave, or decompose one of those epics."
         );
         // The coordinator's channel takes it; an undelivered one would be replaced instead.
@@ -978,10 +983,10 @@ mod tests {
         assert!(rows.iter().all(|(to, _)| to == "coordinator"), "{rows:?}");
         assert_eq!(
             queue_empty_text(2, None),
-            "the ready queue is empty: 2 worker(s) idle; epics with no open child: unknown \
+            "the ready queue is empty: 2 worker(s) idle; epics with no children: unknown \
              (bd did not answer). File the next wave, or decompose one of those epics."
         );
-        assert!(queue_empty_text(1, Some(&[])).contains("no open child: none."));
+        assert!(queue_empty_text(1, Some(&[])).contains("no children: none."));
     }
 
     #[test]

@@ -203,18 +203,18 @@ pub fn render(c: &Cut) -> String {
     }
     for m in &c.members {
         out.push_str(&format!(
-            "  member: {} at {} ({})\n",
+            "  member: {} at {}{}\n",
             m.worker,
             short(&m.head),
-            m.beads.join(" ")
+            super::status::beads_suffix(&m.beads)
         ));
     }
     for d in &c.dropped {
         out.push_str(&format!(
-            "  dropped: {} at {} ({}): conflicts with {} at {} in {} [{}]\n",
+            "  dropped: {} at {}{}: conflicts with {} at {} in {} [{}]\n",
             d.worker,
             short(&d.head),
-            d.beads.join(" "),
+            super::status::beads_suffix(&d.beads),
             d.against,
             short(&d.against_sha),
             d.paths.join(", "),

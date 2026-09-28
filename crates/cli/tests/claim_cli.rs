@@ -59,7 +59,8 @@ echo "$@" >> "$d/bd.log"
 # air-bxe/air-odv: a hook for observing the ledger from INSIDE a command. `air land` calls bd
 # for acceptance after main has moved and before it records the outcome, so a snapshot taken
 # here is what the ledger said mid-land. Off unless the test creates bd.peek.
-[ -f "$d/bd.peek" ] && { rm -rf "$d/seen_air"; cp -R "$d/.air" "$d/seen_air"; }
+# air-92o0: not on `epic`, which `air land` asks after the landing, so the snapshot stays mid-land.
+[ -f "$d/bd.peek" ] && [ "$1" != "epic" ] && { rm -rf "$d/seen_air"; cp -R "$d/.air" "$d/seen_air"; }
 case "$1" in
   --version) echo "bd version 1.3.0"; exit 0;;
   show) if [ -f "$d/bd.issue.json" ]; then cat "$d/bd.issue.json"; exit 0; fi
@@ -86,6 +87,7 @@ case "$1" in
        # printf, not echo: /bin/sh's echo expands the \n inside the JSON description.
        printf '%s\n' "[$out]"; exit 0;;
   ready) if [ -f "$d/bd.ready.json" ]; then cat "$d/bd.ready.json"; exit 0; fi; echo "[]"; exit 0;;
+  epic) if [ -f "$d/bd.epics.json" ]; then cat "$d/bd.epics.json"; exit 0; fi; echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1
           # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
           # issue `show` answers from, so a later claim by another actor sees what bd would.
@@ -4112,7 +4114,7 @@ fn land_prints_acceptance_and_closes_nothing() {
     assert_eq!(code, 0, "{out}{err}");
     assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
     // Every clause, as written, and no verdict on any of them.
-    assert!(out.contains("air land closes nothing"), "{out}");
+    assert!(out.contains("air land closes no worker's bead"), "{out}");
     for clause in [
         "    - Verify recorded green at HEAD.",
         "    - docs/rule.md says the rule.",
@@ -4145,6 +4147,36 @@ fn land_prints_acceptance_and_closes_nothing() {
     assert!(
         !s.contains("landed-not-closed") && !s.contains("zz-1 landed in"),
         "{s}"
+    );
+}
+
+/// air-92o0: a landing closes an epic bd reports with every child closed, and never a
+/// childless one, whatever bd says about it.
+#[test]
+fn a_landing_closes_a_finished_epic_and_not_a_childless_one() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    close_with_proof(&main, &alpha, &bd, "zz-1");
+    std::fs::write(
+        main.join("bd.epics.json"),
+        r#"[{"epic":{"id":"zz-epic"},"total_children":2,"closed_children":2,"eligible_for_close":true},
+            {"epic":{"id":"zz-empty"},"total_children":0,"closed_children":0,"eligible_for_close":true},
+            {"epic":{"id":"zz-half"},"total_children":2,"closed_children":1,"eligible_for_close":false}]"#,
+    )
+    .unwrap();
+    let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("closed epic(s) whose children are all closed: zz-epic"),
+        "{out}"
+    );
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    let closes: Vec<&str> = log.lines().filter(|l| l.starts_with("close ")).collect();
+    assert_eq!(closes.len(), 1, "{log}");
+    assert!(closes[0].contains("zz-epic"), "{log}");
+    assert!(
+        !closes[0].contains("zz-empty") && !closes[0].contains("zz-half"),
+        "{log}"
     );
 }
 
