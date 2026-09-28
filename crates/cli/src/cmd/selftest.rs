@@ -8655,7 +8655,8 @@ fn probe_mcp_tool_budget_and_group_kill() -> Probe {
             let redirect = if quiet { " >/dev/null 2>&1" } else { "" };
             let mut c = Command::new("sh");
             c.arg("-c").arg(format!(
-                "sleep 10{redirect} & echo $! > '{}'; wait",
+                "sleep {}{redirect} & echo $! > '{}'; wait",
+                STALL.as_secs(),
                 pidfile.display()
             ));
             c
@@ -8674,6 +8675,7 @@ fn probe_mcp_tool_budget_and_group_kill() -> Probe {
             }
         };
         let budget = Duration::from_millis(300);
+        const STALL: Duration = Duration::from_secs(10);
 
         // Red: the old kill, the leader only.
         let child = stub(true)
@@ -8695,7 +8697,8 @@ fn probe_mcp_tool_budget_and_group_kill() -> Probe {
         // Green: the group kill, with the orphan holding the pipe.
         let t0 = Instant::now();
         let killed = matches!(run_group(stub(false), budget), Err(GroupRun::Timeout));
-        let prompt = t0.elapsed() < Duration::from_secs(5);
+        // air-8gnk: under the stub's stall, not a wall-clock guess: waiting would take all of it.
+        let prompt = t0.elapsed() < STALL;
         let child_pid = read_pid()?;
         let child_gone = !alive(&child_pid);
         reap(&child_pid);

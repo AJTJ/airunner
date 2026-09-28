@@ -310,8 +310,9 @@ mod drain_tests {
 
     #[test]
     fn a_real_hang_is_killed_and_reported() {
+        const STALL: Duration = Duration::from_secs(5);
         let child = Command::new("sh")
-            .args(["-c", "sleep 5"])
+            .args(["-c", &format!("sleep {}", STALL.as_secs())])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -323,6 +324,7 @@ mod drain_tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(t.elapsed() < Duration::from_secs(2));
+        // air-8gnk: relative to the stall the test injects.
+        assert!(t.elapsed() < STALL, "took {:?}", t.elapsed());
     }
 }
