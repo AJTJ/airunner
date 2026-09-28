@@ -286,13 +286,15 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     "{bead} is neither claimed by {} nor named by a `Bead:` trailer in main..HEAD",
                     f.worker
                 ),
+                // air-ch9p: no `--amend`, which moves a head a lane may already have cut.
                 format!(
-                    "commit its work with a `Bead: {bead}` trailer (git commit --amend); that is what `air land` reads too"
+                    "a commit whose message carries the trailer `Bead: {bead}`, which is what `air land` reads too"
                 ),
             ),
             [] => (
                 format!("no bead is claimed by or carried on {}'s branch", f.worker),
-                "commit the work with a `Bead: <id>` trailer naming the bead it does".to_string(),
+                "a commit whose message carries a `Bead: <id>` trailer naming the bead it does"
+                    .to_string(),
             ),
             many => (
                 format!(
@@ -301,7 +303,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     f.worker
                 ),
                 format!(
-                    "commit the work with a `Bead:` trailer naming it, one of {}",
+                    "a commit whose message carries a `Bead:` trailer naming one of {}",
                     many.join(", ")
                 ),
             ),
@@ -329,7 +331,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                      exists for nobody but this worktree"
                 ),
                 fix: format!(
-                    "git add {dir} && git commit -m \"docs: digest for {one}\" — and if your \
+                    "`git add {dir} && git commit -m \"docs: digest for {one}\"`. If your \
                      lane has already cut a batch at this head, that commit must carry NO \
                      `Bead:` trailer: the batch green has to contain every commit that NAMES \
                      the bead, and an untrailered digest commit never joins that set, so your \
@@ -347,7 +349,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                 [bead] => (
                     format!("no digest in {dir} declaring `bead: {bead}`"),
                     format!(
-                        "write {dir}/<date>-{}-{bead}.md opening with front matter:\n---\nbead: {bead}\n---",
+                        "write {dir}/<date>-{}-{bead}.md, opening with front matter that says `bead: {bead}` between two `---` lines",
                         f.worker
                     ),
                 ),
@@ -358,7 +360,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                         "no digest in {dir}, and no bead to declare: {} holds no claim and none was named",
                         f.worker
                     ),
-                    "air claim the bead first, then write its digest with `bead:` front matter"
+                    "`air claim <id>` the bead first, then write its digest with `bead:` front matter"
                         .to_string(),
                 ),
                 many => (
@@ -370,7 +372,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                             .join(", ")
                     ),
                     format!(
-                        "write {dir}/<date>-{}-<one of {}>.md opening with front matter naming that bead:\n---\nbead: {}\n---",
+                        "write {dir}/<date>-{}-<one of {}>.md, opening with front matter that says `bead: <that id>` between two `---` lines (one of {})",
                         f.worker,
                         many.join("|"),
                         many.join("|")
@@ -450,10 +452,12 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         let items: Vec<String> = missing
             .iter()
             .map(|m| {
+                // air-ch9p: a flow-free fix is prose with its commands in backticks. Wrapping the
+                // whole of it in "run `...`" showed sentences and front matter as a command.
                 if m.flow_dependent {
                     format!("{}: {} — needs {}", m.check, m.detail, m.fix)
                 } else {
-                    format!("{}: {} — run `{}`", m.check, m.detail, m.fix)
+                    format!("{}: {} — fix: {}", m.check, m.detail, m.fix)
                 }
             })
             .collect();

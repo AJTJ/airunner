@@ -276,9 +276,10 @@ pub fn start(
     bins: &Bins,
     wait: Duration,
 ) -> Outcome {
-    if answers(port) {
-        return Outcome::Up { port };
-    }
+    // The database first (air-df53): whether Air set this server up is a fact about the data
+    // directory, not about who happens to listen on the port. Asked the other way round, a
+    // test's transient neighbour on the port read as a running server. Every caller has
+    // already asked `listener`, so the probe below only covers a start racing this one.
     let data = data_dir(main);
     if !allow_empty && !data.join(database).join(".dolt").is_dir() {
         return Outcome::Failed {
@@ -288,6 +289,9 @@ pub fn start(
                 data.display()
             ),
         };
+    }
+    if answers(port) {
+        return Outcome::Up { port };
     }
     if let Err(e) = std::fs::create_dir_all(&data) {
         return Outcome::Failed {
@@ -736,7 +740,10 @@ mod tests {
             tmux: "/nonexistent/tmux".into(),
             dolt: "/nonexistent/dolt".into(),
         };
-        let port = free_port(dir.path()).unwrap();
+        // air-df53: a listener on the port itself, which is what a neighbour did in a loaded
+        // verify. The database is missing, so it is still not started.
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
         let o = start(dir.path(), "x-dolt", port, "zz", false, &b, Duration::ZERO);
         assert!(
             matches!(&o, Outcome::Failed { why } if why.contains("no database `zz`")),

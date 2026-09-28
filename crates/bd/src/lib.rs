@@ -138,6 +138,31 @@ pub struct Issue {
     /// never runs `bd heartbeat`, so it runs out five minutes after the claim. Read only to
     /// tell the coordinator when `air reclaim` can take a bead back.
     pub lease_expires_at: Option<String>,
+    /// The beads this one depends on, as `bd show --json` lists them, each with its own status
+    /// and the edge's type (air-g7hr). `bd ready` withholds a bead with an open `blocks`
+    /// dependency, and `bd update --claim` does not, so `air claim` reads these to refuse it.
+    pub dependencies: Vec<ShownDep>,
+}
+
+/// One dependency of a bead as `bd show --json` embeds it (bd 1.3.0): the bead depended on,
+/// its status, and the edge's type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShownDep {
+    pub id: String,
+    pub status: String,
+    pub dependency_type: String,
+}
+
+impl Issue {
+    /// The dependencies that keep this bead out of `bd ready`: a `blocks` edge to a bead that
+    /// is not closed.
+    pub fn open_blockers(&self) -> Vec<&ShownDep> {
+        self.dependencies
+            .iter()
+            .filter(|d| d.dependency_type == BLOCKS && d.status != "closed")
+            .collect()
+    }
 }
 
 /// One dependency edge as `bd dep list --json` reports it: `issue_id` depends on
@@ -469,8 +494,10 @@ pub fn parse_issues(json: &str) -> Result<Vec<Issue>> {
 }
 
 impl WorkLedger for BdCli {
+    // `-n 0` on both (air-06k7): bd's defaults, 100 for ready and 50 for list, capped ready
+    // depth, the fan-out and the in-progress set without saying so. An adopter started with 88.
     fn ready(&self) -> Result<Vec<Issue>> {
-        parse_issues(&self.run(&["ready", "--json"])?)
+        parse_issues(&self.run(&["ready", "-n", "0", "--json"])?)
     }
 
     fn in_progress(&self) -> Result<Vec<Issue>> {
@@ -478,7 +505,7 @@ impl WorkLedger for BdCli {
     }
 
     fn by_status(&self, status: &str) -> Result<Vec<Issue>> {
-        parse_issues(&self.run(&["list", "--status", status, "--json"])?)
+        parse_issues(&self.run(&["list", "--status", status, "-n", "0", "--json"])?)
     }
 
     fn children(&self, id: &str) -> Result<Vec<Issue>> {

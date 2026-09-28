@@ -40,7 +40,11 @@ pub fn measure(ledger: &Ledger, since: &str) -> LoopTimes {
     let Ok(rows) = ledger.deliveries_since(since) else {
         return out;
     };
-    let runs = ledger.latest_runs(Kind::Verify, 500).unwrap_or_default();
+    // Every run that can end a wait: one started after the window opened (air-06k7; it was the
+    // newest 500, which a busy fortnight outgrows).
+    let runs = ledger
+        .runs_started_since(Kind::Verify, since)
+        .unwrap_or_default();
     for d in rows.iter().filter(|d| d.kind == "batch-ready") {
         let started = runs
             .iter()

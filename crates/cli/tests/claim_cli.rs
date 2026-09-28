@@ -1623,6 +1623,45 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// air-g7hr: a bead with an open `blocks` dependency is refused, naming the blocker and its
+/// status. bd ready withholds it and `bd update --claim` does not; an adopter's worker claimed
+/// one whose blocker a peer held in progress. A closed blocker and a parent edge do not block.
+#[test]
+fn claim_refuses_a_bead_with_an_open_blocker() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let issue = |deps: &str| {
+        std::fs::write(
+            repo.join("bd.issue.json"),
+            format!(
+                r#"{{"id":"zz-b","status":"open","issue_type":"task","labels":[],"dependencies":[{deps}]}}"#
+            ),
+        )
+        .unwrap();
+    };
+    issue(
+        r#"{"id":"zz-a","status":"in_progress","dependency_type":"blocks"},
+           {"id":"zz-e","status":"open","dependency_type":"parent-child"}"#,
+    );
+    let (code, out, _) = air(&repo, &bd, &["claim", "zz-b"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("blocked by zz-a (in_progress)"), "{out}");
+    assert!(
+        !out.contains("zz-e"),
+        "a parent edge is not a blocker: {out}"
+    );
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap_or_default();
+    assert!(!log.contains("update"), "nothing was written to bd: {log}");
+
+    issue(
+        r#"{"id":"zz-a","status":"closed","dependency_type":"blocks"},
+           {"id":"zz-e","status":"open","dependency_type":"parent-child"}"#,
+    );
+    let (code, out, err) = air(&repo, &bd, &["claim", "zz-b"]);
+    assert_eq!(code, 0, "a closed blocker does not block: {out}{err}");
+}
+
 /// An adopter's fleet protocol (2026-09-25), end to end: `"leases"` in `.claude/air.json` makes Air's PreToolUse hook
 /// refuse a declared command from a worker that does not hold the lease — the core of an
 /// adopter's own ~1,500-line guard, which read a second lock store. No config, the owner, an
@@ -1824,19 +1863,26 @@ fn holdings_tags_say_when_and_tell_dirt_from_an_edit() {
         out.contains("src.rs: main[uncommitted now, edited 0 min ago]"),
         "{out}"
     );
-    // Committed and clean: the edit is remembered with its age, and the tree says clean.
-    git(&repo, &["add", "src.rs"]);
-    git(&repo, &["commit", "-q", "-m", "src"]);
-    let (_, out, _) = air(&repo, &bd, &["holdings"]);
-    assert!(
-        out.contains("src.rs: main[journaled 0 min ago, clean now]"),
-        "{out}"
-    );
     let (_, out, _) = air(&repo, &bd, &["--json", "holdings"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(v["at"].as_str().unwrap().starts_with("20"), "{out}");
     assert_eq!(v["files"]["src.rs"][0]["journaled"], true, "{out}");
     assert!(v["files"]["src.rs"][0]["last_edit"].is_string(), "{out}");
+    // air-84lz: committed on main and clean, the holding has ended, and the journal row with
+    // it, so the peer warning stops naming it too.
+    git(&repo, &["add", "src.rs"]);
+    git(&repo, &["commit", "-q", "-m", "src"]);
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(!out.contains("src.rs"), "landed and clean: {out}");
+    let rows: i64 = rusqlite::Connection::open(repo.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM edit_journal WHERE path='src.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 /// air-b5k, end to end: a repo whose settings carry the adopter's `SessionStart -> bd prime
@@ -4434,6 +4480,90 @@ fn a_bead_already_in_main_closes_on_its_landing() {
 
     // A bead nothing landed is still refused: the landing row is what proves the work is
     // there, so an empty range on its own closes nothing.
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-9"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["pass"], false, "{out}");
+}
+
+/// air-5ynn, end to end: **a close between the fast-forward and the landing row passes.** The
+/// lane's green batch reaches main, and no landing row exists yet: `air land` writes it after
+/// the move. The gate used to ask the row whether the bead was in main, so this window refused
+/// the close with "no landing carries it either"; an adopter counted five in one day, each
+/// right after "close them now". Here main is fast-forwarded by hand, which is that window.
+#[test]
+fn a_close_between_the_fast_forward_and_the_landing_row_passes() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(main.join("bd.in_progress"), "ad-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "ad-1"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
+    git(&alpha, &["add", "more.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: ad-1\n"],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    // What `air land` does, up to the fast-forward: a landing commit built off main with the
+    // batch's tree, which has no green of its own until the row is written.
+    let tree = git(&lane, &["rev-parse", "HEAD^{tree}"]);
+    let tip = git(&main, &["rev-parse", "HEAD"]);
+    let batch = git(&lane, &["rev-parse", "HEAD"]);
+    let landing = git(
+        &main,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &tip,
+            "-p",
+            &batch,
+            "-m",
+            "land: lane",
+        ],
+    );
+    git(&main, &["merge", "-q", "--ff-only", &landing]);
+    git(&alpha, &["merge", "-q", "main"]);
+    let landings: i64 = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM landings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(landings, 0, "the window has no landing row");
+
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-1"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let msg = v["message"].as_str().unwrap().to_string();
+    assert_eq!(v["pass"], true, "{msg}");
+    assert!(msg.contains("already in main"), "{msg}");
+
+    // A bead no commit on main names is still refused.
     let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-9"], dead);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["pass"], false, "{out}");

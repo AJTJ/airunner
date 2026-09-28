@@ -526,9 +526,15 @@ pub fn red_batch_line(batch: Option<&crate::cmd::batch::RedBatch>, worker: &str)
         Some(p) => format!("the lane's output is at {p}"),
         None => "the lane's run kept no output".to_string(),
     };
+    // air-ch9p: a batch of one has nothing to split.
+    let then = if b.members.len() == 1 {
+        "you were its only member, so your branch is batch-ready again after a new commit"
+    } else {
+        "the lane splits by hand"
+    };
     Some(format!(
         "batch: your branch at {mine} was in the RED batch {} cut by {} at {}; nothing lands \
-         on it and the lane splits by hand — {log}",
+         on it and {then} — {log}",
         b.sha.get(..8).unwrap_or(&b.sha),
         b.worker,
         b.at,

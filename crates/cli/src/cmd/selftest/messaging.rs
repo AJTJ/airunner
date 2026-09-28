@@ -147,14 +147,77 @@ pub(super) fn view(
     }
 }
 
+/// air-oerm: a worker that joins, or loses its claim, while beads are ready is told them without
+/// the set having to change. An adopter's fleet started with 100 beads ready and four workers
+/// sat idle; every trial had hidden it by filing beads after the workers joined.
+///
+/// Red: the channel's first tick over a non-empty set tells `busy`, already without a claim;
+/// `idle` joining later, with the set unchanged, is told it, rotated by its place. Green: a
+/// repeat tells nobody, the worker holding a claim and the lane are never told, and a worker
+/// whose claim ended is told only a set it was not already told.
+pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
+    use crate::cmd::fanout::fan_out_ready;
+    use crate::cmd::status::{Snapshot, WorkerView};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let early = vec![
+            view("holding", "worker", "idle", Some("zz-9")),
+            view("lane", "lane", "idle", None),
+            view("busy", "worker", "working", None),
+        ];
+        let mut all = early.clone();
+        all.push(view("idle", "worker", "idle", None));
+        let snap = |w: &[WorkerView]| Snapshot {
+            workers: w.to_vec(),
+            ..Default::default()
+        };
+        let set = ["zz-1".to_string(), "zz-2".to_string()];
+        let tick =
+            |w: &[WorkerView], at: &str| fan_out_ready(&l, "coordinator", &snap(w), &set, &[], at);
+        let first = tick(&early, "2026-09-26T00:00:00Z");
+        let joined = tick(&all, "2026-09-26T00:00:30Z");
+        let again = tick(&all, "2026-09-26T00:01:00Z");
+        // `busy` takes a claim and drops it again: the set is unchanged and it was told it.
+        let mut claimed = all.clone();
+        if let Some(b) = claimed.iter_mut().find(|w| w.worker == "busy") {
+            *b = view("busy", "worker", "working", Some("zz-8"));
+        }
+        let _ = tick(&claimed, "2026-09-26T00:01:30Z");
+        let back = tick(&all, "2026-09-26T00:02:00Z");
+        let rows = l
+            .deliveries_since("2026-09-26T00:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = first == ["busy"]
+            && joined == ["idle"]
+            && rows.iter().any(|d| {
+                d.to_worker == "idle" && d.content.starts_with("beads are ready: zz-2 zz-1 (")
+            });
+        let green = again.is_empty()
+            && back.is_empty()
+            && rows.len() == 2
+            && !rows
+                .iter()
+                .any(|d| matches!(d.to_worker.as_str(), "holding" | "lane"));
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "fanout: a worker that joins or loses its claim while beads are ready is told them once, without the set changing",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-dkm1, air-ludo: when the claimable ready set gains a bead, "beads are ready" is queued
 /// once for each worker with a live session holding no claim, whatever its state, and for
 /// nobody else.
 ///
-/// Red: after a seeding tick, a tick where `zz-2` joins the set queues one row each for `idle`
-/// and `busy` (mid-turn, holding nothing), naming both beads. Green: the worker holding a claim
-/// and the lane get nothing; the seeding tick, a repeat of the same set, and a set that only shrank queue
-/// nothing more.
+/// Red: after a seeding tick over an empty set, a tick where the set gains beads queues one
+/// row each for `idle` and `busy` (mid-turn, holding nothing), naming both beads. Green: the
+/// worker holding a claim and the lane get nothing; the seeding tick, a repeat of the same
+/// set, and a set that only shrank queue nothing more. (A first tick over a non-empty set does
+/// tell: that is air-oerm's probe.)
 pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
     use crate::cmd::fanout::fan_out_ready;
     use crate::cmd::status::Snapshot;
@@ -173,7 +236,7 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
         let tick =
             |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), &[], at);
-        let seeded = tick(&["zz-1"], "2026-09-26T00:00:00Z");
+        let seeded = tick(&[], "2026-09-26T00:00:00Z");
         let grew = tick(&["zz-1", "zz-2"], "2026-09-26T00:00:30Z");
         let same = tick(&["zz-1", "zz-2"], "2026-09-26T00:01:00Z");
         let shrank = tick(&["zz-2"], "2026-09-26T00:01:30Z");
@@ -269,11 +332,32 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         s.batch_ready.push(br("w2", "bbbb2222"));
         let already_told = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:01:00Z");
 
-        let beads = |sha: &str| vec![format!("zz-{}", sha.get(..1).unwrap_or(""))];
-        let members = [("w1", "a1a1a1a1a1"), ("", "c3c3c3c3c3")];
+        // air-5ynn: a member whose commits name no bead (the coordinator) hears the green
+        // with no close instruction; one with a later commit hears that bead as waiting.
+        let beads = |m: &air_ledger::landings::Member| match m.worker.as_str() {
+            "coordinator" => crate::cmd::fanout::MemberBeads::default(),
+            "w2" => crate::cmd::fanout::MemberBeads {
+                covered: Vec::new(),
+                later: vec!["zz-b".into()],
+            },
+            _ => crate::cmd::fanout::MemberBeads {
+                covered: vec![format!("zz-{}", m.sha.get(..1).unwrap_or(""))],
+                later: Vec::new(),
+            },
+        };
+        let members = [
+            ("w1", "a1a1a1a1a1"),
+            ("", "c3c3c3c3c3"),
+            ("coordinator", "e5e5e5e5e5"),
+            ("w2", "b2b2b2b2b2"),
+        ];
         let green = batch_result_notes(&batch_run("g0g0g0g0", 0, &members), &beads);
         let red = batch_result_notes(&batch_run("r0r0r0r0", 2, &members), &beads);
         let killed = batch_result_notes(&batch_run("k0k0k0k0", 143, &members), &beads);
+        // air-ch9p (air-23ve): a batch of one names its commit once and splits nothing.
+        let one = [("w1", "a1a1a1a1a1")];
+        let green_one = batch_result_notes(&batch_run("a1a1a1a1a1", 0, &one), &beads);
+        let red_one = batch_result_notes(&batch_run("f6f6f6f6f6", 2, &one), &beads);
         batch_dropped(
             &l,
             "lane",
@@ -296,13 +380,33 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             && rows.iter().any(|d| {
                 d.to_worker == "lane" && d.kind == "batch-ready" && d.key == "w1@aaaa1111"
             })
-            && green.len() == 1
+            && green.len() == 3
             && green.first().is_some_and(|n| {
                 n.to == "w1"
                     && n.kind == "batch-green"
                     && n.beads == "zz-a"
                     && n.content.contains("Close them now")
             })
+            && green
+                .iter()
+                .filter(|n| n.to == "coordinator" || n.to == "w2")
+                .all(|n| n.beads.is_empty() && !n.content.contains("air close"))
+            && green
+                .iter()
+                .any(|n| n.to == "w2" && n.content.contains("zz-b has a later commit"))
+            && green_one.first().is_some_and(|n| {
+                n.content
+                    .starts_with("your a1a1a1a1 is green as a batch of one (zz-a). Close them now")
+            })
+            && red_one.first().is_some_and(|n| {
+                n.content.contains("was its only member")
+                    && n.content
+                        .contains("batch-ready again once it has a new commit")
+                    && !n.content.contains("splits")
+            })
+            && red
+                .first()
+                .is_some_and(|n| n.content.contains("one of 4 members"))
             && red.first().is_some_and(|n| {
                 n.kind == "batch-red"
                     && n.content.contains("exit 2")
@@ -319,7 +423,7 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         let green_half = again == 0
             && already_told == 0
             && killed.is_empty()
-            && red.len() == 1
+            && red.len() == 3
             && none.len() == 1
             && none.iter().all(|x| x.starts_with("nothing is batch-ready"));
         Ok((red_half, green_half))

@@ -813,7 +813,7 @@ pub fn advice(need: &Need, s: &Standing, me: &str) -> Option<String> {
             l.worker
         )),
         Standing::Other(l, None) => Some(format!(
-            "{head} It is HELD by {} (reason: {}); `{take}` records that you want it (shown in `air lease status`), and succeeds once it is released. Meanwhile take work that does not need it, or ask the coordinator; do not route around it.",
+            "{head} It is HELD by {} (reason: {}); `{take}` is refused now and records that you want it (shown in `air lease status`). Air tells you when it is free; then run `{take}` again.",
             l.worker, l.reason
         )),
     }
