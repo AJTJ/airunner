@@ -326,7 +326,7 @@ enum Cmd {
     },
     /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
     /// from `.worktreeinclude`), then runs claude IN it with role prose, deny list, env. No
-    /// `--worktree` (air-8gj): Air's PreToolUse hook is the fence.
+    /// `--worktree` (air-8gj).
     ///
     /// With --tmux or --task and a tty, opens a tmux session here. Without a tty (the
     /// coordinator's Bash tool, `</dev/null`) it starts a detached tmux session named

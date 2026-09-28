@@ -165,8 +165,8 @@ You read beads and add comments with `bd comment`; every other change to a bead 
 Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
 changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
-`air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
-PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/digests/`.
+`air capture`. Work only in your worktree, never in the main checkout, and use your scratchpad
+for anything that is not part of the repo.
 
 ### Verification lane
 
@@ -255,7 +255,7 @@ inbox depth, and the processes reading each tree (`readers: worker-2: 1 (cargo 3
 run recorded" does not mean idle. `air holdings` shows who is in which file. The channel pushes
 a condition when the set of conditions changes, not while one ages: a worker idle, silent or
 gone with a claim, a worker idle without one, a hand-over not green, a branch landable, a bead
-landed and not closed, a lease held by a dead or stale session.
+closed and not landed, a lease held by a dead or stale session.
 
 A gone worker's bead comes back with `air reclaim <id> --worker <name> --reason <reason>`. bd
 lets go once the worker's claim lease has run out, which is five minutes after the claim because
@@ -323,10 +323,7 @@ main. A batch lands once and costs that once. A close does not expire: the close
 green against the main it was recorded over, and main moving no longer retracts a close.
 
 A landing closes nothing, since workers close their own beads. `air land` prints each landed
-bead beside its acceptance criteria with Air's verdict on each clause. Air settles a clause
-only by lookup (a green recorded at the landed sha, or a path the merge changed) and reports
-the rest as unreadable. `air status` names a landed bead whose clause names a file the merge did
-not change, as a lookup that did not answer; read the bead.
+bead beside its acceptance criteria, with no verdict on them; read them.
 
 Intake: `air inbox`, then `bd create --validate --estimate <min>`, then `air triage <id> --bead
 <new>` or `--drop "<why>"`. `--validate` refuses a bead without the sections its type needs:

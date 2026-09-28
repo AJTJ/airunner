@@ -146,7 +146,6 @@ traces! {
     NOTIFICATION_OBSERVED = "hook.Notification" / "observed";
     STOP_FAILURE_STOPPED = "hook.StopFailure" / "stopped";
     STOP_FAILURE_OBSERVED = "hook.StopFailure" / "observed";
-    PRE_TOOL_USE_REFUSE_OUTSIDE_WORKTREE = "hook.PreToolUse" / "refuse-outside-worktree";
     PRE_TOOL_USE_WARN = "hook.PreToolUse" / "warn";
     PRE_TOOL_USE_WARN_REPEAT = "hook.PreToolUse" / "warn-repeat";
     PRE_TOOL_USE_CLEAR = "hook.PreToolUse" / "clear";

@@ -4054,9 +4054,9 @@ fn land_merges_verifies_closes_and_records() {
         std::fs::read_to_string(main.join("work.txt")).unwrap(),
         "the work\n"
     );
-    // Every clause discharged, and still nothing is closed: the worker closes its own bead
-    // with proof before the branch lands (air-ayp).
-    assert!(out.contains("zz-1 — every clause discharged"), "{out}{err}");
+    // The bead is listed with its acceptance, and nothing is closed: the worker closes its
+    // own bead with proof before the branch lands (air-ayp).
+    assert!(out.contains("\n  zz-1\n"), "{out}{err}");
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
     assert!(!log.contains("close zz-1"), "{log}");
     // And the landing is a row.
@@ -4091,67 +4091,44 @@ fn land_merges_verifies_closes_and_records() {
 }
 
 /// air-ayp: `air land` closes nothing — the worker closes its own bead with proof (owner
-/// ruling, 2026-08-22). The landing PRINTS every bead beside its acceptance and Air's verdict
-/// per clause, which is the only external check on that honour system. A clause the merge
-/// A clause naming a file the merge did not change is kept on the `landings` row and
-/// named by `air status` — as a lookup that did not answer, never as a contradiction
-/// (air-k6uh: six of nine such firings were clauses that held).
+/// ruling, 2026-08-22). The landing PRINTS every bead beside its acceptance so a wrong close is
+/// visible where it lands. air-cizz: with no verdict — the per-clause lookups and the
+/// `landed-not-closed` condition built on them were deleted after 7 of 8 firings at an adopter
+/// were paths a clause only mentioned.
 #[test]
-fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
+fn land_prints_acceptance_and_closes_nothing() {
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
     close_with_proof(&main, &alpha, &bd, "zz-1");
-    // Four clauses: one Air can look up, one it can look up and refute (a file that exists and
-    // the merge left alone), one it cannot read, and one naming a path-like token that is no
-    // file at the landed commit — the adopter's possessive (air-dqa) — which must read as
-    // unresolvable, never as a contradiction.
     acceptance(
         &main,
         "- Verify recorded green at HEAD.\n\
          - docs/rule.md says the rule.\n\
-         - The owner rules on the counter-argument.\n\
-         - The `docs/note.md`'s section is updated.\n",
+         - The owner rules on the counter-argument.\n",
     );
     let before = git(&main, &["rev-parse", "HEAD"]);
 
     let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
     assert_eq!(code, 0, "{out}{err}");
-    // It MERGED: the code is in main, so nothing is held hostage to the prose.
     assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
-    assert_eq!(
-        std::fs::read_to_string(main.join("work.txt")).unwrap(),
-        "the work\n"
-    );
-    // The print: every clause with its verdict, so a wrong close is visible as it lands.
+    // Every clause, as written, and no verdict on any of them.
     assert!(out.contains("air land closes nothing"), "{out}");
-    // air-rud0: the tick carries the lookup that produced it, so it cannot be read as a
-    // stronger claim than "a lookup matched".
-    assert!(
-        out.contains("ok (a green verify is recorded at the landed sha) — Verify recorded green"),
-        "{out}"
-    );
-    assert!(!out.contains("ok   Verify recorded"), "bare tick: {out}");
-    assert!(out.contains("MISS docs/rule.md says the rule."), "{out}");
-    assert!(
-        out.contains("?    The owner rules on the counter-argument."),
-        "{out}"
-    );
-    // air-dqa: read end to end through `git ls-tree` at the landed commit. The merge changed
-    // docs/note.md; the token is `docs/note.md`'s; Air says it cannot resolve it, and says
-    // nothing about the merge not changing it.
-    assert!(
-        out.contains("?    The `docs/note.md`'s section is updated.")
-            && out.contains("cannot resolve it"),
-        "{out}"
-    );
-    assert!(!out.contains("did not change docs/note.md"), "{out}");
-    // air-k6uh: the headline reports the lookup, and says in as many words that it is
-    // not a contradiction, because six of nine were clauses that held.
-    assert!(out.contains("zz-1 — UNCONFIRMED"), "{out}");
-    assert!(
-        !out.contains("REFUTED"),
-        "no contradiction is claimed: {out}"
-    );
+    for clause in [
+        "    - Verify recorded green at HEAD.",
+        "    - docs/rule.md says the rule.",
+        "    - The owner rules on the counter-argument.",
+    ] {
+        assert!(out.contains(clause), "{clause}: {out}");
+    }
+    for verdict in [
+        "ok (",
+        "MISS",
+        "UNCONFIRMED",
+        "discharged",
+        "cannot resolve",
+    ] {
+        assert!(!out.contains(verdict), "{verdict}: {out}");
+    }
     // It closes NOTHING, and writes no bd status of any kind.
     let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
     assert!(!log.contains("close zz-1"), "{log}");
@@ -4159,48 +4136,16 @@ fn land_prints_acceptance_closes_nothing_and_flags_a_refuted_clause() {
         !log.lines().any(|l| l.starts_with("update zz-1 -s")),
         "no bd status is written, so the bead blocks exactly what it blocked before: {log}"
     );
-    // What the print said outlives the scrollback, on the landings row.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
-    let (result, open): (String, String) = conn
-        .query_row("SELECT result, open_beads FROM landings", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+    let result: String = conn
+        .query_row("SELECT result FROM landings", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(result, "landed-refuted");
-    assert!(
-        open.contains("zz-1") && open.contains("docs/rule.md"),
-        "{open}"
-    );
-
-    // Restored by air-dlw. Beta weakened this to `!s.is_empty()` when close-with-proof made it
-    // fail, with the reason beside it: the condition used to clear on a RELEASED claim row,
-    // and under the new flow the worker closes immediately so the reconcile releases the claim
-    // on the next tick. The report is derived from the landing and the acceptance verdict now,
-    // so the claim being gone says nothing — which is the whole point of air-ayp surviving the
-    // flow change.
+    assert_eq!(result, "landed");
     let (_, s, _) = air(&main, &bd, &["status"]);
     assert!(
-        s.contains("zz-1 landed in")
-            && s.contains("naming a file this merge did not change")
-            && s.contains("NOT a contradiction")
-            && !s.contains("CONTRADICTS"),
+        !s.contains("landed-not-closed") && !s.contains("zz-1 landed in"),
         "{s}"
     );
-    // The claim really is reconciled away by now, so this is not passing by accident.
-    let released: i64 = rusqlite::Connection::open(main.join(".air/ledger.db"))
-        .unwrap()
-        .query_row(
-            "SELECT count(*) FROM claims WHERE bead='zz-1' AND released_at IS NOT NULL",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(released, 1, "the claim is gone and the report survives it");
-
-    // Somebody reopens the bead: that is what dealing with it looks like, and it clears.
-    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
-    let (_, s, _) = air(&main, &bd, &["status"]);
-    assert!(!s.contains("zz-1 landed in"), "cleared once reopened: {s}");
 }
 
 /// air-odv: **a branch without a green cannot move main at all**, and a land that fails at any
