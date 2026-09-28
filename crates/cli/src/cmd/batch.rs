@@ -481,8 +481,14 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         .iter()
         .map(|m| format!("{}@{}", m.worker, short(&m.sha)))
         .collect();
+    // air-ch9p: a batch of one has nothing to split.
+    let then = if b.members.len() == 1 {
+        "its only member is batch-ready again after a new commit"
+    } else {
+        "the lane splits by hand"
+    };
     format!(
-        "batch red at {} ({}): members {}; nothing lands on it, the lane splits by hand",
+        "batch red at {} ({}): members {}; nothing lands on it, {then}",
         short(&b.sha),
         b.worker,
         members.join(", ")

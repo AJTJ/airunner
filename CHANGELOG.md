@@ -53,6 +53,14 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- Air's messages state facts and the command that acts on them, with the opinions taken out
+  (air-ch9p). `air status` prints `in batch: <worker> at <head> is in batch <sha>, being
+  verified now` for a head inside a running batch, instead of listing it as batch-ready. The
+  coordinator is not sent `landable` while a lane session is live. A close refused for want
+  of a trailer names the `Bead:` trailer. Fixes are printed as `fix: ...` rather than wrapped
+  in "run `...`", and none suggests `git commit --amend`. A batch of one has its own green and
+  red text. "Close them now" names only beads the member still holds, and several messages
+  lose "most likely", "prompt them", "yours" and "closed is closed".
 - The `beads are ready` notice and a claim refused because a peer holds the bead now point
   at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
   after a hand-over caused most refused claims in the 0.4.10 trial.

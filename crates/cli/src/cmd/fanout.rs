@@ -108,7 +108,7 @@ pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -
     // racing on it. So it says so, and names where the current list is.
     format!(
         "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
-         first claim wins, and a refused claim means someone else took it. This list is as of \
+         first claim wins, and a refusal names its reason. This list is as of \
          now: after a refused claim or a finished bead, pick from `bd ready`, not from here.",
         listed.join(" ")
     )
@@ -310,15 +310,16 @@ pub fn capture_to_coordinator(ledger: &Ledger, from: &str, id: &str, text: &str,
     queued
 }
 
-pub fn queue_empty_text(idle: usize, epics: Option<&[String]>) -> String {
+pub fn queue_empty_text(free: usize, epics: Option<&[String]>) -> String {
     let epics = match epics {
         None => "unknown (bd did not answer)".to_string(),
         Some([]) => "none".to_string(),
         Some(v) => v.join(" "),
     };
     format!(
-        "the ready queue is empty: {idle} worker(s) idle; epics with no open child: {epics}. \
-         File the next wave, or decompose one of those epics."
+        // air-ch9p: the count is workers holding no claim, whatever their state, not idle ones.
+        "the ready queue is empty: {free} worker(s) hold no claim; epics with no open child: \
+         {epics}. File the next wave, or decompose one of those epics."
     )
 }
 
@@ -812,7 +813,8 @@ pub fn main_moved_text(
         ));
     }
     if !to_coordinator {
-        t.push_str(" Merge main only if these files touch your own work.");
+        // air-ch9p: a fact and its command; whether to merge is the worker's call.
+        t.push_str(" `git merge main` brings these into your branch.");
     }
     t.push_str(" No reply needed.");
     t
@@ -1087,7 +1089,7 @@ mod tests {
         assert_eq!(rows[0].0, "coordinator");
         assert_eq!(
             rows[0].1,
-            "the ready queue is empty: 1 worker(s) idle; epics with no open child: zz-9. \
+            "the ready queue is empty: 1 worker(s) hold no claim; epics with no open child: zz-9. \
              File the next wave, or decompose one of those epics."
         );
         // The coordinator's channel takes it; an undelivered one would be replaced instead.
@@ -1106,7 +1108,7 @@ mod tests {
         assert!(rows.iter().all(|(to, _)| to == "coordinator"), "{rows:?}");
         assert_eq!(
             queue_empty_text(2, None),
-            "the ready queue is empty: 2 worker(s) idle; epics with no open child: unknown \
+            "the ready queue is empty: 2 worker(s) hold no claim; epics with no open child: unknown \
              (bd did not answer). File the next wave, or decompose one of those epics."
         );
         assert!(queue_empty_text(1, Some(&[])).contains("no open child: none."));
@@ -1189,7 +1191,7 @@ mod tests {
             "{w}"
         );
         assert!(
-            w.contains("Merge main only if these files touch your own work."),
+            w.contains("`git merge main` brings these into your branch."),
             "{w}"
         );
     }

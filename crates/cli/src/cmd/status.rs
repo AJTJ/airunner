@@ -818,7 +818,7 @@ pub fn batch_ready_for(
         let dropped_at_head = dropped.iter().any(|(w, h)| *w == worker && *h == head);
         let in_batch = running
             .iter()
-            .find(|(_, members)| members.iter().any(|m| *m == head))
+            .find(|(_, members)| members.contains(&head))
             .map(|(b, _)| b.clone());
         let facts = BatchFacts {
             red_batch_at_head,
@@ -1530,9 +1530,17 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     "idle" if has_claim && age >= t.idle_with_claim_min => out.push(Attention {
                         worker: w.worker.clone(),
                         kind: kinds::IDLE_WITH_CLAIM,
+                        // air-ch9p: the pid's state, not "prompt them" or "if abandoned".
                         detail: format!(
-                            "idle {age} min holding {}; prompt them, or `air reclaim` if abandoned",
-                            beads()
+                            "idle {age} min holding {}; session pid {}. `air reclaim <bead> \
+                             --worker {} --reason <why>` takes a bead back",
+                            beads(),
+                            match sess.pid_alive {
+                                Some(true) => "alive",
+                                Some(false) => "dead",
+                                None => "unknown",
+                            },
+                            w.worker
                         ),
                         for_minutes: age,
                         fingerprint: String::new(),
@@ -1596,8 +1604,13 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             worker: w.worker.clone(),
                             kind: kinds::SILENT_WITH_CLAIM,
                             detail: format!(
-                                "no hook event for {age} min while holding {}; session may have died",
-                                beads()
+                                "no hook event for {age} min while holding {}; session pid {}",
+                                beads(),
+                                match sess.pid_alive {
+                                    Some(true) => "alive",
+                                    Some(false) => "dead",
+                                    None => "unknown",
+                                }
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
@@ -1711,7 +1724,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 worker: who.clone(),
                 kind,
                 detail: format!(
-                    "{} is held by {} and is {d} (their reason: {}); it is yours to take now — `air lease take {} --reason \"<why>\"` takes a defective lease",
+                    "{} is held by {} and is {d} (their reason: {}); `air lease take {} --reason \"<why>\"` takes a defective lease",
                     l.resource, l.worker, l.reason, l.resource
                 ),
                 for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
@@ -1811,8 +1824,10 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         out.push(Attention {
             worker: worker.clone(),
             kind: kinds::CLOSED_NOT_LANDED,
+            // air-ch9p: facts only. It claimed the branch was green and clean, which nothing
+            // here checks, and its continuation lines carried runs of literal spaces.
             detail: format!(
-                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at                  {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch                  is green and the tree is clean — which is why the person best placed to see                  this is the last who will (air-gazh). The work exists in one place and no                  backup of that place is a landing."
+                "{bead} is closed; its commits are only on {worker}'s branch, at {short}: {why}"
             ),
             for_minutes: 0,
             fingerprint: format!("{bead}/{}", c.head),
@@ -3682,7 +3697,7 @@ mod tests {
         // Addressed to the waiter, never to the holder, and it names the action as theirs.
         assert_eq!(att[0].worker, "b");
         assert_eq!(att[1].worker, "b");
-        assert!(att[0].detail.contains("it is yours to take now"), "{att:?}");
+        assert!(att[0].detail.contains("takes a defective lease"), "{att:?}");
         assert!(att[0].detail.contains("held by a"), "{att:?}");
         assert!(!att[0].detail.contains("lease break"), "{att:?}");
 

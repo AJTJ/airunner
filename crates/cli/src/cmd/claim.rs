@@ -36,7 +36,7 @@ pub const OWNER_LABEL: &str = "owner";
 /// The one wording of the claim race, printed wherever it is the likeliest cause: the
 /// assignee refusal (bd shows an assignee Air has no claim behind) and bd's own `--claim`
 /// refusal (another actor won the atomic write). Two paths, one race, one sentence.
-const RACE: &str = "Most likely another worker just took this one: `air claim` writes bd first and records its claim a moment later. Take another ready bead.";
+const RACE: &str = "Another actor may have just claimed it: `air claim` writes bd first and records its claim a moment later, so Air's ledger can lag bd. `bd show <id>` shows the assignee.";
 
 /// Actor string passed to bd: `BEADS_ACTOR` if set, else the worker name.
 fn actor_for(worker: &str) -> String {
@@ -161,11 +161,13 @@ fn claim_landed(bd: &BdCli, bead: &str, actor: &str) -> bool {
     })
 }
 
-fn timeout_msg(what: &str, bead: &str) -> String {
+/// air-ch9p: `cmd` is the air command that timed out; release and reclaim said "re-run `air
+/// claim`".
+fn timeout_msg(what: &str, bead: &str, cmd: &str) -> String {
     format!(
         "bd timed out during {what}, twice (Air retried once). A timeout, not a refusal: bd's \
          state is unknown and nothing was written to the ledger. Run `bd show {bead}` and \
-         re-run `air claim {bead}`"
+         re-run `air {cmd} {bead}` with the same arguments"
     )
 }
 
@@ -339,7 +341,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
             }
             if issue.status == "closed" {
                 let msg = format!(
-                    "refused: {bead} is closed; closed is closed. File a new bead that references it."
+                    "refused: {bead} is closed. Unfinished work is a new bead that references it."
                 );
                 return fail(
                     &ledger,
@@ -396,7 +398,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 // a REOPEN is the observed instance that filed this bead (air-vsvt came back
                 // carrying `alerts`), not a property anyone has tested in isolation.
                 let msg = format!(
-                    "refused by bd's rule: {bead} has assignee `{a}`, and a pencilled assignee blocks every other worker's --claim (bd 1.3.0, as on 1.2.2). {RACE} Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. If `air status` still shows no claim on it later, the coordinator clears the assignee (`bd update {bead} -a \"\"`)."
+                    "refused by bd's rule: {bead} has assignee `{a}`, and an assignee blocks every other worker's --claim (bd 1.3.0, as on 1.2.2). Air has no open claim behind that assignee. {RACE} bd also keeps an assignee through a close and a reopen. The coordinator clears it with `bd update {bead} -a \"\"`."
                 );
                 return fail(
                     &ledger,
@@ -429,7 +431,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                 &worker,
                 super::decisions::CLAIM_TIMEOUT,
                 inputs(serde_json::json!({})),
-                timeout_msg("show", bead),
+                timeout_msg("show", bead, "claim"),
                 "bd show",
                 json,
                 1,
@@ -553,7 +555,7 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                     &worker,
                     super::decisions::CLAIM_TIMEOUT,
                     inputs(serde_json::json!({"actor": actor})),
-                    timeout_msg("--claim", bead),
+                    timeout_msg("--claim", bead, "claim"),
                     "bd exit",
                     json,
                     1,
@@ -658,7 +660,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
                 &me,
                 super::decisions::RELEASE_TIMEOUT,
                 inputs,
-                timeout_msg("show", bead),
+                timeout_msg("show", bead, "release"),
                 "bd show",
                 json,
                 1,
@@ -671,7 +673,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
     };
     if status == "closed" {
         let msg = format!(
-            "refused: {bead} is closed; closed is closed. Unfinished work is a new bead that references {bead}."
+            "refused: {bead} is closed. Unfinished work is a new bead that references {bead}."
         );
         return fail(
             &ledger,
@@ -699,7 +701,7 @@ pub fn release(repo: &Path, bead: &str, reason: &str, json: bool) -> i32 {
                     &me,
                     super::decisions::RELEASE_TIMEOUT,
                     inputs,
-                    timeout_msg("-s open -a \"\"", bead),
+                    timeout_msg("-s open -a \"\"", bead, "release"),
                     "bd exit",
                     json,
                     1,
@@ -817,7 +819,7 @@ pub fn reclaim(repo: &Path, bead: &str, worker: &str, reason: &str, json: bool) 
                 &me,
                 d::RECLAIM_TIMEOUT,
                 inputs,
-                timeout_msg("show", bead),
+                timeout_msg("show", bead, "reclaim"),
                 "bd show",
                 json,
                 1,
@@ -830,7 +832,7 @@ pub fn reclaim(repo: &Path, bead: &str, worker: &str, reason: &str, json: bool) 
     };
     if issue.status == "closed" {
         let msg = format!(
-            "refused: {bead} is closed; closed is closed. Unfinished work is a new bead that references {bead}."
+            "refused: {bead} is closed. Unfinished work is a new bead that references {bead}."
         );
         return fail(
             &ledger,
@@ -876,7 +878,7 @@ pub fn reclaim(repo: &Path, bead: &str, worker: &str, reason: &str, json: bool) 
                     &me,
                     d::RECLAIM_TIMEOUT,
                     inputs,
-                    timeout_msg("reclaim", bead),
+                    timeout_msg("reclaim", bead, "reclaim"),
                     "bd exit",
                     json,
                     1,

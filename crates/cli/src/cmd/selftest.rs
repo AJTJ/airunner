@@ -497,7 +497,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "claim: the assignee refusal says Air has no claim behind that assignee and offers a reopen as the cause, and live work is refused earlier by name",
         Mutation {
             file: "crates/cli/src/cmd/claim.rs",
-            from: "Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. ",
+            from: " bd also keeps an assignee through a close and a reopen.",
             to: "",
             also_red: &[],
         },
@@ -1222,8 +1222,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // exist. The probe reads hook.rs at build time, so the mutated source is what it
             // sees; nothing else reads that string, so every other probe stays GREEN.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "(`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
-            to: "(run `air peer <name>` for their green sha)",
+            from: "`air holdings` shows who is in the file; `air status` shows their head and whether it is green",
+            to: "run `air peer <name>` for their green sha",
             also_red: &[],
         },
     ),
@@ -6188,7 +6188,7 @@ fn probe_lease_defect_reaches_the_waiter() -> Probe {
             && waited.first().is_some_and(|x| {
                 x.kind == "lease-held-by-dead-session"
                     && x.worker == "b"
-                    && x.detail.contains("yours to take now")
+                    && x.detail.contains("takes a defective lease")
             }),
         green_passes: nobody.is_empty() && self_only.is_empty(),
     }
@@ -11422,9 +11422,9 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let stale = claim()?;
         let red = names_the_basics(&stale)
             && stale.contains("Air has no open claim behind that assignee")
-            && stale.contains("another worker just took this one")
-            && stale.contains("may also be left over")
-            && stale.contains("reopened bead can come back pencilled in");
+            // air-ch9p: stated as facts, the race and the reopen both, with no "most likely".
+            && stale.contains("Another actor may have just claimed it")
+            && stale.contains("through a close and a reopen");
 
         // GREEN: the precedence that makes the red sentence TRUE rather than a guess. With a
         // real claim recorded, the ledger check at step 1 refuses first and names the holder
@@ -11441,8 +11441,7 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let live = claim()?;
         let green = live.contains("is claimed by alerts")
             && live.contains("air reclaim zz-6wv2 --worker alerts")
-            && !live.contains("left over")
-            && !live.contains("reopened bead");
+            && !live.contains("through a close and a reopen");
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))

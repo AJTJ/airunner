@@ -665,7 +665,7 @@ fn pre_tool_use(
                         // moment it was dealing with a shared file. Both commands below exist;
                         // a probe holds every shipped advice string to that.
                         context: Some(format!(
-                            "air: {} is also journaled by {} — coordinate before overlapping edits (`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
+                            "air: {} is also journaled by {}. `air holdings` shows who is in the file; `air status` shows their head and whether it is green",
                             rel,
                             peer_ages(&peers, &now())
                         )),
