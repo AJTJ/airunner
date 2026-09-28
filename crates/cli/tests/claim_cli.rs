@@ -1606,6 +1606,45 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// air-g7hr: a bead with an open `blocks` dependency is refused, naming the blocker and its
+/// status. bd ready withholds it and `bd update --claim` does not; an adopter's worker claimed
+/// one whose blocker a peer held in progress. A closed blocker and a parent edge do not block.
+#[test]
+fn claim_refuses_a_bead_with_an_open_blocker() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    let issue = |deps: &str| {
+        std::fs::write(
+            repo.join("bd.issue.json"),
+            format!(
+                r#"{{"id":"zz-b","status":"open","issue_type":"task","labels":[],"dependencies":[{deps}]}}"#
+            ),
+        )
+        .unwrap();
+    };
+    issue(
+        r#"{"id":"zz-a","status":"in_progress","dependency_type":"blocks"},
+           {"id":"zz-e","status":"open","dependency_type":"parent-child"}"#,
+    );
+    let (code, out, _) = air(&repo, &bd, &["claim", "zz-b"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("blocked by zz-a (in_progress)"), "{out}");
+    assert!(
+        !out.contains("zz-e"),
+        "a parent edge is not a blocker: {out}"
+    );
+    let log = std::fs::read_to_string(repo.join("bd.log")).unwrap_or_default();
+    assert!(!log.contains("update"), "nothing was written to bd: {log}");
+
+    issue(
+        r#"{"id":"zz-a","status":"closed","dependency_type":"blocks"},
+           {"id":"zz-e","status":"open","dependency_type":"parent-child"}"#,
+    );
+    let (code, out, err) = air(&repo, &bd, &["claim", "zz-b"]);
+    assert_eq!(code, 0, "a closed blocker does not block: {out}{err}");
+}
+
 /// An adopter's fleet protocol (2026-09-25), end to end: `"leases"` in `.claude/air.json` makes Air's PreToolUse hook
 /// refuse a declared command from a worker that does not hold the lease — the core of an
 /// adopter's own ~1,500-line guard, which read a second lock store. No config, the owner, an

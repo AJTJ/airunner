@@ -352,6 +352,31 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
                     2,
                 );
             }
+            // air-g7hr: bd ready withholds a bead with an open blocker and `bd update --claim`
+            // takes it anyway. An adopter's worker claimed one whose blocker another worker
+            // held in progress, and noticed only from the acceptance.
+            let blockers = issue.open_blockers();
+            if !blockers.is_empty() && issue.status != "in_progress" {
+                let named: Vec<String> = blockers
+                    .iter()
+                    .map(|d| format!("{} ({})", d.id, d.status))
+                    .collect();
+                let msg = format!(
+                    "refused: {bead} is blocked by {}; `bd ready` does not list it until that \
+                     closes. Take another bead.",
+                    named.join(", ")
+                );
+                return fail(
+                    &ledger,
+                    &worker,
+                    super::decisions::CLAIM_REFUSE,
+                    inputs(serde_json::json!({})),
+                    msg,
+                    "bd show",
+                    json,
+                    2,
+                );
+            }
             if let Some(a) = issue
                 .assignee
                 .as_deref()

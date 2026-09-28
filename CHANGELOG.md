@@ -100,6 +100,8 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air claim` took a bead that an open `blocks` dependency keeps out of `bd ready`. It now
+  refuses, naming the blocker and its status.
 - Seven hard-coded limits that changed an answer without saying so are gone. The close gate
   checks every green recorded after the bead's oldest commit, not the newest 12. The model
   column reads the transcript up to the first model line, not the first 64 KB, so launched
