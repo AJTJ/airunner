@@ -65,10 +65,10 @@ pub fn may_land(role: &str) -> Result<(), String> {
 /// Why `air land` refuses while a verify is in flight (air-1bm), naming every run and the fix.
 /// `None` when nothing is running, so the ok path is silent.
 ///
-/// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
-/// EVERY verify in flight is about to become worthless — not only one on the landed branch,
-/// since every other branch's contains-main precondition breaks and its tree changes on the
-/// re-merge. The adopter's coordinator did this to three workers in one round with no signal
+/// Landing moves main, so a verify reading the main checkout, or the lane's batch built on
+/// it, is about to become worthless. That used to be every verify in flight; since air-9ij a
+/// green is judged against the main it was recorded over, so a worker's own run is untouched
+/// and only [`at_risk`] runs are counted (air-9yx6). The adopter's coordinator did this to three workers in one round with no signal
 /// available (air-4cr); their fix was a protocol where the worker warns first.
 ///
 /// This used to warn and then land. air-4cr defaulted to warn ("a coordinator may still have
@@ -105,6 +105,15 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
          the landing.",
     );
     Some(s)
+}
+
+/// Is this run destroyed by main moving (air-9yx6)? Only one reading the main checkout, or
+/// the lane's tree, which is the batch built on main. A worker's verify runs in its own
+/// worktree on its own branch, and its green is judged against the main it was recorded over
+/// (air-9ij), so a landing does not touch it. Counting it starved the lane: with three workers
+/// verifying for minutes, a green batch waited, and `air batch cut` refused while it did.
+pub fn at_risk(f: &air_ledger::verify::InFlight) -> bool {
+    f.worker == "main" || super::hook::role_for(&f.worker) == "lane"
 }
 
 /// Every process reading any tree of this repo, for `air land`'s main-checkout warning. All
@@ -319,21 +328,6 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
 /// `air land` for such a branch (air-y3v), and `branch_check`'s refusal names the same one, so
 /// the list and the refusal say the same thing.
 ///
-/// The summary `air land` prints when a landing carries clauses Air could not discharge.
-///
-/// A const so the probe reads the SHIPPED string. air-jy99: this said "either reopen it or file
-/// what is left", and an adopter's flow forbids reopening — Air told their coordinator to do what
-/// their own rules deny. The clause is rendered twice, here and in `status.rs`, and air-155w's
-/// defect survived its first fix because one renderer was corrected and the other kept teaching
-/// the forbidden thing. So this states the CONDITION and hands the decision back.
-///
-/// The "not a contradiction" half is air-k6uh's residual: that bead fixed the per-bead line and
-/// left this summary asserting the stronger claim.
-pub const REFUTED_SUMMARY: &str = "bead(s) landed with a clause naming a file this merge did not change — a lookup that did \
-     not answer, not a contradiction. `air status` names them: read the bead, then see that \
-     nothing left over is untracked. How a closed bead's remainder gets tracked is this repo's \
-     flow to say; Air prescribes nothing here.";
-
 /// air-155w: this was character-for-character the string that taught an adopter's worker to
 /// record a green under a verify lane, on the COORDINATOR's surface — which is why it was easy
 /// to miss. The coordinator may record a verify; this line is advice about a WORKER, and under
@@ -389,9 +383,6 @@ enum Outcome {
         /// (air-80x.2), so each member can be told (air-1vri.2).
         tip: String,
         members: Vec<air_ledger::landings::Member>,
-        /// Beads whose acceptance the merge could not fully discharge, with the clauses. A
-        /// record of what the print said; nothing here closes or blocks anything (air-ayp).
-        noted: Vec<air_ledger::landings::OpenBead>,
     },
     Nothing,
     // `Rewound` was here until air-odv. Nothing can rewind main any more: the landing commit
@@ -714,7 +705,6 @@ pub fn run(
     }
 
     let mut landed: Vec<String> = Vec::new();
-    let mut held_open: Vec<air_ledger::landings::OpenBead> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut code = 0;
     // air-1bm: a verify in flight REFUSES the landing (it used to warn and land, air-4cr), and
@@ -726,7 +716,7 @@ pub fn run(
     // hold landings for every worker's cheap check under a lane, and protect nothing.
     let flights: Vec<_> = super::status::verifies_in_flight(&ledger)
         .into_iter()
-        .filter(|f| f.kind != Kind::Precheck)
+        .filter(|f| f.kind != Kind::Precheck && at_risk(f))
         .collect();
     let despite: Vec<String> = flights.iter().map(|f| in_flight_run_line(f, &at)).collect();
     if let Some(msg) = in_flight_refusal(&flights, &at) {
@@ -775,7 +765,23 @@ pub fn run(
     let mut readers = main_readers(repo, &ledger);
     let main_path = super::readers::resolved(repo);
     super::readers::drop_ignored(&mut readers, &main_path);
-    if let Some(w) = super::readers::main_warning(&readers, &main_path) {
+    // air-8goe: said when the set of readers changes, not on every landing.
+    let said_before = !ledger
+        .emit_if_changed(
+            &worker,
+            "land:main-readers",
+            &super::readers::main_fingerprint(&readers, &main_path),
+            &now(),
+        )
+        .unwrap_or(true);
+    let warning = super::readers::main_warning(&readers, &main_path);
+    if warning.is_some() && said_before {
+        lines.push(format!(
+            "main checkout: the same unrecorded process(es) as the last warning ({} process(es) \
+             examined)",
+            readers.examined
+        ));
+    } else if let Some(w) = warning {
         // Its own event line, so `air audit` counts it (`mechanisms.rs` `land-main-readers`).
         log_event(
             &ledger,
@@ -806,7 +812,6 @@ pub fn run(
         match land_one(repo, &ledger, &batch, &despite, json) {
             Outcome::Landed {
                 merge,
-                noted,
                 tip,
                 members,
             } => {
@@ -821,18 +826,7 @@ pub fn run(
                     batch.beads.join(" "),
                     merge.get(..8).unwrap_or(&merge)
                 ));
-                // Only the clauses naming a file the merge did not change (air-ppf): the
-                // print above already showed the unreadable ones with their own `?` marker.
-                // air-k6uh: reported as the lookup it is, never as a contradiction.
-                for o in noted.iter().filter(|o| o.refuted) {
-                    lines.push(format!(
-                        "  {} UNCONFIRMED: {} — a lookup that did not answer, not a \
-                         contradiction; read the bead",
-                        o.bead, o.contradicted
-                    ));
-                }
                 landed.extend(batch.beads.clone());
-                held_open.extend(noted);
             }
             Outcome::Nothing => lines.push(format!("{}: already in main", batch.worker)),
             Outcome::Refused(why) => {
@@ -844,10 +838,6 @@ pub fn run(
     }
     // Nothing is closed here. The worker closes its own bead with proof before the branch
     // lands (owner ruling, 2026-08-22); this command merges, verifies, and reports.
-    let refuted = held_open.iter().filter(|o| o.refuted).count();
-    if refuted > 0 {
-        lines.push(format!("{refuted} {REFUTED_SUMMARY}"));
-    }
     // air-1vri.4: every other session hears that main moved, once per landing.
     if let (Some(before), Some(merge)) = (&moved.0, &moved.1) {
         super::fanout::main_moved(
@@ -876,18 +866,13 @@ pub fn run(
         },
         &inputs,
         &msg,
-        &format!(
-            "{} bead(s) merged, {} with clauses Air could not discharge",
-            landed.len(),
-            held_open.len()
-        ),
+        &format!("{} bead(s) merged", landed.len()),
     );
     emit(
         json,
         &serde_json::json!({
             "ok": code == 0,
             "landed": landed,
-            "not_discharged": held_open,
             "batch_ready": next_ready,
             "log": lines,
         }),
@@ -1164,66 +1149,30 @@ fn land_one(
     }
     record_landing_green(repo, ledger, head, &merge, &tip_now);
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
-    // Layer 1, the part that is true under either closure model: read every bead's acceptance
-    // and print it beside Air's verdict, so a wrong close is visible at the moment it lands.
-    // Nothing closes on branch containment.
-    let changed = git::run(repo, &["diff", "--name-only", &format!("{tip}..{merge}")])
-        .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
-        .unwrap_or_default();
-    // air-dqa: every file at the landed commit, so a path-like token that is no file is
-    // reported as unreadable rather than as a file the merge failed to touch. One git call
-    // per landing. If it fails the list is empty and every missing path reads as unresolvable,
-    // which is the safe direction: silence over a false accusation.
-    let tree = git::run(repo, &["ls-tree", "-r", "--name-only", &merge])
-        .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let ev = acceptance::Evidence {
-        green_at_landed: true, // the run above, recorded at `merge`
-        changed: &changed,
-        tree: &tree,
-    };
+    // Every landed bead beside its acceptance text, so a wrong close is visible where it
+    // lands. No verdict (air-cizz): Air's lookups on clauses were wrong more often than right.
     // `clauses` was read before the merge (air-bh4), so every bead here was actually read.
-    let judged: Vec<acceptance::Judged> = batch
-        .beads
-        .iter()
-        .enumerate()
-        .map(|(i, bead)| {
-            acceptance::judge_clauses(bead, clauses.get(i).cloned().unwrap_or_default(), &ev)
-        })
-        .collect();
     if !json {
-        print!("{}", acceptance::report(&judged));
+        let listed: Vec<(String, Vec<String>)> = batch
+            .beads
+            .iter()
+            .enumerate()
+            .map(|(i, bead)| (bead.clone(), clauses.get(i).cloned().unwrap_or_default()))
+            .collect();
+        print!("{}", acceptance::listing(&listed));
     }
-    // `air land` closes nothing (owner ruling, 2026-08-22: the worker closes its own bead with
-    // proof). What the print said is kept on the row so it outlives the scrollback, and a
-    // REFUTED clause is the wrong-close signal the coordinator is told about.
-    let noted: Vec<air_ledger::landings::OpenBead> = judged
-        .iter()
-        .filter(|j| !j.all_discharged())
-        .map(|j| air_ledger::landings::OpenBead {
-            bead: j.bead.clone(),
-            why: j.why_open(),
-            refuted: j.refuted(),
-            contradicted: j.why_contradicted(),
-        })
-        .collect();
     record_full(
-        if noted.iter().any(|o| o.refuted) {
-            "landed-refuted"
-        } else {
-            "landed"
-        },
+        "landed",
         Some(merge.clone()),
         // air-odv: no verify runs here any more, so there is no run to point at. The evidence
         // for this landing is the worker's own green at the branch head, which `check` required
         // and whose tree is what main now carries.
         None,
         None,
-        &noted,
+        &[],
     );
     Outcome::Landed {
         merge,
-        noted,
         tip,
         members,
     }
@@ -1233,6 +1182,31 @@ fn land_one(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-9yx6: a worker's verify in its own worktree does not refuse a landing; one in the
+    /// main checkout or the lane's tree does.
+    #[test]
+    fn only_a_verify_main_moving_would_destroy_refuses_a_landing() {
+        let run = |worker: &str| air_ledger::verify::InFlight {
+            id: "r".into(),
+            worker: worker.into(),
+            sha: "abcdef0123".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid: None,
+            started_at: "2026-09-28T10:00:00Z".into(),
+        };
+        assert!(!at_risk(&run("worker-1")));
+        assert!(at_risk(&run("main")));
+        assert!(at_risk(&run("lane")));
+        let flights: Vec<_> = [run("worker-1")].into_iter().filter(at_risk).collect();
+        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_none());
+        let flights: Vec<_> = [run("worker-1"), run("main")]
+            .into_iter()
+            .filter(at_risk)
+            .collect();
+        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_some());
+    }
 
     /// 0.4.8 trial: the landing commit is green only when its tree is the verified one's.
     #[test]

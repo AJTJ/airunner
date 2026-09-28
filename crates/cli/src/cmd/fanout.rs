@@ -40,7 +40,7 @@ pub fn without_claim(s: &Snapshot) -> Vec<String> {
                 && w.handed_over.is_empty()
                 && w.session
                     .as_ref()
-                    .is_some_and(|x| x.pid_alive != Some(false))
+                    .is_some_and(|x| x.liveness == super::lease::Liveness::Alive)
         })
         .map(|w| w.worker.clone())
         .collect()
@@ -99,9 +99,13 @@ pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -
          the same one first)"
             .to_string()
     };
+    // air-0blv: the list is a snapshot. In the 0.4.10 trial 10 of 14 refused claims came 83 s
+    // to 19 min after a peer took the bead: workers walking this list after a hand-over, not
+    // racing on it. So it says so, and names where the current list is.
     format!(
         "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
-         first claim wins, and a refused claim means someone else took it.",
+         first claim wins, and a refused claim means someone else took it. This list is as of \
+         now: after a refused claim or a finished bead, pick from `bd ready`, not from here.",
         listed.join(" ")
     )
 }
@@ -242,7 +246,7 @@ pub fn capture_text(from: &str, id: &str, text: &str) -> String {
 /// the coordinator's checkout or the main one is the coordinator's or the owner's, and neither
 /// needs it pushed. Returns whether a message was queued.
 pub fn capture_to_coordinator(ledger: &Ledger, from: &str, id: &str, text: &str, at: &str) -> bool {
-    if super::hook::role_for(from) == "coordinator" {
+    if matches!(super::hook::role_for(from), "coordinator" | "owner") {
         return false;
     }
     let content = capture_text(from, id, text);
@@ -728,7 +732,7 @@ pub fn main_moved(
             merge,
             beads,
             &paths,
-            super::hook::role_for(w) == "coordinator",
+            matches!(super::hook::role_for(w), "coordinator" | "owner"),
             member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
         );
         let queued = ledger
@@ -840,24 +844,6 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
     );
 }
 
-/// After `air batch cut` left a branch out for a missing precheck: tell its worker, once per head.
-pub fn batch_held(ledger: &Ledger, lane: &str, n: &super::status::NotBatchReady) {
-    let note = MemberNote {
-        to: n.worker.clone(),
-        kind: "batch-held",
-        key: n.head.clone(),
-        beads: String::new(),
-        content: n.detail.clone(),
-    };
-    queue_notes(
-        ledger,
-        lane,
-        std::slice::from_ref(&note),
-        &format!("{} held out of the batch: {}", n.worker, n.check),
-        &super::now(),
-    );
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -895,6 +881,11 @@ mod tests {
             "{first}"
         );
         assert!(!first.contains("different order"), "{first}");
+        // air-0blv: the list is a snapshot, and the notice names where the current one is.
+        assert!(
+            first.contains("pick from `bd ready`, not from here"),
+            "{first}"
+        );
         assert!(
             third.starts_with("beads are ready: b-3 b-1 b-2 ("),
             "{third}"
@@ -928,7 +919,10 @@ mod tests {
                     release_reason: None,
                 })
                 .collect(),
-            session: Some(Session::default()),
+            session: Some(Session {
+                liveness: crate::cmd::lease::Liveness::Alive,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let busy = Snapshot {

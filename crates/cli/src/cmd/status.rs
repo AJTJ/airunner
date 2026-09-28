@@ -38,11 +38,10 @@ pub mod kinds {
     pub const LANDABLE: &str = "landable";
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
-    pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
-    /// air-gazh: the inverse of the one above. Closed ∩ landed was reported; closed ∩ NOT
-    /// landed was not, and nothing else in this list covers it — `landable` needs a branch
-    /// containing main so it goes quiet the moment main moves, and `landed-not-closed` needs a
-    /// landing to have happened.
+    // `landed-not-closed` was here (air-ayp; DELETED by air-cizz, owner 2026-09-28): 7 of 8
+    // firings at an adopter were paths an acceptance clause only mentioned. See mechanisms.rs.
+    /// air-gazh: closed ∩ NOT landed, which nothing else in this list covers — `landable`
+    /// needs a branch containing main so it goes quiet the moment main moves.
     pub const CLOSED_NOT_LANDED: &str = "closed-not-landed";
     // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
     // Its subject was the owner capture queue, which is gone: the owner's queue is beads
@@ -59,7 +58,6 @@ pub mod kinds {
         HANDOVER_NOT_GREEN,
         LANDABLE,
         REWOUND_AND_CARRIED,
-        LANDED_NOT_CLOSED,
         CLOSED_NOT_LANDED,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
@@ -73,8 +71,11 @@ pub struct Session {
     pub detail: Option<String>,
     pub changed_at: String,
     pub pid: Option<i64>,
-    /// Filled by `gather` when a pid is known: is that process still running?
-    pub pid_alive: Option<bool>,
+    /// `ps -o lstart=` of `pid` when the hook recorded it (air-sai7).
+    pub pid_started: Option<String>,
+    /// Filled by `gather`: is the process that registered still running (air-sai7)? Unknown
+    /// is never treated as alive.
+    pub liveness: super::lease::Liveness,
     /// Which fleet this session belongs to (air-0lk). The hook writes it from `AIR_PROJECT`,
     /// so a cross-project refusal is derived from the ledger, not from a name's spelling.
     pub project: String,
@@ -103,7 +104,13 @@ pub struct Session {
     /// says the harness is bringing the session back by itself and nothing should touch it,
     /// while `quota_auto_resume_stale`, `quota_auto_resume_disabled` and `stop_failure` say it
     /// is not.
+    ///
+    /// Shown only while no own event of the session follows it (`sticky_holds`, air-n9f3).
     pub stopped: Option<(String, String, String)>,
+    /// air-n9f3: `(since, kind)` when the harness's last word about this session is that it
+    /// waits for the person (a `permission_prompt` or `idle_prompt` notification) and the
+    /// session has done nothing of its own since.
+    pub waiting: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -124,6 +131,9 @@ pub struct WorkerView {
     /// rather than in `green_detail`, which is air-7wf's tree-versus-commit reason and means
     /// something else.
     pub red_log: Option<String>,
+    /// This worker's newest verify, when it was stopped by a signal (air-nwat): the signal, the
+    /// commit and how long it had run. A verify stopped by hand used to leave no row at all.
+    pub interrupted: Option<String>,
     pub claims: Vec<Claim>,
     /// Open claims bd shows in `awaiting_review`: still held (the files are still the
     /// worker's) but no longer work in progress (air-3eu).
@@ -147,10 +157,7 @@ pub struct Snapshot {
     /// `lease_take` records a want only when it was refused by a HEALTHY lease, so a name in
     /// here is someone who asked and was told to wait.
     pub lease_wants: BTreeMap<String, Vec<String>>,
-    /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
-    /// fact, never a bd status (air-ayp).
-    pub landed_open: Vec<air_ledger::landings::LandedOpen>,
-    /// air-gazh: the inverse. Beads bd has closed whose commits are in no tree but their
+    /// air-gazh: Beads bd has closed whose commits are in no tree but their
     /// author's worktree. Joined from two things already computed — `landable` (which names
     /// every bead on a branch not yet in main, blocked or not) and the ledger's `closed`
     /// release reason — so it costs no git walk and no bd call of its own.
@@ -330,6 +337,22 @@ pub struct Attention {
     /// pushes on 2026-08-22 were 13 distinct facts.
     #[serde(default)]
     pub fingerprint: String,
+    /// What the condition is about when that is not the worker: the bead, branch, lease or
+    /// merge (air-8goe). Empty means the worker is the subject. The channel keys its pushes by
+    /// (kind, subject), so two beads of one kind on one worker are two conditions.
+    #[serde(default)]
+    pub subject: String,
+}
+
+impl Attention {
+    /// The subject the channel keys on: [`Attention::subject`], or the worker when unset.
+    pub fn subject_key(&self) -> &str {
+        if self.subject.is_empty() {
+            &self.worker
+        } else {
+            &self.subject
+        }
+    }
 }
 
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
@@ -806,67 +829,17 @@ fn sort_by_wait(v: &mut [Landing]) {
     v.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.bead.cmp(&b.bead)));
 }
 
-/// The landings alone, without a full `gather`: bd's `awaiting_review` list, the claim row
-/// that names who handed each over, and that worker's green at HEAD. Derived every time, so
-/// two readers cannot disagree (air-6p5). bd absent or slow means no landings, not an error.
-/// Which candidate ids this worker is responsible for, from Air's OWN ledger — no bd call.
-///
-/// **Claimed by this worker, and not already landed.** Both halves come from tables Air
-/// writes, so neither moves when git does. There used to be a third: claimed since the branch
-/// point. It was the bug that made `air land` unusable in the adopter (air-6u5) — **merging main
-/// moves the branch point forward past the claim that started the work, and landing requires
-/// merging main**, so preparing to land was what destroyed the attribution. air-4re had
-/// already taken that narrowing off declared ids for the same reason; this takes it off the
-/// guessed ones, which is what a repo with no trailers has.
-///
-/// "Not already landed" is the bound that replaces it, and it is exact rather than a
-/// heuristic: Air records the beads of every landing itself.
-///
-/// `bd show` does not batch — 1 id ~1.4 s, 17 ids 19-21 s, measured 2026-08-22 — so no bd call
-/// happens here at all. `air land` fetches acceptance for the one branch it is landing.
-fn known_beads(
-    ledger: &air_ledger::Ledger,
-    ids: &[String],
-    worker: &str,
-) -> Result<Vec<String>, String> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let claimed: Vec<String> = {
-        let mut st = ledger
-            .conn()
-            .prepare("SELECT DISTINCT bead FROM claims WHERE worker=?1")
-            .map_err(|e| format!("claims: {e}"))?;
-        let rows = st
-            .query_map([worker], |r| r.get::<_, String>(0))
-            .map_err(|e| format!("claims: {e}"))?;
-        rows.collect::<rusqlite::Result<_>>()
-            .map_err(|e| format!("claims: {e}"))?
-    };
-    let landed: Vec<String> = ledger
-        .landings()
-        .map_err(|e| format!("landings: {e}"))?
-        .into_iter()
-        // air-8zn: positive on what landed. This filter was already positive but named one
-        // result, so a bead on a `landed-refuted` row still counted as unlanded here.
-        .filter(air_ledger::landings::Landing::landed)
-        .flat_map(|l| l.beads)
-        .collect();
-    Ok(ids
-        .iter()
-        .filter(|i| claimed.iter().any(|c| c == *i) && !landed.iter().any(|l| l == *i))
-        .cloned()
-        .collect())
-}
-
-/// The narrowing, exposed for `air selftest`: it is the half of air-6u5 that a probe can
-/// reach without a git repo, and the half that was wrong.
-pub fn attributable_for_test(
-    ledger: &air_ledger::Ledger,
-    ids: &[String],
-    worker: &str,
-) -> Result<Vec<String>, String> {
-    known_beads(ledger, ids, worker)
+/// `interrupted (SIGINT) at abc1234 after 12 s` for a run `air record` wrote as stopped by a
+/// signal, else None (air-nwat).
+pub fn interrupted_line(r: &air_ledger::verify::VerifyRun) -> Option<String> {
+    let step = r.failing_step.as_deref()?;
+    step.starts_with(super::record::INTERRUPTED).then(|| {
+        format!(
+            "{step} at {} after {} s",
+            r.sha.get(..7).unwrap_or(&r.sha),
+            r.duration_ms.unwrap_or(0) / 1000
+        )
+    })
 }
 
 /// A bead bd has closed whose commits have not reached main (air-gazh).
@@ -987,7 +960,7 @@ pub fn select(repo: &Path) -> Selection {
         // The coordinator's checkout (`main`, or its own worktree) is not a candidate, and
         // never was: its commits reach main in a lane's batch. The lane's branch IS one, since
         // `air land --worker <lane>` lands the batch through here (air-jc2p.4).
-        if super::hook::role_for(&worker) == "coordinator" {
+        if matches!(super::hook::role_for(&worker), "coordinator" | "owner") {
             continue;
         }
         let head = match git::head(&path) {
@@ -1049,16 +1022,7 @@ pub fn select(repo: &Path) -> Selection {
             Err(why) => Some(why),
         };
         let range = format!("main..{head}");
-        let found = super::attribution::attributed_in_range(repo, &range);
-        // A declared bead stands as it is; only a guessed one is narrowed (air-4re).
-        let mut ids = found.declared;
-        match known_beads(&ledger, &found.guessed, &worker) {
-            Ok(g) => ids.extend(g),
-            Err(e) => {
-                out.errors.push(format!("{worker}: {e}"));
-                continue;
-            }
-        }
+        let ids = super::attribution::attributed_in_range(repo, &range).declared;
         // air-kexg: a branch whose ONLY commits are session-journal entries carries no bead by
         // design, and is landable anyway. The journal (air-3xww) is explicitly not work on a
         // bead, so a journal commit is the one commit a worker legitimately writes that names
@@ -1248,7 +1212,7 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
     let l = &f.landing;
     let merge = l.merge_commit.as_deref().unwrap_or("");
     let elapsed = seconds_between(&l.finished_at, at)
-        .map(|s| format!("{s}s ago"))
+        .map(|s| format!("{}s ago", s.max(0)))
         .unwrap_or_else(|| "at an unreadable time".into());
     let state = match f.alive {
         // air-odv: `air land` runs no verify and arms no rollback; the fast-forward is the
@@ -1403,8 +1367,9 @@ pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> 
 /// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
 /// a verify is ~420 s in the adopter's repo, so a minutes-only reading rounds most of it to 0.
 pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
+    // Never negative: an age is never before its start, whichever clock read `at` is (air-n9f3).
     let elapsed = seconds_between(&f.started_at, at)
-        .map(|s| format!("{s}s"))
+        .map(|s| format!("{}s", s.max(0)))
         .unwrap_or_else(|| "unknown".into());
     format!(
         "{} started {} ago: {} at {}",
@@ -1487,6 +1452,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         ),
                         for_minutes: age,
                         fingerprint: String::new(),
+                        subject: String::new(),
                     }),
                     // "prompt them" needs somebody to prompt. `gather` already asks the OS
                     // whether the session's process is alive; the condition never read the
@@ -1525,7 +1491,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     "idle"
                         if !has_claim
                             && w.role == "worker"
-                            && sess.pid_alive != Some(false)
+                            && sess.liveness == super::lease::Liveness::Alive
                             && !verify_running(s, &w.worker)
                             && !tree_busy(s, &w.worker)
                             && s.claimable_depth.is_some_and(|n| n > 0)
@@ -1540,6 +1506,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
+                            subject: String::new(),
                         });
                     }
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
@@ -1552,6 +1519,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
+                            subject: String::new(),
                         });
                     }
                     _ => {}
@@ -1581,6 +1549,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         ),
                         for_minutes: age,
                         fingerprint: String::new(),
+                        subject: String::new(),
                     });
                 }
             }
@@ -1634,6 +1603,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
+                subject: String::new(),
             });
         }
     }
@@ -1667,6 +1637,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 ),
                 for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
                 fingerprint: format!("{}/{}", l.resource, l.worker),
+                subject: format!("{}/{who}", l.resource),
             });
         }
     }
@@ -1718,6 +1689,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 ),
                 for_minutes: minutes,
                 fingerprint: format!("{worker}@{head}"),
+                subject: String::new(),
             });
         }
     }
@@ -1733,49 +1705,11 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             for_minutes: minutes_between(&r.rewound_at, now).unwrap_or(0),
             // The commit and who holds it is the whole fact; its age is not a change.
             fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
+            subject: r.merge_commit.clone(),
         });
     }
-    // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
-    // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
-    // and says it again only when the reason changes.
-    //
-    // air-jy99: the sentence names no action whose permissibility depends on the repo's flow.
-    // It used to end "either reopen it or file what is left", and an adopter's CLAUDE.md says
-    // "closed is closed — never reopen": Air was instructing their coordinator to do what their
-    // own rules forbid. This is air-155w's ruling at a second surface — a flow-dependent fix
-    // states a CONDITION, not a command — and the same renderer in `land.rs` said it too, which
-    // is exactly how air-155w's own defect survived its first fix. No config key decides this:
-    // reading a repo's flow is the thing air-155w's comment calls "a claim about a decision made
-    // somewhere else". Removal: when Air is told a flow, which is not planned.
-    //
-    // air-ppf: the sentence names `contradicted`, never `why`. `why` is the whole record,
-    // refuted and unreadable clauses together, and rendering it here put "nothing Air can
-    // look up" under a headline asserting a contradiction; two sound closes read as wrong
-    // ones on 2026-08-30. The unreadable clauses stay on the row and in the `air land` print.
-    for o in &s.landed_open {
-        let (bead, why) = (&o.bead, &o.contradicted);
-        out.push(Attention {
-            worker: bead.clone(),
-            kind: kinds::LANDED_NOT_CLOSED,
-            detail: format!(
-                "{bead} landed in {} with an acceptance clause naming a file this merge did \
-                 not change: {why}. That is a lookup that did not answer, NOT a contradiction \
-                 (air-k6uh: six of nine such firings were clauses that held, satisfied in \
-                 another commit or naming a path the clause only mentions). Read the bead: the \
-                 worker closes its own with proof, so either it is done elsewhere, or what is \
-                 left is untracked and must not stay that way. How a closed bead's remainder \
-                 gets tracked is this repo's flow to say; Air reads no flow and prescribes \
-                 nothing here (air-jy99). Landed from {}.",
-                o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
-                o.worker
-            ),
-            for_minutes: 0,
-            fingerprint: format!("{bead}/{why}"),
-        });
-    }
-
-    // air-gazh: the inverse of the condition above, and the state no other condition reaches.
-    // `landable` goes quiet the moment main moves; `landed-not-closed` needs a landing. A bead
+    // air-gazh: a bead closed and not landed, the state no other condition reaches.
+    // `landable` goes quiet the moment main moves. A bead
     // closed on a batch green whose batch then stopped containing main satisfies neither, and
     // an adopter had six of them at once with no error anywhere in how they got there.
     //
@@ -1793,10 +1727,15 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             worker: worker.clone(),
             kind: kinds::CLOSED_NOT_LANDED,
             detail: format!(
-                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at                  {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch                  is green and the tree is clean — which is why the person best placed to see                  this is the last who will (air-gazh). The work exists in one place and no                  backup of that place is a landing."
+                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at \
+                 {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch \
+                 is green and the tree is clean — which is why the person best placed to see \
+                 this is the last who will (air-gazh). The work exists in one place and no \
+                 backup of that place is a landing."
             ),
             for_minutes: 0,
             fingerprint: format!("{bead}/{}", c.head),
+            subject: bead.clone(),
         });
     }
     out
@@ -1877,6 +1816,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                             .and_then(|r| r.log_path)
                     })
                     .flatten();
+                let interrupted = ledger
+                    .latest_run_any(&name, Kind::Verify)
+                    .ok()
+                    .flatten()
+                    .and_then(|r| interrupted_line(&r));
                 views.insert(
                     name.clone(),
                     WorkerView {
@@ -1886,6 +1830,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         green_at_head,
                         green_detail: evidence.as_ref().and_then(super::green::Evidence::detail),
                         red_log,
+                        interrupted,
                         ..Default::default()
                     },
                 );
@@ -1901,7 +1846,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .conn()
             .prepare(
                 "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, \
-                        enforce, stopped_at, stopped_kind, stopped_text, transcript_path \
+                        enforce, stopped_at, stopped_kind, stopped_text, transcript_path, pid_started \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1916,37 +1861,44 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         detail: r.get(4)?,
                         changed_at: r.get(5)?,
                         pid: r.get(6)?,
-                        pid_alive: None,
+                        pid_started: r.get(14)?,
+                        liveness: super::lease::Liveness::Unknown,
                         project: r.get(7)?,
                         model: r.get(8)?,
                         enforce: r.get::<_, Option<i64>>(9)?.map(|v| v == 1),
                         has_transcript: r
                             .get::<_, Option<String>>(13)?
                             .is_some_and(|t| !t.trim().is_empty()),
-                        stopped: match (
-                            r.get::<_, Option<String>>(10)?,
-                            r.get::<_, Option<String>>(11)?,
-                        ) {
-                            (Some(at), Some(kind)) => Some((
-                                at,
-                                kind,
-                                r.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                            )),
-                            _ => None,
-                        },
+                        stopped: None,
+                        waiting: None,
                     },
+                    // The session's sticky fact and the time of its latest own event, sorted
+                    // into `stopped` or `waiting` below.
+                    (
+                        r.get::<_, Option<String>>(10)?,
+                        r.get::<_, Option<String>>(11)?,
+                        r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                    ),
                 ))
             })
             .map_err(|e| e.to_string())?;
         let worktree_names: Vec<String> = views.keys().cloned().collect();
         let mut pruned = Vec::new();
         for row in rows {
-            let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
-            sess.pid_alive = sess.pid.map(super::lease::pid_alive);
+            let (worker, role, mut sess, sticky) = row.map_err(|e| e.to_string())?;
+            (sess.stopped, sess.waiting) = sticky_fact(sticky, &sess.changed_at);
+            sess.liveness = super::lease::liveness(sess.pid, sess.pid_started.as_deref());
+            // air-sai7: the main checkout's session is the owner's; a row written there by a
+            // coordinator before it had its own worktree is not a second coordinator.
+            let role = if super::hook::role_for(&worker) == "owner" {
+                "owner".to_string()
+            } else {
+                role
+            };
             // A session whose worktree no longer exists and whose process is not alive is
             // a leftover (SessionEnd is not guaranteed on crash or worktree removal). Prune it
             // so it never reads as a live worker (dogfooding, 2026-08-22).
-            if !worktree_names.contains(&worker) && sess.pid_alive != Some(true) {
+            if !worktree_names.contains(&worker) && sess.liveness != super::lease::Liveness::Alive {
                 pruned.push(sess.session_id.clone());
                 continue;
             }
@@ -2177,10 +2129,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     }
     // A healthy answer also refreshes `.air/ready.json` for the Stop hook (air-09i); a slow
     // bd leaves that file as it was.
-    // Beads bd shows back in the work queue. Used to clear a `landed-not-closed` report once
-    // somebody reopened the bead (air-dlw); no extra bd call, these lists are already here.
-    let mut back_in_queue: std::collections::BTreeSet<String> =
-        in_progress.iter().flatten().cloned().collect();
     // air-uir: both counts come off the SAME `bd ready` answer and the same `claimable`
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
@@ -2212,7 +2160,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                 pool.extend(ip.iter().cloned());
             }
             without_initiative = Some(super::metis::without_initiative(&pool));
-            back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             // air-f10: one partition of one answer; the counts are its lengths.
             let split = super::ready_cache::split(&v);
             let ids = split.claimable;
@@ -2333,7 +2280,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
     let live: Vec<(String, String, i64)> = all_sessions
         .iter()
-        .filter(|(_, _, x)| x.pid_alive != Some(false))
+        .filter(|(_, _, x)| x.liveness != super::lease::Liveness::Dead)
         .filter_map(|(w, role, x)| x.pid.map(|p| (w.clone(), role.clone(), p)))
         .collect();
     let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
@@ -2343,21 +2290,15 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let bd_listener = super::bd_server::view(&bd_main, &bd_mode);
     Ok(Snapshot {
         main_checkout_sessions,
-        at,
+        // Ages are computed against this, so it is read when the facts are all in, not when
+        // the gather began: a gather takes up to 30 s, and a run that started during it read
+        // "started -6s ago" (air-n9f3). `at` above stays the gather's own start, for writes.
+        at: now(),
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
         leases,
         lease_wants,
-        // A ledger read, so it survives an absent bd (air-ayp). The ledger already drops a
-        // bead whose claim was released as closed (0.4.10 trial); a bead bd shows back in the
-        // work queue has been dealt with too: somebody reopened it.
-        landed_open: ledger
-            .landed_open()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|o| !back_in_queue.contains(&o.bead))
-            .collect(),
         sessions: all_sessions,
         ready_depth,
         claimable_depth,
@@ -2610,14 +2551,55 @@ pub fn render_for_probe(s: &Snapshot) -> String {
     render(s, &[])
 }
 
+/// Does a sticky fact written at `fact_at` still hold, given the session's latest own event
+/// at `changed_at`? It holds until the session does something of its own after it (air-n9f3):
+/// the stop columns are never cleared, and before this rule sessions resumed at 04:4x read
+/// "STOPPED at 04:4x" 16.5 h later while running. Compared as instants, not as text: the
+/// timestamps drop trailing zeros, so their strings do not sort as time. A value that does not
+/// parse keeps the fact, as before this rule.
+pub fn sticky_holds(fact_at: &str, changed_at: &str) -> bool {
+    match (
+        fact_at.parse::<jiff::Timestamp>(),
+        changed_at.parse::<jiff::Timestamp>(),
+    ) {
+        (Ok(f), Ok(c)) => f >= c,
+        _ => true,
+    }
+}
+
+/// A row's sticky columns `(at, kind, text)` as the session's `(stopped, waiting)`: a stop
+/// kind is a stop, a waiting kind is waiting, and either only while it still holds.
+#[allow(clippy::type_complexity)]
+pub fn sticky_fact(
+    (at, kind, text): (Option<String>, Option<String>, String),
+    changed_at: &str,
+) -> (Option<(String, String, String)>, Option<(String, String)>) {
+    let (Some(at), Some(kind)) = (at, kind) else {
+        return (None, None);
+    };
+    if !sticky_holds(&at, changed_at) {
+        return (None, None);
+    }
+    if super::hook::is_waiting_kind(&kind) {
+        (None, Some((at, kind)))
+    } else {
+        (Some((at, kind, text)), None)
+    }
+}
+
 /// How a stopped session reads on its `air status` line (air-1n3).
 ///
 /// The distinction the phrase has to carry is not "stopped or not" but "coming back or not",
 /// because they call for opposite actions: a session the harness is auto-resuming must be left
 /// alone (typing at it cancels the recovery), and one it is not needs a wake. `kind` is the
 /// harness's own declared notification type, never read out of the message text.
-pub fn stopped_phrase(kind: &str, at: &str) -> String {
+pub fn stopped_phrase(kind: &str, at: &str, text: &str) -> String {
     match kind {
+        // An adopter's 233 StopFailure events all came with an empty reason, and each read as
+        // "API error", which nothing had said (air-n9f3).
+        "stop_failure" if text.trim().is_empty() => {
+            format!("STOPPED at {at} (stopped, no reason given)")
+        }
         "quota_auto_resume_fired" => {
             format!("STOPPED at {at} (limit; the harness is resuming it, leave it alone)")
         }
@@ -2680,10 +2662,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 let stopped = x
                     .stopped
                     .as_ref()
-                    .map(|(at, kind, _)| format!(" {}", stopped_phrase(kind, at)))
+                    .map(|(at, kind, text)| format!(" {}", stopped_phrase(kind, at, text)))
+                    .unwrap_or_default();
+                // air-n9f3: a session in a permission prompt read `running` for 6 h 9 min.
+                let waiting = x
+                    .waiting
+                    .as_ref()
+                    .map(|(at, kind)| format!(" waiting for the person since {at} ({kind})"))
                     .unwrap_or_default();
                 format!(
-                    "{} since {} [{model}]{unenforced}{synthetic}{stopped}",
+                    "{} since {} [{model}]{unenforced}{synthetic}{stopped}{waiting}",
                     x.state, x.changed_at
                 )
             })
@@ -2699,6 +2687,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         // the reader to know the layout.
         let green = match w.red_log.as_deref() {
             Some(p) => format!("{green} (output: {p})"),
+            None => green,
+        };
+        let green = match w.interrupted.as_deref() {
+            Some(i) => format!("{green}; last verify {i}"),
             None => green,
         };
         let claims: Vec<String> = w
@@ -3112,17 +3104,20 @@ mod tests {
                 detail: Some("Bash".into()),
                 changed_at: changed.into(),
                 pid: None,
-                pid_alive: None,
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             head: Some("abc".into()),
             green_at_head: green,
             green_detail: None,
             red_log: None,
+            interrupted: None,
             claims,
             handed_over: vec![],
             files_held: 0,
@@ -3316,7 +3311,7 @@ mod tests {
             None,
         );
         idle.session.as_mut().unwrap().pid = Some(1);
-        idle.session.as_mut().unwrap().pid_alive = Some(true);
+        idle.session.as_mut().unwrap().liveness = crate::cmd::lease::Liveness::Alive;
         let s = Snapshot {
             workers: vec![idle.clone()],
             ..Default::default()
@@ -3326,7 +3321,7 @@ mod tests {
         // for never having fired in any recorded day, so a dead pid raises nothing on its
         // own. The row now falls through to the ordinary idle states, which are age-gated,
         // so a 2-minute-old one is still quiet.
-        idle.session.as_mut().unwrap().pid_alive = Some(false);
+        idle.session.as_mut().unwrap().liveness = crate::cmd::lease::Liveness::Dead;
         let s = Snapshot {
             workers: vec![idle.clone()],
             ..Default::default()
@@ -3439,11 +3434,11 @@ mod tests {
     /// longest-lived rows in this repo's ledger were exactly this, open 4 885 minutes each.
     #[test]
     fn idle_without_claim_is_quiet_when_the_session_process_is_gone() {
-        let mk = |alive: Option<bool>| {
+        let mk = |alive: crate::cmd::lease::Liveness| {
             let mut w = worker("w", Some("idle"), &past(), vec![], Some(true));
             let sess = w.session.as_mut().unwrap();
             sess.pid = Some(1);
-            sess.pid_alive = alive;
+            sess.liveness = alive;
             Snapshot {
                 workers: vec![w],
                 ready_depth: Some(5),
@@ -3451,16 +3446,20 @@ mod tests {
                 ..Default::default()
             }
         };
-        // Alive, and unknown (no pid exported): both still fire.
-        for alive in [Some(true), None] {
-            let att = attention(&mk(alive), NOW, Thresholds::default());
-            assert_eq!(
-                att.iter().map(|a| a.kind).collect::<Vec<_>>(),
-                vec!["idle-without-claim"],
-                "{alive:?}"
+        use crate::cmd::lease::Liveness;
+        let att = attention(&mk(Liveness::Alive), NOW, Thresholds::default());
+        assert_eq!(
+            att.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            vec!["idle-without-claim"]
+        );
+        // air-sai7: unknown (no pid exported, or `ps` could not answer) is not alive, so it is
+        // quiet too. An adopter's dead row read alive for 39,000 minutes on a reused pid.
+        for gone in [Liveness::Dead, Liveness::Unknown] {
+            assert!(
+                attention(&mk(gone), NOW, Thresholds::default()).is_empty(),
+                "{gone:?}"
             );
         }
-        assert!(attention(&mk(Some(false)), NOW, Thresholds::default()).is_empty());
     }
 
     #[test]
@@ -3544,5 +3543,33 @@ mod tests {
             minutes_between(NOW, &past()),
             past_every_line_min().checked_neg()
         );
+    }
+
+    /// air-n9f3: no negative ages, a reasonless stop said as such, and instants over text.
+    #[test]
+    fn ages_are_never_negative_and_a_stop_says_what_is_known() {
+        // air-n9f3: a run that started after the clock was read is 0 s old, never negative.
+        let f = air_ledger::verify::InFlight {
+            id: "r".into(),
+            worker: "w1".into(),
+            sha: "abcdef0123".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid: None,
+            started_at: "2026-09-27T10:00:06Z".into(),
+        };
+        assert!(in_flight_line(&f, "2026-09-27T10:00:00Z").contains("started 0s ago"));
+        // A stop with no reason says so rather than naming an API error.
+        assert!(stopped_phrase("stop_failure", "T", "").contains("no reason given"));
+        assert!(stopped_phrase("stop_failure", "T", "overloaded").contains("API error"));
+        // Instants, not text: "00Z" sorts after "00.1Z" as a string and is earlier as time.
+        assert!(!sticky_holds(
+            "2026-09-27T10:00:00Z",
+            "2026-09-27T10:00:00.1Z"
+        ));
+        assert!(sticky_holds(
+            "2026-09-27T10:00:00.5Z",
+            "2026-09-27T10:00:00.45Z"
+        ));
     }
 }

@@ -2480,6 +2480,186 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "session-liveness",
+        since: "2026-09-28 (air-sai7)",
+        headline: "A session is alive only when its pid runs with the start time it registered \
+                   with and is not a zombie; `air status --json` gives `liveness` (alive, dead or \
+                   unknown) per session in place of `pid_alive`. Dead and unknown sessions hear \
+                   no ready notice and raise no idle-without-claim. A new session under a name \
+                   replaces that name's earlier rows, and the main checkout's session shows as \
+                   the owner, never a coordinator.",
+        silent_break: true,
+        action: "A script reading `pid_alive` from `air status --json` reads nothing: read \
+                 `liveness`.",
+    },
+    SurfaceChange {
+        id: "say-once-by-subject",
+        since: "2026-09-28 (air-8goe)",
+        headline: "Channel conditions are keyed by the bead, branch or lease they are about, not \
+                   by worker, so two beads of one kind on one worker push once each; a \
+                   change-only condition's `for_minutes` counts from when its subject first \
+                   appeared. The Stop nudge names an unchanged ready set once per session, and \
+                   `air land` warns about an unchanged set of main-checkout readers once.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "session-facts-yield",
+        since: "2026-09-28 (air-n9f3)",
+        headline: "`air status` shows `STOPPED at <t>` only until the session's next event of                    its own, and shows `waiting for the person since <t>` after a permission or                    idle prompt. A subagent's hooks no longer change its parent's state, a stop                    with no reason reads `stopped, no reason given`, and ages are measured                    against a clock read when the numbers are computed.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "stop-advisory-removed",
+        since: "2026-09-28 (air-wau8)",
+        headline: "The Stop hook no longer reports what a close would refuse; `air close` and \
+                   `air handover` still do. Under a verify lane, a worker whose every claim is \
+                   batch-ready is nudged with the ready beads when it stops, as a worker with no \
+                   claim already was.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "ready-list-is-a-snapshot",
+        since: "2026-09-28 (air-0blv)",
+        headline: "The `beads are ready` notice says its list is a snapshot and to pick from \
+                   `bd ready` after a refused claim or a finished bead; a claim refused because \
+                   a peer holds the bead says the same before naming `air reclaim`. The roles \
+                   text for the notice says so too.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "record-labels-removed",
+        since: "2026-09-28 (air-qlx3)",
+        headline: "`air record` no longer labels a run `suspicious` or `flaky-at-head`; it prints \
+                   `at this commit: N green / M red` when a commit has more than one run. The \
+                   close refusal for such a head states the same counts and no longer says the \
+                   test is flaky.",
+        silent_break: true,
+        action: "A script that matched `suspicious` or `flaky` in `air record` output matches \
+                 nothing now; read the exit and the counts.",
+    },
+    SurfaceChange {
+        id: "close-names-a-bad-id",
+        since: "2026-09-28 (air-a8ra)",
+        headline: "`air close` and `air handover --bead` refuse an id containing whitespace, \
+                   naming it, before the hand-over check runs; and when the check would refuse, \
+                   an id bd does not have is named (`bd has no bead <id>`) instead of the \
+                   check's advice.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "coordinator-no-question-prompt",
+        since: "2026-09-28 (air-jcfb)",
+        headline: "The coordinator is denied `AskUserQuestion`, as workers and the lane already \
+                   were, and roles.md says in Every role that no role uses the question prompt: \
+                   a question for the owner is a bead labelled `owner` or an `air capture`.",
+        silent_break: false,
+        action: "Relaunch the coordinator (`air coordinator`) to pick up the deny.",
+    },
+    SurfaceChange {
+        id: "fleet-up-incomplete",
+        since: "2026-09-28 (air-eeuf)",
+        headline: "When a launch does not start, `air fleet up` names each one with why, and its \
+                   event's decision is `fleet / incomplete` instead of `fleet / up`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "dated-fallbacks-deleted",
+        since: "2026-09-28 (air-jsee)",
+        headline: "The 2026-08-23 fallbacks are gone: a commit with no `Bead:` trailer is \
+                   attributed to nothing and a digest with no `bead:` front matter does not \
+                   count, whatever their date. `air doctor` has no dated rules left and \
+                   `air doctor --json` no longer has `dated_rules`.",
+        silent_break: false,
+        action: "A branch or digest from before 2026-08-23 that is still in play needs a \
+                 `Bead:` trailer or a `bead:` line; `air handover` names which.",
+    },
+    SurfaceChange {
+        id: "batch-held-removed",
+        since: "2026-09-28 (air-aepb)",
+        headline: "`air batch cut` no longer sends a `batch-held` notice to a worker whose branch \
+                   has no green precheck, and writes no `batch-cut / no-precheck` line. The \
+                   branch is still left out, and `air status` still names `no-precheck` for it.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "budgets-side-by-side",
+        since: "2026-09-28 (air-onqi)",
+        headline: "`air audit` prints each budget's recorded p50 and max beside the budget and \
+                   `max x 10`, with the measurement or ceiling the number came from; a budget \
+                   reached reads `over budget N time(s)` instead of `N hit(s)`.",
+        silent_break: true,
+        action: "A script that matched `hit(s)` in `air audit` output matches nothing now; read \
+                 `over budget` or the `hits` field of `--json`.",
+    },
+    SurfaceChange {
+        id: "failed-cut-and-interrupted-run",
+        since: "2026-09-28 (air-nwat)",
+        headline: "`air batch cut` writes `batch-cut / failed` with its reason when it stops part \
+                   way, naming who holds a git lock. `air record` no longer dies on SIGINT, SIGTERM \
+                   or SIGHUP: it stops the check and writes the run with `failing_step` \
+                   `interrupted (<signal>)`, and `air status` shows `last verify interrupted ...` \
+                   under the worker.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "landed-not-closed-removed",
+        since: "2026-09-28 (air-cizz)",
+        headline: "The `landed-not-closed` condition is gone from `air status`, the channel and \
+                   `air audit`, and `air land` no longer marks acceptance clauses `ok`, `MISS` or \
+                   `?`: it lists each landed bead with its acceptance text and no verdict. A \
+                   landing row's result is `landed`, never `landed-refuted`.",
+        silent_break: true,
+        action: "A script that read `landed-not-closed`, `landed-refuted` or the clause marks \
+                 reads nothing now; read the bead's acceptance in the `air land` output.",
+    },
+    SurfaceChange {
+        id: "worktree-fence-removed",
+        since: "2026-09-28 (air-w18h)",
+        headline: "Air's hook no longer denies a worker's Edit or Write outside its worktree \
+                   (`hook.PreToolUse / refuse-outside-worktree` is gone). The roles text now \
+                   says: work only in your worktree, never in the main checkout, and use your \
+                   scratchpad for anything that is not part of the repo.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "land-waits-only-on-runs-at-risk",
+        since: "2026-09-28 (air-9yx6)",
+        headline: "`air land` refuses only while a verify runs in the main checkout or the \
+                   lane's tree. A worker's verify in its own worktree no longer holds a landing, \
+                   and `--despite-inflight` records only the runs a landing can destroy.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "audit-matches-the-ledger",
+        since: "2026-09-28 (air-1yxj)",
+        headline: "`air audit` counts closes from `close / closed` lines (one per bead), reads a \
+                   `uds:` message's recipient from the pid in its socket name, counts subjects by \
+                   the beads or head a line names, and no longer says the Stop nudge names beads \
+                   once.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "lane-loop-allowed-bare",
+        since: "2026-09-28 (air-b1h8)",
+        headline: "The lane's settings allow `air batch cut`, `air record`, `air status`, \
+                   `git merge` and `git reset --hard main` beside `air land`, and the roles text \
+                   tells the lane to run them bare: a piped line reaches the auto-mode \
+                   classifier, which refused a landing and then every one after it.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3570,6 +3750,10 @@ mod tests {
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
         assert!(has("A close needs no message."));
+        // air-jcfb: no role waits on the question prompt, and every launcher denies it.
+        assert!(has(
+            "No role uses the question prompt (`AskUserQuestion`), and every launcher denies it."
+        ));
         assert!(has("then use `air capture`"));
         assert!(has(
             "Do not message a worker to hand it a bead unless the owner asks you to."
@@ -3592,10 +3776,15 @@ mod tests {
         assert!(!has("bd close"));
         assert!(has("You need not merge main to stay batch-ready"));
         assert!(has("commit forward and never amend"));
-        // The worktree fence is Air's hook, not the harness's; the harness claim stays absent
+        // air-w18h: no fence; the roles say where to work. The harness claim stays absent
         // because it would promise a block that is not there (air-8gj).
         assert!(has(
-            "resolved path leaves your worktree is denied by Air's PreToolUse hook"
+            "Work only in your worktree, never in the main checkout, and use your scratchpad"
+        ));
+        assert!(!has("denied by Air's PreToolUse hook"));
+        // air-b1h8: the lane's allow rules match only the bare line.
+        assert!(has(
+            "Run these and `air land` bare, with no pipe or redirect"
         ));
         assert!(!has("the main checkout is blocked natively"));
         // A `digest_dir` digest is tracked, and its route past a cut batch (air-ahl).

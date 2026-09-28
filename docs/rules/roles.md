@@ -29,6 +29,11 @@ from `air`. Your role's section lists every one and what to do about it. The coo
 and resumes the whole fleet with one command to Air, and each section says what a stop means
 for that role.
 
+No role uses the question prompt (`AskUserQuestion`), and every launcher denies it. A session
+waiting on it hears no notices and does no work, and the owner is usually not watching its
+pane. A question for the owner is a bead labelled `owner` (coordinator) or an `air capture`
+(worker, lane), with your recommendation, and you take other work while it waits.
+
 Keep a journal: one file per session in the main checkout's `.air/journal/`, or in the repo's
 `journal_dir` where `.claude/air.json` names one. Append a timestamp and a line as you go. It
 is for things nothing else carries: a bug you hit and how it showed, a wrong turn and what
@@ -122,15 +127,16 @@ blocked, need a decision, or find work outside your bead, and then use `air capt
 
 A closed bead stays closed. Unfinished work is a new bead that references it, which you ask
 for with `air capture`. If part of a bead needs the owner, close what you did and capture the
-rest. For a genuine blocker, or a question only the owner can answer, run `air capture
-"<blocker>"`, then either `air release <id> --reason <reason>` or take unrelated work. The
+rest. For a genuine blocker, or a question only the owner can answer (never the question
+prompt; see Every role), run `air capture "<blocker>"`, then either `air release <id> --reason <reason>` or take unrelated work. The
 coordinator files owner questions as beads labelled `owner`.
 
 Air delivers these messages into your session through its channel, each once, marked as coming
 from `air`:
 
 - `beads are ready: <ids>` arrives when new beads became claimable while you held no claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
-  refused claim means someone else took it; take another.
+  refused claim means someone else took it; take another from `bd ready`, since the list in the
+  notice is as of when it was sent.
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
   branch in it went green. Close each named bead now, with the lane's green as the proof.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
@@ -159,8 +165,8 @@ You read beads and add comments with `bd comment`; every other change to a bead 
 Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
 changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
-`air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
-PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/digests/`.
+`air capture`. Work only in your worktree, never in the main checkout, and use your scratchpad
+for anything that is not part of the repo.
 
 ### Verification lane
 
@@ -170,20 +176,21 @@ batches it holds no bead, and between batches none either: `air batch cut` reset
 branch to main before it merges, so work of the lane's own does not survive a cut.
 
 The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
-merges every batch-ready branch at the sha `air status` lists, refusing while your tree has
-uncommitted changes or your head is a passing batch not yet landed, never a sha from a message, and drops and names a branch
-that conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the
-repo's test-state reset if it has one, and `air record verify -- <verify command>`. A dropped
-branch is resolved by its worker, never by the lane. A red batch lands nothing.
+merges every batch-ready branch at the sha `air status` lists, never a sha from a message,
+refusing while your tree has uncommitted changes or your head is a passing batch not yet
+landed, and drops and names a branch that conflicts with main or with an earlier member.
+`--dry-run` merges nothing. Then run the repo's test-state reset if it has one, and `air record
+verify -- <verify command>`. A dropped branch is resolved by its worker, never by the lane. A
+red batch lands nothing. Run these and `air land` bare, with no pipe or redirect: your settings
+allow only the bare line, and one auto-mode classifier refusal can stop every later landing.
 
 Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
 batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air
 record` end with your next step: the branches batch-ready now and `next: air batch cut`, or
 `nothing is batch-ready`. You need not tell members a result or a dropped worker its conflict,
-because Air tells them.
-
-On `fleet stop`, let a verify already running finish; it is recorded. Then cut and land nothing:
-`air batch cut` and `air land` refuse until `fleet resumed`, and then you cut the next batch.
+because Air tells them. On `fleet stop`, let a verify already running finish; it is recorded.
+Then cut and land nothing: `air batch cut` and `air land` refuse until `fleet resumed`, and
+then you cut the next batch.
 
 A branch is batch-ready when it is not already landable on its own (green at a head that
 contains `main`), its commits carry a `Bead:` trailer for a bead its worker holds, and, where
@@ -194,13 +201,11 @@ main lacks. `air status --json` gives the first fact each other branch lacks.
 A batch is a commit on the lane's branch that contains `main` and each member at the sha it
 merged. The green or red recorded there is the batch's. A red batch is reported by member in
 `air record`'s output and in `air status` until a newer batch replaces it, and `air handover`
-in a member's worktree names it.
-
-The close gate accepts a green at a verified commit that contains `main` and every commit
-carrying the bead's trailer, so a worker closes on the lane's green with no verify of its own.
-The lane lands its green batch with `air land --worker <lane>`, which records every bead the
-range names by trailer. A batch whose only commits are the coordinator's lands carrying no
-bead. `air land` is refused to workers and the coordinator.
+in a member's worktree names it. The close gate accepts a green at a verified commit that
+contains `main` and every commit carrying the bead's trailer, so a worker closes on the lane's
+green with no verify of its own. The lane lands its green batch with `air land --worker
+<lane>`, recording every bead the range names by trailer; a batch of only the coordinator's
+commits lands carrying no bead. `air land` is refused to workers and the coordinator.
 
 ## Coordinator
 
@@ -231,7 +236,7 @@ session.
 
 Ask the owner only for a genuine edge case: a blocker only they can clear, a product or design
 decision only they can make, or a resource conflict. File it as a bead labelled `owner` with
-your recommendation in its description. An unclear acceptance is not an owner question; rewrite
+your recommendation in its description, never as a question prompt (see Every role). An unclear acceptance is not an owner question; rewrite
 it yourself. `air claim` refuses `owner` beads to workers, and `air status` counts them on its
 `ready:` line.
 
@@ -249,7 +254,7 @@ inbox depth, and the processes reading each tree (`readers: worker-2: 1 (cargo 3
 run recorded" does not mean idle. `air holdings` shows who is in which file. The channel pushes
 a condition when the set of conditions changes, not while one ages: a worker idle, silent or
 gone with a claim, a worker idle without one, a hand-over not green, a branch landable, a bead
-landed and not closed, a lease held by a dead or stale session.
+closed and not landed, a lease held by a dead or stale session.
 
 A gone worker's bead comes back with `air reclaim <id> --worker <name> --reason <reason>`. bd
 lets go once the worker's claim lease has run out, which is five minutes after the claim because
@@ -317,10 +322,7 @@ main. A batch lands once and costs that once. A close does not expire: the close
 green against the main it was recorded over, and main moving no longer retracts a close.
 
 A landing closes nothing, since workers close their own beads. `air land` prints each landed
-bead beside its acceptance criteria with Air's verdict on each clause. Air settles a clause
-only by lookup (a green recorded at the landed sha, or a path the merge changed) and reports
-the rest as unreadable. `air status` names a landed bead whose clause names a file the merge did
-not change, as a lookup that did not answer; read the bead.
+bead beside its acceptance criteria, with no verdict on them; read them.
 
 Intake: `air inbox`, then `bd create --validate --estimate <min>`, then `air triage <id> --bead
 <new>` or `--drop "<why>"`. `--validate` refuses a bead without the sections its type needs:

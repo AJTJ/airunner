@@ -421,45 +421,33 @@ fn merge(repo: &Path, sha: &str) -> Result<Merged, String> {
     Ok(Merged::Conflict(marked))
 }
 
-/// Tell each worker whose branch a declared precheck kept out of this cut, once per head
-/// (0.4.8 trial), and write the audit line. `precheck_green_now` re-reads the precheck record
-/// for that head immediately before the hold is written (0.4.9 trial: a hold went out at
-/// 21:09:28.795 for a head whose green precheck was recorded at .725, because the batch-ready
-/// read was taken before the record landed); a head that passes now is neither held nor
-/// counted. Returns the heads held.
-pub fn hold_out<F>(
-    ledger: &Ledger,
-    lane: &str,
-    not_ready: &[status::NotBatchReady],
-    dry_run: bool,
-    considered: usize,
-    mut precheck_green_now: F,
-) -> Vec<String>
-where
-    F: FnMut(&status::NotBatchReady) -> bool,
-{
-    let mut held = Vec::new();
-    for n in not_ready
-        .iter()
-        .filter(|n| n.check == "no-precheck" && n.worker != lane)
-    {
-        if precheck_green_now(n) {
-            continue;
+/// A failed cut's reason, with who holds a git lock file when the reason names one (air-nwat).
+/// An adopter's cut stopped on a leftover `index.lock` and left no ledger line at all between
+/// the landing and the next cut. Pure over the lookup so a test drives every branch.
+pub fn failure_reason(
+    err: &str,
+    holders: impl Fn(&str) -> Result<Vec<(i64, String)>, String>,
+) -> String {
+    let lock = err
+        .split(['\'', '"'])
+        .find(|t| t.ends_with(".lock") && t.contains('/'));
+    let Some(lock) = lock else {
+        return err.to_string();
+    };
+    let held = match holders(lock) {
+        Ok(h) if h.is_empty() => {
+            "no process holds it, so a git that stopped left it behind".to_string()
         }
-        if !dry_run {
-            super::fanout::batch_held(ledger, lane, n);
-        }
-        super::log_event(
-            ledger,
-            lane,
-            super::decisions::BATCH_CUT_NO_PRECHECK,
-            &serde_json::json!({"member": n.worker, "head": n.head, "dry_run": dry_run}),
-            &n.detail,
-            &format!("{considered} batch-ready member(s)"),
-        );
-        held.push(n.head.clone());
-    }
-    held
+        Ok(h) => format!(
+            "held by {}",
+            h.iter()
+                .map(|(p, c)| format!("pid {p} ({c})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Err(e) => format!("its holder could not be looked up: {e}"),
+    };
+    format!("{err} [{lock}: {held}]")
 }
 
 pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
@@ -485,6 +473,21 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
             || why.clone(),
         );
         2
+    };
+    // air-nwat: a cut that stops part way writes a line saying why, so the record between a
+    // landing and the next cut has no silent gap.
+    let fail = |err: String| -> i32 {
+        let why = failure_reason(&err, super::readers::holders_of);
+        super::log_event(
+            &ledger,
+            &lane,
+            super::decisions::BATCH_CUT_FAILED,
+            &serde_json::json!({"dry_run": dry_run}),
+            &why,
+            "0 members",
+        );
+        eprintln!("air batch cut: {why}");
+        1
     };
     // A stopped fleet cuts no batch (air-1vri.1). A dry run changes nothing and still answers.
     if !dry_run && let Some(msg) = super::fleet::refusal(&ledger, "air batch cut") {
@@ -523,10 +526,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     }
     let main = match git::main_tip(repo) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("air batch cut: git rev-parse main: {e}");
-            return 1;
-        }
+        Err(e) => return fail(format!("git rev-parse main: {e}")),
     };
     if !dry_run {
         match git_status(
@@ -544,14 +544,11 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
                     err.trim_end()
                 ));
             }
-            Err(e) => {
-                eprintln!("air batch cut: {e}");
-                return 1;
-            }
+            Err(e) => return fail(e.to_string()),
         }
     }
 
-    let (ready, not_ready, errors) = status::batch_ready_for(&ledger, repo);
+    let (ready, _, errors) = status::batch_ready_for(&ledger, repo);
     for e in &errors {
         eprintln!("air batch cut: {e}");
     }
@@ -575,10 +572,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     }
     let (accepted, mut dropped) = match pre_check(cands, &main, |a, b| merge_tree(repo, a, b)) {
         Ok(x) => x,
-        Err(e) => {
-            eprintln!("air batch cut: {e}");
-            return 1;
-        }
+        Err(e) => return fail(e.to_string()),
     };
 
     // Every batch starts from main (0.4.8 trial): a red batch's merges never carry forward.
@@ -592,10 +586,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
                 short(&head)
             ));
         }
-        Err(e) => {
-            eprintln!("air batch cut: {e}");
-            return 1;
-        }
+        Err(e) => return fail(e),
     };
     let mut cut = Cut {
         dry_run,
@@ -621,10 +612,9 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
                     stage: "merge",
                 }),
                 Err(e) => {
-                    eprintln!("air batch cut: {e}");
                     cut.dropped = dropped;
                     eprintln!("{}", render(&cut));
-                    return 1;
+                    return fail(e);
                 }
             }
         }
@@ -672,18 +662,6 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
             &format!("{considered} member(s) considered"),
         );
     }
-    // The precheck requirement acts here: a branch the repo's `precheck` key kept out of this
-    // batch is one line, so `air audit` counts what the requirement cost (air-hqj8). The other
-    // not-ready reasons are the ordinary state of a branch still in work and write nothing.
-    let worktrees = git::worktrees(repo).unwrap_or_default();
-    hold_out(&ledger, &lane, &not_ready, dry_run, considered, |n| {
-        worktrees
-            .iter()
-            .find(|(p, _)| air_ledger::paths::worker_name_for(p).is_ok_and(|w| w == n.worker))
-            .is_some_and(|(p, _)| {
-                super::green::at(&ledger, p, &n.head, Kind::Precheck).is_ok_and(|e| e.holds())
-            })
-    });
     super::log_event(
         &ledger,
         &lane,
@@ -726,6 +704,30 @@ mod tests {
     /// Against a peer or the batch, the advice names the branch and its sha and says to
     /// wait for it to land; against main, `git merge main` now. The cut's own output carries
     /// the same words and no longer tells the lane to name each drop itself.
+    /// air-nwat: a failure naming a git lock says who holds it, or that nobody does.
+    #[test]
+    fn a_failed_cut_names_the_lock_holder() {
+        let err = "could not reset the lane's branch to main at abc12345: fatal: Unable to \
+                   create '/r/.git/worktrees/lane/index.lock': File exists.";
+        let lock = "/r/.git/worktrees/lane/index.lock";
+        let none = failure_reason(err, |p| {
+            assert_eq!(p, lock);
+            Ok(Vec::new())
+        });
+        assert!(
+            none.ends_with(&format!(
+                "[{lock}: no process holds it, so a git that stopped left it behind]"
+            )),
+            "{none}"
+        );
+        let held = failure_reason(err, |_| Ok(vec![(42, "git".to_string())]));
+        assert!(held.ends_with("held by pid 42 (git)]"), "{held}");
+        assert_eq!(
+            failure_reason("git timed out after 120s", |_| Err("not asked".to_string())),
+            "git timed out after 120s"
+        );
+    }
+
     #[test]
     fn drop_advice_names_the_unlanded_branch_and_says_to_wait() {
         let peer = drop_advice(&dropped("w1"));
@@ -757,28 +759,5 @@ mod tests {
         });
         assert!(out.contains(&peer), "{out}");
         assert!(!out.contains("Name each drop"), "{out}");
-    }
-
-    /// 0.4.9 trial: a `no-precheck` hold was written for a head whose green precheck had
-    /// been recorded 70 ms earlier. The hold re-reads the record first; a head green now is
-    /// neither told nor counted, and one that is not is told once.
-    #[test]
-    fn a_hold_is_skipped_when_the_precheck_passes_on_the_re_read() {
-        let ledger = Ledger::open_in_memory().unwrap();
-        let not = |worker: &str, head: &str| status::NotBatchReady {
-            worker: worker.into(),
-            head: head.into(),
-            check: "no-precheck",
-            detail: format!("{worker} at {head}: no green precheck at this head"),
-        };
-        let not_ready = vec![not("w1", "f914b150"), not("w2", "a76d562e")];
-        let held = hold_out(&ledger, "lane", &not_ready, false, 0, |n| n.worker == "w1");
-        assert_eq!(held, vec!["a76d562e".to_string()]);
-        let rows = ledger.deliveries_since("1970").unwrap();
-        let held_rows: Vec<&air_ledger::deliveries::Delivery> =
-            rows.iter().filter(|d| d.kind == "batch-held").collect();
-        assert_eq!(held_rows.len(), 1, "{rows:?}");
-        assert_eq!(held_rows[0].to_worker, "w2");
-        assert_eq!(held_rows[0].key, "a76d562e");
     }
 }

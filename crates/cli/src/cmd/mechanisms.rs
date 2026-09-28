@@ -105,6 +105,32 @@ pub struct Mechanism {
 ///   in the 2026-09-05 round. The heartbeat is the failsafe (`docs/rules/roles.md`). A wedge
 ///   that auto mode would show as a prompt is now caught by `idle-with-claim` or the
 ///   heartbeat, not by a state nothing ever wrote.
+/// - `suspicious` and `flaky-at-head` on `air record` (2026-08-21; removed 2026-09-28, air-qlx3,
+///   owner: "Air states facts, not opinions"). `suspicious` fired on 14 greens in one day at an
+///   adopter, every one a good docs-scope run compared with a full-scope one; `flaky-at-head`
+///   told a worker "the repo's test is the bug; file it" about a missing build directory. The
+///   facts stay: exit, duration, bytes, dirty tree, and the green and red counts at the commit.
+///   Neither had a registry row; both were words on `record / green` and `record / red`.
+/// - `no-precheck` and the `batch-held` notice (2026-09-25 and the 0.4.8 trial; removed
+///   2026-09-28, air-aepb, owner: delete). Each cut told every branch without a green
+///   precheck that it was held: 156 deliveries in a day at an adopter, 247 `no-precheck`
+///   lines over 162 heads, and for 89 of those heads the precheck was already running. The
+///   worker knows it has not prechecked. The rule itself stays in `status::batch_ready_rule`,
+///   and `air status` names `no-precheck` for such a branch.
+/// - `landed-not-closed` (2026-08-22, air-ayp; removed 2026-09-28, air-cizz, owner: delete
+///   it), with the per-clause verdicts in `air land` it was built on. At an adopter 7 of 8
+///   firings were paths the acceptance text only mentioned (command arguments, "on a change
+///   to X"); in this repo 6 of 9 held (air-k6uh). It never cleared for a bead closed outside
+///   `air close` (air-03w, closed 2026-08-29, still on this repo's status on 2026-09-28), and
+///   it misparsed a possessive path (air-dqa). Close-with-proof already covers the failure it
+///   was built for: the adopter's 99 beads closed on branch containment alone. `air land`
+///   still prints each bead's acceptance text, with no verdict.
+/// - `edit-outside-worktree`, the worktree fence (2026-09-06, air-8gj; removed 2026-09-28,
+///   air-w18h, owner: remove it, tell workers in the roles). Its recorded refusals at an
+///   adopter, 6 of 6, were writes to the session's own Claude Code scratchpad under
+///   /private/tmp; this repo's event log holds none (`grep -c refuse-outside-worktree
+///   .air/events/*`, 2026-09-28), and no write outside a worktree was ever recorded. roles.md tells a
+///   worker to work only in its worktree and use the scratchpad for the rest.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -131,18 +157,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },
     Mechanism {
-        id: "edit-outside-worktree",
-        class: "refusal",
-        what: "A worker's Edit/Write whose resolved path leaves its worktree is denied; the \
-               harness's --worktree isolation it replaces is off.",
-        added: "2026-09-06 (air-8gj)",
-        source: "crates/hooks/src/fence.rs; private/notes/2026-09-06-answers-worktree-and-verify.md",
-        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-outside-worktree")]),
-        removal: Removal::Judgement(
-            "the harness keys its isolation on the cwd rather than the flag; or a round records zero refuse-outside-worktree firings AND the owner prefers the harness block back",
-        ),
-    },
-    Mechanism {
         id: "lease-needed",
         class: "refusal",
         what: "A Bash command matching a pattern under \"leases\" in .claude/air.json, from a \
@@ -161,7 +175,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-would-refuse",
         class: "refusal",
-        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
+        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1. \
+               The Stop hook's arm of it was deleted 2026-09-28 (air-wau8).",
         added: "2026-08-18 (plan 0001)",
         source: "docs/design.md §6.2 (plan 0001 §5 at the time)",
         // `hook.handover` and `hook.stop` are the first slice's names for the same advisory
@@ -174,7 +189,10 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.stop", "would-refuse"),
             // The Stop hook's advisory under its dispatched name, written since the event was
             // dispatched by name and registered by nobody until air-hqj8 (30 in this repo's
-            // record on 2026-09-25).
+            // record on 2026-09-25). Deleted 2026-09-28 (air-wau8, owner: "a worker stops for
+            // many reasons; delete it, keep the nudge") after 443 lines in one day at an
+            // adopter, 329 of them repeats, all describing the normal wait for the lane. Kept
+            // here only so days recorded before then still attribute; nothing writes it now.
             ("hook.Stop", "would-refuse"),
         ]),
         // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
@@ -221,31 +239,11 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "landed-not-closed",
-        class: "attention",
-        what: "A bead that landed with an acceptance clause naming a file the merge did not \
-               change. A lookup that did not answer, not a contradiction and not by itself a \
-               wrong close: of nine standing firings on 2026-09-06, six were clauses that held \
-               (air-k6uh).",
-        added: "2026-08-22 (air-ayp)",
-        source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
-        fires: Fires::Condition("landed-not-closed"),
-        // Not ZeroFirings: this one firing is the mechanism working. The adopter's closer put
-        // 14 partial and 1 not-done bead into `closed` by never asking
-        // (the adopter's plan 0029 on bead closure, D.6, cited via air-ayp). It goes when acceptance is
-        // machine-checkable by construction, at which point the merge either satisfies it or
-        // does not and there is no judgement left to hold open.
-        removal: Removal::Judgement(
-            "acceptance criteria are machine-checkable by construction, so a landing either satisfies them or does not and nothing is held open for a person to read",
-        ),
-    },
-    Mechanism {
         id: "closed-not-landed",
         class: "attention",
         what: "A bead bd has closed whose commits are in no tree but its author's worktree. \
-               The inverse of the one above: closed and landed was reported, closed and NOT \
-               landed was not, and no other condition reaches it — `landable` needs a branch \
-               containing main so it goes quiet the moment main moves.",
+               No other condition reaches it — `landable` needs a branch containing main so \
+               it goes quiet the moment main moves.",
         added: "2026-09-07 (air-gazh)",
         source: "crates/cli/src/cmd/status.rs (closed_not_landed)",
         fires: Fires::Condition("closed-not-landed"),
@@ -394,7 +392,10 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stop-nudge",
         class: "nudge",
-        what: "At WIP 0 with beads ready, the Stop hook names them once.",
+        what: "At WIP 0 with beads ready, the Stop hook names them when the worker stops; \
+               the count below says how often it repeated (air-1yxj). Since air-wau8 \
+               (2026-09-28), under a verify lane, a worker whose every claim is batch-ready \
+               counts as WIP 0.",
         // air-7q5 asked whether this is an auto-start, since starting a session must not start
         // work. It is NOT, and it is left alone rather than gated. A Stop hook fires only after
         // the model has produced a turn, and a worker launched with no `--task` is given no
@@ -570,7 +571,7 @@ pub const MECHANISMS: &[Mechanism] = &[
                configured workers, each in its worktree and tmux session.",
         added: "2026-09-25 (owner, air-jc2p.5)",
         source: "crates/cli/src/cmd/launch.rs, fleet_up",
-        fires: Fires::Decisions(&[("fleet", "up")]),
+        fires: Fires::Decisions(&[("fleet", "up"), ("fleet", "incomplete")]),
         // Owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator; before this
         // nothing started the lane and workers started only when the coordinator decided to.
         removal: Removal::Judgement(
@@ -650,21 +651,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         // was the round's throughput limit while the coordinator landed by hand.
         removal: Removal::Judgement(
             "the lane goes (verify cheap enough that no round has a batch of more than one branch); landing then returns to whoever lands a worker's branch",
-        ),
-    },
-    Mechanism {
-        id: "no-precheck",
-        class: "refusal",
-        what: "Where the repo declares `precheck`, `air batch cut` leaves out a branch with no \
-               recorded green precheck at its head; one line per branch left out.",
-        added: "2026-09-25 (an adopter's fleet protocol)",
-        source: "crates/cli/src/cmd/status.rs batch_ready_rule; crates/cli/src/cmd/batch_cut.rs run",
-        // An adopter's lane script parsed a log file for this, 2026-09-05..07: a worker was
-        // cut before its check finished, a check still running was relayed as "checked", and
-        // a stale green trailer named a head two commits back.
-        fires: Fires::Decisions(&[("batch-cut", "no-precheck")]),
-        removal: Removal::Judgement(
-            "the repo drops the `precheck` key: a round under it with no batch red that a member's precheck would have caught means the precheck only delays the cut",
         ),
     },
     Mechanism {
@@ -870,10 +856,10 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "Each member worker hears its batch's result at once: close on a green or a \
                landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it, the missing precheck \
-               when it holds it out. A killed run says nothing.",
+               other side and the paths when `air batch cut` drops it. A killed run says \
+               nothing.",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped, batch_held; a landing is main_moved",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
         // Same trial: a worker learned the lane's green, and could close, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(

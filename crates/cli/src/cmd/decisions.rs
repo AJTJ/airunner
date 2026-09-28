@@ -57,6 +57,7 @@ traces! {
 
     LAUNCH_REFUSE_INSTALL_UNCOMMITTED = "launch" / "refuse-install-uncommitted";
     FLEET_UP = "fleet" / "up";
+    FLEET_INCOMPLETE = "fleet" / "incomplete";
     BD_SERVER_STARTED = "bd-server" / "started";
     BD_SERVER_FAILED = "bd-server" / "failed";
     BD_SERVER_RESTARTED = "bd-server.keep-alive" / "restarted";
@@ -65,8 +66,8 @@ traces! {
     PIN_DELEGATED = "pin" / "delegated";
 
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
+    BATCH_CUT_FAILED = "batch-cut" / "failed";
     BATCH_CUT_DROP = "batch-cut" / "drop";
-    BATCH_CUT_NO_PRECHECK = "batch-cut" / "no-precheck";
     BATCH_CUT_CUT = "batch-cut" / "cut";
     BATCH_CUT_DRY_RUN = "batch-cut" / "dry-run";
 
@@ -139,16 +140,12 @@ traces! {
     POST_TOOL_USE_JOURNALED = "hook.PostToolUse" / "journaled";
     STOP_OBSERVED = "hook.Stop" / "observed";
     STOP_NUDGE = "hook.Stop" / "nudge";
-    STOP_PASS = "hook.Stop" / "pass";
     STOP_NO_CLAIM = "hook.Stop" / "no-claim";
-    STOP_WOULD_REFUSE = "hook.Stop" / "would-refuse";
-    STOP_WOULD_REFUSE_REPEAT = "hook.Stop" / "would-refuse-repeat";
     SUBAGENT_STOP_OBSERVED = "hook.SubagentStop" / "observed";
     NOTIFICATION_STOPPED = "hook.Notification" / "stopped";
     NOTIFICATION_OBSERVED = "hook.Notification" / "observed";
     STOP_FAILURE_STOPPED = "hook.StopFailure" / "stopped";
     STOP_FAILURE_OBSERVED = "hook.StopFailure" / "observed";
-    PRE_TOOL_USE_REFUSE_OUTSIDE_WORKTREE = "hook.PreToolUse" / "refuse-outside-worktree";
     PRE_TOOL_USE_WARN = "hook.PreToolUse" / "warn";
     PRE_TOOL_USE_WARN_REPEAT = "hook.PreToolUse" / "warn-repeat";
     PRE_TOOL_USE_CLEAR = "hook.PreToolUse" / "clear";

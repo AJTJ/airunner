@@ -3,15 +3,17 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
+mod common;
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 fn scratch_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let g = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -39,7 +41,7 @@ fn scratch_repo() -> tempfile::TempDir {
 const NO_BD: &str = "/nonexistent/bd";
 
 fn seed_idle_with_claim(repo: &Path) {
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
         .arg("status")
@@ -68,7 +70,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     let repo = dir.path().canonicalize().unwrap();
     seed_idle_with_claim(&repo);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+    let mut child = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .arg("mcp")
@@ -173,7 +175,7 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
     // leak of about 40 KB per request or more. It was 1500 (air-4vu); cut on 2026-09-26 when a
     // loaded machine made the run slow enough to look hung.
     let rss = |pid: u32| -> u64 {
-        let out = Command::new("ps")
+        let out = common::command("ps")
             .args(["-o", "rss=", "-p", &pid.to_string()])
             .output()
             .unwrap();

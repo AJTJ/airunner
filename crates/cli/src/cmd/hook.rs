@@ -22,9 +22,9 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use air_hooks::{HookEvent, HookInput, HookOutcome, handover_verdict, journal, stop_nudge};
+use air_hooks::{HookEvent, HookInput, HookOutcome, journal, stop_nudge};
 use air_ledger::Ledger;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::cmd::decisions::{self as dec, Trace};
 use crate::cmd::{handover, log_event_as, now, open, ready_cache};
@@ -139,7 +139,8 @@ fn inner_env(
         .map(PathBuf::from)
         .unwrap_or_else(|| repo.to_path_buf());
     // air-1r6: the tool's cwd is wherever the shell last cd'd, and every path the hook joins
-    // (digest_dir, the ready cache, `.claude/air.json`) is relative to the worktree root. So
+    // (the ready cache, `.claude/air.json`; digest_dir until air-wau8 took the gate out of the
+    // Stop hook) is relative to the worktree root. So
     // the root is resolved ONCE here and everything below reads it; a persisted `cd crates`
     // refused three closes on the adopter's w1 whose digests were there. Same class as air-dws
     // and air-75u: a check that reads where it runs. A cwd outside any repository stays as
@@ -327,7 +328,7 @@ fn dispatch(
             }
             d
         }
-        HookEvent::Stop | HookEvent::SubagentStop if role != "worker" => {
+        HookEvent::Stop if role != "worker" => {
             // The coordinator holds no lane and never hands over: no advisory (the adopter
             // adoption log §9: the coordinator received a worker's hand-over advisory). The
             // lane neither: its branch carries every member's trailers, so the advisory would
@@ -336,19 +337,17 @@ fn dispatch(
             let prev = set_session(ledger, input, worker, role, "idle", None)?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                if input.event() == HookEvent::Stop {
-                    dec::STOP_OBSERVED
-                } else {
-                    dec::SUBAGENT_STOP_OBSERVED
-                },
+                dec::STOP_OBSERVED,
                 format!("{}; {role}: no hand-over check", transition(&prev, "idle")),
             )
         }
-        // A subagent stopping is not the worker stopping: the main agent is mid-turn and
-        // about to read the subagent's result. Treating it as a Stop marked a working
-        // session idle and, with no claim held, ran the nudge's `bd ready` confirm — one bd
-        // process (~2 s) per subagent stop, 241 of them on the adopter's 2026-08-30, none of
-        // which could ever be acted on (air-bp0). Observed, and nothing else.
+        // A subagent stopping is not its parent stopping, in any role: the main agent is
+        // mid-turn and about to read the subagent's result. Treating it as a Stop marked a
+        // working session idle and, with no claim held, ran the nudge's `bd ready` confirm —
+        // one bd process (~2 s) per subagent stop, 241 of them on the adopter's 2026-08-30,
+        // none of which could ever be acted on (air-bp0). The coordinator and the lane kept
+        // that path until air-n9f3: 491 subagent stops flipped a working parent to idle in an
+        // adopter's 2026-09-26/27 round. Observed, and nothing else.
         HookEvent::SubagentStop => Dispatched::new(
             HookOutcome::Allow { context: None },
             dec::SUBAGENT_STOP_OBSERVED,
@@ -356,52 +355,17 @@ fn dispatch(
         ),
         HookEvent::Stop => {
             let prev = set_session(ledger, input, worker, role, "idle", None)?;
-            // Advisory only in this slice; never block, and never when stop_hook_active.
-            let f = handover::facts(ledger, worker, cwd, None, true)?;
-            let v = handover_verdict(&f);
-            // Nothing to hand over if this worker holds no claim AND its branch carries no
-            // bead by trailer: say nothing (guardrails audit 2026-08-21; a non-green stop
-            // after a WIP commit is not a gap). The trailer half is air-60x: a superseding
-            // branch holds no claim and now has a hand-over path, so silence toward it
-            // stopped being correct the moment that path existed (the adopter's w1: "a defect
-            // created by a fix elsewhere"). Both halves are the facts the gate itself read.
-            let has_work = !f.held_beads.is_empty() || !f.carried_beads.is_empty();
-            // Silence is the signal that all is well, and silence when nothing has changed:
-            // the advisory is spoken once per (session, HEAD, missing checks, latest verify)
-            // and again only when one of those moves. A blocked worker is not nagged every
-            // turn about a blocker it cannot clear (the adopter, 2026-08-21).
-            let latest = ledger
-                .latest_run_at_commit(&f.head, air_ledger::verify::Kind::Verify)
-                .ok()
-                .flatten()
-                .map(|r| r.id)
-                .unwrap_or_default();
-            let fingerprint = if v.pass || !has_work {
-                String::new()
-            } else {
-                let checks: Vec<&str> = v.missing.iter().map(|m| m.check).collect();
-                format!("{}|{}|{latest}", f.head, checks.join(","))
-            };
-            let speak = ledger
-                .emit_if_changed(&input.session_id, "stop", &fingerprint, &now())
-                .unwrap_or(true);
-            // air-avj: the Stop hook's own rendering, not the CLI's. Under a verify lane the
-            // CLI's repairs are the two things the lane exists to prevent, and this arrives
-            // with the authority of tooling at the moment a worker picks what to do next.
-            // 0.4.8 trial: under a lane, a Stop whose every missing check is the lane's to
-            // satisfy says nothing; 33 such texts reached three workers waiting on a batch.
-            // `air close` still names them in full when it is run.
-            let lane_only = f.under_lane && v.missing.iter().all(|m| m.flow_dependent);
-            let context = if v.pass || !has_work || !speak || lane_only {
-                None
-            } else {
-                Some(format!(
-                    "air: {}",
-                    air_hooks::stop_message(&v, worker, &f.head)
-                ))
-            };
-            // Nudge (air-09i): no claim and nothing carried, beads ready, first stop: block
-            // once with the list.
+            // air-wau8: no hand-over check here any more. The Stop hook used to run the whole
+            // close check on every stop and say what would fail: 443 such lines in one day at
+            // an adopter (114 spoken, 329 repeats), all describing the normal wait for the
+            // lane, and read as "you are not done, wait". A worker closes with `air close`,
+            // which says the same at the moment it matters (owner, 2026-09-28).
+            //
+            // Nudge (air-09i): beads ready, first stop, and nothing of this worker's still
+            // needs it: no claim, or (air-wau8) under a lane every claim it holds is
+            // batch-ready, so its work is in the lane's hands. Workers at an adopter idled 648
+            // min in 234 spells with a branch waiting on the lane, never nudged because they
+            // held a claim.
             //
             // The cache is the CHEAP GATE, not the answer (air-ouw). It decides whether there
             // is anything to say at all, which costs nothing on the great majority of stops;
@@ -416,12 +380,25 @@ fn dispatch(
             // one costs the worker's trust in every later one.
             let now = now();
             let stop_hook_active = input.stop_hook_active.unwrap_or(false);
+            let held: Vec<String> = ledger
+                .open_claims()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|c| c.worker == worker)
+                .map(|c| c.bead)
+                .collect();
             let cached = ready_cache::read(cwd).map(|c| c.ids).unwrap_or_default();
-            let would_speak =
-                !has_work && !stop_hook_active && !cached.is_empty() && role == "worker";
             // air-1vri.1: a stopped fleet starts nothing, so the nudge says nothing.
             let fleet_stopped = crate::cmd::fleet::stopped(ledger);
-            let ready = if would_speak && !fleet_stopped {
+            let may_speak =
+                role == "worker" && !stop_hook_active && !cached.is_empty() && !fleet_stopped;
+            // Asked only when the nudge could speak: it reads every worktree's branch.
+            let with_lane = may_speak
+                && !held.is_empty()
+                && handover::under_lane(ledger, cwd)
+                && claims_with_lane(ledger, cwd, worker, &held);
+            let free = held.is_empty() || with_lane;
+            let ready = if may_speak && free {
                 ready_cache::confirm(cwd).unwrap_or_default()
             } else {
                 Vec::new()
@@ -429,7 +406,7 @@ fn dispatch(
             let nudge = if fleet_stopped {
                 None
             } else {
-                stop_nudge(role, has_work, &ready, stop_hook_active)
+                stop_nudge(role, !free, &ready, stop_hook_active)
             };
             // Measurement: did a claim follow the previous nudge within 10 min?
             let followed = ledger
@@ -437,40 +414,43 @@ fn dispatch(
                 .ok()
                 .flatten()
                 .map(|(_, at)| claim_followed(ledger, worker, &at));
-            if nudge.is_some() {
-                let _ = ledger.emit_if_changed(&input.session_id, "nudge", &now, &now);
+            // air-8goe: the nudge's subject is the ready set. The same set is named once per
+            // session, again only when it changes, and the slate is wiped once this worker has
+            // work, so its next idle stop names the set afresh. After `followed`, which reads
+            // the last nudge. It used to record the clock as its fingerprint, which always
+            // differs: an adopter's worker was handed the same ready set 13 times.
+            let unchanged = nudge.is_some()
+                && !ledger
+                    .emit_if_changed(&input.session_id, "nudge", &ready.join(","), &now)
+                    .unwrap_or(true);
+            if !free {
+                let _ = ledger.emit_if_changed(&input.session_id, "nudge", "", &now);
             }
+            let nudge = if unchanged { None } else { nudge };
             let decision = if nudge.is_some() {
                 dec::STOP_NUDGE
-            } else if v.pass {
-                dec::STOP_PASS
-            } else if !has_work {
+            } else if held.is_empty() {
                 dec::STOP_NO_CLAIM
-            } else if speak {
-                dec::STOP_WOULD_REFUSE
             } else {
-                dec::STOP_WOULD_REFUSE_REPEAT
+                dec::STOP_OBSERVED
             };
             let outcome = match nudge {
                 Some(reason) => HookOutcome::Block { reason },
-                None => HookOutcome::Allow { context },
+                None => HookOutcome::Allow { context: None },
             };
-            Dispatched::new(
-                outcome,
-                decision,
-                format!("{}; {}", transition(&prev, "idle"), v.message),
+            Dispatched::new(outcome, decision, transition(&prev, "idle")).inputs(
+                serde_json::json!({
+                    "held": held,
+                    "with_lane": with_lane,
+                    "stop_hook_active": input.stop_hook_active,
+                    "ready": ready,
+                    // Whether this nudge's list came from a live bd call; the cost of that
+                    // call is on the same line as bd_ms/bd_calls (air-869), so keeping or
+                    // dropping the cache is decided on a number.
+                    "ready_confirmed": may_speak && free,
+                    "claim_followed_last_nudge": followed,
+                }),
             )
-            .inputs(serde_json::json!({
-                "head": f.head,
-                "stop_hook_active": input.stop_hook_active,
-                "ready": ready,
-                // Whether this nudge's list came from a live bd call; the cost of that call
-                // is on the same line as bd_ms/bd_calls (air-869), so keeping or dropping the
-                // cache is decided on a number.
-                "ready_confirmed": would_speak,
-                "claim_followed_last_nudge": followed,
-            }))
-            .denominator("4 checks")
         }
         // air-1n3: the two events that carry "this session stopped, and not because it
         // finished". No hook fires at a usage limit or at its reset; these are the nearest
@@ -489,10 +469,11 @@ fn dispatch(
                 .chars()
                 .take(400)
                 .collect();
-            // A notification that is not about a stop (a permission prompt, an idle prompt)
-            // is logged like any other event and writes nothing: `air status` must not report
-            // a session stopped because it asked for permission.
-            if is_stop_kind(&kind) {
+            // A stop, or the session waiting on the person (a permission prompt, an idle
+            // prompt), is written as the session's sticky fact; `air status` tells the two
+            // apart by kind and shows either only until the session's next own event
+            // (air-n9f3). Any other notification is logged and writes nothing.
+            if is_stop_kind(&kind) || is_waiting_kind(&kind) {
                 let _ = mark_stopped(ledger, &input.session_id, &kind, &text);
             }
             Dispatched::new(
@@ -548,8 +529,23 @@ pub fn is_stop_kind(kind: &str) -> bool {
     kind == "stop_failure" || kind.starts_with("quota_auto_resume")
 }
 
-/// Record why a session stopped (schema v20). Best effort: this is an observation, and a
-/// failure to write it must never turn into a refusal.
+/// Whether a kind means the session is waiting for the person: the harness showed a
+/// permission prompt, or has sat at an empty prompt. Recorded so `air status` can say
+/// "waiting for the person since T": an adopter's coordinator sat in a permission prompt for
+/// 6 h 9 min and read `running` throughout, with the notification already in the ledger
+/// (air-n9f3).
+pub fn is_waiting_kind(kind: &str) -> bool {
+    matches!(kind, "permission_prompt" | "idle_prompt")
+}
+
+/// Record why a session stopped, or that it waits on the person (schema v20's columns; the
+/// kind says which). Best effort: this is an observation, and a failure to write it must
+/// never turn into a refusal.
+///
+/// Nothing clears these columns. The fact holds only until the session's next own event,
+/// which `set_session` stamps as `changed_at`, and `air status` compares the two when it reads
+/// (`status::sticky_holds`). Before that rule, sessions resumed at 04:4x still read "STOPPED
+/// at 04:4x" 16.5 h later while running (an adopter, 2026-09-27; air-n9f3).
 fn mark_stopped(ledger: &Ledger, session_id: &str, kind: &str, text: &str) -> Result<(), String> {
     ledger
         .conn()
@@ -560,6 +556,18 @@ fn mark_stopped(ledger: &Ledger, session_id: &str, kind: &str, text: &str) -> Re
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Is every bead `worker` holds on its branch as batch-ready (air-wau8)? The same rule the lane
+/// cuts by (`status::batch_ready_for`), so "in the lane's hands" here and "batch-ready" in
+/// `air status` cannot disagree. A head inside a batch stays batch-ready until the batch lands
+/// or goes red, so this covers both.
+fn claims_with_lane(ledger: &Ledger, cwd: &Path, worker: &str, held: &[String]) -> bool {
+    let (ready, _, _) = crate::cmd::status::batch_ready_for(ledger, cwd);
+    ready
+        .iter()
+        .find(|b| b.worker == worker)
+        .is_some_and(|b| held.iter().all(|h| b.beads.contains(h)))
 }
 
 /// Did `worker` claim anything in the 10 minutes after `nudged_at`? The nudge measurement
@@ -600,14 +608,6 @@ fn transition(prev: &Option<String>, next: &str) -> String {
     format!("{} -> {next}", prev.as_deref().unwrap_or("none"))
 }
 
-/// The main checkout's directories every worktree writes to (air-1qnp): session journals and
-/// the opt-in digests. The fence lets a worker's edit land there.
-fn shared_dirs(cwd: &Path) -> Vec<PathBuf> {
-    air_ledger::paths::air_dir_for(cwd)
-        .map(|a| vec![a.join("journal"), a.join("digests")])
-        .unwrap_or_default()
-}
-
 fn pre_tool_use(
     ledger: &Ledger,
     worker: &str,
@@ -624,23 +624,11 @@ fn pre_tool_use(
         input.tool_name.as_deref(),
     )?;
     let moved = transition(&prev, "running");
-    // The worktree fence (air-8gj): a worker's Edit/Write whose resolved path leaves its
-    // worktree is denied, and the lane's (air-jc2p.2: a worker with `air land` added). Never
-    // for the coordinator, which may edit what only the main checkout holds (`private/`). This
-    // is the one check that replaces the harness's `--worktree` isolation (`air_hooks::fence`).
-    if let Some(abs) = input.edited_path()
-        && super::is_worker_like(role)
-        && let Ok(root) = git::toplevel(cwd)
-        && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root, &shared_dirs(cwd))
-    {
-        return Ok(Dispatched::new(
-            HookOutcome::Block { reason },
-            dec::PRE_TOOL_USE_REFUSE_OUTSIDE_WORKTREE,
-            format!("{moved}; edit outside the worktree refused"),
-        )
-        .inputs(serde_json::json!({"path": abs, "worktree": root.display().to_string()}))
-        .denominator("1 path"));
-    }
+    // The worktree fence (air-8gj) was here: a worker's Edit/Write whose resolved path left
+    // its worktree was denied. Deleted 2026-09-28 (air-w18h, owner): its recorded refusals at
+    // an adopter, 6 of 6, were writes to the session's own scratchpad under /private/tmp, this
+    // repo's event log holds none, and no write outside a worktree was ever recorded. roles.md
+    // says where to work instead.
     // Peer-on-file warning.
     if let Some(abs) = input.edited_path() {
         if let Ok(root) = git::toplevel(cwd)
@@ -939,7 +927,9 @@ pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> 
 /// ([`super::role_from`]), so a worktree someone names `lane` lands nothing.
 pub fn role_for(worker: &str) -> &'static str {
     match worker {
-        "main" | "coordinator" => "coordinator",
+        "coordinator" => "coordinator",
+        // The main checkout: a session there with no `AIR_ROLE` is the owner (air-sai7).
+        "main" => "owner",
         "lane" => "lane",
         _ => "worker",
     }
@@ -1077,6 +1067,12 @@ fn set_session(
     detail: Option<&str>,
 ) -> Result<Option<String>, String> {
     let prev = session_state(ledger, &input.session_id)?;
+    // A subagent's hooks carry the parent's session id and are not the parent's own events:
+    // they change neither its state nor its clock (air-n9f3). Its tool calls still pass the
+    // same gate, which does not read this row.
+    if input.agent_id.is_some() {
+        return Ok(prev);
+    }
     let t = now();
     // Which fleet this session belongs to, so "is that peer one of ours?" is a ledger question
     // (air-0lk). `AIR_PROJECT` when the launcher set it; the beads prefix otherwise.
@@ -1085,6 +1081,35 @@ fn set_session(
     let pid: Option<i64> = std::env::var("CLAUDE_PID")
         .ok()
         .and_then(|v| v.parse().ok());
+    // air-sai7: the pid's start time, so a reused pid or a zombie never reads as this session.
+    // `ps` runs only when this row has no start time for this pid yet, not on every hook.
+    let known: Option<(Option<i64>, Option<String>)> = ledger
+        .conn()
+        .query_row(
+            "SELECT pid, pid_started FROM sessions WHERE session_id=?1",
+            params![input.session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let pid_started: Option<String> = match (&known, pid) {
+        (Some((Some(had), Some(at))), Some(p)) if *had == p => Some(at.clone()),
+        (_, Some(p)) => super::lease::pid_started(p),
+        _ => None,
+    };
+    // air-sai7: one row per role name. A new session under a name replaces the rows earlier
+    // sessions left under it, so a registration from weeks ago cannot sit beside the live one
+    // (an adopter's status listed a dead `main` as a second coordinator). Claims are their
+    // own table and are untouched.
+    if known.is_none() {
+        ledger
+            .conn()
+            .execute(
+                "DELETE FROM sessions WHERE worker=?1 AND session_id<>?2",
+                params![worker, input.session_id],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     // Read once per hook, cheaply; None until the transcript has its first assistant message.
     let model = model_of(input.transcript_path.as_deref());
     // What THIS hook process sees, which is what the gate at hook.rs runs with (air-9dg:
@@ -1098,15 +1123,16 @@ fn set_session(
             // NULLIF plus COALESCE, so a hook that fires before the first assistant message
             // leaves the recorded model alone instead of blanking it. An empty string here
             // would be the "guess or empty" the bead rules out.
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model, enforce) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,''),?11) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model, enforce, pid_started) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,''),?11,?12) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
              worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid), \
+             pid_started=CASE WHEN excluded.pid IS NULL THEN sessions.pid_started ELSE excluded.pid_started END, \
              project=excluded.project, \
              model=COALESCE(NULLIF(excluded.model,''), sessions.model), \
              enforce=excluded.enforce",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role, pid, project, model, enforce],
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role, pid, project, model, enforce, pid_started],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
@@ -1310,9 +1336,8 @@ mod tests {
     }
 
     #[test]
-    fn stop_is_silent_when_all_is_well_and_speaks_on_a_gap() {
+    fn stop_is_silent_for_a_worker_with_work_in_hand() {
         use super::{HookOutcome, dispatch};
-        use air_ledger::verify::{Kind, VerifyRun, new_id};
         let dir = scratch_repo();
         let repo = dir.path().canonicalize().unwrap();
         // A linked worktree is a worker; the main checkout would be the coordinator.
@@ -1371,76 +1396,16 @@ mod tests {
         ledger
             .record_claim("zz-1", "wt", &[], &crate::cmd::now())
             .unwrap();
-        // Claim held, no green recorded: speaks once, then the identical gap is silent.
+        // Claim held, no green recorded: silent. The Stop hook no longer reports what a close
+        // would refuse (air-wau8); `air close` says it when it is run.
         let d = stop(&ledger);
-        assert!(matches!(d.outcome, HookOutcome::Allow { context: Some(_) }));
-        assert_eq!(d.decision, "would-refuse");
+        assert!(matches!(d.outcome, HookOutcome::Allow { context: None }));
+        assert_eq!(d.decision, "observed");
         // Null, not true: the measurement asks whether a claim followed a NUDGE, and no
         // nudge fired here because bd never confirmed a list (air-ouw). "No nudge to follow"
         // and "a nudge that was ignored" stay distinguishable, which is the point of the
         // field.
         assert!(d.inputs["claim_followed_last_nudge"].is_null());
-        let d = stop(&ledger);
-        assert!(
-            matches!(d.outcome, HookOutcome::Allow { context: None }),
-            "{:?}",
-            d.outcome
-        );
-        assert_eq!(d.decision, "would-refuse-repeat");
-        // A new (red) verify at HEAD is a change: speaks again.
-        ledger
-            .record_verify(&VerifyRun {
-                id: new_id(),
-                worker: "wt".into(),
-                sha: crate::git::head(&wt).unwrap(),
-                kind: Kind::Verify,
-                exit_code: 1,
-                trigger: "test".into(),
-                failing_step: None,
-                started_at: "2026-01-01T00:00:01Z".into(),
-                finished_at: "2026-01-01T00:00:01Z".into(),
-                log_path: None,
-                command: None,
-                duration_ms: None,
-                output_bytes: None,
-                dirty: false,
-                tree: None,
-                members: vec![],
-                main_sha: None,
-            })
-            .unwrap();
-        let d = stop(&ledger);
-        assert_eq!(d.decision, "would-refuse");
-        // Green at HEAD: silent, but still on the event line as "pass".
-        let head = crate::git::head(&wt).unwrap();
-        ledger
-            .record_verify(&VerifyRun {
-                id: new_id(),
-                worker: "wt".into(),
-                sha: head,
-                kind: Kind::Verify,
-                exit_code: 0,
-                trigger: "test".into(),
-                failing_step: None,
-                started_at: "2026-01-01T00:00:02Z".into(),
-                finished_at: "2026-01-01T00:00:02Z".into(),
-                log_path: None,
-                command: None,
-                duration_ms: None,
-                output_bytes: None,
-                dirty: false,
-                tree: None,
-                members: vec![],
-                main_sha: None,
-            })
-            .unwrap();
-        let d = stop(&ledger);
-        assert!(
-            matches!(d.outcome, HookOutcome::Allow { context: None }),
-            "{:?}",
-            d.outcome
-        );
-        assert_eq!(d.decision, "pass");
     }
 
     /// air-q07: one message, one event line, a byte count, and no content.
@@ -1508,6 +1473,178 @@ mod tests {
         assert_eq!(start("l", "lane", "lane"), None);
     }
 
+    /// air-n9f3: fire a hook as `role` on session `s9` and read back what `air status` would
+    /// show for it: `(state, stopped kind, waiting kind)`.
+    fn fire_as(repo: &Path, role: &str, body: serde_json::Value) {
+        let mut v = body;
+        v["session_id"] = "s9".into();
+        v["cwd"] = repo.to_string_lossy().to_string().into();
+        inner_env(
+            repo,
+            &v.to_string(),
+            Some(role),
+            Some(role),
+            std::time::Instant::now(),
+        )
+        .unwrap();
+    }
+
+    fn seen(repo: &Path) -> (String, Option<String>, Option<String>) {
+        let ledger = air_ledger::Ledger::open_in(&repo.join(".air")).unwrap();
+        let (state, changed_at, at, kind): (String, String, Option<String>, Option<String>) =
+            ledger
+                .conn()
+                .query_row(
+                    "SELECT state, changed_at, stopped_at, stopped_kind FROM sessions \
+                     WHERE session_id='s9'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+        let (stopped, waiting) =
+            crate::cmd::status::sticky_fact((at, kind, String::new()), &changed_at);
+        (state, stopped.map(|x| x.1), waiting.map(|x| x.1))
+    }
+
+    /// air-n9f3: a sticky fact yields to the session's next own event, and a subagent's hooks
+    /// are not the parent's own. Red before: the stop never cleared, a permission prompt wrote
+    /// nothing, and a coordinator's SubagentStop set it idle.
+    #[test]
+    fn sticky_facts_yield_to_the_sessions_next_own_event() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        let bash = serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "true"}});
+        fire_as(repo, "coordinator", bash.clone());
+
+        // Stop, then an own event: no longer stopped.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "StopFailure"}),
+        );
+        assert_eq!(seen(repo).1.as_deref(), Some("stop_failure"));
+        fire_as(repo, "coordinator", bash.clone());
+        assert_eq!(seen(repo), ("running".into(), None, None));
+
+        // A permission prompt, then nothing: waiting for the person.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "Notification",
+                "notification_type": "permission_prompt", "message": "Claude needs your permission"}),
+        );
+        assert_eq!(
+            seen(repo),
+            ("running".into(), None, Some("permission_prompt".into()))
+        );
+
+        // A subagent's stop and its tool calls change neither the state nor the clock, so the
+        // parent still reads as waiting.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "SubagentStop", "agent_id": "a1"}),
+        );
+        let mut sub = bash.clone();
+        sub["agent_id"] = "a1".into();
+        fire_as(repo, "coordinator", sub);
+        assert_eq!(
+            seen(repo),
+            ("running".into(), None, Some("permission_prompt".into()))
+        );
+
+        // The parent's own next event ends the wait.
+        fire_as(repo, "coordinator", bash);
+        assert_eq!(seen(repo), ("running".into(), None, None));
+    }
+
+    /// air-wau8: under a lane, a worker whose every claim is batch-ready is free for the next
+    /// bead, so the nudge goes as far as asking bd for the list; one also holding a claim its
+    /// branch does not carry stays silent. What the nudge then says is `stop_nudge`'s, covered
+    /// in `crates/hooks/src/gate.rs`; with no bd here, the confirmed list is empty.
+    #[test]
+    fn a_worker_whose_claims_are_all_with_the_lane_is_nudged() {
+        use super::dispatch;
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "air")
+                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+                .env("GIT_COMMITTER_NAME", "air")
+                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        std::fs::write(repo.join(".claude/air.json"), r#"{"verify_lane": true}"#).unwrap();
+        let wt = repo.join(".claude/worktrees/worker-1");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", "w1", wt.to_str().unwrap()],
+        );
+        git(
+            &wt,
+            &["commit", "-q", "--allow-empty", "-m", "work\n\nBead: zz-1"],
+        );
+        let (ledger, worker) = crate::cmd::open(&wt).unwrap();
+        assert_eq!(worker, "worker-1");
+        ledger.record_claim("zz-1", "worker-1", &[], "t0").unwrap();
+        crate::cmd::ready_cache::write(&wt, &["zz-9".to_string()], "t0");
+        let stop = |ledger: &air_ledger::Ledger| {
+            let input = air_hooks::HookInput::parse(
+                &serde_json::json!({"session_id": "s", "hook_event_name": "Stop",
+                    "cwd": wt.to_string_lossy()})
+                .to_string(),
+            )
+            .unwrap();
+            dispatch(ledger, "worker-1", "worker", &wt, &input).unwrap()
+        };
+        let d = stop(&ledger);
+        assert_eq!(d.inputs["with_lane"], true, "{}", d.inputs);
+        assert_eq!(d.inputs["ready_confirmed"], true, "{}", d.inputs);
+
+        // A second claim the branch does not carry: not all with the lane, so silence.
+        ledger.record_claim("zz-2", "worker-1", &[], "t1").unwrap();
+        let d = stop(&ledger);
+        assert_eq!(d.inputs["with_lane"], false, "{}", d.inputs);
+        assert_eq!(d.inputs["ready_confirmed"], false, "{}", d.inputs);
+        assert!(matches!(
+            d.outcome,
+            super::HookOutcome::Allow { context: None }
+        ));
+    }
+
+    /// air-w18h: no fence. A worker's Write to its scratchpad under /private/tmp, which is
+    /// what every recorded refusal was, is allowed.
+    #[test]
+    fn a_workers_write_outside_its_worktree_is_allowed() {
+        use super::{HookOutcome, dispatch};
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let (ledger, _) = crate::cmd::open(&repo).unwrap();
+        let input = air_hooks::HookInput::parse(
+            &serde_json::json!({"session_id": "s", "hook_event_name": "PreToolUse",
+                "tool_name": "Write", "cwd": repo.to_string_lossy(),
+                "tool_input": {"file_path": "/private/tmp/claude-501/scratchpad/notes.md"}})
+            .to_string(),
+        )
+        .unwrap();
+        let d = dispatch(&ledger, "worker-1", "worker", &repo, &input).unwrap();
+        assert!(matches!(d.outcome, HookOutcome::Allow { .. }));
+        assert_ne!(d.decision, "refuse-outside-worktree");
+    }
+
     /// air-ludo: a worker `air fleet up` launched with no task has had SessionStart and nothing
     /// else. Its ledger row is what the fan-out sees, and new beads reach it. Seen red
     /// 2026-09-26 against the `state == "idle"` filter with SessionStart writing `working`.
@@ -1550,6 +1687,8 @@ mod tests {
                     session_id: "fresh".into(),
                     state,
                     changed_at,
+                    // `gather` fills this from `ps`; the test has no process behind the row.
+                    liveness: crate::cmd::lease::Liveness::Alive,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1574,5 +1713,50 @@ mod tests {
             x.state = "running".into();
         }
         assert_eq!(crate::cmd::fanout::without_claim(&busy), ["w1"]);
+        // air-sai7: a dead or unknown session is never a fan-out target.
+        for gone in [
+            crate::cmd::lease::Liveness::Dead,
+            crate::cmd::lease::Liveness::Unknown,
+        ] {
+            let mut g = s.clone();
+            if let Some(x) = g.workers[0].session.as_mut() {
+                x.liveness = gone;
+            }
+            assert!(crate::cmd::fanout::without_claim(&g).is_empty(), "{gone:?}");
+        }
+    }
+
+    /// air-sai7: a new session under a name replaces the earlier rows under that name, and
+    /// records its process's start time beside its pid.
+    #[test]
+    fn a_new_session_takes_its_names_slot() {
+        let dir = scratch_repo();
+        let hook = |sid: &str| {
+            let raw = serde_json::json!({
+                "hook_event_name": "SessionStart", "session_id": sid,
+                "cwd": dir.path().to_str().unwrap(), "source": "startup"
+            })
+            .to_string();
+            inner_env(
+                dir.path(),
+                &raw,
+                Some("worker"),
+                Some("worker-9"),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        };
+        hook("old");
+        hook("new");
+        let (ledger, _) = super::open(dir.path()).unwrap();
+        let rows: Vec<String> = ledger
+            .conn()
+            .prepare("SELECT session_id FROM sessions WHERE worker='worker-9'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows, ["new"]);
     }
 }

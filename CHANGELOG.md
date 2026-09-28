@@ -53,6 +53,14 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air audit` prints, for every budget, the recorded median and maximum beside the budget and
+  ten times the maximum, which the next release sets Air's numbers from; each budget names the
+  measurement or the ceiling behind it. A wait that reaches its budget reads `over budget`.
+- The `beads are ready` notice and a claim refused because a peer holds the bead now point
+  at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
+  after a hand-over caused most refused claims in the 0.4.10 trial.
+- Under a verify lane, a worker whose every claim is batch-ready is nudged with the ready beads
+  when it stops, the same as a worker with no claim.
 - Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).
   bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; see Fixed.
 - The fleet's protocol lives in Air's roles text (`.air/roles.md`). An adopting repository keeps
@@ -90,6 +98,21 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The two fallbacks dated 2026-08-23: a commit with no `Bead:` trailer is no longer attributed
+  from its message, and a digest with no `bead:` front matter no longer counts by its file name
+  and time. `air doctor` no longer reports dated rules, since none are left.
+- The worktree fence: a worker's Edit or Write outside its worktree is no longer denied. Its
+  only recorded refusals were writes to the session's own scratchpad. The roles text tells a
+  worker to work only in its worktree and use its scratchpad for the rest.
+- The `landed-not-closed` condition, and the per-clause verdicts in `air land` it came from.
+  `air land` still prints each landed bead with its acceptance text.
+- `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and
+  writes no `no-precheck` line. `air status` still names `no-precheck` for such a branch.
+- `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and
+  red counts at the commit instead, and the close refusal states those counts rather than
+  calling the test flaky.
+- The Stop hook no longer reports what a close would refuse. `air close` and `air handover`
+  still say it when they are run.
 - The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell
   command: neither the hand-over check on it nor the claim release after it. Workers and the
   lane close with `air close`, and their launchers deny bd's write commands.
@@ -100,6 +123,46 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A batch cut stopped by a leftover `index.lock` left no record, and a verify stopped by hand
+  left no run. A failed cut now writes `batch-cut / failed` with its reason and who holds the
+  lock, and `air record` survives SIGINT, SIGTERM and SIGHUP to write the run as interrupted
+  with its duration, which `air status` shows under the worker.
+- `air fleet up` logged and printed that it had started the fleet when every launch was
+  refused. It now names each launch that did not start and why, and its event reads
+  `incomplete` rather than `up`.
+- The coordinator could put a question prompt to the owner and wait on it for hours, hearing no
+  notices; an adopter's coordinator sat in one for six hours. It is now denied the prompt, like
+  workers and the lane, and roles.md says a question for the owner is a bead labelled `owner`.
+- The coordinator's channel pushed the same condition on every poll when one worker had two
+  beads in it: an adopter's coordinator got `closed-not-landed` 417 times in a day. Pushes
+  are now keyed by the bead, branch or lease they are about, and a change-only condition's
+  age counts from when that subject first appeared. The Stop nudge names the same ready set
+  once per session, and `air land` warns about the same main-checkout readers once.
+- A session whose pid had been reused, or had become a zombie, read as alive and got most of
+  the ready notices. A session is now alive only when its pid runs with the start time it
+  registered with; `air status --json` shows `liveness` as alive, dead or unknown, and only
+  live sessions hear ready notices or raise idle-without-claim. A new session under a name
+  replaces that name's earlier rows, and the main checkout's session shows as the owner.
+- The lane piped `air land` into `tail`, the auto-mode classifier refused it, and the session
+  then refused every later landing. The lane's settings now allow its whole loop (`air land`,
+  `air batch cut`, `air record`, `air status`, `git merge`, `git reset --hard main`), and the
+  roles text tells it to run them bare.
+- `air audit` said 0 closes passed while beads were closing, counted `uds:` messages to live
+  sessions as unresolved, counted one subject for many beads or heads, and described the Stop
+  nudge as naming beads once beside a count of its repeats. All four now match the ledger.
+- `air land` refused while any verify ran anywhere in the fleet, so a lane's green batch could
+  wait indefinitely behind workers' own runs. Only a verify in the main checkout or the lane's
+  tree refuses it now.
+- `air close` and `air handover` ran the whole hand-over check on an id like `air-1 notes.md`
+  and advised a `Bead:` trailer naming both words. An id with whitespace is now refused naming
+  it, and when the check would refuse, an id bd does not have is named instead.
+- `make verify` was red when run from a fleet session, because the tests that spawn `air`
+  passed on the session's `AIR_ROLE` and the other launcher variables. Every spawn in
+  `crates/cli/tests` now goes through one helper that removes `AIR_*` and `BEADS_ACTOR`.
+- `air status` kept showing `STOPPED at <t>` after the session resumed; it now shows only
+  until the session's next event of its own. A session in a permission or idle prompt shows
+  `waiting for the person since <t>`, a subagent's hooks no longer mark its parent idle, a
+  stop with no reason says so instead of naming an API error, and no age reads negative.
 - After a red batch, the next `air batch cut` built on the red merges and would have carried
   them into the next batch. Every cut now resets the lane's branch to main first. It refuses
   while the lane has uncommitted changes, or while its head is a passing batch not yet landed.
