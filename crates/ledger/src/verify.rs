@@ -216,6 +216,36 @@ impl Ledger {
         )?)
     }
 
+    /// Stamp `worker`'s finished prechecks that have no next tool call yet with `at` (air-1pu5).
+    /// Called from the PreToolUse hook, so it is one indexed UPDATE and says nothing.
+    pub fn stamp_precheck_resumed(&self, worker: &str, at: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE verify_runs SET resumed_at=?2 WHERE worker=?1 AND kind='precheck' \
+             AND resumed_at IS NULL AND finished_at <= ?2",
+            params![worker, at],
+        )?;
+        Ok(())
+    }
+
+    /// Every precheck started at or after `since`: `(worker, duration_ms, finished_at,
+    /// resumed_at)`, oldest first (air-1pu5).
+    #[allow(clippy::type_complexity)]
+    pub fn precheck_waits(
+        &self,
+        since: &str,
+    ) -> Result<Vec<(String, Option<i64>, String, Option<String>)>> {
+        let mut st = self.conn().prepare(
+            "SELECT worker, duration_ms, finished_at, resumed_at FROM verify_runs \
+             WHERE kind='precheck' AND started_at >= ?1 ORDER BY started_at",
+        )?;
+        let rows = st
+            .query_map(params![since], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// The most recent run of `kind` for `worker` at any sha (for "did the command change").
     pub fn latest_run_any(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         Ok(self
@@ -528,6 +558,40 @@ mod tests {
             members: vec![],
             main_sha: None,
         }
+    }
+
+    /// air-1pu5: the next tool call after a precheck is stamped once, and only on a finished
+    /// precheck of that worker.
+    #[rstest]
+    fn a_precheck_is_stamped_with_the_next_tool_call(ledger: Ledger) {
+        let pre = VerifyRun {
+            kind: Kind::Precheck,
+            duration_ms: Some(40_000),
+            ..run("w1", "aaa", 0, "2026-09-28T10:00:00Z")
+        };
+        ledger.record_verify(&pre).unwrap();
+        ledger
+            .record_verify(&run("w1", "aaa", 0, "2026-09-28T10:00:00Z"))
+            .unwrap();
+        ledger
+            .stamp_precheck_resumed("w2", "2026-09-28T10:00:05Z")
+            .unwrap();
+        ledger
+            .stamp_precheck_resumed("w1", "2026-09-28T10:00:07Z")
+            .unwrap();
+        ledger
+            .stamp_precheck_resumed("w1", "2026-09-28T10:00:09Z")
+            .unwrap();
+        let w = ledger.precheck_waits("2026-09-28").unwrap();
+        assert_eq!(
+            w,
+            vec![(
+                "w1".to_string(),
+                Some(40_000),
+                "2026-09-28T10:00:00Z".to_string(),
+                Some("2026-09-28T10:00:07Z".to_string())
+            )]
+        );
     }
 
     fn run_over(worker: &str, sha: &str, tree: &str, exit: i32, at: &str) -> VerifyRun {

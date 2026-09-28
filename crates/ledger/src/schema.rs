@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 25;
+pub const CURRENT_VERSION: i64 = 26;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -378,6 +378,14 @@ const V25: &str = r#"
 ALTER TABLE sessions ADD COLUMN pid_started TEXT;
 "#;
 
+/// v26 (2026-09-28, air-1pu5): when the worker made its next tool call after a precheck ended.
+/// A worker cannot edit while its precheck reads its tree, and at an adopter prechecks took 7 to
+/// 20 minutes under load, so every worker was frozen that long after every bead; the owner kept
+/// the precheck and wants its cost visible. The PreToolUse hook stamps it; `NULL` until then.
+const V26: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN resumed_at TEXT;
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -393,7 +401,7 @@ ALTER TABLE sessions ADD COLUMN pid_started TEXT;
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25,
+    V22, V23, V24, V25, V26,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
