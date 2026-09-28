@@ -577,6 +577,9 @@ fn init_gates_then_builds_a_project_from_nothing() {
             .args(args)
             .env("PATH", path)
             .env("AIR_BD_BIN", &bd)
+            // air-1fg7: the fake dolt is a freshly written script, and under fleet load macOS
+            // checked it for longer than the ten seconds a real start is given.
+            .env("AIR_BD_START_WAIT_MS", "120000")
             .current_dir(&proj)
             .output()
             .unwrap();
@@ -754,22 +757,28 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
     // fleet a pane belongs to.
     let has = tmux(&["has-session", "-t", "zz-w"]).status.success();
     // Poll for the stub's argv file (normally <0.5 s; macOS scans a freshly written
-    // executable on first exec, which has taken >2 s); kill the server regardless.
+    // executable on first exec, which has taken >2 s idle and over 10 s under fleet load,
+    // air-1fg7); kill the server regardless. A generous ceiling, and the wait is printed.
     let argv_path = repo.join("argv.txt");
     let mut argv = String::new();
-    for _ in 0..1000 {
-        if let Ok(s) = std::fs::read_to_string(&argv_path) {
+    let waited = std::time::Instant::now();
+    while waited.elapsed() < std::time::Duration::from_secs(60) {
+        if let Ok(s) = std::fs::read_to_string(&argv_path)
+            && !s.is_empty()
+        {
             argv = s;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    let waited = waited.elapsed();
     tmux(&["kill-server"]);
 
     assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
     assert!(has, "tmux session zz-w missing: {stdout}{stderr}");
     assert!(stdout.contains("attach -t zz-w"), "{stdout}");
     assert!(!stderr.contains("tcgetattr"), "{stderr}");
+    assert!(!argv.is_empty(), "no argv from the stub after {waited:?}");
     let lines: Vec<&str> = argv.lines().collect();
     // The prompt goes first (air-2ct: after the deny list it reads as one more deny rule),
     // and it names the task file rather than carrying the task (air-er0: the text in argv is

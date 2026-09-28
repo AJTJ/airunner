@@ -13,6 +13,7 @@ missing notices, which are fixed or added below.
 
 ### Added
 
+
 - `air status` shows, per worker with a precheck in the last day, `precheck p50 Ns, wait after
   p50 Ns`: how long its prechecks ran and how long from a run's end to its next tool call.
   `air audit` prints the totals. The ledger gains `verify_runs.resumed_at` (schema v26).
@@ -56,11 +57,14 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- A bead writes its changelog line as a fragment, `changelog.d/<bead-id>.md`, instead of into
+  this file, which every landing conflicted on. This is the last line written here directly.
 - `air land` closes an epic once bd reports every one of its children closed, and never an
   epic with no children. `air status` names an epic to decompose only when it has no
   children, and prints the beads-without-initiative count only when `"metis": true` is set.
   The decomposition skill puts an epic's "Done when" in its last child and files children
   with their `--deps`.
+
 - The channel poll no longer runs `lsof`. Five sessions polling every few seconds kept three
   or four `lsof` scans running at 40-50% CPU each on a loaded machine. Only `air status` run by
   a person and `air land` read processes; the poll uses their last reading while it is under
@@ -147,6 +151,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- Tests that waited a fixed ten seconds for a freshly written script or binary went red under
+  fleet load, while macOS checked the new executable. The bd-server probe now runs with no
+  real server, and the launch, init and MCP tests allow up to 60 or 120 seconds.
 - A branch whose bead was closed on a green, and which then fell behind main before the lane
   landed it, could neither land nor join a batch, because batch-ready needed a bead the worker
   still held. A closed bead now counts, and `air status` names it `closed, waiting for the lane`.

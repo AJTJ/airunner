@@ -45,7 +45,10 @@ Index items are 1–3 lines; detail lives behind the link.
   count) + the same version in `Cargo.toml` + `make release`, which refuses a dirty tree or a
   non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
   **Each release also gets a `CHANGELOG.md` entry** (owner, 2026-09-26): plain lines under
-  Added, Changed, Removed and Fixed, written as the round's work lands.
+  Added, Changed, Removed and Fixed, written as the round's work lands. A bead writes its line
+  as a fragment, `changelog.d/<bead-id>.md`, never into `CHANGELOG.md` itself: every bead
+  editing one heading conflicted every landing (air-be6d). `make changelog` folds them in at
+  round end; `changelog.d/README.md` has the format.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
   as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,
@@ -120,6 +123,7 @@ Index items are 1–3 lines; detail lives behind the link.
 |---|---|
 | What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans or research directory; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
 | Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
+| Every problem Air has hit and demonstrably solved, with the fix and what would regress it; read before changing a mechanism (only landed fixes with a recorded incident; nothing planned) | [`docs/solved-issues.md`](docs/solved-issues.md) |
 | Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | the target shape and its open rulings are `docs/design.md` §10 |
 | Why Rust, SQLite, bd, Claude Code, worktrees, tmux, the MCP channel and the merge-queue lane; whether a part of Air is now commodity | `docs/design.md` §11 (technology decisions, sourced) |
 | Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | skill `beads`; `.claude/skills/beads/references/bd-facts.md` |
@@ -155,7 +159,9 @@ lives in [`docs/rules/roles.md`](docs/rules/roles.md), shipped as `.air/roles.md
 
 - **Verify** is `make verify` (fmt, clippy, tests, `air selftest` on this tree's build),
   recorded as `air record verify -- make verify` (owner, 2026-08-22). There is no precheck and
-  no test-state reset. This repo sets no `verify_lane` and no `digest_dir`.
+  no test-state reset. This repo sets `"verify_lane": true` (owner, 2026-09-28: three workers and the lane
+  each verifying the same Rust tree put the machine at load 40; now the lane verifies once per batch
+  and workers verify nothing) and no `digest_dir`.
 - **`make release` also runs `make adoption-check`**, which adopts `examples/minimal` with this
   tree's binary and fails if `air init` would write something the example does not show. A
   change to what `air init` writes updates the example in the same commit (air-livz).

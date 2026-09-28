@@ -43,15 +43,23 @@ trial:
 # and five row collisions between lanes.
 #
 # The coordinator, at round end:
+#   0. make changelog, and commit the folded CHANGELOG.md (air-be6d)
 #   1. append ONE row to install::RELEASES covering every notice since the last:
 #      (crate version, surface version, notice count)
 #   2. set the same version in Cargo.toml [workspace.package]
 #   3. make release (verify, then adoption-check, then the tag)
 #
 # Steps 1 and 2 in either order: `air release-check` fails until they agree.
+# Fold changelog.d/<bead>.md fragments into CHANGELOG.md's [Unreleased] and delete them
+# (air-be6d). The coordinator runs it at round end and commits the result before `make release`.
+.PHONY: changelog
+changelog:
+	sh scripts/changelog-assemble.sh
+
 .PHONY: release
 release:
 	@test -z "$$(git status --porcelain)" || { echo "release: tree is dirty; commit first"; exit 1; }
+	@test -z "$$(find changelog.d -name '*.md' ! -name README.md 2>/dev/null)" || { echo "release: fragments left in changelog.d; run make changelog and commit"; exit 1; }
 	@test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "release: cut releases from main"; exit 1; }
 	cargo run -q -p air -- release-check
 	$(MAKE) verify

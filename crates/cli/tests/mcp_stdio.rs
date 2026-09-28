@@ -109,7 +109,9 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         if let Some(i) = pending.iter().position(pred) {
             return pending.remove(i);
         }
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Generous: under fleet load macOS checks the freshly built binary before it runs
+        // (air-1fg7), and a green run never waits this long.
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             let line = match rx.recv_timeout(left) {
