@@ -127,6 +127,8 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
+  green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
 - A batch cut stopped by a leftover `index.lock` left no record, and a verify stopped by hand
   left no run. A failed cut now writes `batch-cut / failed` with its reason and who holds the
   lock, and `air record` survives SIGINT, SIGTERM and SIGHUP to write the run as interrupted

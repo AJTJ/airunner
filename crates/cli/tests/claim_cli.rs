@@ -1982,8 +1982,10 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
             lane.to_str().unwrap(),
         ],
     );
+    // air-k81s: no member, so the cut exits 1 and names what held alpha.
     let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
-    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("held: alpha at"), "{out}{err}");
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let held: i64 = conn
         .query_row(
@@ -3247,10 +3249,11 @@ fn a_cut_starts_from_main_and_refuses_an_unlanded_green() {
     assert_eq!(git(&lane, &["rev-parse", "HEAD"]), green);
     git(&lane, &["checkout", "README"]);
 
-    // Landed: the head is in main, so the cut resets and runs.
+    // Landed: the head is in main, so the cut resets and runs. Nothing is batch-ready, so it
+    // exits 1 (air-k81s) after the reset.
     git(&main, &["merge", "-q", "--ff-only", &green]);
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
-    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(code, 1, "{out}{err}");
     assert!(json(&out)["reset_from"].is_null(), "{out}");
     assert_eq!(
         git(&lane, &["rev-parse", "HEAD"]),
