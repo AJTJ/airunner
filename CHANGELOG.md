@@ -56,6 +56,11 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air land` closes an epic once bd reports every one of its children closed, and never an
+  epic with no children. `air status` names an epic to decompose only when it has no
+  children, and prints the beads-without-initiative count only when `"metis": true` is set.
+  The decomposition skill puts an epic's "Done when" in its last child and files children
+  with their `--deps`.
 - This repo sets `verify_lane: true`: the lane verifies once per batch; workers run no verify of their own (four parallel Rust verifies had put the owner's machine at load 40).
 
 - The channel poll no longer runs `lsof`. Five sessions polling every few seconds kept three

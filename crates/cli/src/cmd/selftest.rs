@@ -841,14 +841,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     // That is the one direction this line must not fail in — naming an epic somebody is
     // working on costs the line its credibility, and nothing refuses on it to make up for that.
     (
-        "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        "status: a ready epic with no children is named; one with children, open or all closed, is not",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
-            // The anchor is what rustfmt LEFT, not what was typed: written as one expression
-            // it was reflowed onto three lines and the anchor matched nothing, which
-            // `air selftest --prove` calls BROKEN and `make verify` does not check at all.
-            from: "all(|c| c.status == \"closed\")",
-            to: "any(|c| c.status == \"closed\")",
+            // air-92o0: back to the old rule, which named an epic whose children are all closed.
+            from: "children.is_empty().then(",
+            to: "children.iter().all(|c| c.status == \"closed\").then(",
             also_red: &[],
         },
     ),
@@ -4550,7 +4548,6 @@ fn probe_epic_count_carries_no_instruction() -> Probe {
         epic_depth: Some(2),
         epics_to_decompose: Some(vec![EpicToDecompose {
             epic: "zz-open".into(),
-            closed_children: 4,
         }]),
         ..Default::default()
     });
@@ -4570,7 +4567,7 @@ fn probe_epic_count_carries_no_instruction() -> Probe {
         // the surrounding wording, so the declared mutation takes out the red half only.
         fresh.contains("2 epic(s)")
         // The instruction is on the line that can tell, and it names only the epic it is true of.
-        && fresh.contains("epic ready to decompose: zz-open (0 open children, 4 closed)")
+        && fresh.contains("epic ready to decompose: zz-open (no children yet)")
         && !fresh.contains("zz-cut")
         // The cache path still answers, and says which path it is, so silence there is not
         // read as "nothing to decompose".
@@ -10044,11 +10041,10 @@ fn probe_scaffolded_verify_fails_until_edited() -> Probe {
 /// air-80x sat undecomposed for hours and is ready again with all six children closed. The
 /// line names which epic, so the count becomes an action.
 ///
-/// Red (declared mutation: `all(closed)` becomes `any(closed)`): an epic with one open child
-/// is named, which is the one thing this must never do — a line that names an epic somebody is
-/// working on costs its own credibility. Green: an epic whose children are all closed is
-/// named with the count, an epic with no children at all is named with 0, a child in any
-/// status but `closed` keeps its epic silent, and a snapshot with no such epic prints no line.
+/// Red: an epic with children is never named, whether a child is in flight (naming an epic
+/// somebody is working on costs the line its credibility) or all are closed (that epic is
+/// finished and `air land` closes it, air-92o0). Green: an epic with no children is named, and
+/// a snapshot with no such epic prints no line.
 fn probe_epic_with_no_open_children_is_named() -> Probe {
     use crate::cmd::status::{EpicToDecompose, Snapshot, render_for_probe, to_decompose};
 
@@ -10057,39 +10053,31 @@ fn probe_epic_with_no_open_children_is_named() -> Probe {
         status: status.into(),
         ..air_bd::Issue::default()
     };
-    let closed = [kid("closed"), kid("closed")];
 
-    // RED: an epic with work under it stays silent, in every status that is not `closed`.
+    // RED: an epic with children stays silent, whether they are in flight or all closed. An
+    // all-closed epic is finished, and `air land` closes it (air-92o0).
     let red = ["open", "in_progress", "blocked", "awaiting_review"]
         .iter()
-        .all(|s| to_decompose("zz-e", &[kid("closed"), kid(s)]).is_none());
+        .all(|s| to_decompose("zz-e", &[kid("closed"), kid(s)]).is_none())
+        && to_decompose("zz-e", &[kid("closed"), kid("closed")]).is_none();
 
-    let named = to_decompose("zz-e", &closed);
     let never = to_decompose("zz-e", &[]);
     let line = render_for_probe(&Snapshot {
         epics_to_decompose: Some(vec![EpicToDecompose {
             epic: "zz-e".into(),
-            closed_children: 6,
         }]),
         ..Snapshot::default()
     });
     let silent = render_for_probe(&Snapshot::default());
-    let green = named
+    let green = never
         == Some(EpicToDecompose {
             epic: "zz-e".into(),
-            closed_children: 2,
         })
-        // An epic nobody has ever decomposed is the same duty, and says 0.
-        && never
-            == Some(EpicToDecompose {
-                epic: "zz-e".into(),
-                closed_children: 0,
-            })
-        && line.contains("epic ready to decompose: zz-e (0 open children, 6 closed)")
+        && line.contains("epic ready to decompose: zz-e (no children yet)")
         && !silent.contains("epic ready to decompose");
 
     Probe {
-        name: "status: a ready epic with no open child is named with its closed count; one with work under it, in any status but closed, is not",
+        name: "status: a ready epic with no children is named; one with children, open or all closed, is not",
         red_fires: red,
         green_passes: green,
     }

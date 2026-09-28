@@ -907,7 +907,7 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "When the claimable ready set is empty and at least one worker holds no claim, \
                the coordinator hears \"the ready queue is empty: <n> worker(s) idle; epics \
-               with no open child: <ids or none>\" once per emptying, and not again until the \
+               with no children: <ids or none>\" once per emptying, and not again until the \
                set has had a bead.",
         added: "2026-09-26 (air-1vri.5)",
         source: "crates/cli/src/cmd/fanout.rs, queue_empty; called from tick",
