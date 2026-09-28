@@ -2281,6 +2281,24 @@ fn a_released_bead_is_claimable_by_another_worker() {
     assert!(!text.contains("pencilled assignee"), "{text}");
 }
 
+/// air-0blv: a claim refused because a peer holds the bead points at the current list first.
+/// In the 0.4.10 trial most refusals came minutes after the peer's claim, from workers walking
+/// a stale list, and the refusal's only advice was to ask the holder or reclaim.
+#[test]
+fn a_claim_held_by_a_peer_points_at_bd_ready() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let (code, out, err) = air(&main, &bd, &["claim", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = air(&alpha, &bd, &["claim", "zz-1"]);
+    assert_ne!(code, 0, "{out}{err}");
+    let text = format!("{out}{err}");
+    assert!(
+        text.contains("is claimed by") && text.contains("`bd ready` lists what is claimable now"),
+        "{text}"
+    );
+}
+
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
 /// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
 #[test]

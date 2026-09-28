@@ -53,6 +53,9 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- The `beads are ready` notice and a claim refused because a peer holds the bead now point
+  at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
+  after a hand-over caused most refused claims in the 0.4.10 trial.
 - Under a verify lane, a worker whose every claim is batch-ready is nudged with the ready beads
   when it stops, the same as a worker with no claim.
 - Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).

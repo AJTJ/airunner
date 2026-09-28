@@ -99,9 +99,13 @@ pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -
          the same one first)"
             .to_string()
     };
+    // air-0blv: the list is a snapshot. In the 0.4.10 trial 10 of 14 refused claims came 83 s
+    // to 19 min after a peer took the bead: workers walking this list after a hand-over, not
+    // racing on it. So it says so, and names where the current list is.
     format!(
         "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
-         first claim wins, and a refused claim means someone else took it.",
+         first claim wins, and a refused claim means someone else took it. This list is as of \
+         now: after a refused claim or a finished bead, pick from `bd ready`, not from here.",
         listed.join(" ")
     )
 }
@@ -895,6 +899,11 @@ mod tests {
             "{first}"
         );
         assert!(!first.contains("different order"), "{first}");
+        // air-0blv: the list is a snapshot, and the notice names where the current one is.
+        assert!(
+            first.contains("pick from `bd ready`, not from here"),
+            "{first}"
+        );
         assert!(
             third.starts_with("beads are ready: b-3 b-1 b-2 ("),
             "{third}"
