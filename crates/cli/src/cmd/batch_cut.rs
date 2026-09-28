@@ -421,47 +421,6 @@ fn merge(repo: &Path, sha: &str) -> Result<Merged, String> {
     Ok(Merged::Conflict(marked))
 }
 
-/// Tell each worker whose branch a declared precheck kept out of this cut, once per head
-/// (0.4.8 trial), and write the audit line. `precheck_green_now` re-reads the precheck record
-/// for that head immediately before the hold is written (0.4.9 trial: a hold went out at
-/// 21:09:28.795 for a head whose green precheck was recorded at .725, because the batch-ready
-/// read was taken before the record landed); a head that passes now is neither held nor
-/// counted. Returns the heads held.
-pub fn hold_out<F>(
-    ledger: &Ledger,
-    lane: &str,
-    not_ready: &[status::NotBatchReady],
-    dry_run: bool,
-    considered: usize,
-    mut precheck_green_now: F,
-) -> Vec<String>
-where
-    F: FnMut(&status::NotBatchReady) -> bool,
-{
-    let mut held = Vec::new();
-    for n in not_ready
-        .iter()
-        .filter(|n| n.check == "no-precheck" && n.worker != lane)
-    {
-        if precheck_green_now(n) {
-            continue;
-        }
-        if !dry_run {
-            super::fanout::batch_held(ledger, lane, n);
-        }
-        super::log_event(
-            ledger,
-            lane,
-            super::decisions::BATCH_CUT_NO_PRECHECK,
-            &serde_json::json!({"member": n.worker, "head": n.head, "dry_run": dry_run}),
-            &n.detail,
-            &format!("{considered} batch-ready member(s)"),
-        );
-        held.push(n.head.clone());
-    }
-    held
-}
-
 pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     let (ledger, lane) = match super::open(repo) {
         Ok(x) => x,
@@ -551,7 +510,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         }
     }
 
-    let (ready, not_ready, errors) = status::batch_ready_for(&ledger, repo);
+    let (ready, _, errors) = status::batch_ready_for(&ledger, repo);
     for e in &errors {
         eprintln!("air batch cut: {e}");
     }
@@ -672,18 +631,6 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
             &format!("{considered} member(s) considered"),
         );
     }
-    // The precheck requirement acts here: a branch the repo's `precheck` key kept out of this
-    // batch is one line, so `air audit` counts what the requirement cost (air-hqj8). The other
-    // not-ready reasons are the ordinary state of a branch still in work and write nothing.
-    let worktrees = git::worktrees(repo).unwrap_or_default();
-    hold_out(&ledger, &lane, &not_ready, dry_run, considered, |n| {
-        worktrees
-            .iter()
-            .find(|(p, _)| air_ledger::paths::worker_name_for(p).is_ok_and(|w| w == n.worker))
-            .is_some_and(|(p, _)| {
-                super::green::at(&ledger, p, &n.head, Kind::Precheck).is_ok_and(|e| e.holds())
-            })
-    });
     super::log_event(
         &ledger,
         &lane,
@@ -757,28 +704,5 @@ mod tests {
         });
         assert!(out.contains(&peer), "{out}");
         assert!(!out.contains("Name each drop"), "{out}");
-    }
-
-    /// 0.4.9 trial: a `no-precheck` hold was written for a head whose green precheck had
-    /// been recorded 70 ms earlier. The hold re-reads the record first; a head green now is
-    /// neither told nor counted, and one that is not is told once.
-    #[test]
-    fn a_hold_is_skipped_when_the_precheck_passes_on_the_re_read() {
-        let ledger = Ledger::open_in_memory().unwrap();
-        let not = |worker: &str, head: &str| status::NotBatchReady {
-            worker: worker.into(),
-            head: head.into(),
-            check: "no-precheck",
-            detail: format!("{worker} at {head}: no green precheck at this head"),
-        };
-        let not_ready = vec![not("w1", "f914b150"), not("w2", "a76d562e")];
-        let held = hold_out(&ledger, "lane", &not_ready, false, 0, |n| n.worker == "w1");
-        assert_eq!(held, vec!["a76d562e".to_string()]);
-        let rows = ledger.deliveries_since("1970").unwrap();
-        let held_rows: Vec<&air_ledger::deliveries::Delivery> =
-            rows.iter().filter(|d| d.kind == "batch-held").collect();
-        assert_eq!(held_rows.len(), 1, "{rows:?}");
-        assert_eq!(held_rows[0].to_worker, "w2");
-        assert_eq!(held_rows[0].key, "a76d562e");
     }
 }

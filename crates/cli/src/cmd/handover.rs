@@ -543,6 +543,18 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
             return 1;
         }
     };
+    // air-a8ra: an id that is not one is named before the gate.
+    if let Some(b) = bead
+        && let Err(msg) = super::close::check_shape(&[b.to_string()])
+    {
+        let msg = format!("air handover: {msg}");
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     let f = match facts(&ledger, &worker, repo, bead, !enforce) {
         Ok(f) => f,
         Err(e) => {
@@ -551,6 +563,20 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
         }
     };
     let v: Verdict = handover_verdict(&f);
+    // air-a8ra: an id bd does not have is the answer, not whatever the gate made of it. Asked
+    // only when the verdict fails, so a passing hand-over costs no extra bd process.
+    if !v.pass
+        && let Some(b) = bead
+        && let Err(msg) = super::close::check_known(repo, &[b.to_string()])
+    {
+        let msg = format!("air handover: {msg}");
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     // NOT stamped here (air-eiv). `air handover` is documented as the way to find what is
     // missing, and it used to increment `handover_attempts` on the claim -- the same counter
     // `handover-not-green` reads -- so running the diagnostic raised the alarm and the

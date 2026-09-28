@@ -150,10 +150,9 @@ The worker launcher sets it to worker, the lane launcher to lane, and the coordi
 to coordinator. A shell Air did not start has no role, and Air treats it as the owner, who may
 do anything. A value Air does not recognise counts as a worker.
 
-The lane is a worker with one permission added and one piece of advice removed. It may run air
-land, which is refused to workers and, since the owner's ruling of 2026-09-14, to the
-coordinator; the owner may still land. The stop hook offers it no ready bead and gives it no
-hand-over advice, since its branch carries every member's beads. Every other check that stops
+The lane is a worker with one permission added. It may run air land, which is refused to
+workers and, since the owner's ruling of 2026-09-14, to the coordinator; the owner may still
+land. The stop hook offers it no ready bead. Every other check that stops
 a worker stops the lane: the edit fence, the hand-over check in air close, the refusal of
 claiming a bead the owner must decide, releasing another worker's claim, and the UNENFORCED mark in status.
 
@@ -271,8 +270,9 @@ timeout.
 | Session start and end | The session's row is created, idle, or removed. |
 | Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. Closes are not read from the command text. A command the repository declares as needing a lease is refused to a session not holding it when enforcement is on, which the worker and lane launchers turn on; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
-| Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
-| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim, naming ready beads it has confirmed. The same ready set is named once per session and again only when it changes or after the worker has held work (air-8goe). The lane and the coordinator get neither, by AIR_ROLE. |
+| Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. A stop failure, a quota notification, or a permission or idle prompt is recorded as the session's sticky fact, and `air status` shows it only until the session's next event of its own. |
+| Stop | The session is marked idle. A worker is nudged, naming ready beads it has confirmed, when it holds no claim or, under a lane, when every claim it holds is batch-ready; the same ready set is named once per session and again only when it changes or after the worker has held work (air-8goe). The Stop hook runs no hand-over check (air-wau8, 2026-09-28): `air close` reports what is missing when it is run. The lane and the coordinator are never nudged, by AIR_ROLE. |
+| Subagent stop, and any hook inside a subagent | Only an event line. A subagent's hooks carry its parent's session id and never change the parent's state or clock. |
 
 Every hook call, including the silent ones, writes one event line.
 
@@ -705,7 +705,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 |---|---|---|
 | Closing a bead needs a green at a commit containing main, and a tracked digest only where `digest_dir` is set. | 2026-09-25 | hand-over gate, `AIR_ENFORCE=1` |
 | A green is keyed by commit and counts for any worker; it is keyed by tree only if the repo declares that. | 2026-09-05 | `verify_key` in `.claude/air.json` |
-| A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
+| A backgrounded verify is refused; a dirty tree, a changed command, and the green and red counts at a commit with more than one run are stated beside the exit. The `suspicious` and `flaky-at-head` labels were removed 2026-09-28 (air-qlx3): Air states facts, not diagnoses. | 2026-08-21 | `air record` |
 | Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
 | Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release`, `air reclaim` |
 | Air gets out of the way and tells agents facts as soon as they are true. Workarounds will always exist; a trial workaround is fixed only when Air caused it, and by removing or correcting that part of Air, not by adding a rule. | 2026-09-26 | trial reports (§9.1) |
@@ -787,7 +787,7 @@ The adoption check (make adoption-check, scripts/adoption-check.sh) copies examp
 temporary directory, deletes the files air init writes, and adopts it with this tree's binary
 first on the path: init as a dry run and with --write, a commit, install, the first recorded
 verify, status, and each launcher with --print. It fails on a non-zero exit, on output naming a
-warning, error, refusal or suspicious run, or on any difference between what init wrote and
+warning, error or refusal, or on any difference between what init wrote and
 examples/minimal. It needs beads and Claude Code, and took 18 to 22 seconds on 2026-09-26, so it
 runs in the release target and on demand, not in the verify target.
 
