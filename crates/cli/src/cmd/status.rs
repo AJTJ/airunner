@@ -454,7 +454,7 @@ pub fn coordinator_only(commits: &[String], coordinator: &[String]) -> bool {
     !commits.is_empty() && commits.iter().all(|c| coordinator.contains(c))
 }
 
-/// The fix for a range that names no bead. A worker amends its own commit. The lane cannot,
+/// The fix for a range that names no bead. A worker adds a trailered commit. The lane cannot,
 /// because amending moves its head off the sha its green is at and the commit is a member's,
 /// so the member adds the trailer on its own branch and the lane cuts again.
 pub fn no_bead_fix(worker: &str) -> String {
@@ -463,7 +463,9 @@ pub fn no_bead_fix(worker: &str) -> String {
          own branch, then the lane runs `air batch cut` again (the coordinator's commits need none)"
             .to_string()
     } else {
-        "add a `Bead: <id>` trailer to the commit that did the work (git commit --amend)"
+        // air-ch9p: a new commit, not `--amend`; roles say commit forward once a sha has left
+        // the worktree, and a lane may already have cut at it.
+        "add a commit whose message carries a `Bead: <id>` trailer; the range then names the bead"
             .to_string()
     }
 }

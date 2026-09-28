@@ -552,24 +552,30 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
 /// Each states what must become TRUE rather than which command makes it so (air-155w): under a
 /// lane the worker runs no verify, and a fix naming one is followed successfully by the wrong
 /// worker.
-pub fn fix_absent(s: &Scanned) -> &'static str {
+pub fn fix_absent(bead: &str, s: &Scanned) -> String {
     if s.commits == 0 {
-        // The missing trailer is a FACT and belongs in the detail; the green is still what is
-        // missing. Making the trailer the FIX here told a worker to add a trailer when their
-        // actual next step was a verify — caught by an existing probe, which asserted this
-        // line and went red. The detail gains a fact; the fix keeps its subject.
-        return "a green at this head; `air handover` names what your flow needs to produce one";
+        // The green stays the subject: with no lane, a green at this head is the fix, and a
+        // probe caught the version that named only the trailer. air-ch9p: under a lane it is
+        // the trailer, because a branch whose commits name no bead it holds is never
+        // batch-ready, so no batch green comes. The line names both and which is which.
+        return format!(
+            "a green at this head; a batch covers only commits whose message carries \
+             `Bead: {bead}`, so under a lane that trailer comes first"
+        );
     }
     if s.candidates == 0 {
-        return "a green containing main and your commits; nothing has recorded one recently, \
-                and `air handover` names what your flow needs to produce one";
+        return "a green containing main and your commits; none is recorded since your oldest \
+                commit, and `air handover` names what your flow needs to produce one"
+            .to_string();
     }
     if s.with_main == 0 {
         return "a green whose run contained main; where a lane runs, that is the next batch \
-                that merges main before it verifies";
+                that merges main before it verifies"
+            .to_string();
     }
     "a green recorded at or after your commits: the ones on record are all older, so where a \
      lane runs it is the next batch rather than this one"
+        .to_string()
 }
 
 pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
@@ -609,7 +615,7 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             (None, None) => {
                 // air-hgi9: the state that used to be silent. The counts say which it is.
                 out.absent = Some(why_absent(bead, &b.scanned));
-                out.absent_fix = Some(fix_absent(&b.scanned).to_string());
+                out.absent_fix = Some(fix_absent(bead, &b.scanned));
                 return out;
             }
         }

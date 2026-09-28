@@ -12482,10 +12482,10 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     // The half that actually differs: wait-for-the-next-batch versus stop-waiting are opposite
     // instructions, and they used to share a fix line.
     let fixes = [
-        fix_absent(&none_recorded),
-        fix_absent(&no_main),
-        fix_absent(&untouched),
-        fix_absent(&no_commits),
+        fix_absent("air-hgi9", &none_recorded),
+        fix_absent("air-hgi9", &no_main),
+        fix_absent("air-hgi9", &untouched),
+        fix_absent("air-hgi9", &no_commits),
     ];
     let acts = fixes
         .iter()
@@ -12497,6 +12497,8 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
         // the detail. Making the trailer the fix told a worker to add one when their next step
         // was a verify, and an existing probe caught it by going red on this very line.
         && fixes[3].contains("a green at this head")
+        // air-ch9p: and under a lane the trailer, which is what makes a branch batch-ready.
+        && fixes[3].contains("`Bead: air-hgi9`")
         && four[3].contains("trailer");
     // No fix names a command the worker must not run under a lane (air-155w).
     let flow_safe = fixes
