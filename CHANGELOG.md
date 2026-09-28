@@ -135,6 +135,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air handover` and `air close` said only "no green" at a head where a red was recorded, and
+  where the repo gates batches on a precheck that had not run. They now name the red with its
+  kept output, and the missing precheck with `air record precheck`.
 - A branch whose red batch had it as the only member stayed ready for the next batch, so the
   lane merged the same red again. Such a branch is now left out until its worker commits past
   it.

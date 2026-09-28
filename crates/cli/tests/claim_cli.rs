@@ -1625,6 +1625,43 @@ fn ready_line_names_epics_apart_and_claim_refuses_one() {
     assert!(out.contains("claim a child"), "{out}");
 }
 
+/// air-erii, end to end: `air handover` and `air close` name a red recorded at HEAD with its
+/// kept output, and a missing precheck with the worker's fix, where the repo declares one.
+#[test]
+fn handover_and_close_name_a_red_at_head_and_a_missing_precheck() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let bd = fake_bd(&repo);
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"precheck": true}"#).unwrap();
+    std::fs::write(repo.join("bd.in_progress"), "zz-e\n").unwrap();
+    let w = &[("AIR_ROLE", "worker")];
+    assert_eq!(air_env(&repo, &bd, &["claim", "zz-e"], w).0, 0);
+    let (code, _, _) = air_env(&repo, &bd, &["record", "verify", "--", "false"], w);
+    assert_ne!(code, 0);
+    for args in [
+        &["handover", "--bead", "zz-e"][..],
+        &["close", "zz-e", "--reason", "x"][..],
+    ] {
+        let (code, out, err) = air_env(&repo, &bd, args, w);
+        let text = format!("{out}{err}");
+        // `air handover` reports and exits 0; `air close` refuses.
+        if args[0] == "close" {
+            assert_ne!(code, 0, "{text}");
+        }
+        assert!(
+            text.contains("a red verify is recorded at this head, output: ")
+                && text.contains(".air/logs/"),
+            "{args:?}: {text}"
+        );
+        assert!(
+            text.contains("precheck: no precheck recorded at")
+                && text.contains("`air record precheck -- <the repo's precheck command>`"),
+            "{args:?}: {text}"
+        );
+    }
+}
+
 /// air-g7hr: a bead with an open `blocks` dependency is refused, naming the blocker and its
 /// status. bd ready withholds it and `bd update --claim` does not; an adopter's worker claimed
 /// one whose blocker a peer held in progress. A closed blocker and a parent edge do not block.
