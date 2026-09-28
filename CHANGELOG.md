@@ -100,6 +100,11 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A session whose pid had been reused, or had become a zombie, read as alive and got most of
+  the ready notices. A session is now alive only when its pid runs with the start time it
+  registered with; `air status --json` shows `liveness` as alive, dead or unknown, and only
+  live sessions hear ready notices or raise idle-without-claim. A new session under a name
+  replaces that name's earlier rows, and the main checkout's session shows as the owner.
 - After a red batch, the next `air batch cut` built on the red merges and would have carried
   them into the next batch. Every cut now resets the lane's branch to main first. It refuses
   while the lane has uncommitted changes, or while its head is a passing batch not yet landed.

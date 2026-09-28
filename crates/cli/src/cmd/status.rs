@@ -73,8 +73,11 @@ pub struct Session {
     pub detail: Option<String>,
     pub changed_at: String,
     pub pid: Option<i64>,
-    /// Filled by `gather` when a pid is known: is that process still running?
-    pub pid_alive: Option<bool>,
+    /// `ps -o lstart=` of `pid` when the hook recorded it (air-sai7).
+    pub pid_started: Option<String>,
+    /// Filled by `gather`: is the process that registered still running (air-sai7)? Unknown
+    /// is never treated as alive.
+    pub liveness: super::lease::Liveness,
     /// Which fleet this session belongs to (air-0lk). The hook writes it from `AIR_PROJECT`,
     /// so a cross-project refusal is derived from the ledger, not from a name's spelling.
     pub project: String,
@@ -987,7 +990,7 @@ pub fn select(repo: &Path) -> Selection {
         // The coordinator's checkout (`main`, or its own worktree) is not a candidate, and
         // never was: its commits reach main in a lane's batch. The lane's branch IS one, since
         // `air land --worker <lane>` lands the batch through here (air-jc2p.4).
-        if super::hook::role_for(&worker) == "coordinator" {
+        if matches!(super::hook::role_for(&worker), "coordinator" | "owner") {
             continue;
         }
         let head = match git::head(&path) {
@@ -1525,7 +1528,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                     "idle"
                         if !has_claim
                             && w.role == "worker"
-                            && sess.pid_alive != Some(false)
+                            && sess.liveness == super::lease::Liveness::Alive
                             && !verify_running(s, &w.worker)
                             && !tree_busy(s, &w.worker)
                             && s.claimable_depth.is_some_and(|n| n > 0)
@@ -1901,7 +1904,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .conn()
             .prepare(
                 "SELECT worker, role, session_id, state, detail, changed_at, pid, project, model, \
-                        enforce, stopped_at, stopped_kind, stopped_text, transcript_path \
+                        enforce, stopped_at, stopped_kind, stopped_text, transcript_path, pid_started \
                  FROM sessions ORDER BY changed_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1916,7 +1919,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         detail: r.get(4)?,
                         changed_at: r.get(5)?,
                         pid: r.get(6)?,
-                        pid_alive: None,
+                        pid_started: r.get(14)?,
+                        liveness: super::lease::Liveness::Unknown,
                         project: r.get(7)?,
                         model: r.get(8)?,
                         enforce: r.get::<_, Option<i64>>(9)?.map(|v| v == 1),
@@ -1942,11 +1946,18 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         let mut pruned = Vec::new();
         for row in rows {
             let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
-            sess.pid_alive = sess.pid.map(super::lease::pid_alive);
+            sess.liveness = super::lease::liveness(sess.pid, sess.pid_started.as_deref());
+            // air-sai7: the main checkout's session is the owner's; a row written there by a
+            // coordinator before it had its own worktree is not a second coordinator.
+            let role = if super::hook::role_for(&worker) == "owner" {
+                "owner".to_string()
+            } else {
+                role
+            };
             // A session whose worktree no longer exists and whose process is not alive is
             // a leftover (SessionEnd is not guaranteed on crash or worktree removal). Prune it
             // so it never reads as a live worker (dogfooding, 2026-08-22).
-            if !worktree_names.contains(&worker) && sess.pid_alive != Some(true) {
+            if !worktree_names.contains(&worker) && sess.liveness != super::lease::Liveness::Alive {
                 pruned.push(sess.session_id.clone());
                 continue;
             }
@@ -2333,7 +2344,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
     let live: Vec<(String, String, i64)> = all_sessions
         .iter()
-        .filter(|(_, _, x)| x.pid_alive != Some(false))
+        .filter(|(_, _, x)| x.liveness != super::lease::Liveness::Dead)
         .filter_map(|(w, role, x)| x.pid.map(|p| (w.clone(), role.clone(), p)))
         .collect();
     let main_checkout_sessions = super::readers::main_checkout_sessions(&tree_readers, &live);
@@ -3112,7 +3123,8 @@ mod tests {
                 detail: Some("Bash".into()),
                 changed_at: changed.into(),
                 pid: None,
-                pid_alive: None,
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
@@ -3316,7 +3328,7 @@ mod tests {
             None,
         );
         idle.session.as_mut().unwrap().pid = Some(1);
-        idle.session.as_mut().unwrap().pid_alive = Some(true);
+        idle.session.as_mut().unwrap().liveness = crate::cmd::lease::Liveness::Alive;
         let s = Snapshot {
             workers: vec![idle.clone()],
             ..Default::default()
@@ -3326,7 +3338,7 @@ mod tests {
         // for never having fired in any recorded day, so a dead pid raises nothing on its
         // own. The row now falls through to the ordinary idle states, which are age-gated,
         // so a 2-minute-old one is still quiet.
-        idle.session.as_mut().unwrap().pid_alive = Some(false);
+        idle.session.as_mut().unwrap().liveness = crate::cmd::lease::Liveness::Dead;
         let s = Snapshot {
             workers: vec![idle.clone()],
             ..Default::default()
@@ -3439,11 +3451,11 @@ mod tests {
     /// longest-lived rows in this repo's ledger were exactly this, open 4 885 minutes each.
     #[test]
     fn idle_without_claim_is_quiet_when_the_session_process_is_gone() {
-        let mk = |alive: Option<bool>| {
+        let mk = |alive: crate::cmd::lease::Liveness| {
             let mut w = worker("w", Some("idle"), &past(), vec![], Some(true));
             let sess = w.session.as_mut().unwrap();
             sess.pid = Some(1);
-            sess.pid_alive = alive;
+            sess.liveness = alive;
             Snapshot {
                 workers: vec![w],
                 ready_depth: Some(5),
@@ -3451,16 +3463,20 @@ mod tests {
                 ..Default::default()
             }
         };
-        // Alive, and unknown (no pid exported): both still fire.
-        for alive in [Some(true), None] {
-            let att = attention(&mk(alive), NOW, Thresholds::default());
-            assert_eq!(
-                att.iter().map(|a| a.kind).collect::<Vec<_>>(),
-                vec!["idle-without-claim"],
-                "{alive:?}"
+        use crate::cmd::lease::Liveness;
+        let att = attention(&mk(Liveness::Alive), NOW, Thresholds::default());
+        assert_eq!(
+            att.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            vec!["idle-without-claim"]
+        );
+        // air-sai7: unknown (no pid exported, or `ps` could not answer) is not alive, so it is
+        // quiet too. An adopter's dead row read alive for 39,000 minutes on a reused pid.
+        for gone in [Liveness::Dead, Liveness::Unknown] {
+            assert!(
+                attention(&mk(gone), NOW, Thresholds::default()).is_empty(),
+                "{gone:?}"
             );
         }
-        assert!(attention(&mk(Some(false)), NOW, Thresholds::default()).is_empty());
     }
 
     #[test]

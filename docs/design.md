@@ -342,7 +342,7 @@ erDiagram
 | verify in flight | The check currently running and its process. | record |
 | edit journal | Which worker touched which file, and when. | the hook |
 | claims | Which worker holds which bead, the files it declared, and when it let go. | claim, release, close, the gate |
-| sessions | Each session's worker name, role, and state. | the hook |
+| sessions | One row per worker name (a new session replaces the name's earlier rows): role, state, and the pid with its start time. `air status` reads a session as alive only when that pid runs with that start time and is not a zombie; with no pid or no answer from `ps` it is unknown, and only alive sessions hear ready notices (air-sai7). | the hook |
 | landings | Each landing attempt, its result, the beads it carried, and the commit it made. | land |
 | captures | Inbox items and what became of them. | capture and triage |
 | leases and lease wants | Who holds each shared resource and who is waiting. | lease and the hook |

@@ -1521,7 +1521,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // The one clause air-d10 added. Not the whole arm: taking that out would silence
             // the condition entirely and prove only that the probe is connected.
             file: "crates/cli/src/cmd/status.rs",
-            from: "sess.pid_alive != Some(false)",
+            from: "sess.liveness == super::lease::Liveness::Alive",
             to: "true",
             also_red: &[],
         },
@@ -4853,7 +4853,8 @@ fn probe_idle_without_claim_counts_claimable_only() -> Probe {
                 session_id: "s".into(),
                 state: "idle".into(),
                 changed_at: "2026-08-29T12:00:00Z".into(),
-                pid_alive: Some(true),
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 ..Default::default()
             }),
             ..Default::default()
@@ -4917,7 +4918,8 @@ fn probe_idle_without_claim_silent_while_verifying() -> Probe {
                 session_id: "s".into(),
                 state: "idle".into(),
                 changed_at: "2026-09-06T12:00:00Z".into(),
-                pid_alive: Some(true),
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 ..Default::default()
             }),
             ..Default::default()
@@ -5022,7 +5024,8 @@ fn probe_idle_without_claim_silent_while_its_tree_is_read() -> Probe {
                 session_id: "s".into(),
                 state: "idle".into(),
                 changed_at: "2026-09-07T12:00:00Z".into(),
-                pid_alive: Some(true),
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 ..Default::default()
             }),
             ..Default::default()
@@ -6282,7 +6285,8 @@ fn probe_attention() -> Probe {
                 detail: None,
                 changed_at: changed.into(),
                 pid: None,
-                pid_alive: None,
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
@@ -6350,7 +6354,8 @@ fn probe_standstill() -> Probe {
                 detail: None,
                 changed_at: changed.into(),
                 pid: None,
-                pid_alive: None,
+                pid_started: None,
+                liveness: crate::cmd::lease::Liveness::Alive,
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
@@ -6402,7 +6407,7 @@ fn probe_standstill() -> Probe {
 /// the session's process gone is silent — the shape of the two longest-lived rows in this
 /// repo's ledger, open 4 885 minutes each.
 ///
-/// The mutation that made it red: dropping `sess.pid_alive != Some(false)` from the arm in
+/// The mutation that made it red: dropping `sess.liveness == super::lease::Liveness::Alive` from the arm in
 /// `status::attention` puts the dead-session case back and this probe's green half fails.
 fn probe_idle_without_claim_needs_a_live_session() -> Probe {
     use crate::cmd::status::{Session, Snapshot, Thresholds, WorkerView, attention};
@@ -6422,7 +6427,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
             green_passes: false,
         };
     };
-    let mk = |alive: Option<bool>| Snapshot {
+    let mk = |alive: crate::cmd::lease::Liveness| Snapshot {
         workers: vec![WorkerView {
             worker: "w".into(),
             role: "worker".into(),
@@ -6432,7 +6437,8 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 detail: None,
                 changed_at: over.clone(),
                 pid: Some(1),
-                pid_alive: alive,
+                pid_started: None,
+                liveness: alive,
                 project: String::new(),
                 model: String::new(),
                 enforce: None,
@@ -6447,8 +6453,16 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
         claimable_depth: Some(2),
         ..Default::default()
     };
-    let red = attention(&mk(Some(true)), now, Thresholds::default());
-    let green = attention(&mk(Some(false)), now, Thresholds::default());
+    let red = attention(
+        &mk(crate::cmd::lease::Liveness::Alive),
+        now,
+        Thresholds::default(),
+    );
+    let green = attention(
+        &mk(crate::cmd::lease::Liveness::Dead),
+        now,
+        Thresholds::default(),
+    );
     Probe {
         name: "attention: idle-without-claim fires for a live session, not a dead one",
         red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
@@ -13256,7 +13270,8 @@ fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
         detail: None,
         changed_at: "2026-09-06T11:16:35Z".into(),
         pid: Some(97487),
-        pid_alive: Some(true),
+        pid_started: None,
+        liveness: crate::cmd::lease::Liveness::Alive,
         project: "air".into(),
         model: String::new(),
         enforce: None,
