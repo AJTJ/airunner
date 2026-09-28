@@ -65,10 +65,10 @@ pub fn may_land(role: &str) -> Result<(), String> {
 /// Why `air land` refuses while a verify is in flight (air-1bm), naming every run and the fix.
 /// `None` when nothing is running, so the ok path is silent.
 ///
-/// Landing moves main, and the hand-over gate wants a green at a HEAD containing main, so
-/// EVERY verify in flight is about to become worthless — not only one on the landed branch,
-/// since every other branch's contains-main precondition breaks and its tree changes on the
-/// re-merge. The adopter's coordinator did this to three workers in one round with no signal
+/// Landing moves main, so a verify reading the main checkout, or the lane's batch built on
+/// it, is about to become worthless. That used to be every verify in flight; since air-9ij a
+/// green is judged against the main it was recorded over, so a worker's own run is untouched
+/// and only [`at_risk`] runs are counted (air-9yx6). The adopter's coordinator did this to three workers in one round with no signal
 /// available (air-4cr); their fix was a protocol where the worker warns first.
 ///
 /// This used to warn and then land. air-4cr defaulted to warn ("a coordinator may still have
@@ -105,6 +105,15 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
          the landing.",
     );
     Some(s)
+}
+
+/// Is this run destroyed by main moving (air-9yx6)? Only one reading the main checkout, or
+/// the lane's tree, which is the batch built on main. A worker's verify runs in its own
+/// worktree on its own branch, and its green is judged against the main it was recorded over
+/// (air-9ij), so a landing does not touch it. Counting it starved the lane: with three workers
+/// verifying for minutes, a green batch waited, and `air batch cut` refused while it did.
+pub fn at_risk(f: &air_ledger::verify::InFlight) -> bool {
+    f.worker == "main" || super::hook::role_for(&f.worker) == "lane"
 }
 
 /// Every process reading any tree of this repo, for `air land`'s main-checkout warning. All
@@ -707,7 +716,7 @@ pub fn run(
     // hold landings for every worker's cheap check under a lane, and protect nothing.
     let flights: Vec<_> = super::status::verifies_in_flight(&ledger)
         .into_iter()
-        .filter(|f| f.kind != Kind::Precheck)
+        .filter(|f| f.kind != Kind::Precheck && at_risk(f))
         .collect();
     let despite: Vec<String> = flights.iter().map(|f| in_flight_run_line(f, &at)).collect();
     if let Some(msg) = in_flight_refusal(&flights, &at) {
@@ -1157,6 +1166,31 @@ fn land_one(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-9yx6: a worker's verify in its own worktree does not refuse a landing; one in the
+    /// main checkout or the lane's tree does.
+    #[test]
+    fn only_a_verify_main_moving_would_destroy_refuses_a_landing() {
+        let run = |worker: &str| air_ledger::verify::InFlight {
+            id: "r".into(),
+            worker: worker.into(),
+            sha: "abcdef0123".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid: None,
+            started_at: "2026-09-28T10:00:00Z".into(),
+        };
+        assert!(!at_risk(&run("worker-1")));
+        assert!(at_risk(&run("main")));
+        assert!(at_risk(&run("lane")));
+        let flights: Vec<_> = [run("worker-1")].into_iter().filter(at_risk).collect();
+        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_none());
+        let flights: Vec<_> = [run("worker-1"), run("main")]
+            .into_iter()
+            .filter(at_risk)
+            .collect();
+        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_some());
+    }
 
     /// 0.4.8 trial: the landing commit is green only when its tree is the verified one's.
     #[test]

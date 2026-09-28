@@ -117,6 +117,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air land` refused while any verify ran anywhere in the fleet, so a lane's green batch could
+  wait indefinitely behind workers' own runs. Only a verify in the main checkout or the lane's
+  tree refuses it now.
 - `air close` and `air handover` ran the whole hand-over check on an id like `air-1 notes.md`
   and advised a `Bead:` trailer naming both words. An id with whitespace is now refused naming
   it, and when the check would refuse, an id bd does not have is named instead.
