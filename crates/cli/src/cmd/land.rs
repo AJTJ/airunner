@@ -121,6 +121,10 @@ pub fn at_risk(f: &air_ledger::verify::InFlight) -> bool {
 /// trees, not only main, so a worktree nested under the main checkout is not counted as main.
 pub fn main_readers(repo: &Path, ledger: &air_ledger::Ledger) -> super::readers::TreeReaders {
     let raw = super::readers::lookup();
+    // air-czbg: the channel poll reads this instead of running lsof itself.
+    if let Ok(r) = &raw {
+        super::readers::cache_put(ledger, r, &super::now());
+    }
     let trees: Vec<(String, std::path::PathBuf)> = match crate::git::worktrees(repo) {
         Ok(w) => w
             .into_iter()

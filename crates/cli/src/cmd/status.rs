@@ -1886,8 +1886,10 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
 pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let t0 = std::time::Instant::now();
     // Started first and joined last: `lsof` costs most of a second (`cmd::readers`), and
-    // nothing below needs it until the snapshot is assembled.
-    let readers_job = std::thread::spawn(super::readers::lookup);
+    // nothing below needs it until the snapshot is assembled. air-czbg: only when a person
+    // asked; the channel poll reads the last reading instead and never runs `lsof`.
+    let readers_job =
+        matches!(bd_use, BdUse::Fresh).then(|| std::thread::spawn(super::readers::lookup));
     let (ledger, _me) = open(repo)?;
     let at = now();
     let mut trees: Vec<(String, std::path::PathBuf)> = Vec::new();
@@ -2388,13 +2390,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let selection = select(repo);
     let session_pids: std::collections::BTreeSet<i64> =
         all_sessions.iter().filter_map(|(_, _, x)| x.pid).collect();
-    let tree_readers = super::readers::gather(
-        readers_job
-            .join()
-            .unwrap_or_else(|_| Err("the process lookup panicked".into())),
-        &trees,
-        &session_pids,
-    );
+    let raw = match readers_job {
+        Some(job) => {
+            let r = job
+                .join()
+                .unwrap_or_else(|_| Err("the process lookup panicked".into()));
+            if let Ok(raw) = &r {
+                super::readers::cache_put(&ledger, raw, &at);
+            }
+            r
+        }
+        None => super::readers::cached(&ledger, &at),
+    };
+    let tree_readers = super::readers::gather(raw, &trees, &session_pids);
     // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
     let live: Vec<(String, String, i64)> = all_sessions
         .iter()
