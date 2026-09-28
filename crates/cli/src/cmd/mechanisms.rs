@@ -392,7 +392,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stop-nudge",
         class: "nudge",
-        what: "At WIP 0 with beads ready, the Stop hook names them once. Since air-wau8 \
+        what: "At WIP 0 with beads ready, the Stop hook names them when the worker stops; \
+               the count below says how often it repeated (air-1yxj). Since air-wau8 \
                (2026-09-28), under a verify lane, a worker whose every claim is batch-ready \
                counts as WIP 0.",
         // air-7q5 asked whether this is an auto-start, since starting a session must not start

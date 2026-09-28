@@ -109,8 +109,11 @@ pub struct Audit {
 /// messages only when blocked, needing a decision or finding work outside its bead; this is
 /// the number that shows whether that held. The `messages` table records the sender's role but
 /// not the recipient's, so a recipient is read from its address: a session named
-/// `coordinator` or `<project>-coordinator` counts as the coordinator, and a `uds:` socket
-/// address, which names no session, is counted apart rather than guessed.
+/// `coordinator` or `<project>-coordinator` counts as the coordinator. A `uds:` socket address
+/// is `/tmp/cc-socks/<pid>.sock`, the pid of the recipient's `claude` process, which the
+/// sessions table records (air-1yxj: an adopter's eight "unresolved" messages went to the pids
+/// of its coordinator, lane and worker-1). One whose pid no session row has is counted apart
+/// rather than guessed.
 ///
 /// Removal: when two rounds show the rate near zero, or when the owner stops asking about it.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -120,8 +123,16 @@ pub struct Chatter {
     pub closes: usize,
 }
 
-/// Pure over `(from_role, to)` rows from `messages` and the window's closed-bead count.
-pub fn chatter_of(msgs: &[(String, String)], closes: usize) -> Chatter {
+/// The pid in a `uds:` address: `uds:/tmp/cc-socks/4223.sock` is 4223. Pure.
+pub fn uds_pid(to: &str) -> Option<i64> {
+    let path = to.strip_prefix("uds:")?;
+    let name = std::path::Path::new(path).file_stem()?.to_str()?;
+    name.parse().ok()
+}
+
+/// Pure over `(from_role, to)` rows from `messages`, the window's closed-bead count, and the
+/// `(pid, role)` of every session row.
+pub fn chatter_of(msgs: &[(String, String)], closes: usize, pids: &[(i64, String)]) -> Chatter {
     let mut c = Chatter {
         closes,
         ..Chatter::default()
@@ -133,7 +144,14 @@ pub fn chatter_of(msgs: &[(String, String)], closes: usize) -> Chatter {
         if to == "coordinator" || to.ends_with("-coordinator") {
             c.to_coordinator = c.to_coordinator.saturating_add(1);
         } else if to.starts_with("uds:") {
-            c.to_unresolved = c.to_unresolved.saturating_add(1);
+            match uds_pid(to).and_then(|p| pids.iter().find(|(q, _)| *q == p)) {
+                Some((_, role)) if role == "coordinator" => {
+                    c.to_coordinator = c.to_coordinator.saturating_add(1);
+                }
+                // A peer or the lane: not a message to the coordinator.
+                Some(_) => {}
+                None => c.to_unresolved = c.to_unresolved.saturating_add(1),
+            }
         }
     }
     c
@@ -155,9 +173,10 @@ pub fn render_chatter(c: &Chatter) -> String {
     };
     format!(
         "\nworker-to-coordinator messages: {} to the coordinator by name and {} to a `uds:` \
-         address that names no session, over {} closed bead(s): {rate}.\n  counts: SendMessage \
-         rows from a worker (`messages`) against claims released as `closed`, both since the \
-         window start; the upper figure assumes every `uds:` message went to the coordinator. \
+         address whose pid no session row has, over {} closed bead(s): {rate}.\n  counts: \
+         SendMessage rows from a worker (`messages`), a `uds:` address read by the pid in its \
+         socket name, against claims released as `closed`, both since the window start; the \
+         upper figure assumes every unresolved message went to the coordinator. \
          Baseline 0.83 to 2.67, the 2026-09-26 trial (air-uzh2).\n",
         c.to_coordinator, c.to_unresolved, c.closes,
     )
@@ -211,7 +230,7 @@ pub struct Cost {
     pub distinct_shas: usize,
     /// Runs that re-verified a sha already verified by the same worker.
     pub repeat_runs: usize,
-    /// `bd close` / `-s closed` / `-s awaiting_review` writes the gate saw pass.
+    /// Beads closed through `air close` (`close / closed` lines, one per bead).
     pub closes: usize,
     /// Verify runs per close. The per-bead price of enforcing a green.
     pub runs_per_close: Option<f64>,
@@ -346,6 +365,8 @@ struct Ev {
     /// the event carries neither, which is most of them.
     session_id: String,
     path: String,
+    /// How many ids `inputs.beads` names; `close / closed` counts one close per bead.
+    beads: usize,
     worker: String,
     /// `(budget, hits)` for every budget this line reached (`budgets.<name>.hits`), for the
     /// `Fires::Budget` rows (air-hqj8).
@@ -353,11 +374,22 @@ struct Ev {
 }
 
 /// The most specific thing an event names. Peer warnings are per file, claim refusals per
-/// bead; a mechanism with neither is at least per worker.
+/// bead, batch lines per head; a mechanism with none is at least per worker.
+///
+/// air-1yxj: `beads` (an array) and `head` were not read, so an adopter's audit said "over 2
+/// subject(s)" for eleven beads and "over 1 subject(s)" for 162 heads.
 fn subject_of(v: &serde_json::Value) -> String {
     let inputs = v.get("inputs");
     let worker = v.get("worker").and_then(|w| w.as_str()).unwrap_or("-");
-    for key in ["path", "bead"] {
+    if let Some(beads) = inputs
+        .and_then(|i| i.get("beads"))
+        .and_then(|b| b.as_array())
+        .filter(|b| !b.is_empty())
+    {
+        let ids: Vec<&str> = beads.iter().filter_map(|b| b.as_str()).collect();
+        return format!("{worker}:{}", ids.join(" "));
+    }
+    for key in ["path", "bead", "head"] {
         if let Some(x) = inputs.and_then(|i| i.get(key)).and_then(|x| x.as_str())
             && !x.is_empty()
         {
@@ -384,6 +416,11 @@ fn parse(line: &str) -> Option<Ev> {
         subject: subject_of(&v),
         session_id: field("session_id"),
         path: field("path"),
+        beads: v
+            .get("inputs")
+            .and_then(|i| i.get("beads"))
+            .and_then(|b| b.as_array())
+            .map_or(0, Vec::len),
         worker: v
             .get("worker")
             .and_then(|w| w.as_str())
@@ -662,7 +699,9 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         .collect();
     let mut events_scanned = 0usize;
     let mut days_scanned = 0usize;
-    // Closes the gate let through: one `pass` per bd status write it inspected (air-2zq).
+    // Closes the gate let through, one per bead on each `close / closed` line (air-1yxj). It
+    // counted `hook.PreToolUse / pass`, a line nothing has written since `air close` took the
+    // gate over, and reported 0 closes beside 176 `close / closed` lines at an adopter.
     let mut closes = 0usize;
     // (at, worker, session_id, path) for the peer-warning join (air-1ra).
     let mut warns: Vec<(String, String, String, String)> = Vec::new();
@@ -678,8 +717,8 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             if in_window {
                 events_scanned = events_scanned.saturating_add(1);
             }
-            if in_window && e.decision == "pass" && e.command == "hook.PreToolUse" {
-                closes = closes.saturating_add(1);
+            if in_window && e.command == "close" && e.decision == "closed" {
+                closes = closes.saturating_add(e.beads.max(1));
             }
             if in_window && !e.session_id.is_empty() && !e.path.is_empty() {
                 match e.decision.as_str() {
@@ -1337,7 +1376,12 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
             |r| r.get::<_, i64>(0),
         )
         .map_or(0, |n| usize::try_from(n).unwrap_or(0));
-    audit.chatter = Some(chatter_of(&msgs, closed));
+    let pids: Vec<(i64, String)> = ledger
+        .conn()
+        .prepare("SELECT pid, role FROM sessions WHERE pid IS NOT NULL")
+        .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .unwrap_or_default();
+    audit.chatter = Some(chatter_of(&msgs, closed, &pids));
     let defects = audit
         .rows
         .iter()
@@ -1606,10 +1650,84 @@ mod tests {
                 r("coordinator", "minimal-worker-1"),
             ],
             4,
+            &[],
         );
         assert_eq!((c.to_coordinator, c.to_unresolved, c.closes), (2, 1, 4));
         let line = render_chatter(&c);
         assert!(line.contains("0.50 to 0.75 per closed bead"), "{line}");
-        assert!(render_chatter(&chatter_of(&[], 0)).contains("no closes, so no rate"));
+        assert!(render_chatter(&chatter_of(&[], 0, &[])).contains("no closes, so no rate"));
+    }
+
+    /// air-1yxj: a `uds:` address names the pid of the recipient's `claude`, and the sessions
+    /// table has it. The coordinator's pid counts as the coordinator, a peer's as neither, and
+    /// only a pid no session row has stays unresolved.
+    #[test]
+    fn a_uds_address_resolves_through_the_session_pid() {
+        assert_eq!(uds_pid("uds:/tmp/cc-socks/4339.sock"), Some(4339));
+        assert_eq!(uds_pid("minimal-coordinator"), None);
+        let r = |a: &str, b: &str| (a.to_string(), b.to_string());
+        let pids = [
+            (4339, "coordinator".to_string()),
+            (4223, "worker".to_string()),
+        ];
+        let c = chatter_of(
+            &[
+                r("worker", "uds:/tmp/cc-socks/4339.sock"),
+                r("worker", "uds:/tmp/cc-socks/4223.sock"),
+                r("worker", "uds:/tmp/cc-socks/9.sock"),
+            ],
+            1,
+            &pids,
+        );
+        assert_eq!((c.to_coordinator, c.to_unresolved), (1, 1));
+    }
+
+    /// air-1yxj: closes are the `close / closed` lines, one per bead, not a hook decision
+    /// nothing writes any more.
+    #[test]
+    fn closes_are_counted_from_close_lines_per_bead() {
+        let a = gather_from(
+            &[day(
+                "2026-09-28",
+                &[
+                    r#"{"at":"2026-09-28T01:00:00Z","worker":"w1","command":"close","inputs":{"beads":["zz-1","zz-2"]},"decision":"closed"}"#,
+                    r#"{"at":"2026-09-28T01:00:01Z","worker":"w2","command":"close","inputs":{"beads":["zz-3"]},"decision":"closed"}"#,
+                    r#"{"at":"2026-09-28T01:00:02Z","worker":"w2","command":"close","inputs":{"beads":["zz-4"]},"decision":"refuse"}"#,
+                ],
+            )],
+            "2026-09-28",
+        );
+        assert_eq!(a.cost.as_ref().map(|c| c.closes), Some(3));
+    }
+
+    /// air-1yxj: a line's subject is the bead, beads or head it names, not only its worker.
+    #[test]
+    fn subjects_are_the_beads_and_heads_a_line_names() {
+        let v = |j: &str| serde_json::from_str::<serde_json::Value>(j).unwrap();
+        assert_eq!(
+            subject_of(&v(r#"{"worker":"w1","inputs":{"beads":["zz-1","zz-2"]}}"#)),
+            "w1:zz-1 zz-2"
+        );
+        assert_eq!(
+            subject_of(&v(
+                r#"{"worker":"lane","inputs":{"member":"w1","head":"abc123"}}"#
+            )),
+            "lane:abc123"
+        );
+        assert_ne!(
+            subject_of(&v(r#"{"worker":"lane","inputs":{"head":"abc123"}}"#)),
+            subject_of(&v(r#"{"worker":"lane","inputs":{"head":"def456"}}"#))
+        );
+        assert_eq!(subject_of(&v(r#"{"worker":"w1","inputs":{}}"#)), "w1");
+    }
+
+    /// air-1yxj: the nudge's own description claims nothing its count can contradict.
+    #[test]
+    fn the_stop_nudge_is_not_described_as_once() {
+        let m = crate::cmd::mechanisms::MECHANISMS
+            .iter()
+            .find(|m| m.id == "stop-nudge")
+            .unwrap();
+        assert!(!m.what.contains("once"), "{}", m.what);
     }
 }
