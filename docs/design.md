@@ -630,6 +630,14 @@ one by killing the process, so hitting it leaves no trace except a hook event wi
 With the fleet running on 2026-09-06, git took 54 milliseconds at the median and 170 at the 99th
 percentile. The SQLite lock waited at most 131 milliseconds with six writers.
 
+Each budget in the catalogue (cmd/budgets.rs) names the measurement its number came from, or the
+ceiling that holds it, and air audit prints every budget's recorded median and maximum beside it
+with ten times the maximum, which is what a release sets the numbers Air chooses from (air-onqi,
+owner 2026-09-28). A wait that reaches its budget is printed as over budget, a fact about that
+machine's load rather than a defect. The twenty-second ceiling on the status tools and the
+five-second hook cap are Air's own choices, not Claude Code's, and they are what keep the status
+and git budgets short.
+
 ## 7. Guarantees and failure model
 
 | Always true | Enforced by | A violation shows up as |

@@ -53,6 +53,9 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air audit` prints, for every budget, the recorded median and maximum beside the budget and
+  ten times the maximum, which the next release sets Air's numbers from; each budget names the
+  measurement or the ceiling behind it. A wait that reaches its budget reads `over budget`.
 - The `beads are ready` notice and a claim refused because a peer holds the bead now point
   at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
   after a hand-over caused most refused claims in the 0.4.10 trial.
