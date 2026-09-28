@@ -1,5 +1,6 @@
 //! `scripts/changelog-assemble.sh`, the step `make changelog` runs before `make release`
 //! (air-be6d): fragments in `changelog.d/` fold into `CHANGELOG.md` under `[Unreleased]`.
+#![allow(clippy::unwrap_used)]
 
 mod common;
 
