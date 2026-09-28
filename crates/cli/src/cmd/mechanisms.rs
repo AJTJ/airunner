@@ -111,6 +111,12 @@ pub struct Mechanism {
 ///   told a worker "the repo's test is the bug; file it" about a missing build directory. The
 ///   facts stay: exit, duration, bytes, dirty tree, and the green and red counts at the commit.
 ///   Neither had a registry row; both were words on `record / green` and `record / red`.
+/// - `no-precheck` and the `batch-held` notice (2026-09-25 and the 0.4.8 trial; removed
+///   2026-09-28, air-aepb, owner: delete). Each cut told every branch without a green
+///   precheck that it was held: 156 deliveries in a day at an adopter, 247 `no-precheck`
+///   lines over 162 heads, and for 89 of those heads the precheck was already running. The
+///   worker knows it has not prechecked. The rule itself stays in `status::batch_ready_rule`,
+///   and `air status` names `no-precheck` for such a branch.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -665,21 +671,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "no-precheck",
-        class: "refusal",
-        what: "Where the repo declares `precheck`, `air batch cut` leaves out a branch with no \
-               recorded green precheck at its head; one line per branch left out.",
-        added: "2026-09-25 (an adopter's fleet protocol)",
-        source: "crates/cli/src/cmd/status.rs batch_ready_rule; crates/cli/src/cmd/batch_cut.rs run",
-        // An adopter's lane script parsed a log file for this, 2026-09-05..07: a worker was
-        // cut before its check finished, a check still running was relayed as "checked", and
-        // a stale green trailer named a head two commits back.
-        fires: Fires::Decisions(&[("batch-cut", "no-precheck")]),
-        removal: Removal::Judgement(
-            "the repo drops the `precheck` key: a round under it with no batch red that a member's precheck would have caught means the precheck only delays the cut",
-        ),
-    },
-    Mechanism {
         id: "batch-cut-refusal",
         class: "refusal",
         what: "`air batch cut` refuses to start: in the main checkout, git without \
@@ -882,10 +873,10 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "Each member worker hears its batch's result at once: close on a green or a \
                landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it, the missing precheck \
-               when it holds it out. A killed run says nothing.",
+               other side and the paths when `air batch cut` drops it. A killed run says \
+               nothing.",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped, batch_held; a landing is main_moved",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
         // Same trial: a worker learned the lane's green, and could close, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(

@@ -95,6 +95,8 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and
+  writes no `no-precheck` line. `air status` still names `no-precheck` for such a branch.
 - `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and
   red counts at the commit instead, and the close refusal states those counts rather than
   calling the test flaky.

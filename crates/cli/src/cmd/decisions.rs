@@ -66,7 +66,6 @@ traces! {
 
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
     BATCH_CUT_DROP = "batch-cut" / "drop";
-    BATCH_CUT_NO_PRECHECK = "batch-cut" / "no-precheck";
     BATCH_CUT_CUT = "batch-cut" / "cut";
     BATCH_CUT_DRY_RUN = "batch-cut" / "dry-run";
 

@@ -1967,7 +1967,8 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
         "{s}"
     );
 
-    // 0.4.8 trial: the lane's cut tells the held-out worker, once per head.
+    // air-aepb: the lane's cut leaves the branch out and tells its worker nothing; the worker
+    // knows it has not prechecked, and `air status` names why above.
     let lane = main.parent().unwrap().join("lane");
     git(
         &main,
@@ -1980,24 +1981,17 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
             lane.to_str().unwrap(),
         ],
     );
-    for _ in 0..2 {
-        let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
-        assert_eq!(code, 0, "{out}{err}");
-    }
+    let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
-    let held: Vec<(String, String, String)> = conn
-        .prepare("SELECT to_worker, key, content FROM deliveries WHERE kind='batch-held'")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
+    let held: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE kind='batch-held'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(held.len(), 1, "{held:?}");
-    assert_eq!(
-        (held[0].0.as_str(), held[0].1.as_str()),
-        ("alpha", head.as_str())
-    );
-    assert!(held[0].2.contains("air record precheck --"), "{held:?}");
+    assert_eq!(held, 0);
 
     // A red precheck is not enough; a green one at this head is.
     assert_eq!(
