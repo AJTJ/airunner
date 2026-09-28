@@ -131,6 +131,10 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- Three tests that timed Air against a stalled child asserted a fixed number of seconds and
+  went red on a loaded machine. Each now asserts that the command finished before the stall
+  it injects, which is the fact under test. The status test's seeding call also gets a bd
+  budget no loaded machine reaches.
 - `air handover` and `air close` said only "no green" at a head where a red was recorded, and
   where the repo gates batches on a precheck that had not run. They now name the red with its
   kept output, and the missing precheck with `air record precheck`.
