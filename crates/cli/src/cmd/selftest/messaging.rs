@@ -112,7 +112,8 @@ fn session(state: &str) -> crate::cmd::status::Session {
         state: state.into(),
         changed_at: "2026-09-26T00:00:00Z".into(),
         pid: Some(1),
-        pid_alive: Some(true),
+        pid_started: None,
+        liveness: crate::cmd::lease::Liveness::Alive,
         has_transcript: true,
         ..Default::default()
     }

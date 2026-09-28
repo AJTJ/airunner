@@ -15,34 +15,16 @@
 //! start inferring task IDs from somewhere, then they should probably be in JSON format or
 //! something that is useful."*
 //!
-//! The prose scan stays for one reason only: commits that predate the trailer. It is dated so
-//! it can be deleted (see [`FALLBACK_BEFORE`]), and it is not extended — the point of air-4re
-//! is to stop adding rules to it, so nothing here touches [`prose_ids`] beyond calling it.
+//! The prose scan stayed for commits that predated the trailer, dated 2026-08-23 so it could be
+//! deleted on evidence. It was deleted on 2026-09-28, when no branch in play predated that
+//! date (air-jsee): a commit with no trailer is attributed to nothing.
 
 use std::path::Path;
 
 use crate::git;
 
-/// Commits committed strictly before this instant may be attributed by the prose scan;
-/// from it onward, only a `Bead:` trailer counts.
-///
-/// **Delete the fallback, and `prose_ids`, once no branch in play predates this.** That is the
-/// whole removal condition: the fallback exists for history, not for convenience, and a dated
-/// one can be removed on evidence instead of argument. `AIR_BEAD_TRAILER_SINCE` overrides it
-/// for tests.
-pub const FALLBACK_BEFORE: &str = "2026-08-23T00:00:00Z";
-
-pub fn cutoff() -> jiff::Timestamp {
-    std::env::var("AIR_BEAD_TRAILER_SINCE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .or_else(|| FALLBACK_BEFORE.parse().ok())
-        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
-}
-
 /// One commit, reduced to what attribution needs.
 pub struct Commit {
-    pub committed: String,
     pub message: String,
 }
 
@@ -72,30 +54,13 @@ pub fn trailer_ids(message: &str) -> Vec<String> {
     out
 }
 
-/// The beads `commits` are attributed to.
-///
-/// Per commit: its trailers if it has any, otherwise the prose scan **only** if it predates
-/// the cutoff. A commit at or after the cutoff with no trailer contributes nothing, which is
-/// the forcing function — it is meant to be noticed, and `air handover` names the missing
-/// trailer before the branch is ever landed.
-pub fn ids_of(
-    commits: &[Commit],
-    prose: impl Fn(&str) -> Vec<String>,
-    cutoff: jiff::Timestamp,
-) -> Vec<String> {
+/// The beads `commits` are attributed to: their `Bead:` trailers. A commit with no trailer
+/// contributes nothing, which is the forcing function — it is meant to be noticed, and
+/// `air handover` names the missing trailer before the branch is ever landed.
+pub fn ids_of(commits: &[Commit]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for c in commits {
-        let ids = match trailer_ids(&c.message) {
-            t if !t.is_empty() => t,
-            _ => {
-                let old = c
-                    .committed
-                    .parse::<jiff::Timestamp>()
-                    .is_ok_and(|t| t < cutoff);
-                if old { prose(&c.message) } else { Vec::new() }
-            }
-        };
-        for id in ids {
+        for id in trailer_ids(&c.message) {
             if !out.iter().any(|x| x == &id) {
                 out.push(id);
             }
@@ -112,75 +77,26 @@ pub fn parse_log(text: &str) -> Vec<Commit> {
             let rec = rec.trim_start_matches('\n');
             let (committed, message) = rec.split_once('\u{1f}')?;
             (!committed.trim().is_empty()).then(|| Commit {
-                committed: committed.trim().to_string(),
                 message: message.to_string(),
             })
         })
         .collect()
 }
 
-/// What a range attributes, split by how much Air trusts it.
+/// What a range attributes.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Attributed {
     /// Declared by a `Bead:` trailer. Authoritative: a machine wrote it, so nothing further
     /// is inferred about it.
     pub declared: Vec<String>,
-    /// Guessed from prose, on commits older than the cutoff only. The caller narrows these.
-    pub guessed: Vec<String>,
 }
 
-/// The beads the commits in `range` attribute, declared and guessed kept apart.
-///
-/// **The split is the point** (air-4re). The narrowing air-7kp put on the prose scan — claimed
-/// by this worker, claimed since the branch point — was scaffolding for a guess. Applying it
-/// to a declared id is the same mistake one level up: a fact a machine wrote does not need a
-/// heuristic to confirm it, and the heuristic is wrong often enough to matter. It dropped this
-/// bead's own attribution the moment the branch merged `main`, because merging moves the
-/// branch point forward past the claim that started the work.
+/// The beads the commits in `range` declare by trailer.
 pub fn attributed_in_range(repo: &Path, range: &str) -> Attributed {
     let text = git::run(repo, &["log", "--format=%cI%x1f%B%x1e", range]).unwrap_or_default();
-    let commits = parse_log(&text);
-    let cut = cutoff();
     Attributed {
-        declared: ids_of(&commits, |_| Vec::new(), cut),
-        guessed: ids_of(&commits, prose_ids, cut)
-            .into_iter()
-            .filter(|id| {
-                !ids_of(&commits, |_| Vec::new(), cut)
-                    .iter()
-                    .any(|d| d == id)
-            })
-            .collect(),
+        declared: ids_of(&parse_log(&text)),
     }
-}
-
-/// The old prose scan, kept only for commits older than [`FALLBACK_BEFORE`].
-///
-/// **Frozen.** No rule may be added here (air-4re): every rule is another statement about how
-/// a person happened to write a sentence, and the replacement is the trailer above. It goes
-/// when the fallback goes.
-pub fn prose_ids(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for raw in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-        let Some((pre, suf)) = raw.split_once('-') else {
-            continue;
-        };
-        // No length or digit rule, deliberately: real ids here include `air-zyo` and
-        // `air-ouw` with no digit at all, and test ids are as short as `ad-1`. Anything
-        // narrower drops real beads, and a false positive costs one more argument to a single
-        // lookup. Restored after the move out of status.rs — this comment is what stops the
-        // next person tightening a parser that is meant to be frozen.
-        // No length or count cap either (air-06k7): a 12-character prefix or suffix and 64
-        // ids per text silently dropped longer ids and the ones after the 64th.
-        let looks_like_id = !pre.is_empty()
-            && pre.chars().all(|c| c.is_ascii_lowercase())
-            && !suf.is_empty()
-            && suf.chars().all(|c| c.is_ascii_alphanumeric());
-        if looks_like_id && !out.iter().any(|x| x == raw) {
-            out.push(raw.to_string());
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -188,18 +104,11 @@ pub fn prose_ids(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn c(committed: &str, message: &str) -> Commit {
+    fn c(message: &str) -> Commit {
         Commit {
-            committed: committed.to_string(),
             message: message.to_string(),
         }
     }
-
-    fn at(s: &str) -> jiff::Timestamp {
-        s.parse().unwrap()
-    }
-
-    const CUT: &str = "2026-08-23T00:00:00Z";
 
     #[test]
     fn a_trailer_wins_and_prose_in_the_same_commit_is_ignored() {
@@ -207,7 +116,7 @@ mod tests {
                    measured against air-7kp.\n\nBead: air-4re\n";
         // The body names three beads it did not do. Only the trailer counts.
         assert_eq!(trailer_ids(msg), ["air-4re"]);
-        let got = ids_of(&[c("2026-08-22T10:00:00Z", msg)], prose_ids, at(CUT));
+        let got = ids_of(&[c(msg)]);
         assert_eq!(got, ["air-4re"], "a mention is not an attribution");
     }
 
@@ -219,34 +128,13 @@ mod tests {
         assert!(trailer_ids("Bead: air-1a air-2b\n").is_empty());
     }
 
+    /// air-jsee: with the prose fallback gone, a commit without a trailer is attributed to
+    /// nothing, however old it is.
     #[test]
-    fn the_prose_fallback_is_dated_and_applies_only_to_older_commits() {
-        let old = c("2026-08-22T10:00:00Z", "fix: the work (air-old)\n");
-        let new = c("2026-08-24T10:00:00Z", "fix: the work (air-new)\n");
-        assert_eq!(
-            ids_of(&[old], prose_ids, at(CUT)),
-            ["air-old"],
-            "history still reads"
-        );
-        assert!(
-            ids_of(&[new], prose_ids, at(CUT)).is_empty(),
-            "after the cutoff a commit without a trailer is not attributed at all"
-        );
-    }
-
-    /// air-4re: a declared id is not put through the prose scan's narrowing. This bead's own
-    /// branch lost its attribution to exactly that: merging `main` moved the branch point
-    /// past the claim, and the time bound then excluded a bead the commit had declared.
-    #[test]
-    fn a_declared_id_is_kept_apart_from_a_guessed_one() {
-        let declared = c("2026-08-22T10:00:00Z", "feat: x\n\nBead: air-4re\n");
-        let guessed = c("2026-08-22T10:00:00Z", "feat: the work (air-old)\n");
-        assert_eq!(ids_of(&[declared], |_| Vec::new(), at(CUT)), ["air-4re"]);
-        // With no prose reader the guessed commit contributes nothing...
-        assert!(ids_of(&[guessed], |_| Vec::new(), at(CUT)).is_empty());
-        // ...and with one, it contributes its id.
-        let guessed = c("2026-08-22T10:00:00Z", "feat: the work (air-old)\n");
-        assert_eq!(ids_of(&[guessed], prose_ids, at(CUT)), ["air-old"]);
+    fn a_commit_without_a_trailer_attributes_nothing_at_any_date() {
+        let old = c("fix: the work (air-old)\n");
+        let new = c("fix: the work (air-new)\n");
+        assert!(ids_of(&[old, new]).is_empty());
     }
 
     #[test]
@@ -255,6 +143,6 @@ mod tests {
                     2026-08-22T11:00:00Z\u{1f}chore: another\n\nBead: air-8y\n\u{1e}";
         let commits = parse_log(text);
         assert_eq!(commits.len(), 2);
-        assert_eq!(ids_of(&commits, prose_ids, at(CUT)), ["air-9z", "air-8y"]);
+        assert_eq!(ids_of(&commits), ["air-9z", "air-8y"]);
     }
 }

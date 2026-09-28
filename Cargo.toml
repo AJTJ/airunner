@@ -26,6 +26,9 @@ ulid = "1"
 # CLI and process
 clap = { version = "4.6", features = ["derive"] }
 wait-timeout = "0.2"
+# Lets `air record` outlive the Ctrl-C that stops its check, so the run is still written
+# (air-nwat). The workspace forbids unsafe code, and std cannot catch a signal without it.
+signal-hook = "0.4"
 thiserror = "2"
 
 # Test-only
