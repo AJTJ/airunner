@@ -100,7 +100,10 @@ the harness refuses a long `--reason "…"`. `air capture --file` works the same
 
 Close with `air close`; closing through bd directly is denied to workers and the lane.
 `air close` runs the hand-over check before it closes, and refuses unless a recorded green exists
-at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Whose green it is does not matter. Where the repo
+at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Every
+bead closes on a commit that names it, so a bead with no such commit, on your branch or on main,
+is refused whatever your head's green: commit the result, a document if nothing else, with the
+trailer. Whose green it is does not matter. Where the repo
 sets `"verify_key": "tree"`, a green at another commit with the identical tree also counts.
 `air handover` names whatever is missing and the command that fixes it, so run it before you
 close.

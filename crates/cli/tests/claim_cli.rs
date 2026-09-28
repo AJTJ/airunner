@@ -910,6 +910,16 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert!(out.contains("bd has no bead zz-99"), "{out}");
     std::fs::remove_file(wt.join("bd.unknown")).unwrap();
 
+    // air-gcjp: a green head is not enough while no commit names the bead.
+    let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("bead-commit"), "{out}");
+    assert!(out.contains("`Bead: zz-11`"), "{out}");
+    std::fs::write(wt.join("zz-11.md"), "done\n").unwrap();
+    git(&wt, &["add", "zz-11.md"]);
+    git(&wt, &["commit", "-q", "-m", &bead_trailer("zz-11")]);
     let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
     let (code, out, err) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);

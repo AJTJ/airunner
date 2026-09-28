@@ -327,8 +327,13 @@ mod tests {
         };
         let main_is_ancestor = is_sub(&s.main, &w.head);
         let carried = w.head.difference(&s.main).any(|c| bead_of(c) == Some(i));
+        // air-gcjp: a bead with no commit on the branch or in main does not close.
+        let named = mine
+            .iter()
+            .any(|c| w.head.contains(c) || s.main.contains(c));
         let f = GateFacts {
             worker: format!("w{i}"),
+            beads_without_commit: if named { vec![] } else { vec![bead_name(i)] },
             head: sha(&w.head),
             green_at_head: verdict_at(s, &w.head) == Some(Verdict::Green),
             batch_green,
