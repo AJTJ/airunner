@@ -501,6 +501,24 @@ pub fn main_warning(r: &TreeReaders, main: &str) -> Option<String> {
 
 // ----- the part that asks the OS -----
 
+/// The processes holding `path` open, as `(pid, command)`, from `lsof -Fpc`. Empty when none
+/// does, which for a git lock file means a git that stopped left it behind (air-nwat).
+pub fn holders_of(path: &str) -> Result<Vec<(i64, String)>, String> {
+    let out = run_child("lsof", &["-n", "-P", "-w", "-Fpc", "--", path])?;
+    let mut held = Vec::new();
+    let mut pid: Option<i64> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p.trim().parse().ok();
+        } else if let Some(c) = line.strip_prefix('c')
+            && let Some(p) = pid
+        {
+            held.push((p, c.to_string()));
+        }
+    }
+    Ok(held)
+}
+
 fn run_child(program: &str, args: &[&str]) -> Result<String, String> {
     let child = Command::new(program)
         .args(args)

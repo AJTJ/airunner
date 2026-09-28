@@ -2738,6 +2738,61 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
 /// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's
 /// head holding main plus exactly alpha's and gamma's commits, and each drop is an event line.
 /// The main checkout is refused.
+/// air-nwat: a cut stopped by a leftover `index.lock` writes a `batch-cut / failed` line naming
+/// the lock, so the record between a landing and the next cut has no silent gap.
+#[test]
+fn a_cut_stopped_by_an_index_lock_is_recorded_as_failed() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    let wt = root.join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let lane = wt.canonicalize().unwrap();
+    // Main moves, so the cut has to reset the lane's branch, which needs the index lock.
+    std::fs::write(main.join("moved.txt"), "moved\n").unwrap();
+    git(&main, &["add", "moved.txt"]);
+    git(&main, &["commit", "-q", "-m", "main moves"]);
+    let lock = git(
+        &lane,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index.lock",
+        ],
+    );
+    std::fs::write(&lock, "").unwrap();
+
+    let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("index.lock"), "{err}");
+    let events: String = std::fs::read_dir(main.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    let failed: Vec<&str> = events
+        .lines()
+        .filter(|l| {
+            l.contains("\"command\":\"batch-cut\"") && l.contains("\"decision\":\"failed\"")
+        })
+        .collect();
+    assert_eq!(failed.len(), 1, "{events}");
+    assert!(failed[0].contains("index.lock"), "{}", failed[0]);
+    std::fs::remove_file(&lock).unwrap();
+}
+
 #[test]
 fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (_tmp, main, alpha) = land_repo("true");

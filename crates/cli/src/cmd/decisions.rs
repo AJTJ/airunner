@@ -66,6 +66,7 @@ traces! {
     PIN_DELEGATED = "pin" / "delegated";
 
     BATCH_CUT_REFUSE = "batch-cut" / "refuse";
+    BATCH_CUT_FAILED = "batch-cut" / "failed";
     BATCH_CUT_DROP = "batch-cut" / "drop";
     BATCH_CUT_CUT = "batch-cut" / "cut";
     BATCH_CUT_DRY_RUN = "batch-cut" / "dry-run";
