@@ -2764,6 +2764,8 @@ pub const SURFACE: &[SurfaceChange] = &[
                    HEAD is red, and a `precheck` check (`no precheck recorded at <sha>` with \
                    `air record precheck -- <the repo's precheck command>`) when \
                    `.claude/air.json` sets `\"precheck\": true` and none is green at HEAD.",
+        silent_break: false,
+        action: "",
     },
     SurfaceChange {
         id: "dolt-server-no-tmux",
