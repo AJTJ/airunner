@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `make verify` was red when run from a fleet session, because the tests that spawn `air`
+  passed on the session's `AIR_ROLE` and the other launcher variables. Every spawn in
+  `crates/cli/tests` now goes through one helper that removes `AIR_*` and `BEADS_ACTOR`.
 - `air status` kept showing `STOPPED at <t>` after the session resumed; it now shows only
   until the session's next event of its own. A session in a permission or idle prompt shows
   `waiting for the person since <t>`, a subagent's hooks no longer mark its parent idle, a

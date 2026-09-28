@@ -4,13 +4,14 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn scratch_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let g = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -137,7 +138,7 @@ fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
 /// wants (a `Bead:` trailer, a `bead:` front-matter line); the one test that is ABOUT a
 /// fallback pins its cutoff through this, and that pin is deleted when the fallback is.
 fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+    let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
     cmd.arg("--repo")
         .arg(repo)
         .args(args)
@@ -160,7 +161,7 @@ fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32,
 /// `air hook` with a hook payload on stdin, the way Claude Code invokes it.
 fn air_hook(repo: &Path, bd: &Path, payload: serde_json::Value, enforce: bool) -> (i32, String) {
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+    let mut child = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
         .arg("hook")
@@ -257,7 +258,7 @@ fn release_passes_the_holder_actor_that_bd_1_3_requires() {
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -374,12 +375,12 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
     }
     // Warm the first exec, which pays a macOS security assessment, so the budget below
     // measures bd and not the OS.
-    let _ = Command::new(&slow)
+    let _ = common::command(&slow)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["claim", "zz-9"])
@@ -454,12 +455,12 @@ fn a_bd_timeout_on_claim_is_retried_once_and_the_retry_lands() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&flaky, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let _ = Command::new(&flaky)
+    let _ = common::command(&flaky)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["claim", "zz-9"])
@@ -523,13 +524,13 @@ fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
     }
     // First exec of a freshly written script pays a macOS security assessment (seen >1.5 s
     // under load, 2026-08-22); warm it so the short timeout below measures bd, not the OS.
-    let _ = Command::new(&slow)
+    let _ = common::command(&slow)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -867,7 +868,7 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
 
     // A worker's close runs the hand-over gate.
     let wt = repo.join("wt-w");
-    let g = Command::new("git")
+    let g = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -1043,9 +1044,9 @@ fn triage_refuses_when_bd_does_not_answer() {
     }
     // First exec of a freshly written script pays a macOS security assessment; warm it so
     // the short budget below measures the stub, not the OS (air-y8m).
-    let _ = Command::new(&slow).arg("ready").output().unwrap();
+    let _ = common::command(&slow).arg("ready").output().unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["triage", &id, "--bead", "zz-1"])
@@ -1076,7 +1077,7 @@ fn owner_label_is_the_gate_and_human_is_not() {
     let bd = fake_bd(&repo);
     // A worker, not the coordinator: the label only gates workers.
     let wt = repo.join("wt-w");
-    let g = Command::new("git")
+    let g = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -1122,7 +1123,7 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     let bd = fake_bd(&repo);
     // Second worktree.
     let wt = repo.join("wt-b");
-    let out = Command::new("git")
+    let out = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -1142,12 +1143,12 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     );
 
     // A pid that is certainly dead: spawn `true` and wait for it.
-    let dead = Command::new("true").spawn().unwrap();
+    let dead = common::command("true").spawn().unwrap();
     let dead_pid = dead.id().to_string();
     let _ = dead.wait_with_output();
 
     let run = |cwd: &Path, pid: &str, args: &[&str]| -> (i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(cwd)
             .args(args)
@@ -1617,7 +1618,7 @@ fn a_declared_command_needs_its_lease() {
     let bd = fake_bd(&main);
     // (exit code, stdout + stderr) for one PreToolUse(Bash) from alpha's worktree.
     let hook = |cmd: &str, role: Option<&str>, enforce: bool| -> (i32, String) {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_air"));
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
         c.arg("--repo")
             .arg(&alpha)
             .arg("hook")
@@ -1713,7 +1714,7 @@ fn stop_nudge_skips_the_verification_lane() {
     .unwrap();
     assert_eq!(air(&main, &bd, &["status"]).0, 0);
     let stop = |session: &str, role: &str| -> String {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+        let mut child = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&main)
             .arg("hook")
@@ -2034,7 +2035,7 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let t0 = std::time::Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["--json", "status"])
@@ -2089,7 +2090,7 @@ fn status_lists_green_landings_with_their_commands() {
     let bd = fake_bd(&repo);
     let alpha = repo.join("alpha");
     let g = |cwd: &Path, args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(cwd)
             .args(args)
@@ -2241,7 +2242,7 @@ fn a_released_bead_is_claimable_by_another_worker() {
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
     let as_actor = |actor: &str, args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -2284,7 +2285,7 @@ fn a_released_bead_is_claimable_by_another_worker() {
 /// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
 #[test]
 fn claim_labels_the_tmux_window_and_release_clears_it() {
-    if Command::new("tmux").arg("-V").output().is_err() {
+    if common::command("tmux").arg("-V").output().is_err() {
         eprintln!("SKIP: tmux not installed");
         return;
     }
@@ -2295,7 +2296,7 @@ fn claim_labels_the_tmux_window_and_release_clears_it() {
     std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
     let socket = format!("air-test-label-{}", std::process::id());
     let tmux = |args: &[&str]| {
-        Command::new("tmux")
+        common::command("tmux")
             .args(["-L", &socket])
             .args(args)
             .output()
@@ -2306,7 +2307,7 @@ fn claim_labels_the_tmux_window_and_release_clears_it() {
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     };
     let air_tmux = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_air"))
+        common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -2807,7 +2808,7 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
         assert_eq!(air(wt, &bd, &["claim", bead]).0, 0, "{name}");
         std::fs::write(wt.join(file), body).unwrap();
         git(wt, &["add", file]);
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(wt)
             .args(["commit", "-q", "-m", &bead_trailer(bead)])
@@ -2881,7 +2882,7 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     assert!(git(&lane, &["ls-files", "-u"]).is_empty());
     // Exactly main plus alpha's and gamma's commits.
     let is_anc = |sha: &str| {
-        Command::new("git")
+        common::command("git")
             .arg("-C")
             .arg(&lane)
             .args(["merge-base", "--is-ancestor", sha, "HEAD"])
@@ -3081,7 +3082,7 @@ fn a_cut_starts_from_main_and_refuses_an_unlanded_green() {
     let beta = root.join("beta").canonicalize().unwrap();
     let lane = root.join("lane").canonicalize().unwrap();
     let is_anc = |sha: &str| {
-        Command::new("git")
+        common::command("git")
             .arg("-C")
             .arg(&lane)
             .args(["merge-base", "--is-ancestor", sha, "HEAD"])
@@ -3192,7 +3193,7 @@ fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = common::command("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -3803,7 +3804,7 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     git(&alpha, &["commit", "-q", "-m", "wip"]);
 
     let stop = |session: &str, env: &[(&str, &str)]| -> String {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+        let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
         cmd.arg("--repo")
             .arg(&main)
             .arg("hook")
