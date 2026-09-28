@@ -57,7 +57,7 @@ Pin bd at 1.2.2 and assert it at startup. It is the only tested line upstream st
 
 Do not depend on bd leases, on any version. Even on main they are a fixed five-minute TTL, per-clone and ephemeral, enforced only on the node that granted them, renewable by any process presenting the same actor string, and reaped only when something runs `bd reclaim`. Air's ledger holds `(bead_id, actor, generation, lease_until, heartbeat_at, worktree)`; on bd the only durable signal is `status = in_progress` plus `assignee`, and Air treats those as mirrors of the ledger, re-asserted after a crash rather than inferred.
 
-Use the minimal command surface, all verified present at tag v1.1.2: `bd ready --json`, `bd show <id> --json`, `bd list --status <s> --json` (custom statuses accepted here even though `ready` drops them), `bd update <id> --claim --actor <a>`, `bd update <id> -s <status> [-a <actor>|-a ""]` (unguarded on 1.2.2, so gate it behind the ledger), `bd comment`, `bd close --reason`, `bd dep list --json`. Not to be relied on: `heartbeat`, `reclaim`, `unclaim`, `events`, `sync`, `serve`, `--if-*`, `--brief`, `claim.pools`, `set-state`, `merge-slot`, `gate`, `formula`, `mol`.
+Use the minimal command surface, all verified present at tag v1.1.2: `bd ready -n 0 --json`, `bd show <id> --json`, `bd list --status <s> -n 0 --json` (custom statuses accepted here even though `ready` drops them), `bd update <id> --claim --actor <a>`, `bd update <id> -s <status> [-a <actor>|-a ""]` (unguarded on 1.2.2, so gate it behind the ledger), `bd comment`, `bd close --reason`, `bd dep list --json`. Not to be relied on: `heartbeat`, `reclaim`, `unclaim`, `events`, `sync`, `serve`, `--if-*`, `--brief`, `claim.pools`, `set-state`, `merge-slot`, `gate`, `formula`, `mol`.
 
 ## bd's dependency guard is two rules, not an ancestor walk
 
@@ -138,7 +138,7 @@ Integrate through a `bd --json` subprocess behind a Rust trait, so an HTTP clien
 
 Pin the bd version rather than feature-gating on it. Air took the stricter form: one pinned version checked by `doctor`, no probing for optional features, because everything Air needs exists on 1.2.2 and everything it would probe for is retracted.
 
-Take the concurrency model as given. Embedded Dolt serialises writers, so N agents calling `bd` queue on the engine lock (an adopter ran four this way). Air runs no daemon and no server; it keeps bd out of every hook path instead, because `bd ready --json` costs 0.7 to 1.4 s against a 100 ms hook budget. The Stop hook reads `.air/ready.json`, a cache written by commands that already paid for a `bd ready` (`crates/cli/src/cmd/ready_cache.rs:1-4`, air-09i).
+Take the concurrency model as given. Embedded Dolt serialises writers, so N agents calling `bd` queue on the engine lock (an adopter ran four this way). Air runs no daemon of its own; it starts bd's Dolt server as a background process (`.air/dolt/server.pid`), and it keeps bd out of every hook path, because `bd ready --json` costs 0.7 to 1.4 s against a 100 ms hook budget. The Stop hook reads `.air/ready.json`, a cache written by commands that already paid for a `bd ready` (`crates/cli/src/cmd/ready_cache.rs:1-4`, air-09i).
 
 Keep beads plain: `metadata`, labels and `external_ref` rather than new fields. Air adds one custom status, `awaiting_review`, declared at `air init`, and nothing else.
 
@@ -156,8 +156,8 @@ Air's whole dependence is `crates/bd/src/lib.rs`: one trait and one shell-out im
 
 | Method | argv | Source (2026-09-14) |
 |---|---|---|
-| `ready` | `bd ready --json` | `crates/bd/src/lib.rs:387` |
-| `in_progress`, `by_status` | `bd list --status <s> --json` | `lib.rs:395` |
+| `ready` | `bd ready -n 0 --json` | `crates/bd/src/lib.rs:536` |
+| `in_progress`, `by_status` | `bd list --status <s> -n 0 --json` | `lib.rs:544` |
 | `children` | `bd list --parent <id> --all -n 0 --json` | `lib.rs:399` |
 | `by_statuses` | `bd list --status <s1,s2,…> -n 0 --json` (one argument; a repeated `-s` silently overwrites on 1.2.2) | `lib.rs:218` (`by_statuses_argv`) |
 | `dep_list` | `bd dep list <id> … --json` | `lib.rs:232` (`dep_list_argv`) |

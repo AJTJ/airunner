@@ -247,9 +247,8 @@ check), and read `bd dep tree <epic> --json` for an edge from a child to ANY anc
 its parent. Both are one call each and both are cheap next to a night of unreachable work.
 Air names this shape in `air status` (air-btz), which is the failsafe, not the check.
 
-`bd create --validate` stays on. Note: in bd 1.2.1 it checks required description sections
-from the beads config, not `--acceptance`; Air's triage check is what refuses an empty
-acceptance.
+`bd create --validate` stays on: it is what refuses a bead missing `## Acceptance Criteria`;
+Air's triage does not check it.
 
 ### 5. Stop at one wave
 
@@ -274,7 +273,7 @@ frontier thins.
 
 There are no per-worker queues. Workers pull from a legible ready list; the coordinator's job
 is that the list is never empty of claimable tasks and that priority says what goes first.
-**Do not set `assignee` on an open bead**: in bd 1.2.x a pencilled assignee blocks every other
+**Do not set `assignee` on an open bead**: in bd 1.3.0, as on 1.2.2, a pencilled assignee blocks every other
 worker's `--claim` (three collisions in one round, 2026-08-21). Reads:
 
 ```bash
