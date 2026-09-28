@@ -143,13 +143,13 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | System | One line |
 |---|---|
 | `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) plus NDJSON events (`.air/events/`). Rows have no time-based expiry. |
-| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, the edit journal; `air hook` dispatches every harness event, fails open, and writes one event line per invocation. The gate refuses only with `AIR_ENFORCE=1`. |
+| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, the edit journal; `air hook` dispatches every harness event, fails open, and writes one event line per invocation. `air close` runs the hand-over gate and refuses regardless of `AIR_ENFORCE`; in the hook, `AIR_ENFORCE=1` turns lease advice into refusal. |
 | `crates/bd` (`air-bd`) | The `WorkLedger` trait over `bd --json`; never called from a hook path. |
 | `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
 | `air mcp` | One stdio MCP server per session: Air's channel. It delivers Air's notices into every launched session (ready beads, batch results, fleet stop) and attention conditions to the coordinator, plus tools that invoke the CLI with `--json`. |
-| Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (or the main checkout for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
-| Hand-over gate | The one refusal: closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). A worker's `air close` runs it; the hook runs it on a raw `bd close` as a backstop. Never blocks a prompt or a WIP commit. |
-| Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads, lands. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
+| Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (`.claude/worktrees/coordinator` for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
+| Hand-over gate | Closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). A worker's or the lane's `air close` runs it; their launchers deny raw `bd close`. Never blocks a prompt or a WIP commit. |
+| Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## This repo's work flow
 
