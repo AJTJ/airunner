@@ -445,8 +445,9 @@ close without running verification themselves. A commit made after the batch was
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
 names a bead its worker holds, or, for the coordinator's branch, has any commit main lacks; it
 does not have to contain main, because the lane starts each
-batch from main. A branch whose head a red batch was recorded at, as a batch of one
-is, is not ready again until it has a new commit.
+batch from main. A branch whose head was the only member of a red batch is not ready again
+until it has a new commit; the batch commit is a merge onto main, so this is asked of the
+batch's recorded members, not of the commit the red was recorded at (air-hyli).
 
 The lane cuts with air batch cut, then records its verification at the new head. Which of two
 conflicting branches is dropped is decided by the order rule, oldest ready first, and never by

@@ -701,6 +701,16 @@ pub fn precheck_declared(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// A red batch whose only member was `head` (air-hyli). A batch starts from main, so its
+/// commit is a merge and never the member's own sha: asking for a red AT the head, as this
+/// did, missed every such batch, and an adopter's lane merged the same red member into the next
+/// batch twice in a day. The head is ready again once its worker commits past it. In a larger
+/// batch the red may be another member's doing and is the lane's to split, as before.
+pub fn red_alone(reds: &[air_ledger::verify::VerifyRun], head: &str) -> bool {
+    reds.iter()
+        .any(|r| matches!(r.members.as_slice(), [m] if m.sha == head))
+}
+
 /// Every worker worktree through [`batch_ready_rule`]: git and the ledger only, no bd. The
 /// same green predicate `select` uses (air-7wf), so a branch is never both landable and
 /// batch-ready.
@@ -773,11 +783,7 @@ pub fn batch_ready_for(
             .ok()
             .and_then(|n| n.trim().parse::<u64>().ok())
             .is_some_and(|n| n > 0);
-        // Only a red AT this head, which a batch of one is: in a larger batch the red may be
-        // another member's doing, and this head was never verified alone.
-        let red_batch_at_head = red_batches
-            .iter()
-            .any(|r| r.sha == head && r.members.iter().any(|m| m.sha == head));
+        let red_batch_at_head = red_alone(&red_batches, &head);
         let dropped_at_head = dropped.iter().any(|(w, h)| *w == worker && *h == head);
         let facts = BatchFacts {
             red_batch_at_head,
@@ -3100,6 +3106,41 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-hyli: a one-member red at merge commit M with member C keeps C out of the batch;
+    /// a new commit past C is ready; a red with two members excludes neither.
+    #[test]
+    fn a_one_member_red_batch_excludes_its_member_until_it_moves() {
+        let run = |sha: &str, members: &[&str]| air_ledger::verify::VerifyRun {
+            id: sha.into(),
+            worker: "lane".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: 2,
+            trigger: "test".into(),
+            failing_step: None,
+            started_at: "t".into(),
+            finished_at: "t".into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members: members
+                .iter()
+                .map(|m| air_ledger::landings::Member {
+                    worker: "w3".into(),
+                    sha: (*m).into(),
+                })
+                .collect(),
+            main_sha: None,
+        };
+        let reds = [run("mmmm", &["cccc"]), run("nnnn", &["aaaa", "bbbb"])];
+        assert!(red_alone(&reds, "cccc"), "the red member is out");
+        assert!(!red_alone(&reds, "dddd"), "a commit past it is ready");
+        assert!(!red_alone(&reds, "aaaa") && !red_alone(&reds, "bbbb"));
+    }
 
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds
     /// later and dropped again. Like a red at the head, a recorded drop holds the head out

@@ -112,6 +112,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A branch whose red batch had it as the only member stayed ready for the next batch, so the
+  lane merged the same red again. Such a branch is now left out until its worker commits past
+  it.
 - `air batch cut` refused for good once the lane's green batch fell behind main, and `air land`
   refused that batch too, so the lane could neither cut nor land. The cut now refuses only a
   green batch that could still land; a stale one is named and re-cut from main.
