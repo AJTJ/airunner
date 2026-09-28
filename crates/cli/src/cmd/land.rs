@@ -853,6 +853,8 @@ pub fn run(
         super::fanout::main_moved(
             repo, &ledger, &worker, role, before, merge, &landed, &moved.2,
         );
+        // air-84lz: a holding whose change this landing put in main, in a clean tree, ends.
+        super::holdings::expire(&ledger, repo);
     }
     // air-1vri.2: the lane's next step, as of this landing. It ran the command, so it learns
     // here and the channel does not tell it again.

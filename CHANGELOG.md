@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A recorded edit never expired, so the peer warning and `air holdings` named edits days old
+  and long landed, and sessions long gone. An edit now ends once the file is clean in its
+  holder's worktree and unchanged against main.
 - `air claim` took a bead that an open `blocks` dependency keeps out of `bd ready`. It now
   refuses, naming the blocker and its status.
 - Seven hard-coded limits that changed an answer without saying so are gone. The close gate

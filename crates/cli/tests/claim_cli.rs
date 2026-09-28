@@ -1835,19 +1835,26 @@ fn holdings_tags_say_when_and_tell_dirt_from_an_edit() {
         out.contains("src.rs: main[uncommitted now, edited 0 min ago]"),
         "{out}"
     );
-    // Committed and clean: the edit is remembered with its age, and the tree says clean.
-    git(&repo, &["add", "src.rs"]);
-    git(&repo, &["commit", "-q", "-m", "src"]);
-    let (_, out, _) = air(&repo, &bd, &["holdings"]);
-    assert!(
-        out.contains("src.rs: main[journaled 0 min ago, clean now]"),
-        "{out}"
-    );
     let (_, out, _) = air(&repo, &bd, &["--json", "holdings"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(v["at"].as_str().unwrap().starts_with("20"), "{out}");
     assert_eq!(v["files"]["src.rs"][0]["journaled"], true, "{out}");
     assert!(v["files"]["src.rs"][0]["last_edit"].is_string(), "{out}");
+    // air-84lz: committed on main and clean, the holding has ended, and the journal row with
+    // it, so the peer warning stops naming it too.
+    git(&repo, &["add", "src.rs"]);
+    git(&repo, &["commit", "-q", "-m", "src"]);
+    let (_, out, _) = air(&repo, &bd, &["holdings"]);
+    assert!(!out.contains("src.rs"), "landed and clean: {out}");
+    let rows: i64 = rusqlite::Connection::open(repo.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM edit_journal WHERE path='src.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 /// air-b5k, end to end: a repo whose settings carry the adopter's `SessionStart -> bd prime

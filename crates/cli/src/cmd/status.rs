@@ -1383,8 +1383,8 @@ pub fn rewind_propagation(merge: &str, carried_by: &[String]) -> Vec<String> {
 /// `uncommitted` from `git status` in that worktree, `committed` from `main...HEAD` — and the
 /// predicate used neither.
 ///
-/// `air holdings` is untouched and still shows every holder, journaled-only included:
-/// suppressing a summary and hiding a fact are different things.
+/// `air holdings` still shows a journaled-only holder while its row lives; since air-84lz a
+/// row ends once its file is clean and unchanged against main, which is this same test.
 pub fn colliding(holders: &[holdings::Holding]) -> Vec<&holdings::Holding> {
     holders
         .iter()
