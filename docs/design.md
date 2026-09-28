@@ -87,7 +87,7 @@ The workspace has four crates. Line counts are from 2026-09-25.
 | Crate | Lines | What it does |
 |---|---|---|
 | ledger | 3,559 | The SQLite schema, one row type per table, and the event writer. It makes no network calls and never calls beads. |
-| hooks | 1,361 | The hook input and output types, the hand-over gate, the edit journal, the worktree fence, and the nudge a claimless worker gets when it stops. The gate is a pure function of a set of facts, so it can be tested without git or a clock. |
+| hooks | 1,361 | The hook input and output types, the hand-over gate, the edit journal, and the nudge a claimless worker gets when it stops. The gate is a pure function of a set of facts, so it can be tested without git or a clock. |
 | bd | 544 | A wrapper over the beads command line: list ready work, show, claim, set status, comment, close. It also counts time spent waiting on beads. |
 | cli | 38,243 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. The self-test file alone is 13,670 lines. |
 
@@ -153,7 +153,7 @@ do anything. A value Air does not recognise counts as a worker.
 The lane is a worker with one permission added. It may run air land, which is refused to
 workers and, since the owner's ruling of 2026-09-14, to the coordinator; the owner may still
 land. The stop hook offers it no ready bead. Every other check that stops
-a worker stops the lane: the edit fence, the hand-over check in air close, the refusal of
+a worker stops the lane: the hand-over check in air close, the refusal of
 claiming a bead the owner must decide, releasing another worker's claim, and the UNENFORCED mark in status.
 
 The directory a command runs in never decides what it may do. Neither does the repository path
@@ -202,7 +202,7 @@ Nothing refuses inbox, triage, install or init to a worker.
 |---|---|
 | air inbox | Lists open captures, oldest first. |
 | air triage | Resolves one capture, either by linking the bead the coordinator filed or by dropping it with a reason. |
-| air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while any verification is running. Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. A range that names no bead is refused unless its commits are all session-journal entries or all the coordinator's (the non-merge commits of the coordinator worktree's branch), and then it lands recording no bead. It closes nothing, and it always updates main in the main checkout, wherever it is run from. It refuses while the fleet is stopped, tells each member that its commits landed, and ends with the branches batch-ready now and the next command. |
+| air land | Refused to every launched role but the lane; the owner may run it. Builds a commit from the branch's tree on top of main and moves main forward to it. It refuses unless the branch contains main and has a green at its head, and it refuses while a verification is running in the main checkout or the lane's tree (a worker's own run is not affected by main moving, air-9yx6). Before moving main it warns, without refusing, about every process that is not a session with its working directory in the main checkout, by pid. It records the beads the branch's commits name. A range that names no bead is refused unless its commits are all session-journal entries or all the coordinator's (the non-merge commits of the coordinator worktree's branch), and then it lands recording no bead. It closes nothing, and it always updates main in the main checkout, wherever it is run from. It refuses while the fleet is stopped, tells each member that its commits landed, and ends with the branches batch-ready now and the next command. |
 | air reclaim | The coordinator takes back a gone worker's bead with `bd reclaim --id`. bd lets go only once the claim's five-minute lease has run out (Air never renews it); until then the command names the expiry and exits non-zero. It never passes `--force`. |
 | air worker | Starts a worker session, or prints the command it would run and writes nothing. It refuses, naming the files, while air install's output is uncommitted in the main checkout, since a new worktree gets only committed files. It can also remove a worktree, but not while the worktree has uncommitted work or a live session. |
 | air lane | Starts the verification lane: a worker session in the lane worktree with AIR_ROLE lane and the worker deny list without air land. It refuses and prints as air worker does. |
@@ -285,7 +285,7 @@ Every hook call, including the silent ones, writes one event line.
 | .air/installed.json | The version and notices this repository has been installed with. |
 | .air/ready.json | A cached list of ready beads, used by the stop nudge. |
 | .air/tasks | A worker's first task, kept off the command line. |
-| .air/journal | One session journal per file, written from any worktree (the fence allows it). Default location unless `journal_dir` names one in the tree. Nothing reads it. |
+| .air/journal | One session journal per file, written from any worktree. Default location unless `journal_dir` names one in the tree. Nothing reads it. |
 | .air/digests | The digests the close gate reads when `.claude/air.json` says `"digests": true`: a file declaring `bead: <id>`, checked for existence, written from any worktree. |
 | .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, whether a close needs a digest (`"digests": true` for `.air/digests/`, or a tracked `digest_dir`; neither means none), an optional tracked `journal_dir`, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
@@ -508,7 +508,7 @@ sequenceDiagram
     K-->>H: name them, once
   end
   K->>L: one event line
-  K-->>H: allow, or refuse only for the gate, the fence, or a lease
+  K-->>H: allow, or refuse only for the gate or a lease
 ```
 
 The target is about a tenth of a second per call, so anything slow lives in the CLI instead. If
@@ -650,7 +650,7 @@ percentile. The SQLite lock waited at most 131 milliseconds with six writers.
 | A bead closes only with a green at a commit that contains main and every commit naming the bead. | The gate, with enforcement on for workers. | A handover not green condition. |
 | Main moves only forward, onto a commit whose tree has a green. | air land. | A commit on main with no verification run. |
 | One worker holds a claim at a time. | The ledger check, then beads' atomic claim. | Two open claims for one bead. |
-| A worker's edits stay inside its worktree. | The fence in the hook. | A denied edit in the event stream. |
+| A worker's edits stay inside its worktree. | roles.md, since the fence was removed 2026-09-28 (air-w18h). | Nothing records it; the fence's only recorded refusals were writes to a session's own scratchpad. |
 | A worker runs a command the repo declares as needing a lease only while it holds that lease. | The lease gate in the hook, refusing for workers and advising the coordinator. | A lease-refuse or lease-would-refuse event. |
 | Permissions come from AIR_ROLE and never from the directory or the repository path. | Every role check reads the role from the environment. | A self-test probe going red. |
 | Workers cannot push, file beads, land, close, start sessions, or ask the owner a question directly. | Claude Code's deny list, backed by Air's role checks. | A permission denied event. |
@@ -743,7 +743,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | Metis is attached to the coordinator at launch. | 2026-09-06 | `metis` in `.claude/air.json` |
 | `owner` is the authority label and `human` means presence; the owner's queue is those beads, with no separate inbox. | 2026-09-05 | `OWNER_LABEL`, `ready:` in `air status` |
 | A session acts on its own project only; reading and messaging another project is fine. | 2026-09-05 | `roles.md` |
-| Air makes each session's worktree and fences edits to it; the verification lane is a role. | 2026-09-14 | `edit-outside-worktree`, `air lane` |
+| Air makes each session's worktree; the verification lane is a role. The edit fence it added was removed 2026-09-28 (air-w18h). | 2026-09-14 | `air lane` |
 | The merge-queue protocol is Air's and ships in `.air/roles.md`; a repo keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
 | A worker closes its own bead with proof; there is no review status. | 2026-08-22 | the gate |
 | A worker closes with `air close`, which runs the hand-over gate itself. The hook's match on a raw `bd close` and its claim release are deleted. | 2026-09-26 | `close.rs` `gate` |
@@ -1009,7 +1009,7 @@ section 8.1.
 | Claude Code is the harness. | Its deny rules hold in every permission mode, including bypass. Its PreToolUse hook sees a close before it runs, and exit 2 is the one outcome nothing overrides. Sessions stay interactive terminals the owner can watch. The gate itself ports to any harness with a pre-tool hook, such as OpenCode's tool.execute.before; Codex was not checked. | https://code.claude.com/docs/en/permission-modes (2026-09-05); https://code.claude.com/docs/en/hooks.md (2026-08-17); https://opencode.ai/docs/plugins/ (2026-08-24) |
 | Keep Air rather than adopt an orchestrator. | Of 186 rostered orchestrators read one by one, eleven overlap part of Air, and none refuses to close a tracked work item without a recorded green at a commit containing main, in a session a person is watching. The closest (tutti, orc, loki-mode) had one to six contributors or a BUSL licence. herdr, scion, tutti and loki-mode were declined on 2026-08-29. Spawning, isolating and watching sessions are commodity. | https://github.com/andyrewlee/awesome-agent-orchestrators (snapshot 2026-08-24) |
 | Not adopted on 2026-08-17: the agent client protocol, Symphony's dispatcher, Vibe Kanban's executors, pueue, Codex's app server, and an Air daemon. | Air drives no agent process and runs no daemon. Workers are interactive Claude Code sessions, and the gate needs a hook and a bead id, not a wire protocol or a job queue. | section 8 |
-| One git worktree per worker, made by Air, with Air's hook as the edit fence. | Enforced partitions beat declared ones: on PaperBench a single agent scored 57.2, prompt-declared isolation 55.5, worktrees 63.3; four agents on distinct files passed 92.1% against 44.3% for eight on one file. Air makes the worktree itself so it can copy ignored files in and fence edits by role. | https://arxiv.org/abs/2603.21489 (2026-08-21); `air worker --help` |
+| One git worktree per worker, made by Air. | Enforced partitions beat declared ones: on PaperBench a single agent scored 57.2, prompt-declared isolation 55.5, worktrees 63.3; four agents on distinct files passed 92.1% against 44.3% for eight on one file. Air makes the worktree itself so it can copy ignored files in. | https://arxiv.org/abs/2603.21489 (2026-08-21); `air worker --help` |
 | Detached tmux sessions named for the project and the worker. | Every session must stay attachable by the owner. The only launch need with no first-party equivalent was a detached start for a session without a terminal. | CLAUDE.md, "A human is always in the loop"; `claude --help` for 2.1.241 (2026-08-24): `--tmux` needs `--worktree`, and no flag starts a session detached |
 | One stdio MCP server as the coordinator's channel, polling the ledger every 30 seconds; its tools run the CLI with JSON output. | It lives and dies with the coordinator's session, so there is no daemon, and the channel and the CLI cannot disagree. Agent-facing operations stay CLI-first: MCP and CLI runs failed equally often, but MCP failures wasted 12.9% of spend against 2.2%. | crates/cli/src/cmd/mcp.rs; https://arxiv.org/abs/2608.08654 (2026-08-18) |
 | The same channel on every session Air starts, delivering the ledger's deliveries table addressed to that worktree (air-1vri). | A channel is the documented way to push an event into a running session, including an idle one, and events that arrive during a turn are queued and handed over together on the next. Claude Code starts one channel server per session over stdio, so the server's own directory is the address and no routing is needed. The alternative was a Stop hook with asyncRewake, which "wakes Claude immediately even when the session is idle": it needs a waiting process per stop, killed at the hook timeout (600 seconds by default), and it is documented for reporting background failures, not for messaging. The cost of the channel is one development-channels confirmation per session while channels are in research preview. | https://code.claude.com/docs/en/channels-reference.md "Notification format" and "Test during the research preview"; https://code.claude.com/docs/en/channels.md; https://code.claude.com/docs/en/hooks.md `asyncRewake` and "Run hooks in the background" (all read 2026-09-26, Claude Code 2.1.283) |

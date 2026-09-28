@@ -598,14 +598,6 @@ fn transition(prev: &Option<String>, next: &str) -> String {
     format!("{} -> {next}", prev.as_deref().unwrap_or("none"))
 }
 
-/// The main checkout's directories every worktree writes to (air-1qnp): session journals and
-/// the opt-in digests. The fence lets a worker's edit land there.
-fn shared_dirs(cwd: &Path) -> Vec<PathBuf> {
-    air_ledger::paths::air_dir_for(cwd)
-        .map(|a| vec![a.join("journal"), a.join("digests")])
-        .unwrap_or_default()
-}
-
 fn pre_tool_use(
     ledger: &Ledger,
     worker: &str,
@@ -622,23 +614,11 @@ fn pre_tool_use(
         input.tool_name.as_deref(),
     )?;
     let moved = transition(&prev, "running");
-    // The worktree fence (air-8gj): a worker's Edit/Write whose resolved path leaves its
-    // worktree is denied, and the lane's (air-jc2p.2: a worker with `air land` added). Never
-    // for the coordinator, which may edit what only the main checkout holds (`private/`). This
-    // is the one check that replaces the harness's `--worktree` isolation (`air_hooks::fence`).
-    if let Some(abs) = input.edited_path()
-        && super::is_worker_like(role)
-        && let Ok(root) = git::toplevel(cwd)
-        && let Some(reason) = air_hooks::fence::denial(Path::new(&abs), &root, &shared_dirs(cwd))
-    {
-        return Ok(Dispatched::new(
-            HookOutcome::Block { reason },
-            dec::PRE_TOOL_USE_REFUSE_OUTSIDE_WORKTREE,
-            format!("{moved}; edit outside the worktree refused"),
-        )
-        .inputs(serde_json::json!({"path": abs, "worktree": root.display().to_string()}))
-        .denominator("1 path"));
-    }
+    // The worktree fence (air-8gj) was here: a worker's Edit/Write whose resolved path left
+    // its worktree was denied. Deleted 2026-09-28 (air-w18h, owner): its recorded refusals at
+    // an adopter, 6 of 6, were writes to the session's own scratchpad under /private/tmp, this
+    // repo's event log holds none, and no write outside a worktree was ever recorded. roles.md
+    // says where to work instead.
     // Peer-on-file warning.
     if let Some(abs) = input.edited_path() {
         if let Ok(root) = git::toplevel(cwd)
@@ -1078,7 +1058,7 @@ fn set_session(
     let prev = session_state(ledger, &input.session_id)?;
     // A subagent's hooks carry the parent's session id and are not the parent's own events:
     // they change neither its state nor its clock (air-n9f3). Its tool calls still pass the
-    // same gate and fence, which do not read this row.
+    // same gate, which does not read this row.
     if input.agent_id.is_some() {
         return Ok(prev);
     }
@@ -1622,6 +1602,26 @@ mod tests {
             d.outcome,
             super::HookOutcome::Allow { context: None }
         ));
+    }
+
+    /// air-w18h: no fence. A worker's Write to its scratchpad under /private/tmp, which is
+    /// what every recorded refusal was, is allowed.
+    #[test]
+    fn a_workers_write_outside_its_worktree_is_allowed() {
+        use super::{HookOutcome, dispatch};
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let (ledger, _) = crate::cmd::open(&repo).unwrap();
+        let input = air_hooks::HookInput::parse(
+            &serde_json::json!({"session_id": "s", "hook_event_name": "PreToolUse",
+                "tool_name": "Write", "cwd": repo.to_string_lossy(),
+                "tool_input": {"file_path": "/private/tmp/claude-501/scratchpad/notes.md"}})
+            .to_string(),
+        )
+        .unwrap();
+        let d = dispatch(&ledger, "worker-1", "worker", &repo, &input).unwrap();
+        assert!(matches!(d.outcome, HookOutcome::Allow { .. }));
+        assert_ne!(d.decision, "refuse-outside-worktree");
     }
 
     /// air-ludo: a worker `air fleet up` launched with no task has had SessionStart and nothing

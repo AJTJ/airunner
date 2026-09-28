@@ -5,7 +5,6 @@
 //! Rules (plan 0001 §5): answer fast, fail open, never block on a prompt, never block a WIP
 //! commit, refuse only at hand-over — and only once advisory mode has run a round.
 
-pub mod fence;
 pub mod gate;
 pub mod input;
 pub mod journal;

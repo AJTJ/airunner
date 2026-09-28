@@ -313,7 +313,7 @@ pub fn under_lane(ledger: &Ledger, repo: &Path) -> bool {
 
 /// `journal_dir` from `.claude/air.json`: an override for a repo that wants its session
 /// journals tracked in its own tree (air-3xww). Absent, they go to `<main>/.air/journal/`
-/// (`init::DEFAULT_JOURNAL_DIR`, air-1qnp), which the worktree fence lets every worktree write.
+/// (`init::DEFAULT_JOURNAL_DIR`, air-1qnp), which every worktree writes to.
 ///
 /// **Nothing in Air reads the files themselves**: no gate, no condition, no count. `air
 /// status` reads the key only to let a branch of tracked journal entries land (air-kexg).

@@ -468,22 +468,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // air-jy99. The anchor RESTORES the prescription, in `land.rs` rather than `status.rs`,
-    // deliberately: the probe checks both renderers and a mutation in either must take it red.
-    // Restoring it in the renderer that is NOT the bead's headline surface is the stronger
-    // evidence, because that is the shape air-155w's own defect came back through — one
-    // renderer corrected, the other left teaching the forbidden thing. The rest of the
-    // sentence survives, so the mutation reaches the prescription and not the whole line.
-    // Anchor taken from the file AFTER rustfmt, per air-gei.
-    (
-        "status/land: an undischarged clause names the condition and no flow-dependent action, in both renderers",
-        Mutation {
-            file: "crates/cli/src/cmd/land.rs",
-            from: "read the bead, then see that \\\n     nothing left over is untracked.",
-            to: "read the bead, then either reopen it or file what is left.",
-            also_red: &[],
-        },
-    ),
     // air-45pw. The anchor truncates the file route at 500 chars — a generous command line, and
     // exactly the shape of the bug: the capture is still filed, still long, still reads as a
     // capture. A probe asserting "non-empty" or "long enough" stays green here, which is why the
@@ -635,22 +619,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/init.rs",
             from: "                path: format!(\"{}/README.md\", journal.0),\n                create: true,",
             to: "                path: format!(\"{DEFAULT_JOURNAL_DIR}/README.md\"),\n                create: true,",
-            also_red: &[],
-        },
-    ),
-    // air-rud0. The anchor is the discharged line's format string and nothing else: the
-    // judgement, the two honest branches and `--json`'s `how` all survive it, because none of
-    // them moved. Under it the tick is bare again and a reader scanning a nine-bead landing's
-    // verdict column sees `ok` with nothing beside it — which is the defect exactly, and one
-    // that is RIGHT in most cases, so a probe that stayed green under this was checking that
-    // discharged clauses appear rather than that they say what discharged them.
-    // Anchor as rustfmt leaves it, per air-gei.
-    (
-        "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
-        Mutation {
-            file: "crates/cli/src/cmd/acceptance.rs",
-            from: "s.push_str(&format!(\"    ok ({how}) — {text}\\n\"));",
-            to: "s.push_str(&format!(\"    ok   {text}\\n         {how}\\n\"));",
             also_red: &[],
         },
     ),
@@ -1284,17 +1252,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
-        Mutation {
-            // The old denylist of one, exactly as it stood: only `in-flight` is skipped, so a
-            // refused row is read as a landing again. One branch, in the reader that was wrong.
-            file: "crates/ledger/src/landings.rs",
-            from: "            if !l.landed() {",
-            to: "            if l.result == \"in-flight\" {",
-            also_red: &[],
-        },
-    ),
-    (
         "verify: a run in flight is named by status and refused by land with its pid and the override; nothing running is silent and a dead pid clears",
         Mutation {
             // Back to never refusing: the one branch that turns a live in-flight run into a
@@ -1661,33 +1618,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "status: landed-not-closed names only the clauses whose file the merge did not change, claims no contradiction, and stays silent about a bead Air merely could not read",
-        Mutation {
-            // Render the row's whole `why` again, which is exactly the pre-fix line (air-ppf):
-            // every unreadable clause back under the CONTRADICTS headline. One binding, it
-            // compiles, and `landed_open` still filters on `refuted`, so the only-unreadable
-            // half stays silent under it — which shows the mutation reaches the rendering rule
-            // and not the ledger's filter beside it.
-            file: "crates/cli/src/cmd/status.rs",
-            from: "let (bead, why) = (&o.bead, &o.contradicted);",
-            to: "let (bead, why) = (&o.bead, &o.why);",
-            also_red: &[],
-        },
-    ),
-    (
-        "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
-        Mutation {
-            // Every missing path counts as an untouched file again, which is exactly the
-            // pre-fix rule (air-dqa): the tree is never consulted. One closure, it compiles,
-            // and the two landed-not-closed probes name files that ARE in their tree, so they
-            // stay GREEN under it — which shows this reaches the resolution rule alone.
-            file: "crates/cli/src/cmd/acceptance.rs",
-            from: ".partition(|p| ev.tree.iter().any(|t| t == *p));",
-            to: ".partition(|_p| true);",
-            also_red: &[],
-        },
-    ),
-    (
         "land: a bead on two branches is refused naming each with --worker; --worker lands that branch with every bead it carries; a bead on one blocked branch is still refused with its fix",
         Mutation {
             // Never see a bead as ambiguous, which is the pre-fix rule exactly (air-09b): two
@@ -1762,21 +1692,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/install.rs",
             from: "    len >= last",
             to: "    len == last",
-            also_red: &[],
-        },
-    ),
-    (
-        "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator is never fenced, wherever it runs",
-        Mutation {
-            // Fence the coordinator instead of the worker: one comparison, it compiles, and
-            // the fence, the path arithmetic and the message are all untouched. The worker
-            // stops being fenced (the probe's RED half falls) and the coordinator still is
-            // not, because its checkout IS the root it would be measured against — so the
-            // GREEN half survives, which is what shows the anchor reaches the role gate alone
-            // rather than taking out the check.
-            file: "crates/cli/src/cmd/hook.rs",
-            from: "    if let Some(abs) = input.edited_path()\n        && super::is_worker_like(role)",
-            to: "    if let Some(abs) = input.edited_path()\n        && role == \"coordinator\"",
             also_red: &[],
         },
     ),
@@ -2735,8 +2650,6 @@ fn all_probes() -> Vec<Probe> {
         probe_land_refusals(),
         probe_project_is_taken_from_what_it_is_told(),
         probe_audit_help_names_only_what_it_prints(),
-        probe_landed_but_open(),
-        probe_refused_landing_publishes_nothing(),
         probe_land_by_bead_carries_the_whole_branch(),
         probe_acceptance_unread_refuses(),
         probe_claim_retries_a_timeout_once(),
@@ -2752,7 +2665,6 @@ fn all_probes() -> Vec<Probe> {
         probe_a_prefix_claim_is_recorded_and_survives_the_reconcile(),
         probe_the_build_reaches_a_reader(),
         probe_batch_members_are_the_shas_the_batch_took(),
-        probe_a_discharged_clause_names_its_lookup(),
         probe_a_journal_only_branch_needs_no_bead(),
         probe_a_coordinator_only_range_needs_no_bead(),
         probe_a_landed_bead_closes_on_its_landing(),
@@ -2763,10 +2675,7 @@ fn all_probes() -> Vec<Probe> {
         probe_no_session_reads_stuck(),
         probe_acceptance_budget_scales_with_ids(),
         probe_mcp_tool_budget_and_group_kill(),
-        probe_contradicts_names_only_the_refuted(),
-        probe_unresolvable_path_is_unreadable_not_refuted(),
         probe_land_names_a_branch(),
-        probe_no_flow_dependent_prescription_when_a_clause_is_undischarged(),
         probe_closed_bead_not_landed_is_named(),
         probe_capture_records_where_it_was_written(),
         probe_capture_takes_a_file_whole(),
@@ -2794,7 +2703,6 @@ fn all_probes() -> Vec<Probe> {
         probe_a_hook_records_its_own_wall_clock(),
         probe_an_unpaired_hook_is_counted_from_the_installed_matchers(),
         probe_a_notice_waits_for_the_round_and_the_release_refuses(),
-        probe_an_edit_outside_the_worktree_is_denied(),
         probe_metis_is_the_coordinators_and_never_a_workers(),
         probe_an_initiative_is_declared_and_counted_without_a_gate(),
         probe_no_tracked_file_names_an_adopter(),
@@ -3527,93 +3435,6 @@ fn probe_capture_takes_a_file_whole() -> Probe {
     }
 }
 
-/// air-jy99: the `landed-not-closed` line ended "either reopen it or file what is left", and an
-/// adopter's CLAUDE.md says "closed is closed — never reopen". Air was instructing their
-/// coordinator to do what their own rules forbid, on a bead that was correctly closed.
-///
-/// This is air-155w's ruling at a second surface: a flow-dependent fix states a CONDITION, not a
-/// command, because whose job a thing is — and whether it is allowed at all — is the repo's flow
-/// to say and Air reads no repo's flow. What makes it worth its own probe rather than one more
-/// assertion on the sentence's existing one is the failure air-155w recorded: air-avj fixed the
-/// Stop hook and left the refusal asserting the forbidden command, so the adopter's worker read
-/// it from the refusal instead. Following such a line WORKS, so nothing ever contradicts it.
-/// Hence both renderers, checked together: the same clause reached the reader twice.
-///
-/// Red: the prescription restored anywhere it is rendered is caught. Green: neither shipped
-/// string names the action, both still say what must become true, and the two things air-k6uh
-/// established — the lookup framing, and "it is done elsewhere" as the first option — survive.
-fn probe_no_flow_dependent_prescription_when_a_clause_is_undischarged() -> Probe {
-    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
-    use air_ledger::landings::{Landing, OpenBead};
-
-    let res = (|| -> Result<(bool, bool), String> {
-        // The real attention sentence, rendered from a real row rather than quoted.
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_landing(&Landing {
-            despite_inflight: vec![],
-            members: vec![],
-            id: new_id(),
-            worker: "alpha".into(),
-            sha: "aaa".into(),
-            tip_sha: Some("bbb".into()),
-            result: "landed-refuted".into(),
-            failing_step: None,
-            verify_run_id: None,
-            attempt_no: 1,
-            beads: vec!["zz-1".into()],
-            open_beads: vec![OpenBead {
-                bead: "zz-1".into(),
-                why: "docs/absent.md says it.".into(),
-                refuted: true,
-                contradicted: "docs/absent.md says it.".into(),
-            }],
-            merge_commit: Some("ccc".into()),
-            pid: None,
-            started_at: "t0".into(),
-            finished_at: "t1".into(),
-        })
-        .map_err(|e| e.to_string())?;
-        let snap = Snapshot {
-            landed_open: l.landed_open().map_err(|e| e.to_string())?,
-            ..Default::default()
-        };
-        let att = attention(&snap, "2026-09-05T00:00:00Z", Thresholds::default());
-        let line = att
-            .iter()
-            .find(|a| a.kind == kinds::LANDED_NOT_CLOSED)
-            .map(|a| a.detail.clone())
-            .ok_or("no landed-not-closed line")?;
-
-        // `air land`'s summary is the SAME clause rendered a second time. air-155w's defect
-        // survived its first fix because one renderer was corrected and the other was not, so
-        // this probe fails unless both are clean.
-        let land_summary = crate::cmd::land::REFUTED_SUMMARY;
-
-        // No attention sentence of any kind prescribes it either: a second condition rendering
-        // this advice is the way it would come back.
-        let nothing_prescribes = att.iter().all(|a| !a.detail.contains("reopen"));
-
-        let red =
-            !line.contains("reopen") && !land_summary.contains("reopen") && nothing_prescribes;
-
-        // Saying less is only right if it still says what must be established. The line names
-        // the condition and hands the decision back, and air-k6uh's two survive.
-        let green = line.contains("untracked")
-            && line.contains("this repo's flow to say")
-            && line.contains("it is done elsewhere")
-            && line.contains("NOT a contradiction")
-            && land_summary.contains("nothing left over is untracked")
-            && !land_summary.contains("CONTRADICTS");
-        Ok((red, green))
-    })()
-    .unwrap_or_else(blocked);
-    Probe {
-        name: "status/land: an undischarged clause names the condition and no flow-dependent action, in both renderers",
-        red_fires: res.0,
-        green_passes: res.1,
-    }
-}
-
 /// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
 /// An adopter had six at once, derived independently by their coordinator and their worker from
 /// different joins — same six — and there is no error anywhere in how they got there: closed on
@@ -3942,387 +3763,6 @@ fn probe_audit_help_names_only_what_it_prints() -> Probe {
     }
 }
 
-/// air-ayp: `air land` closes nothing (the worker closes its own bead with proof), so what a
-/// landing carries past its print is the one signal meaning a wrong close: a clause the merge
-/// CONTRADICTS. As a `landings` row, never as a bd status.
-///
-/// Red: a bead naming a file the merge did not touch is refuted, not discharged, the ledger
-/// reports it with the clause, and the report survives the bead being claimed. Green: a bead
-/// whose every clause is discharged says so; one Air merely cannot read is neither refuted
-/// nor discharged and is not reported; a claim released as closed, which is what `air close`
-/// writes, ends the report (0.4.10 trial: it was raised after the close and stayed); and a
-/// later landing that stops refuting a still-open bead clears it.
-///
-/// The no-blocking half is the second assertion: the whole representation is a ledger row, and
-/// the bead's bd status is untouched, so a dependent is exactly as blocked as it was before
-/// the merge. bd's blocking predicate never consults the workflow class, which is why parking
-/// it in a done-class status would have blocked dependents indefinitely.
-fn probe_landed_but_open() -> Probe {
-    use crate::cmd::acceptance::{Evidence, judge_clauses};
-    use air_ledger::landings::{Landing, OpenBead};
-
-    let changed = vec!["docs/rules/roles.md".to_string()];
-    let tree = vec![
-        "docs/rules/roles.md".to_string(),
-        "docs/rules/adopting-air.md".to_string(),
-        "docs/absent.md".to_string(),
-    ];
-    let ev = Evidence {
-        green_at_landed: true,
-        changed: &changed,
-        tree: &tree,
-    };
-    // A clause the merge CONTRADICTS: the bead names a file it did not touch.
-    let refutable = judge_clauses(
-        "zz-2",
-        vec!["docs/rules/adopting-air.md names the rule.".into()],
-        &ev,
-    );
-    // A clause Air simply cannot read. Not a defect, and not the wrong-close signal.
-    let unreadable = judge_clauses(
-        "zz-3",
-        vec!["The owner rules on the counter-argument.".into()],
-        &ev,
-    );
-    let discharged = judge_clauses(
-        "zz-1",
-        vec![
-            "Verify recorded green at HEAD.".into(),
-            "docs/rules/roles.md names the rule.".into(),
-        ],
-        &ev,
-    );
-
-    let res = (|| -> Result<(bool, bool), String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_landing(&Landing {
-            despite_inflight: vec![],
-            members: vec![],
-            id: new_id(),
-            worker: "alpha".into(),
-            sha: "aaa".into(),
-            tip_sha: Some("bbb".into()),
-            result: "landed-refuted".into(),
-            failing_step: None,
-            verify_run_id: None,
-            attempt_no: 1,
-            beads: vec!["zz-1".into(), "zz-2".into()],
-            open_beads: vec![OpenBead {
-                bead: "zz-2".into(),
-                why: refutable.why_open(),
-                refuted: true,
-                contradicted: refutable.why_contradicted(),
-            }],
-            merge_commit: Some("ccc".into()),
-            pid: None,
-            started_at: "t0".into(),
-            finished_at: "t1".into(),
-        })
-        .map_err(|e| e.to_string())?;
-        let open = l.landed_open().map_err(|e| e.to_string())?;
-        // Reported, with the clause, and the closable bead is NOT in the held-open set.
-        let reported = open.len() == 1
-            && open
-                .first()
-                .is_some_and(|o| o.bead == "zz-2" && o.why.contains("docs/rules/adopting-air.md"));
-        // An open claim is not a close: the report survives it.
-        l.record_claim("zz-2", "alpha", &[], "t2")
-            .map_err(|e| e.to_string())?;
-        let survives_the_claim = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
-        // 0.4.10 trial: releasing it as `air close` does IS a close, and the report goes.
-        l.release_claims_on(&["zz-2".to_string()], "closed", "t3")
-            .map_err(|e| e.to_string())?;
-        let gone_once_closed = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-        // Claimed again, so the bead is open here again and the later landing decides.
-        l.record_claim("zz-2", "beta", &[], "t3")
-            .map_err(|e| e.to_string())?;
-        let back_when_reclaimed = l.landed_open().map_err(|e| e.to_string())?.len() == 1;
-
-        // It clears when a LATER landing of the same bead stops refuting it.
-        l.record_landing(&Landing {
-            despite_inflight: vec![],
-            members: vec![],
-            id: new_id(),
-            worker: "alpha".into(),
-            sha: "ddd".into(),
-            tip_sha: Some("ccc".into()),
-            result: "landed".into(),
-            failing_step: None,
-            verify_run_id: None,
-            attempt_no: 2,
-            beads: vec!["zz-2".into()],
-            open_beads: vec![OpenBead {
-                bead: "zz-2".into(),
-                why: "a clause Air cannot read".into(),
-                refuted: false,
-                contradicted: String::new(),
-            }],
-            merge_commit: Some("eee".into()),
-            pid: None,
-            started_at: "t4".into(),
-            finished_at: "t5".into(),
-        })
-        .map_err(|e| e.to_string())?;
-        let cleared = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-        Ok((
-            reported && survives_the_claim && back_when_reclaimed,
-            gone_once_closed && cleared,
-        ))
-    })()
-    .unwrap_or_else(blocked);
-    let (reported, cleared) = res;
-
-    Probe {
-        name: "land: a contradicted clause is reported from the landing while the bead is open here, and not once its claim is released as closed; one Air cannot read is not",
-        red_fires: refutable.refuted() && !refutable.all_discharged() && reported,
-        green_passes: discharged.all_discharged()
-            && !unreadable.refuted()
-            && !unreadable.all_discharged()
-            && cleared,
-    }
-}
-
-/// air-8zn: a REFUSED landing publishes no landed beads, and a successful one still publishes
-/// all of them. `landed_open` excluded only `in-flight` and treated every other result as a
-/// landing, so the second branch of an `air land --all` — refused for main-moved, as every
-/// branch after the first is — was read as the newest word on the five beads its row carried.
-///
-/// Red: a refused row carrying a refuted bead reports nothing, and a refused row NEWER than a
-/// real landing does not silence that landing's refutation. Green: the real landing reports
-/// every refuted bead it carries, which is what stops the fix becoming a silence.
-fn probe_refused_landing_publishes_nothing() -> Probe {
-    use air_ledger::landings::{Landing, OpenBead};
-
-    let row = |id: &str, result: &str, at: &str, beads: &[&str], open: Vec<OpenBead>| Landing {
-        despite_inflight: vec![],
-        members: vec![],
-        id: id.into(),
-        worker: "w4".into(),
-        sha: "823b2fd5".into(),
-        tip_sha: Some("99b10fa0".into()),
-        result: result.into(),
-        failing_step: (result == "refused").then(|| "check".to_string()),
-        verify_run_id: None,
-        attempt_no: 1,
-        beads: beads.iter().map(|b| b.to_string()).collect(),
-        open_beads: open,
-        merge_commit: (result != "refused").then(|| "ccc".to_string()),
-        pid: None,
-        started_at: at.into(),
-        finished_at: at.into(),
-    };
-    let refuted = |bead: &str| OpenBead {
-        bead: bead.into(),
-        why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-        refuted: true,
-        contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-    };
-    let five = ["zz-7p85", "zz-epo9", "zz-fsxg", "zz-lqhf", "zz-xeq3"];
-
-    let res = (|| -> Result<(bool, bool), String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        // The live case: a refusal carrying five beads. Even with a refuted clause on the row
-        // it publishes nothing, because nothing landed.
-        l.record_landing(&row("r1", "refused", "t1", &five, vec![refuted("zz-7p85")]))
-            .map_err(|e| e.to_string())?;
-        let refused_publishes_nothing = l.landed_open().map_err(|e| e.to_string())?.is_empty();
-
-        // A real landing that refutes two of them reports both.
-        l.record_landing(&row(
-            "l1",
-            "landed-refuted",
-            "t2",
-            &five,
-            vec![refuted("zz-epo9"), refuted("zz-fsxg")],
-        ))
-        .map_err(|e| e.to_string())?;
-        let mut reported: Vec<String> = l
-            .landed_open()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|o| o.bead)
-            .collect();
-        reported.sort();
-        let landed_publishes_all = reported == ["zz-epo9", "zz-fsxg"];
-
-        // A newer refusal of the same branch (main moved under it) leaves both standing.
-        l.record_landing(&row("r2", "refused", "t3", &five, vec![]))
-            .map_err(|e| e.to_string())?;
-        let refusal_does_not_silence = l.landed_open().map_err(|e| e.to_string())?.len() == 2;
-        Ok((
-            refused_publishes_nothing && refusal_does_not_silence,
-            landed_publishes_all,
-        ))
-    })()
-    .unwrap_or_else(blocked);
-    let (red, green) = res;
-    Probe {
-        name: "land: a refused landing publishes no landed beads and silences no refutation; a landed one publishes all of them",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
-/// air-ppf: the `landed-not-closed` sentence asserts a contradiction, so it may name only the
-/// clauses the merge contradicts. It used to render the row's whole `why`, which also carries
-/// every clause Air could not read, so "nothing Air can look up" appeared under a CONTRADICTS
-/// headline and two sound closes (air-03w, air-97z) each cost a round trip on 2026-08-30.
-///
-/// Red: a bead with one refuted clause and two unreadable ones is reported naming the refuted
-/// clause and neither of the others. Green: a bead with only unreadable clauses produces no
-/// CONTRADICTS claim at all, and the row still keeps both halves. The first is what makes the
-/// second believable: a message that only ever names what it can refute can be read at face
-/// value.
-fn probe_contradicts_names_only_the_refuted() -> Probe {
-    use crate::cmd::acceptance::{Evidence, judge_clauses};
-    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
-    use air_ledger::landings::{Landing, OpenBead};
-
-    let changed = vec!["docs/rules/roles.md".to_string()];
-    let tree = vec![
-        "docs/rules/roles.md".to_string(),
-        "docs/rules/adopting-air.md".to_string(),
-        "docs/absent.md".to_string(),
-    ];
-    let ev = Evidence {
-        green_at_landed: true,
-        changed: &changed,
-        tree: &tree,
-    };
-    let mixed = judge_clauses(
-        "zz-1",
-        vec![
-            "docs/absent.md says it.".into(),
-            "The owner rules on the counter-argument.".into(),
-            "Docs are updated.".into(),
-        ],
-        &ev,
-    );
-    let unreadable_only = judge_clauses("zz-2", vec!["The owner rules on it.".into()], &ev);
-    let as_row = |j: &crate::cmd::acceptance::Judged| OpenBead {
-        bead: j.bead.clone(),
-        why: j.why_open(),
-        refuted: j.refuted(),
-        contradicted: j.why_contradicted(),
-    };
-
-    let res = (|| -> Result<(bool, bool), String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_landing(&Landing {
-            despite_inflight: vec![],
-            members: vec![],
-            id: new_id(),
-            worker: "alpha".into(),
-            sha: "aaa".into(),
-            tip_sha: Some("bbb".into()),
-            result: "landed-refuted".into(),
-            failing_step: None,
-            verify_run_id: None,
-            attempt_no: 1,
-            beads: vec!["zz-1".into(), "zz-2".into()],
-            open_beads: vec![as_row(&mixed), as_row(&unreadable_only)],
-            merge_commit: Some("ccc".into()),
-            pid: None,
-            started_at: "t0".into(),
-            finished_at: "t1".into(),
-        })
-        .map_err(|e| e.to_string())?;
-        let snap = Snapshot {
-            landed_open: l.landed_open().map_err(|e| e.to_string())?,
-            ..Default::default()
-        };
-        let att = attention(&snap, "2026-09-05T00:00:00Z", Thresholds::default());
-        let landed: Vec<_> = att
-            .iter()
-            .filter(|a| a.kind == kinds::LANDED_NOT_CLOSED)
-            .collect();
-        let names_the_refuted_alone = landed.len() == 1
-            && landed.first().is_some_and(|a| {
-                a.worker == "zz-1"
-                    // air-k6uh: the split air-ppf established is unchanged — only the
-                    // clauses whose named file the merge did not change are here. What
-                    // changed is the CLAIM: the sentence reports the lookup and says in as
-                    // many words that it is not a contradiction, because six of nine such
-                    // firings on 2026-09-06 were clauses that held.
-                    && a.detail.contains("naming a file this merge did not change")
-                    && a.detail.contains("\"docs/absent.md says it.\"")
-                    && a.detail.contains("NOT a contradiction")
-                    && !a.detail.contains("CONTRADICTS")
-                    && !a.detail.contains("nothing Air can look up")
-                    && !a.detail.contains("owner rules")
-                    && !a.detail.contains("Docs are updated")
-            });
-        let row_keeps_both = l
-            .landings()
-            .map_err(|e| e.to_string())?
-            .first()
-            .and_then(|r| r.open_beads.iter().find(|o| o.bead == "zz-1").cloned())
-            .is_some_and(|o| {
-                o.why.contains("nothing Air can look up") && o.why.contains("docs/absent.md")
-            });
-        let unreadable_is_silent = !landed.iter().any(|a| a.worker == "zz-2");
-        Ok((
-            names_the_refuted_alone,
-            unreadable_is_silent && row_keeps_both,
-        ))
-    })()
-    .unwrap_or_else(blocked);
-    let (red_fires, green_passes) = res;
-
-    Probe {
-        name: "status: landed-not-closed names only the clauses whose file the merge did not change, claims no contradiction, and stays silent about a bead Air merely could not read",
-        red_fires,
-        green_passes,
-    }
-}
-
-/// air-dqa: a path Air read out of prose and got wrong must not become a confident false
-/// accusation. Three firings of `landed-not-closed`, zero true: the adopter's clause wrote a
-/// possessive (`docs/reference/tooling.md`'s), the trim stopped at the `s`, the token matched
-/// nothing in a merge that had changed that very file, and Air reported CONTRADICTED.
-///
-/// Red: that clause, verbatim, against a merge that changed the file, is UNREADABLE with the
-/// token named, not refuted. Green: the ai_runner case, a clause naming an existing file the
-/// work correctly did not touch (the pin landed in install.rs, not install_and_launch.rs),
-/// stays REFUTED — the true fact, for a person to read — and the plainly written possessive
-/// clause discharges. The second is the true positive the first must not cost.
-fn probe_unresolvable_path_is_unreadable_not_refuted() -> Probe {
-    use crate::cmd::acceptance::{Evidence, Verdict, judge};
-
-    let tree = vec![
-        "docs/reference/tooling.md".to_string(),
-        "crates/cli/tests/install_and_launch.rs".to_string(),
-        "crates/cli/src/cmd/install.rs".to_string(),
-    ];
-    let adopter = Evidence {
-        green_at_landed: true,
-        changed: &["docs/reference/tooling.md".to_string()],
-        tree: &tree,
-    };
-    let possessive = "Air's own `docs/reference/tooling.md`'s section is updated.";
-    let red_fires = matches!(
-        judge(possessive, &adopter),
-        Verdict::Undecidable { how } if how.contains("cannot resolve") && how.contains("tooling.md`'s")
-    );
-
-    let ai_runner = Evidence {
-        changed: &["crates/cli/src/cmd/install.rs".to_string()],
-        ..adopter
-    };
-    let untouched_stays_refuted = matches!(
-        judge("Pin it in crates/cli/tests/install_and_launch.rs.", &ai_runner),
-        Verdict::Unevidenced { how }
-            if how == "the merge did not change crates/cli/tests/install_and_launch.rs"
-    );
-    let plain_discharges = judge("docs/reference/tooling.md is updated.", &adopter).discharged();
-
-    Probe {
-        name: "acceptance: a path-like token that is no file at the landed commit is unreadable, not refuted; an existing untouched file still is",
-        red_fires,
-        green_passes: untouched_stays_refuted && plain_discharges,
-    }
-}
-
 /// air-09b: a bead is a handle on a branch only while one branch carries it. The adopter,
 /// 2026-08-30, twice: a bead carried by a batching lane and by the worker it batched. Named,
 /// `air land` took the oldest-waiting branch (the worker's), main moved, and the lane was
@@ -4520,11 +3960,11 @@ fn probe_claim_retries_a_timeout_once() -> Probe {
 /// a clean result.
 ///
 /// Red: a bd error yields a refusal naming bd, the beads, and "Nothing was changed", and it
-/// does not contain the no-criteria sentence. Green: a bead that genuinely states none still
-/// judges as "states no acceptance criteria" — the two are different artefacts (a refusal
-/// string versus a landed row's `why`), which is what the bead asks for.
+/// does not contain the no-criteria sentence. Green: a bead that genuinely states none is
+/// listed as stating none — the two are different artefacts (a refusal string versus the
+/// landing's listing), which is what the bead asks for.
 fn probe_acceptance_unread_refuses() -> Probe {
-    use crate::cmd::acceptance::{Evidence, judge_clauses};
+    use crate::cmd::acceptance::listing;
     use crate::cmd::land::acceptance_read;
 
     let beads = vec!["zz-0vh3".to_string()];
@@ -4537,19 +3977,11 @@ fn probe_acceptance_unread_refuses() -> Probe {
         && m.contains("Nothing was changed")
         && !m.contains("no acceptance criteria"));
 
-    let changed: Vec<String> = Vec::new();
-    let tree: Vec<String> = Vec::new();
-    let ev = Evidence {
-        green_at_landed: true,
-        changed: &changed,
-        tree: &tree,
-    };
     let answered = acceptance_read(Ok(vec![Vec::new()]), &beads);
-    let none = judge_clauses("zz-0vh3", Vec::new(), &ev);
+    // air-cizz: no verdict any more; the listing says the bead states none.
+    let none = listing(&[("zz-0vh3".to_string(), Vec::new())]);
     let green = matches!(&answered, Ok(c) if c.len() == 1 && c.first().is_some_and(Vec::is_empty))
-        && none.why_open().contains("states no acceptance criteria")
-        && !none.all_discharged()
-        && !none.refuted();
+        && none.contains("no acceptance criteria");
 
     Probe {
         name: "land: bd not answering about acceptance refuses before the merge; a bead that states none still lands as 'none'",
@@ -10219,123 +9651,6 @@ fn probe_a_notice_waits_for_the_round_and_the_release_refuses() -> Probe {
     }
 }
 
-/// air-8gj: the harness's `--worktree` isolation is off, and one PreToolUse check replaces it.
-///
-/// The flag was removed on evidence, not preference: in the adopter's record it stopped no
-/// observed write to the main checkout and cost 455 refusals in five days, 388 of them (88%)
-/// with no git token in the command, plus a native build refused with no prompt and permission
-/// prompts nobody could answer unattended
-/// (`private/notes/2026-09-06-answers-worktree-and-verify.md`, owner ruling 2026-09-06).
-/// The one gap it did close and nothing else did is a hand-written `../../main/<path>` in a
-/// file tool. That is this check, and nothing wider: a Bash `cd ../..` is out of scope on
-/// purpose, because the harness never caught it either.
-///
-/// Driven through a spawned `air hook` against a real repo and a real worktree, not through
-/// `fence::denial`: the unit tests already cover the path arithmetic, and what is under test
-/// here is that the hook actually BLOCKS — the wiring, the role gate, and the exit code the
-/// harness reads.
-///
-/// Red: the refusals fire. A worker's Edit to a path outside its worktree is blocked, so is a
-/// `..` climb out of it, and the refusal names both the path and the worktree. Green: the
-/// non-refusals do not. The same worker editing inside is allowed, and the coordinator in the
-/// main checkout is never fenced — its checkout IS the root it would be measured against, and
-/// the one session whose job is to edit main must not be stopped from doing it.
-fn probe_an_edit_outside_the_worktree_is_denied() -> Probe {
-    let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
-        let g = |args: &[&str]| -> Result<(), String> {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).to_string());
-            }
-            Ok(())
-        };
-        g(&["init", "-q", "-b", "main"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
-        let wt = dir.join(".claude").join("worktrees").join("w");
-        g(&[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "w",
-            &wt.display().to_string(),
-        ])?;
-        std::fs::create_dir_all(dir.join("src")).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(wt.join("src")).map_err(|e| e.to_string())?;
-
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        // (exit code, stderr) of one PreToolUse Edit from `cwd` at `path`, as `role`.
-        let edit = |cwd: &Path, path: &Path, role: &str| -> Result<(i32, String), String> {
-            use std::io::Write;
-            let input = serde_json::json!({
-                "hook_event_name": "PreToolUse",
-                "session_id": "air-8gj-probe",
-                "cwd": cwd.display().to_string(),
-                "tool_name": "Edit",
-                "tool_input": {"file_path": path.display().to_string()},
-            });
-            let mut child = air_command(&exe, cwd)
-                .arg("hook")
-                .env("AIR_ROLE", role)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(input.to_string().as_bytes())
-                    .map_err(|e| e.to_string())?;
-            }
-            let out = child.wait_with_output().map_err(|e| e.to_string())?;
-            Ok((
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr).to_string(),
-            ))
-        };
-
-        let outside = dir.join("src").join("a.rs");
-        let (out_code, out_err) = edit(&wt, &outside, "worker")?;
-        let (in_code, _) = edit(&wt, &wt.join("src").join("a.rs"), "worker")?;
-        // The gap the harness's isolation did close: a hand-written climb out of the worktree.
-        let (climb_code, _) = edit(
-            &wt,
-            &wt.join("..").join("..").join("..").join("src").join("a.rs"),
-            "worker",
-        )?;
-        // The coordinator editing the same file the worker was refused, from inside the worker's
-        // worktree: the role decides, not the directory.
-        let (main_code, _) = edit(&wt, &outside, "coordinator")?;
-        let _ = std::fs::remove_dir_all(&dir);
-
-        let named = out_err.contains(&outside.display().to_string())
-            && out_err.contains(&wt.display().to_string());
-        Ok((
-            out_code == 2 && climb_code == 2 && named,
-            in_code == 0 && main_code == 0,
-        ))
-    })()
-    .unwrap_or_else(blocked);
-
-    Probe {
-        name: "hook: a worker's edit outside its worktree is denied naming the path; inside is allowed and the coordinator is never fenced, wherever it runs",
-        red_fires: res.0,
-        green_passes: res.1,
-    }
-}
-
 /// air-g5o: Metis reaches the coordinator's session and no worker's.
 ///
 /// The owner asked whether making the planning rule programmatic is "what metis does
@@ -13523,79 +12838,6 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
     let (red, green) = res.unwrap_or((false, false));
     Probe {
         name: "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
-/// air-rud0 (an adopter, after their batch 22, with the rendering proposed by their lane): the
-/// landing's clause report gave a REASON when it could not read a clause and a bare `ok` when
-/// it could, so the weaker claim wore the stronger form.
-///
-/// `ok` means a lookup matched — the merge touched a path the clause names, or a green is
-/// recorded at the landed sha. It does not mean anything about the clause's substance was
-/// checked. Their batch 22 printed `ok` beside a clause about sections no longer carrying a
-/// sequential number, discharged because the merge touched that file; it would have printed the
-/// same had the change renamed a variable in it. Their lane's phrase, and it is the bead's:
-/// **a lookup wearing the clothes of a judgement.** It is right in this case and right most of
-/// the time, which is what made it invisible, and a nine-bead landing is read by scanning this
-/// column.
-///
-/// Red (declared mutation: the discharged line goes back to a bare mark): a reader scanning
-/// verdicts sees `ok` with nothing beside it, which is the defect. Green: the lookup is on the
-/// SAME line as the tick and names the path that discharged it; the two honest branches are
-/// untouched, keeping their reason on the line beneath; and — the half that matters most — the
-/// JUDGEMENT is unchanged, so a clause naming a file the merge left alone is still `MISS` and
-/// prose is still `?`. Nothing here reads a clause's meaning.
-fn probe_a_discharged_clause_names_its_lookup() -> Probe {
-    use crate::cmd::acceptance::{Evidence, Verdict, judge, judge_clauses, report};
-
-    let changed = ["docs/rules/roles.md".to_string()];
-    let tree = [
-        "docs/rules/roles.md".to_string(),
-        "docs/untouched.md".to_string(),
-    ];
-    let ev = Evidence {
-        green_at_landed: true,
-        changed: &changed,
-        tree: &tree,
-    };
-    let touched = "docs/rules/roles.md names the rule.";
-    let left_alone = "docs/untouched.md gains a section.";
-    let prose = "The reviewer is happy with it.";
-
-    let r = report(&[judge_clauses(
-        "zz-1",
-        vec![touched.into(), left_alone.into(), prose.into()],
-        &ev,
-    )]);
-
-    // RED: the tick carries its lookup, on its own line, where the column is scanned.
-    let red = r.contains("ok (the merge changed docs/rules/roles.md) — docs/rules/roles.md")
-        && !r.contains("ok   docs/rules/roles.md");
-
-    // The judgement did not move: a lookup, never a reading of the clause.
-    let judged_the_same = matches!(judge(touched, &ev), Verdict::Discharged { .. })
-        && matches!(judge(left_alone, &ev), Verdict::Unevidenced { .. })
-        && matches!(judge(prose, &ev), Verdict::Undecidable { .. });
-    // The two honest branches are untouched, reason on the line beneath.
-    let honest_branches_untouched = r.contains(&format!("MISS {left_alone}"))
-        && r.contains("the merge did not change docs/untouched.md")
-        && r.contains(&format!("?    {prose}"));
-    // The discharged reason appears once, not twice: the second line went with the move.
-    let not_duplicated = r.matches("the merge changed docs/rules/roles.md").count() == 1;
-    // A green-backed clause names ITS lookup too, not just a path-backed one.
-    let g = report(&[judge_clauses(
-        "zz-2",
-        vec!["make verify green.".into()],
-        &ev,
-    )]);
-    let green_clause_named = g.contains("ok (a green verify is recorded at the landed sha) —");
-
-    let green =
-        judged_the_same && honest_branches_untouched && not_duplicated && green_clause_named;
-    Probe {
-        name: "land: a discharged acceptance clause names the lookup that discharged it on the verdict line, and the judgement is still a lookup rather than a reading",
         red_fires: red,
         green_passes: green,
     }

@@ -95,6 +95,11 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The worktree fence: a worker's Edit or Write outside its worktree is no longer denied. Its
+  only recorded refusals were writes to the session's own scratchpad. The roles text tells a
+  worker to work only in its worktree and use its scratchpad for the rest.
+- The `landed-not-closed` condition, and the per-clause verdicts in `air land` it came from.
+  `air land` still prints each landed bead with its acceptance text.
 - `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and
   writes no `no-precheck` line. `air status` still names `no-precheck` for such a branch.
 - `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and
@@ -140,6 +145,9 @@ missing notices, which are fixed or added below.
   refused. The gate now asks git whether every commit naming the bead is in main. The "batch
   green" notice now names only the beads the batch fully contains, and a member with no such
   bead is not told to close anything.
+- `air land` refused while any verify ran anywhere in the fleet, so a lane's green batch could
+  wait indefinitely behind workers' own runs. Only a verify in the main checkout or the lane's
+  tree refuses it now.
 - `air close` and `air handover` ran the whole hand-over check on an id like `air-1 notes.md`
   and advised a `Bead:` trailer naming both words. An id with whitespace is now refused naming
   it, and when the check would refuse, an id bd does not have is named instead.

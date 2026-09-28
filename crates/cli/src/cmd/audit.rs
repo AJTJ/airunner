@@ -440,6 +440,12 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
     }
 }
 
+/// Condition kinds whose mechanism was deleted, so a firing recorded before the deletion is
+/// history rather than an unregistered mechanism. Each is written up in `mechanisms.rs`'s
+/// deleted list. Removed, kind by kind, once the audit window no longer reaches its last
+/// firing; for `landed-not-closed` (air-cizz) that is one window after 2026-09-28.
+pub const DELETED_KINDS: &[&str] = &["landed-not-closed"];
+
 /// Decisions that record what happened rather than a mechanism acting on someone: an event
 /// was observed, a check passed, a claim was written.
 ///
@@ -736,7 +742,10 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
             if in_window {
                 for c in &e.conditions {
                     let kind = c.split(':').next().unwrap_or(c);
-                    if kind.is_empty() || registered_kinds.contains(kind) {
+                    if kind.is_empty()
+                        || registered_kinds.contains(kind)
+                        || DELETED_KINDS.contains(&kind)
+                    {
                         continue;
                     }
                     let slot = seen_traces.entry(format!("condition {kind}")).or_default();
@@ -1542,6 +1551,25 @@ mod tests {
             "2026-08-22",
         );
         assert_eq!(a.unregistered, vec![("hook.Stop / refuse".to_string(), 1)]);
+    }
+
+    /// air-cizz: a deleted condition's recorded firings are history, not an unregistered
+    /// mechanism; an unknown kind still is.
+    #[test]
+    fn a_deleted_condition_kind_is_not_reported_as_unregistered() {
+        let a = gather_from(
+            &[day(
+                "2026-09-27",
+                &[
+                    r#"{"at":"2026-09-27T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["landed-not-closed:zz-1","no-such-kind:zz-2"]},"decision":"attention"}"#,
+                ],
+            )],
+            "2026-09-27",
+        );
+        assert_eq!(
+            a.unregistered,
+            vec![("condition no-such-kind".to_string(), 1)]
+        );
     }
 
     /// air-hqj8: a budget row counts each hit on its names, from any line, and nothing else.
