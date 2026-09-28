@@ -99,6 +99,8 @@ pub struct Audit {
     /// Worker messages to the coordinator per closed bead (air-uzh2). Filled by `run` from the
     /// ledger; `gather_from` has no ledger and reports none.
     pub chatter: Option<Chatter>,
+    /// air-1pu5: what prechecks held workers for over the window; `None` from `gather_from`.
+    pub precheck: Option<PrecheckCost>,
     pub duration_ms: u64,
 }
 
@@ -128,6 +130,47 @@ pub fn uds_pid(to: &str) -> Option<i64> {
     let path = to.strip_prefix("uds:")?;
     let name = std::path::Path::new(path).file_stem()?.to_str()?;
     name.parse().ok()
+}
+
+/// What prechecks held workers for over the window (air-1pu5): a worker cannot edit while its
+/// precheck reads its tree, and cannot until its next tool call after it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PrecheckCost {
+    pub runs: usize,
+    pub run_secs: i64,
+    /// Summed only over runs whose next tool call was stamped.
+    pub wait_secs: i64,
+    pub waits: usize,
+}
+
+/// Pure over `(worker, duration_ms, finished_at, resumed_at)` rows.
+#[allow(clippy::type_complexity)]
+pub fn precheck_cost_of(rows: &[(String, Option<i64>, String, Option<String>)]) -> PrecheckCost {
+    let mut c = PrecheckCost {
+        runs: rows.len(),
+        ..PrecheckCost::default()
+    };
+    for (_, ms, end, resumed) in rows {
+        c.run_secs = c
+            .run_secs
+            .saturating_add(ms.unwrap_or(0).checked_div(1000).unwrap_or(0));
+        if let Some(s) = resumed
+            .as_deref()
+            .and_then(|r| super::status::seconds_between(end, r))
+        {
+            c.wait_secs = c.wait_secs.saturating_add(s.max(0));
+            c.waits = c.waits.saturating_add(1);
+        }
+    }
+    c
+}
+
+pub fn render_precheck(c: &PrecheckCost) -> String {
+    format!(
+        "\nprecheck cost: {} run(s), {} s running and {} s from a run's end to the worker's next \
+         tool call ({} of them stamped).\n",
+        c.runs, c.run_secs, c.wait_secs, c.waits
+    )
 }
 
 /// Pure over `(from_role, to)` rows from `messages`, the window's closed-bead count, and the
@@ -848,6 +891,7 @@ pub fn gather_from(days: &[(String, String)], since: &str) -> Audit {
         // not hold a release, so `gather_from` reports none rather than zero.
         churn: Churn::default(),
         chatter: None,
+        precheck: None,
         duration_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
 }
@@ -1276,6 +1320,9 @@ pub fn render(a: &Audit) -> String {
     if let Some(c) = &a.chatter {
         s.push_str(&render_chatter(c));
     }
+    if let Some(c) = a.precheck.as_ref().filter(|c| c.runs > 0) {
+        s.push_str(&render_precheck(c));
+    }
     s.push_str(&render_peer(&a.peer));
     s
 }
@@ -1382,6 +1429,9 @@ pub fn run(repo: &Path, since: Option<&str>, json: bool) -> i32 {
         .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
         .unwrap_or_default();
     audit.chatter = Some(chatter_of(&msgs, closed, &pids));
+    audit.precheck = Some(precheck_cost_of(
+        &ledger.precheck_waits(&since).unwrap_or_default(),
+    ));
     let defects = audit
         .rows
         .iter()
@@ -1656,6 +1706,25 @@ mod tests {
         let line = render_chatter(&c);
         assert!(line.contains("0.50 to 0.75 per closed bead"), "{line}");
         assert!(render_chatter(&chatter_of(&[], 0, &[])).contains("no closes, so no rate"));
+    }
+
+    /// air-1pu5: the audit's precheck totals, with an unstamped wait left out of the wait sum.
+    #[test]
+    fn precheck_totals_sum_runs_and_stamped_waits() {
+        let row = |ms: i64, end: &str, r: Option<&str>| {
+            (
+                "w1".to_string(),
+                Some(ms),
+                end.to_string(),
+                r.map(str::to_string),
+            )
+        };
+        let c = precheck_cost_of(&[
+            row(40_000, "2026-09-28T10:00:40Z", Some("2026-09-28T10:00:47Z")),
+            row(20_000, "2026-09-28T11:00:20Z", None),
+        ]);
+        assert_eq!((c.runs, c.run_secs, c.wait_secs, c.waits), (2, 60, 7, 1));
+        assert!(render_precheck(&c).contains("2 run(s), 60 s running and 7 s"));
     }
 
     /// air-1yxj: a `uds:` address names the pid of the recipient's `claude`, and the sessions

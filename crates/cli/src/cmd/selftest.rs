@@ -2214,7 +2214,6 @@ fn probe_bd_server_down_is_started_and_told_once() -> Probe {
             Ok(p)
         };
         let bins = Bins {
-            tmux: script("tmux", FAKE_TMUX)?,
             dolt: script("dolt", FAKE_DOLT)?,
         };
         let port = || -> Result<u16, String> {
@@ -2236,7 +2235,6 @@ fn probe_bd_server_down_is_started_and_told_once() -> Probe {
         let mut real = |p: u16, db: &str| {
             start(
                 &main,
-                "zz-dolt",
                 p,
                 db,
                 false,
@@ -2303,9 +2301,6 @@ fn probe_bd_server_down_is_started_and_told_once() -> Probe {
         green_passes: green,
     }
 }
-
-/// Runs the command a real tmux would, detached, with no pipe back to the caller.
-const FAKE_TMUX: &str = "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in\n*\" new-session \"*) sh -c \"$last\" </dev/null >/dev/null 2>&1 & ;;\n*\" has-session \"*) exit 1 ;;\nesac\nexit 0\n";
 
 /// Listens on `--port` for five seconds, which is all a probe or a test needs of a server.
 const FAKE_DOLT: &str = "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --port ] && port=$2; shift; done\nexec perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(LocalAddr=>\"127.0.0.1\",LocalPort=>$ARGV[0],Listen=>5,ReuseAddr=>1) or exit 1; alarm 5; while(my $c=$s->accept){close $c}' \"$port\"\n";
