@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A `bd_server` unit test read a neighbour listening on its port as a running server and
+  failed under a loaded verify. `start` now checks for Air's database before it probes the
+  port, and the test holds a listener on its own port to prove the port does not matter.
 - A recorded edit never expired, so the peer warning and `air holdings` named edits days old
   and long landed, and sessions long gone. An edit now ends once the file is clean in its
   holder's worktree and unchanged against main.
