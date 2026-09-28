@@ -1516,6 +1516,16 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
+        "channel: two subjects of one kind on one worker push once each, and audit reads pushed <= evaluated",
+        Mutation {
+            // air-8goe: the key the adopter's 417 pushes came from.
+            file: "crates/cli/src/cmd/mcp.rs",
+            from: "let key = (a.kind, a.subject_key().to_string());",
+            to: "let key = (a.kind, a.worker.clone());",
+            also_red: &[],
+        },
+    ),
+    (
         "attention: idle-without-claim fires for a live session, not a dead one",
         Mutation {
             // The one clause air-d10 added. Not the whole arm: taking that out would silence
@@ -2752,6 +2762,7 @@ fn all_probes() -> Vec<Probe> {
         probe_triage_bead_exists(),
         probe_surface_diff(),
         probe_change_only_push(),
+        probe_one_push_per_subject_audited(),
         probe_conditions_logged_on_change_only(),
         probe_doctor_enumerates_tables(),
         probe_gc_keeps_what_it_must(),
@@ -2881,6 +2892,7 @@ fn probe_change_only_push() -> Probe {
         detail: format!("{bead} handed over {mins} min ago"),
         for_minutes: mins,
         fingerprint: format!("{bead}/alpha"),
+        subject: String::new(),
     };
     let queue = |attempts: usize, mins: i64| Attention {
         worker: "beta".to_string(),
@@ -2888,6 +2900,7 @@ fn probe_change_only_push() -> Probe {
         detail: format!("{attempts} attempt(s), oldest {mins} min"),
         for_minutes: mins,
         fingerprint: format!("attempts:{attempts}"),
+        subject: String::new(),
     };
 
     let mut pushed = Pushed::new();
@@ -2910,6 +2923,81 @@ fn probe_change_only_push() -> Probe {
         && !changed.iter().any(|a| a.worker == "air-1");
     Probe {
         name: "channel: an unchanged set pushes once however old it gets; a changed set pushes again",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// air-8goe: two `closed-not-landed` beads on one worker, polled for twenty ticks, are pushed
+/// once each, and `air audit` over what the ticks wrote reads pushed <= evaluated. An adopter's
+/// coordinator was pushed that condition 417 times in a day against 11 evaluations, because
+/// both beads shared one (worker, kind) key and each overwrote the other's fingerprint.
+///
+/// Red: a head that moves under one bead pushes that bead again, and only it. Green: the
+/// twenty unchanged ticks push two, and the audit ratio holds.
+///
+/// The mutation that makes it red: keying `select_new_at` by `a.worker` instead of
+/// `a.subject_key()` puts the flapping back, and the green half's count fails.
+fn probe_one_push_per_subject_audited() -> Probe {
+    use crate::cmd::mcp::{Pushed, push_tick};
+    use crate::cmd::status::{Attention, Snapshot, kinds};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let l = Ledger::open_in(&dir).map_err(|e| e.to_string())?;
+        let opened = Some((l, "coordinator".to_string()));
+        let day = crate::cmd::today();
+        let cnl = |bead: &str, head: &str| Attention {
+            worker: "w1".into(),
+            kind: kinds::CLOSED_NOT_LANDED,
+            detail: format!("{bead} is closed but its commits are in no tree but w1's"),
+            for_minutes: 0,
+            fingerprint: format!("{bead}/{head}"),
+            subject: bead.into(),
+        };
+        let mut pushed = Pushed::new();
+        let mut sent = 0usize;
+        for tick in 0..20 {
+            let snap = Snapshot {
+                at: format!("{day}T10:{tick:02}:00Z"),
+                ..Default::default()
+            };
+            push_tick(
+                opened.as_ref(),
+                &mut pushed,
+                &snap,
+                &[cnl("zz-1", "aaa"), cnl("zz-2", "aaa")],
+                &mut |_| sent = sent.saturating_add(1),
+            );
+        }
+        let audit = crate::cmd::audit::gather(&dir, &day);
+        let row = audit.rows.iter().find(|r| r.id == "closed-not-landed");
+        let green = sent == 2 && row.is_some_and(|r| r.pushes == 2 && r.pushes <= r.evaluations);
+        let snap = Snapshot {
+            at: format!("{day}T10:30:00Z"),
+            ..Default::default()
+        };
+        let mut again = Vec::new();
+        push_tick(
+            opened.as_ref(),
+            &mut pushed,
+            &snap,
+            &[cnl("zz-1", "bbb"), cnl("zz-2", "aaa")],
+            &mut |v| again.push(v.clone()),
+        );
+        let red = again.len() == 1
+            && again
+                .first()
+                .and_then(|v| v.pointer("/params/content"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|c| c.contains("zz-1"));
+        std::fs::remove_dir_all(&dir).ok();
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "channel: two subjects of one kind on one worker push once each, and audit reads pushed <= evaluated",
         red_fires: red,
         green_passes: green,
     }
@@ -2946,6 +3034,7 @@ fn probe_conditions_logged_on_change_only() -> Probe {
             detail: format!("4 attempts, oldest {mins} min"),
             for_minutes: mins,
             fingerprint: "attempts:4".to_string(),
+            subject: String::new(),
         };
 
         // An hour of polling with nothing changing but the clock.
@@ -6880,6 +6969,7 @@ fn probe_channel_dedupe() -> Probe {
         detail: String::new(),
         for_minutes: m,
         fingerprint: String::new(),
+        subject: String::new(),
     };
     let mut p = Pushed::new();
     let first = select_new(&mut p, &[a(5)]).len() == 1;

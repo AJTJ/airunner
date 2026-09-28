@@ -1756,6 +1756,17 @@ fn stop_nudge_skips_the_verification_lane() {
     .unwrap();
     let named = stop("s-named", "worker");
     assert!(named.contains("air claim zz-t"), "{named}");
+    // air-8goe: the same ready set is named once per session; a changed set is named again.
+    let again = stop("s-worker", "worker");
+    assert!(!again.contains("air claim"), "{again}");
+    std::fs::write(
+        main.join("bd.ready.json"),
+        r#"[{"id":"zz-t","status":"open","issue_type":"task"},{"id":"zz-u","status":"open","issue_type":"task"}]"#,
+    )
+    .unwrap();
+    assert_eq!(air(&main, &bd, &["status"]).0, 0);
+    let changed = stop("s-worker", "worker");
+    assert!(changed.contains("zz-u"), "{changed}");
 }
 
 /// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as

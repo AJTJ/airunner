@@ -437,9 +437,19 @@ fn dispatch(
                 .ok()
                 .flatten()
                 .map(|(_, at)| claim_followed(ledger, worker, &at));
-            if nudge.is_some() {
-                let _ = ledger.emit_if_changed(&input.session_id, "nudge", &now, &now);
+            // air-8goe: the nudge's subject is the ready set. The same set is named once per
+            // session, again only when it changes, and the slate is wiped once this worker has
+            // work, so its next idle stop names the set afresh. After `followed`, which reads
+            // the last nudge. It used to record the clock as its fingerprint, which always
+            // differs: an adopter's worker was handed the same ready set 13 times.
+            let unchanged = nudge.is_some()
+                && !ledger
+                    .emit_if_changed(&input.session_id, "nudge", &ready.join(","), &now)
+                    .unwrap_or(true);
+            if has_work {
+                let _ = ledger.emit_if_changed(&input.session_id, "nudge", "", &now);
             }
+            let nudge = if unchanged { None } else { nudge };
             let decision = if nudge.is_some() {
                 dec::STOP_NUDGE
             } else if v.pass {

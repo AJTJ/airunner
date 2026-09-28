@@ -100,6 +100,11 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- The coordinator's channel pushed the same condition on every poll when one worker had two
+  beads in it: an adopter's coordinator got `closed-not-landed` 417 times in a day. Pushes
+  are now keyed by the bead, branch or lease they are about, and a change-only condition's
+  age counts from when that subject first appeared. The Stop nudge names the same ready set
+  once per session, and `air land` warns about the same main-checkout readers once.
 - A session whose pid had been reused, or had become a zombie, read as alive and got most of
   the ready notices. A session is now alive only when its pid runs with the start time it
   registered with; `air status --json` shows `liveness` as alive, dead or unknown, and only

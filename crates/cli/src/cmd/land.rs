@@ -775,7 +775,23 @@ pub fn run(
     let mut readers = main_readers(repo, &ledger);
     let main_path = super::readers::resolved(repo);
     super::readers::drop_ignored(&mut readers, &main_path);
-    if let Some(w) = super::readers::main_warning(&readers, &main_path) {
+    // air-8goe: said when the set of readers changes, not on every landing.
+    let said_before = !ledger
+        .emit_if_changed(
+            &worker,
+            "land:main-readers",
+            &super::readers::main_fingerprint(&readers, &main_path),
+            &now(),
+        )
+        .unwrap_or(true);
+    let warning = super::readers::main_warning(&readers, &main_path);
+    if warning.is_some() && said_before {
+        lines.push(format!(
+            "main checkout: the same unrecorded process(es) as the last warning ({} process(es) \
+             examined)",
+            readers.examined
+        ));
+    } else if let Some(w) = warning {
         // Its own event line, so `air audit` counts it (`mechanisms.rs` `land-main-readers`).
         log_event(
             &ledger,

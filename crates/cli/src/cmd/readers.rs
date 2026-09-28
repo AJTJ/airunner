@@ -444,6 +444,25 @@ fn check_ignore(repo: &Path, paths: &[String]) -> BTreeSet<String> {
 /// `air land`'s warning about the main checkout, or None when nothing but sessions is there.
 /// A warning, never a refusal: the landing moves files under these processes, and whether
 /// that matters is the coordinator's call.
+/// What [`main_warning`] is about, for saying it once (air-8goe): the pids it names, or why
+/// nothing could be seen. Empty when there is no warning. An adopter's 97 landings each
+/// printed the same six readers.
+pub fn main_fingerprint(r: &TreeReaders, main: &str) -> String {
+    if let Some(why) = &r.unknown {
+        return format!("unknown:{why}");
+    }
+    let mut pids: Vec<String> = r
+        .trees
+        .iter()
+        .filter(|t| t.path == main)
+        .flat_map(|t| t.readers.iter())
+        .filter(|x| !x.session)
+        .map(|x| x.pid.to_string())
+        .collect();
+    pids.sort();
+    pids.join(",")
+}
+
 pub fn main_warning(r: &TreeReaders, main: &str) -> Option<String> {
     if let Some(why) = &r.unknown {
         return Some(format!(

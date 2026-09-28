@@ -333,6 +333,22 @@ pub struct Attention {
     /// pushes on 2026-08-22 were 13 distinct facts.
     #[serde(default)]
     pub fingerprint: String,
+    /// What the condition is about when that is not the worker: the bead, branch, lease or
+    /// merge (air-8goe). Empty means the worker is the subject. The channel keys its pushes by
+    /// (kind, subject), so two beads of one kind on one worker are two conditions.
+    #[serde(default)]
+    pub subject: String,
+}
+
+impl Attention {
+    /// The subject the channel keys on: [`Attention::subject`], or the worker when unset.
+    pub fn subject_key(&self) -> &str {
+        if self.subject.is_empty() {
+            &self.worker
+        } else {
+            &self.subject
+        }
+    }
 }
 
 /// The command alone, for a line that already says what it is (air-6p5). Since air-3pz that
@@ -1490,6 +1506,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         ),
                         for_minutes: age,
                         fingerprint: String::new(),
+                        subject: String::new(),
                     }),
                     // "prompt them" needs somebody to prompt. `gather` already asks the OS
                     // whether the session's process is alive; the condition never read the
@@ -1543,6 +1560,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
+                            subject: String::new(),
                         });
                     }
                     "working" | "running" if has_claim && age >= t.silent_with_claim_min => {
@@ -1555,6 +1573,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                             ),
                             for_minutes: age,
                             fingerprint: String::new(),
+                            subject: String::new(),
                         });
                     }
                     _ => {}
@@ -1584,6 +1603,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                         ),
                         for_minutes: age,
                         fingerprint: String::new(),
+                        subject: String::new(),
                     });
                 }
             }
@@ -1637,6 +1657,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
+                subject: String::new(),
             });
         }
     }
@@ -1670,6 +1691,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 ),
                 for_minutes: minutes_between(&l.heartbeat_at, now).unwrap_or(0),
                 fingerprint: format!("{}/{}", l.resource, l.worker),
+                subject: format!("{}/{who}", l.resource),
             });
         }
     }
@@ -1721,6 +1743,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 ),
                 for_minutes: minutes,
                 fingerprint: format!("{worker}@{head}"),
+                subject: String::new(),
             });
         }
     }
@@ -1736,6 +1759,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             for_minutes: minutes_between(&r.rewound_at, now).unwrap_or(0),
             // The commit and who holds it is the whole fact; its age is not a change.
             fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
+            subject: r.merge_commit.clone(),
         });
     }
     // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
@@ -1774,6 +1798,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             ),
             for_minutes: 0,
             fingerprint: format!("{bead}/{why}"),
+            subject: bead.clone(),
         });
     }
 
@@ -1796,10 +1821,15 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             worker: worker.clone(),
             kind: kinds::CLOSED_NOT_LANDED,
             detail: format!(
-                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at                  {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch                  is green and the tree is clean — which is why the person best placed to see                  this is the last who will (air-gazh). The work exists in one place and no                  backup of that place is a landing."
+                "{bead} is closed but its commits are in no tree but {worker}'s worktree, at \
+                 {short}: {why}. Nothing is wrong locally — the bead reads closed, the branch \
+                 is green and the tree is clean — which is why the person best placed to see \
+                 this is the last who will (air-gazh). The work exists in one place and no \
+                 backup of that place is a landing."
             ),
             for_minutes: 0,
             fingerprint: format!("{bead}/{}", c.head),
+            subject: bead.clone(),
         });
     }
     out

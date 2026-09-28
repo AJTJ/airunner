@@ -272,7 +272,7 @@ timeout.
 | Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. Closes are not read from the command text. A command the repository declares as needing a lease is refused to a session not holding it when enforcement is on, which the worker and lane launchers turn on; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
 | Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
-| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
+| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim, naming ready beads it has confirmed. The same ready set is named once per session and again only when it changes or after the worker has held work (air-8goe). The lane and the coordinator get neither, by AIR_ROLE. |
 
 Every hook call, including the silent ones, writes one event line.
 
@@ -716,6 +716,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 | Each hook call appends one event line, and nothing is overwritten. | 2026-08-20 | `air hook` |
 | Every `SendMessage` is recorded in the ledger with its content. | 2026-09-05 | `messages` table |
 | Attention is pushed when the set of conditions changes; age alone is not a change. | 2026-08-22 | fingerprint in `air status` |
+| Everything Air says is keyed by its kind and its subject (the bead, branch, lease, ready set or process set it is about) and said when new, changed or escalating, never again unchanged. A change-only condition's age is counted from when the channel first saw its subject. | 2026-09-28 | air-8goe; `select_new_at` in `mcp.rs` |
 | A worker idle without a claim is a condition; queue depth is only measured. | 2026-08-22 | `idle-without-claim` |
 | Every mechanism has a removal condition. | 2026-08-22 | mechanism registry |
 | A count of zero is evidence only if the subject occurred, and a deletion's numbers are checked against the raw record. | 2026-08-29 | `do-less` skill |
