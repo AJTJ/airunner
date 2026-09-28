@@ -2577,6 +2577,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "lane-loop-allowed-bare",
+        since: "2026-09-28 (air-b1h8)",
+        headline: "The lane's settings allow `air batch cut`, `air record`, `air status`, \
+                   `git merge` and `git reset --hard main` beside `air land`, and the roles text \
+                   tells the lane to run them bare: a piped line reaches the auto-mode \
+                   classifier, which refused a landing and then every one after it.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3695,6 +3705,10 @@ mod tests {
             "Work only in your worktree, never in the main checkout, and use your scratchpad"
         ));
         assert!(!has("denied by Air's PreToolUse hook"));
+        // air-b1h8: the lane's allow rules match only the bare line.
+        assert!(has(
+            "Run these and `air land` bare, with no pipe or redirect"
+        ));
         assert!(!has("the main checkout is blocked natively"));
         // A `digest_dir` digest is tracked, and its route past a cut batch (air-ahl).
         assert!(has("It also has to be tracked by git there"));

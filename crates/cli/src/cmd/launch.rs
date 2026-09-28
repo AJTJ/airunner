@@ -395,12 +395,32 @@ fn with_pin(repo: &Path, mut env: Vec<(String, String)>) -> Vec<(String, String)
 /// (https://code.claude.com/docs/en/permissions.md "Project allow rules and workspace trust",
 /// accessed 2026-09-25). Workers keep their `Bash(air land *)` deny, which beats any allow.
 ///
-/// Removal: when the lane is removed, or when a round shows the lane's `air land` reaching the
-/// classifier anyway (a `PermissionDenied` event line naming it).
+/// air-b1h8 (2026-09-28 21:34Z): that removal condition occurred. The lane ran
+/// `air land --worker lane 2>&1 | tail -8`; a piped line is judged segment by segment, `tail -8`
+/// matched no rule, the whole line went to the classifier, and after one "[Auto-Mode Bypass]"
+/// the session refused every later landing and a reset of its own branch for 45 minutes. So the
+/// rest of the lane's loop is allowed too, and roles.md tells the lane to run these bare.
+///
+/// Removal: when the lane is removed, or when a round shows one of these reaching the classifier
+/// while run bare (a `PermissionDenied` event line naming it).
 pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
-    std::iter::once("Bash(air land *)".to_string())
-        .chain(pin.map(|p| format!("Bash({} land *)", p.display())))
-        .collect()
+    const AIR: &[&str] = &[
+        "land *",
+        "batch cut",
+        "batch cut *",
+        "record *",
+        "status",
+        "status *",
+    ];
+    let mut v: Vec<String> = AIR.iter().map(|c| format!("Bash(air {c})")).collect();
+    if let Some(p) = pin {
+        v.extend(AIR.iter().map(|c| format!("Bash({} {c})", p.display())));
+    }
+    v.extend([
+        "Bash(git merge *)".to_string(),
+        "Bash(git reset --hard main)".to_string(),
+    ]);
+    v
 }
 
 /// The one project MCP server Air installs (`.mcp.json`, and `server:air` for the channel).
@@ -1465,6 +1485,17 @@ mod tests {
             "{pin:?}"
         );
         assert!(pin.contains(&"Bash(air land *)".to_string()));
+        // air-b1h8: the whole loop, not only the landing, so none of it meets the classifier.
+        for rule in [
+            "Bash(air batch cut)",
+            "Bash(air record *)",
+            "Bash(air status)",
+            "Bash(/m/.air/bin/air batch cut *)",
+            "Bash(git merge *)",
+            "Bash(git reset --hard main)",
+        ] {
+            assert!(pin.contains(&rule.to_string()), "{rule}: {pin:?}");
+        }
         // A pass-through allow list is kept beside Air's, not replaced by it.
         let mut argv = lane_argv("lane", "air", roles, &[]);
         merge_settings(
