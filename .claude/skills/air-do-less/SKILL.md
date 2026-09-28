@@ -12,6 +12,31 @@ that the model cannot be trusted with something; that bet decays as models impro
 constraint nobody re-examines becomes a throttle. Opinionated frameworks (Gas Town: roles,
 molecules, convoys, merge slots) are the cautionary case: mechanisms ahead of measured need.
 
+## Precedent before change
+
+**Before any change, read what was already solved, and write it on the bead as a `## Precedent`
+section.** The same defect came back under a new name: the channel repeated one condition
+thousands of times on 2026-08-22 and was fixed for that one kind (air-s7c); the same shape came
+back on 2026-09-27 as `closed-not-landed`, 417 pushes, because the fix had been made for a kind
+and not for the rule. Nobody read the earlier fix before making the later one, because there was
+nowhere to read it (owner, 2026-09-28: "a surgical fix that's well thought out with an
+understanding of historical precedents"). The section has four parts:
+
+- **Register.** The entries in `docs/solved-issues.md` that touch the same mechanism or state,
+  quoted by title, and what each one's "Do not" line forbids.
+- **Lifecycle.** Which states and transitions of the lifecycle table (`docs/design.md` §6.8,
+  `crates/cli/src/cmd/lifecycle.rs`) the change touches, or "none: not a flow change".
+- **Weight.** Whether the incident is a recurring cost under normal operation or a one-off, with
+  the count that says so. A count taken while a session was dead or out of tokens is named as
+  such and is not the weight: the 417 pushes went mostly into a session that could not read
+  them; the defect was the keying, and its weight is two beads on one worker, not 417.
+- **The surgical change.** One sentence for the change, and one for what it must not regress.
+
+The coordinator writes the section when filing, from the register and the table; where the repo
+sets `lint.sections` in `.beads/config.yaml`, as this one does, bd refuses a task or bug filed
+with `--validate` and without it. A
+worker who finds the precedent wrong captures that rather than proceeding.
+
 ## Before adding anything, answer in writing
 
 1. **Which recorded failure does this remove?** Cite the incident (capture id, retro line,
