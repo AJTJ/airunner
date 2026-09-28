@@ -246,8 +246,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
     match ledger.open_claim(bead) {
         Ok(Some(c)) if c.worker != worker => {
             let msg = format!(
-                "refused: {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
-                c.worker, c.claimed_at, c.worker
+                "refused: {bead} is claimed by {} since {} (someone else took it: `bd ready` lists what is claimable now; if {} has gone, the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
+                c.worker, c.claimed_at, c.worker, c.worker
             );
             return fail(
                 &ledger,
@@ -456,8 +456,8 @@ pub fn claim(repo: &Path, bead: &str, files: &[String], json: bool) -> i32 {
         match ledger.open_claim(bead) {
             Ok(Some(c)) if c.worker != worker => {
                 let msg = format!(
-                    "refused: you typed {typed}, which bd resolves to {bead}, and {bead} is claimed by {} since {} (fix: ask them, or the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
-                    c.worker, c.claimed_at, c.worker
+                    "refused: you typed {typed}, which bd resolves to {bead}, and {bead} is claimed by {} since {} (someone else took it: `bd ready` lists what is claimable now; if {} has gone, the coordinator runs `air reclaim {bead} --worker {} --reason reassigned`)",
+                    c.worker, c.claimed_at, c.worker, c.worker
                 );
                 return fail(
                     &ledger,

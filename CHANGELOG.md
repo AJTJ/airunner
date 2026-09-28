@@ -53,6 +53,11 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- The `beads are ready` notice and a claim refused because a peer holds the bead now point
+  at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
+  after a hand-over caused most refused claims in the 0.4.10 trial.
+- Under a verify lane, a worker whose every claim is batch-ready is nudged with the ready beads
+  when it stops, the same as a worker with no claim.
 - Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).
   bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; see Fixed.
 - The fleet's protocol lives in Air's roles text (`.air/roles.md`). An adopting repository keeps
@@ -90,6 +95,13 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and
+  writes no `no-precheck` line. `air status` still names `no-precheck` for such a branch.
+- `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and
+  red counts at the commit instead, and the close refusal states those counts rather than
+  calling the test flaky.
+- The Stop hook no longer reports what a close would refuse. `air close` and `air handover`
+  still say it when they are run.
 - The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell
   command: neither the hand-over check on it nor the claim release after it. Workers and the
   lane close with `air close`, and their launchers deny bd's write commands.
@@ -122,6 +134,16 @@ missing notices, which are fixed or added below.
   refused. The gate now asks git whether every commit naming the bead is in main. The "batch
   green" notice now names only the beads the batch fully contains, and a member with no such
   bead is not told to close anything.
+- `air close` and `air handover` ran the whole hand-over check on an id like `air-1 notes.md`
+  and advised a `Bead:` trailer naming both words. An id with whitespace is now refused naming
+  it, and when the check would refuse, an id bd does not have is named instead.
+- `make verify` was red when run from a fleet session, because the tests that spawn `air`
+  passed on the session's `AIR_ROLE` and the other launcher variables. Every spawn in
+  `crates/cli/tests` now goes through one helper that removes `AIR_*` and `BEADS_ACTOR`.
+- `air status` kept showing `STOPPED at <t>` after the session resumed; it now shows only
+  until the session's next event of its own. A session in a permission or idle prompt shows
+  `waiting for the person since <t>`, a subagent's hooks no longer mark its parent idle, a
+  stop with no reason says so instead of naming an API error, and no age reads negative.
 - After a red batch, the next `air batch cut` built on the red merges and would have carried
   them into the next batch. Every cut now resets the lane's branch to main first. It refuses
   while the lane has uncommitted changes, or while its head is a passing batch not yet landed.

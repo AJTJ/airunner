@@ -4,13 +4,14 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn scratch_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let g = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -137,7 +138,7 @@ fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
 /// wants (a `Bead:` trailer, a `bead:` front-matter line); the one test that is ABOUT a
 /// fallback pins its cutoff through this, and that pin is deleted when the fallback is.
 fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+    let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
     cmd.arg("--repo")
         .arg(repo)
         .args(args)
@@ -160,7 +161,7 @@ fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32,
 /// `air hook` with a hook payload on stdin, the way Claude Code invokes it.
 fn air_hook(repo: &Path, bd: &Path, payload: serde_json::Value, enforce: bool) -> (i32, String) {
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+    let mut child = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(repo)
         .arg("hook")
@@ -257,7 +258,7 @@ fn release_passes_the_holder_actor_that_bd_1_3_requires() {
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -374,12 +375,12 @@ fn a_bd_timeout_is_not_a_refusal_and_does_not_claim_to_know_bd_state() {
     }
     // Warm the first exec, which pays a macOS security assessment, so the budget below
     // measures bd and not the OS.
-    let _ = Command::new(&slow)
+    let _ = common::command(&slow)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["claim", "zz-9"])
@@ -454,12 +455,12 @@ fn a_bd_timeout_on_claim_is_retried_once_and_the_retry_lands() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&flaky, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let _ = Command::new(&flaky)
+    let _ = common::command(&flaky)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["claim", "zz-9"])
@@ -523,13 +524,13 @@ fn slow_bd_claim_is_reconciled_and_reclaim_keeps_the_first_time() {
     }
     // First exec of a freshly written script pays a macOS security assessment (seen >1.5 s
     // under load, 2026-08-22); warm it so the short timeout below measures bd, not the OS.
-    let _ = Command::new(&slow)
+    let _ = common::command(&slow)
         .arg("show")
         .arg("warm")
         .output()
         .unwrap();
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -867,7 +868,7 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
 
     // A worker's close runs the hand-over gate.
     let wt = repo.join("wt-w");
-    let g = Command::new("git")
+    let g = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -889,7 +890,33 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("air close refused for"), "{out}");
     assert!(out.contains("verify-green-at-head"), "{out}");
+    // A refusal closes nothing. It asks bd, once, whether the id exists (air-a8ra), so an
+    // unknown id is named instead of the gate's advice.
+    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
+    assert!(!log.contains("close"), "{log}");
+    assert!(log.lines().count() <= 1, "{log}");
+
+    // air-a8ra: an id and a filename as one argument is refused before bd or the gate, and
+    // an id bd does not have is named rather than advised about.
+    std::fs::write(wt.join("bd.log"), "").unwrap();
+    let (code, out, _) = air_env(
+        &wt,
+        &bd,
+        &["close", "zz-11 notes.md", "--reason", "x"],
+        &worker,
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("not a bead id: \"zz-11 notes.md\""), "{out}");
+    assert!(!out.contains("Bead:"), "{out}");
     assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
+    std::fs::write(wt.join("bd.unknown"), "zz-99\n").unwrap();
+    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-99", "--reason", "x"], &worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("bd has no bead zz-99"), "{out}");
+    let (code, out, err) = air_env(&wt, &bd, &["handover", "--bead", "zz-99"], &worker);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("bd has no bead zz-99"), "{out}");
+    std::fs::remove_file(wt.join("bd.unknown")).unwrap();
 
     let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
@@ -1043,9 +1070,9 @@ fn triage_refuses_when_bd_does_not_answer() {
     }
     // First exec of a freshly written script pays a macOS security assessment; warm it so
     // the short budget below measures the stub, not the OS (air-y8m).
-    let _ = Command::new(&slow).arg("ready").output().unwrap();
+    let _ = common::command(&slow).arg("ready").output().unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["triage", &id, "--bead", "zz-1"])
@@ -1076,7 +1103,7 @@ fn owner_label_is_the_gate_and_human_is_not() {
     let bd = fake_bd(&repo);
     // A worker, not the coordinator: the label only gates workers.
     let wt = repo.join("wt-w");
-    let g = Command::new("git")
+    let g = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -1122,7 +1149,7 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     let bd = fake_bd(&repo);
     // Second worktree.
     let wt = repo.join("wt-b");
-    let out = Command::new("git")
+    let out = common::command("git")
         .args([
             "-C",
             repo.to_str().unwrap(),
@@ -1142,12 +1169,12 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
     );
 
     // A pid that is certainly dead: spawn `true` and wait for it.
-    let dead = Command::new("true").spawn().unwrap();
+    let dead = common::command("true").spawn().unwrap();
     let dead_pid = dead.id().to_string();
     let _ = dead.wait_with_output();
 
     let run = |cwd: &Path, pid: &str, args: &[&str]| -> (i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(cwd)
             .args(args)
@@ -1656,7 +1683,7 @@ fn a_declared_command_needs_its_lease() {
     let bd = fake_bd(&main);
     // (exit code, stdout + stderr) for one PreToolUse(Bash) from alpha's worktree.
     let hook = |cmd: &str, role: Option<&str>, enforce: bool| -> (i32, String) {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_air"));
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
         c.arg("--repo")
             .arg(&alpha)
             .arg("hook")
@@ -1752,7 +1779,7 @@ fn stop_nudge_skips_the_verification_lane() {
     .unwrap();
     assert_eq!(air(&main, &bd, &["status"]).0, 0);
     let stop = |session: &str, role: &str| -> String {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_air"))
+        let mut child = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&main)
             .arg("hook")
@@ -1986,7 +2013,8 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
         "{s}"
     );
 
-    // 0.4.8 trial: the lane's cut tells the held-out worker, once per head.
+    // air-aepb: the lane's cut leaves the branch out and tells its worker nothing; the worker
+    // knows it has not prechecked, and `air status` names why above.
     let lane = main.parent().unwrap().join("lane");
     git(
         &main,
@@ -1999,24 +2027,17 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
             lane.to_str().unwrap(),
         ],
     );
-    for _ in 0..2 {
-        let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
-        assert_eq!(code, 0, "{out}{err}");
-    }
+    let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+    assert_eq!(code, 0, "{out}{err}");
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
-    let held: Vec<(String, String, String)> = conn
-        .prepare("SELECT to_worker, key, content FROM deliveries WHERE kind='batch-held'")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
+    let held: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE kind='batch-held'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(held.len(), 1, "{held:?}");
-    assert_eq!(
-        (held[0].0.as_str(), held[0].1.as_str()),
-        ("alpha", head.as_str())
-    );
-    assert!(held[0].2.contains("air record precheck --"), "{held:?}");
+    assert_eq!(held, 0);
 
     // A red precheck is not enough; a green one at this head is.
     assert_eq!(
@@ -2080,7 +2101,7 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let t0 = std::time::Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_air"))
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
         .arg("--repo")
         .arg(&repo)
         .args(["--json", "status"])
@@ -2135,7 +2156,7 @@ fn status_lists_green_landings_with_their_commands() {
     let bd = fake_bd(&repo);
     let alpha = repo.join("alpha");
     let g = |cwd: &Path, args: &[&str]| {
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(cwd)
             .args(args)
@@ -2287,7 +2308,7 @@ fn a_released_bead_is_claimable_by_another_worker() {
     let repo = dir.path().canonicalize().unwrap();
     let bd = fake_bd(&repo);
     let as_actor = |actor: &str, args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_air"))
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -2326,11 +2347,29 @@ fn a_released_bead_is_claimable_by_another_worker() {
     assert!(!text.contains("pencilled assignee"), "{text}");
 }
 
+/// air-0blv: a claim refused because a peer holds the bead points at the current list first.
+/// In the 0.4.10 trial most refusals came minutes after the peer's claim, from workers walking
+/// a stale list, and the refusal's only advice was to ask the holder or reclaim.
+#[test]
+fn a_claim_held_by_a_peer_points_at_bd_ready() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let (code, out, err) = air(&main, &bd, &["claim", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = air(&alpha, &bd, &["claim", "zz-1"]);
+    assert_ne!(code, 0, "{out}{err}");
+    let text = format!("{out}{err}");
+    assert!(
+        text.contains("is claimed by") && text.contains("`bd ready` lists what is claimable now"),
+        "{text}"
+    );
+}
+
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
 /// `air claim` renames the worker's tmux window to the bead and `air release` clears it.
 #[test]
 fn claim_labels_the_tmux_window_and_release_clears_it() {
-    if Command::new("tmux").arg("-V").output().is_err() {
+    if common::command("tmux").arg("-V").output().is_err() {
         eprintln!("SKIP: tmux not installed");
         return;
     }
@@ -2341,7 +2380,7 @@ fn claim_labels_the_tmux_window_and_release_clears_it() {
     std::fs::write(repo.join(".beads/config.yaml"), "issue-prefix: \"zz\"\n").unwrap();
     let socket = format!("air-test-label-{}", std::process::id());
     let tmux = |args: &[&str]| {
-        Command::new("tmux")
+        common::command("tmux")
             .args(["-L", &socket])
             .args(args)
             .output()
@@ -2352,7 +2391,7 @@ fn claim_labels_the_tmux_window_and_release_clears_it() {
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     };
     let air_tmux = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_air"))
+        common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
             .arg(&repo)
             .args(args)
@@ -2853,7 +2892,7 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
         assert_eq!(air(wt, &bd, &["claim", bead]).0, 0, "{name}");
         std::fs::write(wt.join(file), body).unwrap();
         git(wt, &["add", file]);
-        let out = Command::new("git")
+        let out = common::command("git")
             .arg("-C")
             .arg(wt)
             .args(["commit", "-q", "-m", &bead_trailer(bead)])
@@ -2927,7 +2966,7 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     assert!(git(&lane, &["ls-files", "-u"]).is_empty());
     // Exactly main plus alpha's and gamma's commits.
     let is_anc = |sha: &str| {
-        Command::new("git")
+        common::command("git")
             .arg("-C")
             .arg(&lane)
             .args(["merge-base", "--is-ancestor", sha, "HEAD"])
@@ -3127,7 +3166,7 @@ fn a_cut_starts_from_main_and_refuses_an_unlanded_green() {
     let beta = root.join("beta").canonicalize().unwrap();
     let lane = root.join("lane").canonicalize().unwrap();
     let is_anc = |sha: &str| {
-        Command::new("git")
+        common::command("git")
             .arg("-C")
             .arg(&lane)
             .args(["merge-base", "--is-ancestor", sha, "HEAD"])
@@ -3238,7 +3277,7 @@ fn land_repo(verify: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = common::command("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -3834,14 +3873,13 @@ fn a_bead_on_two_branches_is_refused_and_worker_names_the_branch() {
 /// air-75u: the adopter end to end. The coordinator's shell sits in alpha's worktree
 /// when its turn ends, so the Stop hook's `cwd` is alpha's. With the launcher's `AIR_ROLE`
 /// the session is still the coordinator: no hand-over check, and the session row is its. Without it
-/// (a session Air did not launch) the checkout decides, and the advisory at least says whose
-/// tree it is about.
+/// (a session Air did not launch) it is the owner, whatever the checkout.
 #[test]
 fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     use std::io::Write;
     let (_tmp, main, alpha) = land_repo("true");
     let bd = fake_bd(&main);
-    // alpha holds a claim and is not green, so a worker's Stop would speak.
+    // alpha holds a claim and is not green, so a worker's Stop spoke before air-wau8.
     std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
     assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
     std::fs::write(alpha.join("more.txt"), "x\n").unwrap();
@@ -3849,7 +3887,7 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
     git(&alpha, &["commit", "-q", "-m", "wip"]);
 
     let stop = |session: &str, env: &[(&str, &str)]| -> String {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_air"));
+        let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
         cmd.arg("--repo")
             .arg(&main)
             .arg("hook")
@@ -3919,9 +3957,10 @@ fn a_coordinator_whose_shell_is_in_a_worktree_is_still_the_coordinator() {
         .unwrap();
     assert_eq!(who, "coordinator");
 
-    // Launched as a worker: the advisory says whose tree it is.
+    // Launched as a worker: the event is alpha's. The Stop hook says nothing about a close
+    // any more (air-wau8); before, it said whose tree the advisory was about.
     let out = stop("w", &[("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")]);
-    assert!(out.contains("handover would refuse for alpha at"), "{out}");
+    assert!(!out.contains("handover"), "{out}");
     let ev = stop_events();
     assert_eq!(
         ev.last().unwrap()["worker"],

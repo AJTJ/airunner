@@ -457,7 +457,8 @@ pub const BOOKKEEPING: &[&str] = &[
     // broken on request, the lease gate finding every lease held, a hook event with no
     // handler, a push (counted through the condition it carries), a cut and a dry run (their
     // drops, refusals and precheck exclusions are rows), a landing that could not select, a
-    // triage bd could not answer, and the Stop advisory's suppressed repeat.
+    // triage bd could not answer, and the Stop advisory's suppressed repeat (nothing writes
+    // that one since air-wau8 deleted the advisory; kept so earlier days stay classified).
     "already-mine",
     "attention",
     "bd-refused",

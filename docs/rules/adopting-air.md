@@ -74,10 +74,10 @@ launchers.
 
 A verify command. Air records its exit code, and the close gate reads that record. When
 `air init` writes a `verify` target, it exits 1 until you replace it with the repo's real check,
-so a placeholder can never record a green. `air record` flags a green as `suspicious` when it
-printed nothing, or when it ran in under a fifth of the time the same command's last green took.
-Run the verify three times at one commit before you
-rely on it: `air record` flags runs that disagree at one sha, and a flaky test will hold closes.
+so a placeholder can never record a green. `air record` prints how long the run took, how much
+it printed, and the green and red counts at the commit when it has more than one run.
+Run the verify three times at one commit before you rely on it: a test that fails some of the
+time will hold closes.
 
 Claude Code's Bash tool stops a command after 10 minutes by default, and a verify killed that
 way records nothing. Set `BASH_MAX_TIMEOUT_MS` above your longest verify, or have the lane run

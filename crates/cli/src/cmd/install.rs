@@ -2481,6 +2481,63 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "session-facts-yield",
+        since: "2026-09-28 (air-n9f3)",
+        headline: "`air status` shows `STOPPED at <t>` only until the session's next event of                    its own, and shows `waiting for the person since <t>` after a permission or                    idle prompt. A subagent's hooks no longer change its parent's state, a stop                    with no reason reads `stopped, no reason given`, and ages are measured                    against a clock read when the numbers are computed.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "stop-advisory-removed",
+        since: "2026-09-28 (air-wau8)",
+        headline: "The Stop hook no longer reports what a close would refuse; `air close` and \
+                   `air handover` still do. Under a verify lane, a worker whose every claim is \
+                   batch-ready is nudged with the ready beads when it stops, as a worker with no \
+                   claim already was.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "ready-list-is-a-snapshot",
+        since: "2026-09-28 (air-0blv)",
+        headline: "The `beads are ready` notice says its list is a snapshot and to pick from \
+                   `bd ready` after a refused claim or a finished bead; a claim refused because \
+                   a peer holds the bead says the same before naming `air reclaim`. The roles \
+                   text for the notice says so too.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "record-labels-removed",
+        since: "2026-09-28 (air-qlx3)",
+        headline: "`air record` no longer labels a run `suspicious` or `flaky-at-head`; it prints \
+                   `at this commit: N green / M red` when a commit has more than one run. The \
+                   close refusal for such a head states the same counts and no longer says the \
+                   test is flaky.",
+        silent_break: true,
+        action: "A script that matched `suspicious` or `flaky` in `air record` output matches \
+                 nothing now; read the exit and the counts.",
+    },
+    SurfaceChange {
+        id: "close-names-a-bad-id",
+        since: "2026-09-28 (air-a8ra)",
+        headline: "`air close` and `air handover --bead` refuse an id containing whitespace, \
+                   naming it, before the hand-over check runs; and when the check would refuse, \
+                   an id bd does not have is named (`bd has no bead <id>`) instead of the \
+                   check's advice.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "batch-held-removed",
+        since: "2026-09-28 (air-aepb)",
+        headline: "`air batch cut` no longer sends a `batch-held` notice to a worker whose branch \
+                   has no green precheck, and writes no `batch-cut / no-precheck` line. The \
+                   branch is still left out, and `air status` still names `no-precheck` for it.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
         id: "close-reads-main-from-git",
         since: "2026-09-28 (air-5ynn)",
         headline: "`air close` passes a bead whose every `Bead:` trailer commit is in main, \

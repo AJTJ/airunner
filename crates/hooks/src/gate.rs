@@ -135,10 +135,9 @@ pub struct Missing {
     /// both to three workers under a lane in one round — w1 obeyed and lost its batch
     /// membership, w2 ignored it at the cost of a round trip, w3 asked instead of obeying.
     ///
-    /// The flag exists so [`stop_message`] can drop these repairs and name the command that
-    /// computes them. It is set beside each `fix` rather than derived from a list of check
-    /// names, so a new check has to decide rather than default into being advertised at Stop
-    /// time.
+    /// The flag first existed so the Stop hook's advisory could drop these repairs (that
+    /// advisory was deleted by air-wau8). It is set beside each `fix` rather than derived from
+    /// a list of check names, so a new check has to decide rather than default.
     ///
     /// **air-155w: the flag governs the fix TEXT as well, not only who prints it.** air-avj
     /// changed what the Stop hook prints and left the refusal itself asserting
@@ -173,12 +172,13 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             )
         } else if g > 0 && r > 0 {
             (
+                // Counts, not a diagnosis (air-qlx3): "flaky" blamed a test for an adopter's
+                // missing build directory.
                 format!(
-                    "verify at HEAD {} is flaky: {g} green / {r} red; latest is red",
+                    "verify at HEAD {}: {g} green / {r} red recorded; latest is red",
                     short(&f.head)
                 ),
-                "fix or quarantine the flaky test (file it), then get a green at this head"
-                    .to_string(),
+                "a green at this head".to_string(),
             )
         } else if let Some(tree) = f.tree_green.as_deref() {
             (
@@ -474,64 +474,6 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     }
 }
 
-/// What the STOP HOOK says about a refusal (air-avj): the same facts, with the flow-dependent
-/// repairs replaced by the command that computes them.
-///
-/// The hook fires when a worker is choosing what to do next, and it arrives with the authority
-/// of tooling. Under a verify lane its old text told three of an adopter's workers to do the
-/// two things a lane exists to prevent — merge main, which moves the head off the sha the lane
-/// cut at, and record a green, which is the lane's job. One obeyed and lost its batch
-/// membership.
-///
-/// **The decision, recorded because it was a decision** (the bead offered three routes). This
-/// text does NOT branch on `verify_lane` (nothing in the hook reads it since the lane got its own
-/// role, air-jc2p.2; the nudge skips `AIR_ROLE=lane`): a
-/// hook branching on it would be a second copy of a decision `air handover` already makes
-/// correctly — which is the drift that made this wrong rather than merely unhelpful. Nor is
-/// the wording made vague enough to be true under both, because the two repairs are opposite
-/// actions and a sentence covering both says nothing. Instead the hook states the fact and
-/// names the command that knows: `air handover` reads the repo's own configuration and prints
-/// the repair its flow calls for.
-///
-/// **What does not change.** `air handover` and every CLI surface still print the exact
-/// repair; a fix that does not depend on the flow — the `Bead:` trailer, the digest — is still
-/// printed here in full. Only the two flow-dependent ones become a pointer, and only at Stop.
-///
-/// Generalises past this case: any surface that restates a flow-dependent repair drifts from
-/// the one place that computes it. Name the command that knows.
-pub fn stop_message(v: &Verdict, worker: &str, head: &str) -> String {
-    if v.pass {
-        return v.message.clone();
-    }
-    let mode = if v.block { "refuses" } else { "would refuse" };
-    let items: Vec<String> = v
-        .missing
-        .iter()
-        .map(|m| {
-            if m.flow_dependent {
-                format!("{}: {}", m.check, m.detail)
-            } else {
-                format!("{}: {} — run `{}`", m.check, m.detail, m.fix)
-            }
-        })
-        .collect();
-    // air-155w: this used to say `air handover` "reads your repo's flow", which Air does
-    // not do and deliberately does not do — this text does not branch on `verify_lane`. The promise was
-    // the same defect one surface over: a claim about a decision made somewhere else. What
-    // is true is that `air handover` prints every check in full, and since that text is now
-    // flow-safe too, the pointer no longer has to promise anything about flows.
-    let pointer = if v.missing.iter().any(|m| m.flow_dependent) {
-        " — run `air handover` for each check and what it needs"
-    } else {
-        ""
-    };
-    format!(
-        "handover {mode} for {worker} at {}: {}{pointer}",
-        short(head),
-        items.join("; ")
-    )
-}
-
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
@@ -731,17 +673,18 @@ mod tests {
     }
 
     #[test]
-    fn flaky_head_is_named_in_the_refusal() {
+    fn a_head_with_green_and_red_is_stated_as_counts() {
         let mut f = facts();
         f.green_at_head = false;
         f.runs_at_head = (2, 1);
         let v = handover_verdict(&f);
+        let d = &v.missing[0].detail;
+        assert!(d.contains("2 green / 1 red recorded; latest is red"), "{d}");
+        // air-qlx3: counts, not a diagnosis.
         assert!(
-            v.missing[0].detail.contains("flaky"),
-            "{}",
-            v.missing[0].detail
+            !d.contains("flaky") && !v.missing[0].fix.contains("quarantine"),
+            "{d}"
         );
-        assert!(v.missing[0].fix.contains("quarantine"));
     }
 
     /// air-7wf: a green for this exact tree that the repo's key declines is named in the

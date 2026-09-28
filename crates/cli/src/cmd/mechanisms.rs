@@ -105,6 +105,18 @@ pub struct Mechanism {
 ///   in the 2026-09-05 round. The heartbeat is the failsafe (`docs/rules/roles.md`). A wedge
 ///   that auto mode would show as a prompt is now caught by `idle-with-claim` or the
 ///   heartbeat, not by a state nothing ever wrote.
+/// - `suspicious` and `flaky-at-head` on `air record` (2026-08-21; removed 2026-09-28, air-qlx3,
+///   owner: "Air states facts, not opinions"). `suspicious` fired on 14 greens in one day at an
+///   adopter, every one a good docs-scope run compared with a full-scope one; `flaky-at-head`
+///   told a worker "the repo's test is the bug; file it" about a missing build directory. The
+///   facts stay: exit, duration, bytes, dirty tree, and the green and red counts at the commit.
+///   Neither had a registry row; both were words on `record / green` and `record / red`.
+/// - `no-precheck` and the `batch-held` notice (2026-09-25 and the 0.4.8 trial; removed
+///   2026-09-28, air-aepb, owner: delete). Each cut told every branch without a green
+///   precheck that it was held: 156 deliveries in a day at an adopter, 247 `no-precheck`
+///   lines over 162 heads, and for 89 of those heads the precheck was already running. The
+///   worker knows it has not prechecked. The rule itself stays in `status::batch_ready_rule`,
+///   and `air status` names `no-precheck` for such a branch.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -161,7 +173,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-would-refuse",
         class: "refusal",
-        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
+        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1. \
+               The Stop hook's arm of it was deleted 2026-09-28 (air-wau8).",
         added: "2026-08-18 (plan 0001)",
         source: "docs/design.md §6.2 (plan 0001 §5 at the time)",
         // `hook.handover` and `hook.stop` are the first slice's names for the same advisory
@@ -174,7 +187,10 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.stop", "would-refuse"),
             // The Stop hook's advisory under its dispatched name, written since the event was
             // dispatched by name and registered by nobody until air-hqj8 (30 in this repo's
-            // record on 2026-09-25).
+            // record on 2026-09-25). Deleted 2026-09-28 (air-wau8, owner: "a worker stops for
+            // many reasons; delete it, keep the nudge") after 443 lines in one day at an
+            // adopter, 329 of them repeats, all describing the normal wait for the lane. Kept
+            // here only so days recorded before then still attribute; nothing writes it now.
             ("hook.Stop", "would-refuse"),
         ]),
         // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
@@ -394,7 +410,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stop-nudge",
         class: "nudge",
-        what: "At WIP 0 with beads ready, the Stop hook names them once.",
+        what: "At WIP 0 with beads ready, the Stop hook names them once. Since air-wau8 \
+               (2026-09-28), under a verify lane, a worker whose every claim is batch-ready \
+               counts as WIP 0.",
         // air-7q5 asked whether this is an auto-start, since starting a session must not start
         // work. It is NOT, and it is left alone rather than gated. A Stop hook fires only after
         // the model has produced a turn, and a worker launched with no `--task` is given no
@@ -653,21 +671,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "no-precheck",
-        class: "refusal",
-        what: "Where the repo declares `precheck`, `air batch cut` leaves out a branch with no \
-               recorded green precheck at its head; one line per branch left out.",
-        added: "2026-09-25 (an adopter's fleet protocol)",
-        source: "crates/cli/src/cmd/status.rs batch_ready_rule; crates/cli/src/cmd/batch_cut.rs run",
-        // An adopter's lane script parsed a log file for this, 2026-09-05..07: a worker was
-        // cut before its check finished, a check still running was relayed as "checked", and
-        // a stale green trailer named a head two commits back.
-        fires: Fires::Decisions(&[("batch-cut", "no-precheck")]),
-        removal: Removal::Judgement(
-            "the repo drops the `precheck` key: a round under it with no batch red that a member's precheck would have caught means the precheck only delays the cut",
-        ),
-    },
-    Mechanism {
         id: "batch-cut-refusal",
         class: "refusal",
         what: "`air batch cut` refuses to start: in the main checkout, git without \
@@ -872,10 +875,10 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "Each member worker hears its batch's result at once: close on a green or a \
                landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it, the missing precheck \
-               when it holds it out. A killed run says nothing.",
+               other side and the paths when `air batch cut` drops it. A killed run says \
+               nothing.",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped, batch_held; a landing is main_moved",
+        source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
         // Same trial: a worker learned the lane's green, and could close, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(
