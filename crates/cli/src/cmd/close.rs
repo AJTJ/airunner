@@ -115,6 +115,50 @@ pub fn refusal(e: &BdError, ids: usize, overridden: bool) -> String {
     }
 }
 
+/// Ids that cannot be a bead id: empty, or containing whitespace (air-a8ra). Pure.
+///
+/// An adopter's worker passed a bead id and a filename as one quoted argument eight times, and
+/// Air ran the whole gate on the string and advised a `Bead:` trailer naming both words.
+pub fn malformed_ids(ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .filter(|id| id.is_empty() || id.contains(char::is_whitespace))
+        .cloned()
+        .collect()
+}
+
+/// Refuse an id that is not a bead id, naming it (air-a8ra). Pure, so it runs before
+/// anything else.
+pub fn check_shape(ids: &[String]) -> Result<(), String> {
+    let bad = malformed_ids(ids);
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "not a bead id: {}; give each id as its own argument",
+        bad.iter()
+            .map(|b| format!("\"{b}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+/// Refuse an id bd does not have, naming it (air-a8ra), as `air triage` does (air-76z). One
+/// `bd show` under the probe budget, so it is asked only when the gate is about to refuse:
+/// that is where an unknown id turned into advice about trailers, and a close that passes
+/// stays one bd process (air-869). When bd does not answer, this says nothing and the
+/// gate's own refusal stands.
+pub fn check_known(repo: &Path, ids: &[String]) -> Result<(), String> {
+    let Ok(known) = super::claim::probe_bd(repo).show_all(ids) else {
+        return Ok(());
+    };
+    let missing = super::capture::missing_ids(ids, &known);
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("bd has no bead {}", missing.join(", ")))
+    }
+}
+
 pub fn run(
     repo: &Path,
     beads: &[String],
@@ -149,12 +193,26 @@ pub fn run(
             return 1;
         }
     };
+    if let Err(msg) = check_shape(beads) {
+        let msg = format!("air close: {msg}; nothing was closed");
+        emit(
+            json,
+            &serde_json::json!({"ok": false, "reason": msg}),
+            || msg.clone(),
+        );
+        return 2;
+    }
     let role = super::caller_role();
     let inputs =
         serde_json::json!({"beads": beads, "reason": reason, "role": role, "repo_worker": worker});
     if gated(role)
         && let Err(msg) = gate(&ledger, &worker, repo, beads)
     {
+        // An id bd does not have is the refusal, not whatever the gate made of it.
+        let msg = match check_known(repo, beads) {
+            Err(unknown) => format!("air close: {unknown}; nothing was closed"),
+            Ok(()) => msg,
+        };
         log_event(
             &ledger,
             &worker,
@@ -243,4 +301,20 @@ pub fn run(
         || msg.clone(),
     );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::malformed_ids;
+
+    /// air-a8ra: a bead id and a filename passed as one argument is not an id.
+    #[test]
+    fn an_id_with_whitespace_or_nothing_in_it_is_malformed() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            malformed_ids(&ids(&["air-1 foo", "air-2", "", "air-3\tx"])),
+            ids(&["air-1 foo", "", "air-3\tx"])
+        );
+        assert!(malformed_ids(&ids(&["air-1", "fd-xxxx"])).is_empty());
+    }
 }

@@ -890,7 +890,33 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("air close refused for"), "{out}");
     assert!(out.contains("verify-green-at-head"), "{out}");
+    // A refusal closes nothing. It asks bd, once, whether the id exists (air-a8ra), so an
+    // unknown id is named instead of the gate's advice.
+    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
+    assert!(!log.contains("close"), "{log}");
+    assert!(log.lines().count() <= 1, "{log}");
+
+    // air-a8ra: an id and a filename as one argument is refused before bd or the gate, and
+    // an id bd does not have is named rather than advised about.
+    std::fs::write(wt.join("bd.log"), "").unwrap();
+    let (code, out, _) = air_env(
+        &wt,
+        &bd,
+        &["close", "zz-11 notes.md", "--reason", "x"],
+        &worker,
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("not a bead id: \"zz-11 notes.md\""), "{out}");
+    assert!(!out.contains("Bead:"), "{out}");
     assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
+    std::fs::write(wt.join("bd.unknown"), "zz-99\n").unwrap();
+    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-99", "--reason", "x"], &worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("bd has no bead zz-99"), "{out}");
+    let (code, out, err) = air_env(&wt, &bd, &["handover", "--bead", "zz-99"], &worker);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("bd has no bead zz-99"), "{out}");
+    std::fs::remove_file(wt.join("bd.unknown")).unwrap();
 
     let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");

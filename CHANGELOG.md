@@ -110,6 +110,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air close` and `air handover` ran the whole hand-over check on an id like `air-1 notes.md`
+  and advised a `Bead:` trailer naming both words. An id with whitespace is now refused naming
+  it, and when the check would refuse, an id bd does not have is named instead.
 - `make verify` was red when run from a fleet session, because the tests that spawn `air`
   passed on the session's `AIR_ROLE` and the other launcher variables. Every spawn in
   `crates/cli/tests` now goes through one helper that removes `AIR_*` and `BEADS_ACTOR`.
