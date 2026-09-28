@@ -95,6 +95,8 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The `landed-not-closed` condition, and the per-clause verdicts in `air land` it came from.
+  `air land` still prints each landed bead with its acceptance text.
 - `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and
   writes no `no-precheck` line. `air status` still names `no-precheck` for such a branch.
 - `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and

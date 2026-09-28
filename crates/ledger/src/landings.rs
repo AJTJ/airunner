@@ -9,26 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ledger, Result};
 
-/// A bead a landing merged but did not close, still open, with everything a reader needs to
-/// act: `air status` renders it and the `landed-not-closed` condition names it (air-ayp).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct LandedOpen {
-    pub bead: String,
-    /// The worker whose branch carried it.
-    pub worker: String,
-    pub merge_commit: String,
-    /// Every clause Air could not discharge: the refuted ones AND the ones it could not read.
-    /// The complete record, for the row and `--json`; not what the condition says.
-    pub why: String,
-    /// Only the clauses the merge CONTRADICTS (air-ppf). This is what the `landed-not-closed`
-    /// sentence names: the message used to render `why` under a headline asserting a
-    /// contradiction, so every unreadable clause was presented as one, and two sound closes
-    /// (air-03w, air-97z) each cost the coordinator a round trip on 2026-08-30.
-    pub contradicted: String,
-    pub landed_at: String,
-}
-
-/// A bead a landing merged but did not close, and the clause it could not discharge.
+/// A bead a landing merged but did not close, and the clause it could not discharge. Written
+/// by `air land` until air-cizz (2026-09-28) deleted the acceptance verdicts; a landing now
+/// writes none, and old rows keep theirs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenBead {
     pub bead: String,
@@ -40,29 +23,9 @@ pub struct OpenBead {
     #[serde(default)]
     pub refuted: bool,
     /// Of `why`, only the refuted clauses (air-ppf). Empty on rows written before the field
-    /// existed; `landed_open` derives it from `why` for those.
+    /// existed.
     #[serde(default)]
     pub contradicted: String,
-}
-
-/// The refuted half of a `why` written before `contradicted` was stored (air-ppf). `why` is
-/// Air's own format — `"clause": how` parts joined by `; `, each opening with a quote, and an
-/// unreadable one ending in the fixed phrase — so this reads Air's text, not a person's.
-fn legacy_contradicted(why: &str) -> String {
-    const UNREADABLE: &str = ": nothing Air can look up";
-    let kept: Vec<String> = why
-        .split("; \"")
-        .enumerate()
-        .map(|(i, part)| {
-            if i == 0 {
-                part.to_string()
-            } else {
-                format!("\"{part}")
-            }
-        })
-        .filter(|part| !part.ends_with(UNREADABLE))
-        .collect();
-    kept.join("; ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -242,76 +205,6 @@ impl Ledger {
         )?)
     }
 
-    /// Beads that landed carrying an acceptance clause the merge CONTRADICTS, and that nobody
-    /// has dealt with since (air-ayp).
-    ///
-    /// The worker closes its own bead with proof before the branch lands, so `air land` closes
-    /// nothing and "merged but not closed" is not by itself a defect. What is worth carrying
-    /// past the print is a REFUTED clause: a bead claiming a file the merge did not touch.
-    ///
-    /// The verdict is the landing's: a refuted bead is reported from its newest landing until
-    /// that landing stops refuting it. Whether the bead is *closed* is the claim's: a bead whose
-    /// newest claim the ledger released as closed (`closed_in_ledger`: what `air close` writes,
-    /// and what the reconcile writes when bd holds it closed) is not landed-and-not-closed, and
-    /// is not reported. 0.4.10 trial: the condition was raised six seconds after `air close`
-    /// had closed the bead and was still shown six minutes later, because the claim's release
-    /// was ignored here and `air status` cleared only beads back in the work queue.
-    ///
-    /// The claim's release was ignored on purpose (air-dlw): under close-with-proof the worker
-    /// closes before the branch lands, so a report that clears on the close can never fire for
-    /// such a bead. That is now the intended reading: `air close` checked the proof, and a
-    /// clause the merge does not touch is a lookup that did not answer, not a contradiction
-    /// (air-k6uh). What is left to report is a bead that landed while still open.
-    ///
-    /// Deciding a still-open bead has been *dealt with* needs bd (reopened, or a successor
-    /// filed) and is the caller's: `air status` clears one bd shows back in the work queue,
-    /// using lists it already fetches. Nothing here calls bd, so this stays askable on every
-    /// tick.
-    ///
-    /// Nothing here writes a bd status. A bead named by one of these rows is exactly as open
-    /// in bd as it was before the merge, so the merge did not change what it blocks.
-    pub fn landed_open(&self) -> Result<Vec<LandedOpen>> {
-        let mut out: Vec<LandedOpen> = Vec::new();
-        // Newest landing wins. `landings()` is newest-first, so the first row that mentions a
-        // bead decides its verdict: a bead re-landed clean is named again without a
-        // refutation, and an older row saying otherwise is history, not the current state.
-        let mut decided: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        let rows = self.landings()?;
-        for l in &rows {
-            // Only a row that actually landed decides anything (air-8zn). An in-flight one has
-            // reached no verdict yet, and a refused one touched nothing: letting either count
-            // as the newest word on a bead would silence a standing refutation (air-bxe), and
-            // a refusal is guaranteed for every branch after the first in `air land --all`.
-            if !l.landed() {
-                continue;
-            }
-            for bead in &l.beads {
-                if !decided.insert(bead.as_str()) {
-                    continue;
-                }
-                let Some(ob) = l.open_beads.iter().find(|o| &o.bead == bead) else {
-                    continue;
-                };
-                if !ob.refuted || self.closed_in_ledger(bead)? {
-                    continue;
-                }
-                out.push(LandedOpen {
-                    bead: ob.bead.clone(),
-                    worker: l.worker.clone(),
-                    merge_commit: l.merge_commit.clone().unwrap_or_default(),
-                    why: ob.why.clone(),
-                    contradicted: if ob.contradicted.is_empty() {
-                        legacy_contradicted(&ob.why)
-                    } else {
-                        ob.contradicted.clone()
-                    },
-                    landed_at: l.finished_at.clone(),
-                });
-            }
-        }
-        Ok(out)
-    }
-
     /// Every landing, newest first.
     pub fn landings(&self) -> Result<Vec<Landing>> {
         let mut st = self.conn.prepare(
@@ -427,179 +320,6 @@ mod tests {
     /// defect. What is carried past the print is a REFUTED clause — a bead claiming a file the
     /// merge did not touch — and it stops being reported once somebody deals with the bead. No
     /// bd status is written either way, so the bead blocks exactly what it blocked before.
-    #[test]
-    fn only_a_refuted_clause_is_reported_and_only_until_the_bead_is_dealt_with() {
-        let l = Ledger::open_in_memory().unwrap();
-        let mut r = row("1", "landed-refuted");
-        r.beads = vec!["zz-1".into(), "zz-2".into(), "zz-3".into()];
-        r.open_beads = vec![
-            // Air could not read this one. Not a wrong close, so not reported.
-            OpenBead {
-                bead: "zz-2".into(),
-                why: "\"the owner rules on X\": nothing Air can look up".into(),
-                refuted: false,
-                contradicted: String::new(),
-            },
-            // This one the merge contradicts.
-            OpenBead {
-                bead: "zz-3".into(),
-                why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-                refuted: true,
-                contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
-                    .into(),
-            },
-        ];
-        l.record_landing(&r).unwrap();
-
-        let open = l.landed_open().unwrap();
-        assert_eq!(
-            open.iter().map(|o| o.bead.as_str()).collect::<Vec<_>>(),
-            vec!["zz-3"],
-            "unreadable is not the same signal as contradicted"
-        );
-        assert_eq!(
-            (open[0].worker.as_str(), open[0].merge_commit.as_str()),
-            ("alpha", "ccc")
-        );
-        assert!(open[0].why.contains("docs/absent.md"));
-        // It round-trips through the row, so the reason survives a restart.
-        assert_eq!(l.landings().unwrap()[0].open_beads, r.open_beads);
-
-        // An open claim changes nothing: the bead is held, not closed.
-        l.record_claim("zz-3", "alpha", &[], "t0").unwrap();
-        assert_eq!(
-            l.landed_open().unwrap().len(),
-            1,
-            "an open claim changes nothing"
-        );
-        // A release for any other reason is not a close either.
-        l.release_claim("zz-3", "alpha", "abandoned", "t2").unwrap();
-        assert_eq!(
-            l.landed_open().unwrap().len(),
-            1,
-            "an abandoned claim leaves the bead open"
-        );
-
-        // A LATER landing that names the bead without refuting it clears it: newest landing
-        // wins, and an older row saying otherwise is history.
-        let mut again = row("2", "landed");
-        again.beads = vec!["zz-3".into()];
-        again.open_beads = vec![];
-        again.finished_at = "t9".into();
-        l.record_landing(&again).unwrap();
-        assert!(l.landed_open().unwrap().is_empty());
-    }
-
-    /// 0.4.10 trial: `landed-not-closed` was raised for a bead `air close` had already closed
-    /// and stayed for six minutes. Land with a refuted clause, close through the call `air
-    /// close` makes, and the report is gone.
-    #[test]
-    fn a_bead_the_ledger_records_as_closed_is_not_landed_open() {
-        let l = Ledger::open_in_memory().unwrap();
-        let refuted = OpenBead {
-            bead: "zz-1".into(),
-            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-            refuted: true,
-            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
-                .into(),
-        };
-        l.record_claim("zz-1", "alpha", &[], "t0").unwrap();
-        let mut r = row("1", "landed-refuted");
-        r.open_beads = vec![refuted.clone()];
-        l.record_landing(&r).unwrap();
-        assert_eq!(
-            l.landed_open().unwrap().len(),
-            1,
-            "landed, held, refuted: reported"
-        );
-
-        // The order in the trial: closed BEFORE the landing is also closed.
-        assert_eq!(
-            l.release_claims_on(&["zz-1".into()], "closed", "t2")
-                .unwrap(),
-            vec![("zz-1".to_string(), "alpha".to_string())]
-        );
-        assert!(
-            l.landed_open().unwrap().is_empty(),
-            "closed is not landed-not-closed"
-        );
-
-        // The coordinator's `air close` writes "landed"; same answer.
-        l.record_claim("zz-1", "beta", &[], "t3").unwrap();
-        let mut r2 = row("2", "landed-refuted");
-        r2.open_beads = vec![refuted];
-        r2.finished_at = "t4".into();
-        l.record_landing(&r2).unwrap();
-        assert_eq!(
-            l.landed_open().unwrap().len(),
-            1,
-            "claimed again and re-refuted"
-        );
-        l.release_claims_on(&["zz-1".into()], "landed", "t5")
-            .unwrap();
-        assert!(l.landed_open().unwrap().is_empty());
-
-        // A bead never claimed is not closed here.
-        let mut r3 = row("3", "landed-refuted");
-        r3.beads = vec!["zz-9".into()];
-        r3.open_beads = vec![OpenBead {
-            bead: "zz-9".into(),
-            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-            refuted: true,
-            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
-                .into(),
-        }];
-        r3.finished_at = "t6".into();
-        l.record_landing(&r3).unwrap();
-        assert_eq!(l.landed_open().unwrap().len(), 1);
-    }
-
-    /// air-8zn: a refused attempt carries the branch's beads (kept on purpose: it says what the
-    /// attempt covered) and decides NOTHING about them. It neither reports its own open beads
-    /// nor silences an older landing's standing refutation. `rewound` is the same.
-    #[test]
-    fn a_refused_attempt_decides_nothing_about_the_beads_it_carried() {
-        let l = Ledger::open_in_memory().unwrap();
-        let refuted = OpenBead {
-            bead: "zz-1".into(),
-            why: "\"docs/absent.md says it\": the merge did not change docs/absent.md".into(),
-            refuted: true,
-            contradicted: "\"docs/absent.md says it\": the merge did not change docs/absent.md"
-                .into(),
-        };
-        // A refusal carrying a refuted clause is not a landing, so nothing is reported.
-        let mut refused = row("1", "refused");
-        refused.open_beads = vec![refuted.clone()];
-        refused.merge_commit = None;
-        l.record_landing(&refused).unwrap();
-        assert!(l.landed_open().unwrap().is_empty());
-        assert!(!refused.landed());
-
-        // A real landing with the same refutation is reported.
-        let mut landed = row("2", "landed-refuted");
-        landed.open_beads = vec![refuted];
-        landed.finished_at = "t2".into();
-        l.record_landing(&landed).unwrap();
-        assert_eq!(l.landed_open().unwrap().len(), 1);
-        assert!(landed.landed());
-
-        // A NEWER refusal of the same branch (main moved under it) is not the newest word on
-        // ad-1: the refutation stands.
-        let mut later = row("3", "refused");
-        later.merge_commit = None;
-        later.finished_at = "t3".into();
-        l.record_landing(&later).unwrap();
-        assert_eq!(
-            l.landed_open().unwrap().len(),
-            1,
-            "a refusal must not clear it"
-        );
-        let mut rewound = row("4", "rewound");
-        rewound.finished_at = "t4".into();
-        l.record_landing(&rewound).unwrap();
-        assert_eq!(l.landed_open().unwrap().len(), 1, "nor a rewind");
-    }
-
     /// air-80x.2: a batch's members round-trip through the row, and a single-branch landing
     /// has none.
     #[test]
@@ -643,37 +363,6 @@ mod tests {
         plain.finished_at = "t9".into();
         l.record_landing(&plain).unwrap();
         assert!(l.landings().unwrap()[0].despite_inflight.is_empty());
-    }
-
-    /// air-ppf: a row written before `contradicted` existed carries only `why`, which is the
-    /// refuted and the unreadable clauses together. The shape of the 2026-08-30 message that
-    /// cost two round trips, read back as only its refuted half.
-    #[test]
-    fn a_legacy_row_yields_only_its_refuted_clauses() {
-        let why = "\"Pin it in crates/cli/tests/install_and_launch.rs\": the merge did not \
-                   change crates/cli/tests/install_and_launch.rs; \"The owner is told; and \
-                   agrees\": nothing Air can look up; \"Docs updated\": nothing Air can look up";
-        assert_eq!(
-            legacy_contradicted(why),
-            "\"Pin it in crates/cli/tests/install_and_launch.rs\": the merge did not change \
-             crates/cli/tests/install_and_launch.rs"
-        );
-        let l = Ledger::open_in_memory().unwrap();
-        let mut r = row("1", "landed-refuted");
-        r.open_beads = vec![OpenBead {
-            bead: "zz-1".into(),
-            why: why.into(),
-            refuted: true,
-            contradicted: String::new(),
-        }];
-        l.record_landing(&r).unwrap();
-        let open = l.landed_open().unwrap();
-        assert_eq!(open.len(), 1);
-        assert!(!open[0].contradicted.contains("nothing Air can look up"));
-        assert!(
-            open[0].why.contains("nothing Air can look up"),
-            "the row keeps both"
-        );
     }
 
     #[test]

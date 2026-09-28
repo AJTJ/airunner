@@ -85,9 +85,7 @@ impl Ledger {
     /// "closed"`: written by `air close` for a gated role, and by the reconcile in
     /// `status::gather` when bd reports the bead closed), newest first.
     ///
-    /// air-gazh: this is how Air knows a bead is closed without asking bd. `landed-not-closed`
-    /// is a ledger fact and never a bd status (air-ayp), and its inverse is the same fact from
-    /// the other side, so it reads the same store. The alternative was a `bd show` per tick on
+    /// air-gazh: this is how Air knows a bead is closed without asking bd. The alternative was a `bd show` per tick on
     /// the beads of every unlanded branch, which is the cost air-bp0 and air-cmn spent two
     /// beads removing from this exact code path.
     ///
@@ -175,25 +173,6 @@ impl Ledger {
             params![bead, worker, at],
         )?;
         Ok(n > 0)
-    }
-
-    /// Whether the ledger's newest claim on this bead was released because the bead closed:
-    /// `"closed"` (a gated `air close`, or the reconcile seeing bd hold it closed) or
-    /// `"landed"` (the coordinator's `air close`). A bead never claimed, or claimed again
-    /// since, is not closed here.
-    pub fn closed_in_ledger(&self, bead: &str) -> Result<bool> {
-        let reason: Option<Option<String>> = self
-            .conn
-            .query_row(
-                "SELECT release_reason FROM claims WHERE bead=?1 ORDER BY claimed_at DESC LIMIT 1",
-                params![bead],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Ok(matches!(
-            reason.flatten().as_deref(),
-            Some("closed") | Some("landed")
-        ))
     }
 
     /// Close every open claim on these beads with one reason, in ONE transaction, whoever

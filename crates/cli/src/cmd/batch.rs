@@ -169,7 +169,7 @@ pub const CANDIDATES: usize = 12;
 /// at a head containing main, and the commit it fast-forwards main onto has that green's
 /// exact tree (air-odv), so the work reached main carrying precisely the proof this gate
 /// asks for. Demanding a fresh green naming the merge would make Air refuse the close of a
-/// bead Air itself landed and is already nagging about as `landed-not-closed`.
+/// bead Air itself landed.
 ///
 /// It is a landing ROW, not "HEAD is an ancestor of main", because the row names the bead by
 /// the same `Bead:` trailer the rest of the gate reads. A worker that claimed a bead and

@@ -117,6 +117,14 @@ pub struct Mechanism {
 ///   lines over 162 heads, and for 89 of those heads the precheck was already running. The
 ///   worker knows it has not prechecked. The rule itself stays in `status::batch_ready_rule`,
 ///   and `air status` names `no-precheck` for such a branch.
+/// - `landed-not-closed` (2026-08-22, air-ayp; removed 2026-09-28, air-cizz, owner: delete
+///   it), with the per-clause verdicts in `air land` it was built on. At an adopter 7 of 8
+///   firings were paths the acceptance text only mentioned (command arguments, "on a change
+///   to X"); in this repo 6 of 9 held (air-k6uh). It never cleared for a bead closed outside
+///   `air close` (air-03w, closed 2026-08-29, still on this repo's status on 2026-09-28), and
+///   it misparsed a possessive path (air-dqa). Close-with-proof already covers the failure it
+///   was built for: the adopter's 99 beads closed on branch containment alone. `air land`
+///   still prints each bead's acceptance text, with no verdict.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -237,31 +245,11 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "landed-not-closed",
-        class: "attention",
-        what: "A bead that landed with an acceptance clause naming a file the merge did not \
-               change. A lookup that did not answer, not a contradiction and not by itself a \
-               wrong close: of nine standing firings on 2026-09-06, six were clauses that held \
-               (air-k6uh).",
-        added: "2026-08-22 (air-ayp)",
-        source: "crates/cli/src/cmd/acceptance.rs, crates/cli/src/cmd/land.rs",
-        fires: Fires::Condition("landed-not-closed"),
-        // Not ZeroFirings: this one firing is the mechanism working. The adopter's closer put
-        // 14 partial and 1 not-done bead into `closed` by never asking
-        // (the adopter's plan 0029 on bead closure, D.6, cited via air-ayp). It goes when acceptance is
-        // machine-checkable by construction, at which point the merge either satisfies it or
-        // does not and there is no judgement left to hold open.
-        removal: Removal::Judgement(
-            "acceptance criteria are machine-checkable by construction, so a landing either satisfies them or does not and nothing is held open for a person to read",
-        ),
-    },
-    Mechanism {
         id: "closed-not-landed",
         class: "attention",
         what: "A bead bd has closed whose commits are in no tree but its author's worktree. \
-               The inverse of the one above: closed and landed was reported, closed and NOT \
-               landed was not, and no other condition reaches it — `landable` needs a branch \
-               containing main so it goes quiet the moment main moves.",
+               No other condition reaches it — `landable` needs a branch containing main so \
+               it goes quiet the moment main moves.",
         added: "2026-09-07 (air-gazh)",
         source: "crates/cli/src/cmd/status.rs (closed_not_landed)",
         fires: Fires::Condition("closed-not-landed"),
