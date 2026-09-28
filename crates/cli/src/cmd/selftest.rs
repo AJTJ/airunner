@@ -237,6 +237,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-oerm: nobody counts as joining, which is the fan-out as it stood: only a change of
+    // the set tells anyone.
+    (
+        "fanout: a worker that joins or loses its claim while beads are ready is told them once, without the set changing",
+        Mutation {
+            file: "crates/cli/src/cmd/fanout.rs",
+            from: "    let joined = before.map_or_else(|| recipients.clone(), |b| added(&b, &recipients));",
+            to: "    let joined: Vec<String> = before.map(|_| Vec::new()).unwrap_or_default();",
+            also_red: &[],
+        },
+    ),
     // air-1vri: the channel marks the row delivered and pushes nothing, which is exactly what a
     // session that did not load the server as a channel would see. Seen red 2026-09-26.
     (
@@ -486,7 +497,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "claim: the assignee refusal says Air has no claim behind that assignee and offers a reopen as the cause, and live work is refused earlier by name",
         Mutation {
             file: "crates/cli/src/cmd/claim.rs",
-            from: "Air has no open claim behind that assignee yet, so it may also be left over: bd keeps an assignee through a close, and a reopened bead can come back pencilled in with nobody having assigned it. ",
+            from: " bd also keeps an assignee through a close and a reopen.",
             to: "",
             also_red: &[],
         },
@@ -727,7 +738,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     // green under it would be reading the array out of the middle of the stream rather than
     // from its first byte, which is not what a parser does.
     (
-        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         Mutation {
             file: "crates/cli/src/cmd/selftest.rs",
             // NOT `std::io::stdout(), std::io::stderr()`, which is the original bug: it
@@ -753,13 +764,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
-    // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
-    // Under it a green writes one too, and since the store is bounded by COUNT rather than by
-    // age, a fleet's greens evict the reds the store exists for. Anchor taken from the file
-    // AFTER rustfmt, per air-gei.
+    // air-5ik. The anchor is the keep-or-not test alone: the tail and the end-to-end write both
+    // survive it, so what changes is only WHICH runs write a log. Under it a green writes one
+    // too, into a store that is never pruned (air-06k7). Anchor taken from the file AFTER
+    // rustfmt, per air-gei.
     (
-        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         Mutation {
             file: "crates/cli/src/cmd/runlog.rs",
             from: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code != 0\n}",
@@ -1212,8 +1222,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // exist. The probe reads hook.rs at build time, so the mutated source is what it
             // sees; nothing else reads that string, so every other probe stays GREEN.
             file: "crates/cli/src/cmd/hook.rs",
-            from: "(`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
-            to: "(run `air peer <name>` for their green sha)",
+            from: "`air holdings` shows who is in the file; `air status` shows their head and whether it is green",
+            to: "run `air peer <name>` for their green sha",
             also_red: &[],
         },
     ),
@@ -1729,15 +1739,14 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        "gate: a bead whose every commit is already in main closes with no landing row, and only when a commit on main names it by trailer",
         Mutation {
-            // Stop asking whether main still contains the merge, so a rewound or abandoned
-            // landing would close a bead whose work is no longer anywhere. The bead-naming and
-            // landed() conditions are untouched: this reaches the containment question alone,
-            // which is the one that makes the row evidence rather than a memory.
+            // Stop reading the trailer: any commit on main whose message mentions the id
+            // counts, so prose naming a bead, or a longer id it prefixes, would close it. The
+            // search itself is untouched, so this reaches the trailer question alone.
             file: "crates/cli/src/cmd/batch.rs",
-            from: "            && git::is_ancestor(repo, &merge, \"main\").unwrap_or(false))",
-            to: "            && true)",
+            from: "        super::attribution::trailer_ids(body)\n            .iter()\n            .any(|b| b == bead)\n            .then(|| sha",
+            to: "        (!body.is_empty())\n            .then(|| sha",
             also_red: &[],
         },
     ),
@@ -2717,6 +2726,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
         messaging::probe_a_message_reaches_only_its_session(),
         messaging::probe_new_beads_reach_idle_workers_once(),
+        messaging::probe_a_joining_worker_hears_the_ready_set(),
         messaging::probe_the_lane_and_members_hear_batch_events_at_once(),
         messaging::probe_loop_times_are_measured_from_rows(),
         messaging::probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_it(),
@@ -5010,7 +5020,31 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
             ..snap("abcdef1234", &["air-1"], 5)
         })
         .iter()
-        .any(|a| a.kind == "landable");
+        .any(|a| a.kind == "landable")
+        // air-ch9p: while a lane session is live, landing is the lane's; a worker's landable
+        // branch is not pushed to the coordinator. A lane row not known to be alive does not.
+        && {
+            use crate::cmd::lease::Liveness;
+            let lane = |alive: Liveness| crate::cmd::status::WorkerView {
+                worker: "lane".into(),
+                role: "lane".into(),
+                session: Some(crate::cmd::status::Session {
+                    liveness: alive,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let with = |alive: Liveness| {
+                at(&Snapshot {
+                    workers: vec![lane(alive)],
+                    ..snap("abcdef1234", &["air-1"], 5)
+                })
+                .iter()
+                .any(|a| a.kind == "landable")
+            };
+            // Unknown liveness is never read as alive (air-sai7).
+            !with(Liveness::Alive) && with(Liveness::Dead) && with(Liveness::Unknown)
+        };
     Probe {
         name: "landable: a branch green with main merged pushes once per head, not while it sits",
         red_fires: red,
@@ -6138,7 +6172,7 @@ fn probe_lease_defect_reaches_the_waiter() -> Probe {
             && waited.first().is_some_and(|x| {
                 x.kind == "lease-held-by-dead-session"
                     && x.worker == "b"
-                    && x.detail.contains("yours to take now")
+                    && x.detail.contains("takes a defective lease")
             }),
         green_passes: nobody.is_empty() && self_only.is_empty(),
     }
@@ -6682,12 +6716,14 @@ fn probe_batch_cut_starts_from_main() -> Probe {
         let dry_ok =
             dry == LaneStart::Reset {
                 from: Some(red.clone()),
+                stale_over: None,
             } && g(&["rev-parse", "HEAD"])? == red;
 
         let cut = lane_start(&dir, &l, &main, false)?;
         let red_fires =
             cut == LaneStart::Reset {
                 from: Some(red.clone()),
+                stale_over: None,
             } && g(&["rev-parse", "HEAD"])? == main
                 && g(&["merge-base", "--is-ancestor", &red, "HEAD"]).is_err();
 
@@ -6702,12 +6738,26 @@ fn probe_batch_cut_starts_from_main() -> Probe {
                 && g(&["rev-parse", "HEAD"])? == green)
         };
         let unlanded = refused(true)? && refused(false)?;
+        // air-tml4: main moves past the green batch by another landing. The batch can no longer
+        // land, so the cut is not refused; it names the batch as stale and would re-cut.
+        let tree = g(&["rev-parse", "HEAD^{tree}"])?;
+        let moved = g(&["commit-tree", &tree, "-p", &main, "-m", "another landing"])?;
+        let stale = lane_start(&dir, &l, &moved, true)?
+            == LaneStart::Reset {
+                from: Some(green.clone()),
+                stale_over: Some(String::new()),
+            }
+            && g(&["rev-parse", "HEAD"])? == green;
         g(&["branch", "-f", "main", &green])?;
-        let landed = lane_start(&dir, &l, &green, false)? == LaneStart::Reset { from: None }
+        let landed = lane_start(&dir, &l, &green, false)?
+            == LaneStart::Reset {
+                from: None,
+                stale_over: None,
+            }
             && g(&["rev-parse", "HEAD"])? == green;
 
         std::fs::remove_dir_all(&dir).ok();
-        Ok((red_fires, dry_ok && unlanded && landed))
+        Ok((red_fires, dry_ok && unlanded && stale && landed))
     })()
     .unwrap_or_else(blocked);
     Probe {
@@ -9080,31 +9130,23 @@ fn probe_batch_green_survives_main_moving_under_it() -> Probe {
 
 /// air-9ij, limb 1, and the judgement it forced: **when every commit of a bead is already in
 /// main, the close passes.** `main..HEAD` is empty then, and reading that as "this bead has no
-/// commits" refused the close of a bead Air had itself landed, in any repo that keys green by
-/// commit. The landing gate already demanded a green at a head containing main, and the commit
-/// main is fast-forwarded onto carries that green's tree (air-odv), so the proof this gate
-/// asks for is the proof the work arrived with. Requiring a fresh green naming the merge would
-/// have Air refuse the close it nags for as `landed-not-closed`.
+/// commits" refused the close of a bead Air had itself landed. Main moves only through a green
+/// landing, so the work arrived with the proof this gate asks for.
 ///
-/// Red (declared mutation: the landing row says `refused` rather than `landed`): the work is
-/// not on main, so an empty range closes nothing. Green: the `landed` row closes it, a row
-/// that named a different bead does not, and a landing whose merge commit main no longer
-/// contains does not either — a worker that claimed a bead and committed nothing has no row
-/// and still has nothing to close on.
+/// air-5ynn: asked of git, not of the landing row. `air land` writes the row after the
+/// fast-forward, and a close in between was refused; an adopter counted five in one day.
+///
+/// Red (declared mutation: the trailer is not read, so a mention counts): a bead main names
+/// only in prose, or only as a prefix of a longer id, closes nothing. Green: a bead a commit on
+/// main names in its `Bead:` trailer closes with an empty ledger, so no landing row is needed.
 fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
-    use air_ledger::landings::Landing;
-
     let res = (|| -> Result<(bool, bool), String> {
         let dir = probe_repo()?;
         let g = |args: &[&str]| probe_git(&dir, args);
         let out = (|| -> Result<(bool, bool), String> {
             g(&["init", "-q", "-b", "main"])?;
             g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
-            // A commit main never gets, to stand for a landing that was rewound.
-            g(&["checkout", "-q", "-b", "stray"])?;
-            g(&["commit", "-q", "--allow-empty", "-m", "stray"])?;
-            let stray = g(&["rev-parse", "HEAD"])?;
-            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&["checkout", "-q", "-b", "w"])?;
             g(&[
                 "commit",
                 "-q",
@@ -9113,43 +9155,26 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
                 "work\n\nBead: ad-1\n",
             ])?;
             g(&["checkout", "-q", "main"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "docs: ad-2 is next\n\nBead: ad-33\n",
+            ])?;
             g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
-            let merge = g(&["rev-parse", "HEAD"])?;
             // The worker's next `git merge main` fast-forwards: main..HEAD is now empty.
             g(&["checkout", "-q", "w"])?;
             g(&["merge", "-q", "--ff-only", "main"])?;
             let empty = crate::cmd::batch::bead_commits(&dir, "ad-1").is_empty();
-
-            let landed = |result: &str, beads: &[&str], at: &str| -> Result<bool, String> {
-                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-                l.record_landing(&Landing {
-                    id: new_id(),
-                    worker: "lane".into(),
-                    sha: "wwww".into(),
-                    tip_sha: None,
-                    result: result.into(),
-                    failing_step: None,
-                    verify_run_id: None,
-                    attempt_no: 1,
-                    beads: beads.iter().map(|b| (*b).to_string()).collect(),
-                    open_beads: vec![],
-                    merge_commit: Some(at.to_string()),
-                    pid: None,
-                    started_at: "t0".into(),
-                    finished_at: "t1".into(),
-                    despite_inflight: vec![],
-                    members: vec![],
-                })
-                .map_err(|e| e.to_string())?;
-                Ok(crate::cmd::batch::for_bead(&l, &dir, "ad-1")?
+            let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+            let landed = |bead: &str| -> Result<bool, String> {
+                Ok(crate::cmd::batch::for_bead(&l, &dir, bead)?
                     .landed
                     .is_some())
             };
-            let red = empty && !landed("refused", &["ad-1"], &merge)?;
-            let green = landed("landed", &["ad-1"], &merge)?
-                && landed("landed-refuted", &["ad-1"], &merge)?
-                && !landed("landed", &["ad-2"], &merge)?
-                && !landed("landed", &["ad-1"], &stray)?;
+            let red = empty && !landed("ad-2")? && !landed("ad-3")?;
+            let green = landed("ad-1")? && landed("ad-33")?;
             Ok((red, green))
         })();
         std::fs::remove_dir_all(&dir).ok();
@@ -9157,7 +9182,7 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
     })();
     let (red, green) = res.unwrap_or((false, false));
     Probe {
-        name: "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        name: "gate: a bead whose every commit is already in main closes with no landing row, and only when a commit on main names it by trailer",
         red_fires: red,
         green_passes: green,
     }
@@ -10501,17 +10526,15 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
 /// all under load 66-67) are undiagnosable now for exactly that reason.
 ///
 /// Red (declared mutation: `exit_code != 0` becomes `true`): a GREEN run keeps its output too.
-/// That is not untidiness — the store is bounded by COUNT, so greens would evict the reds it
-/// exists to keep, and a fleet's greens outnumber its reds by an order of magnitude.
+/// The store is never pruned (air-06k7), and a fleet's greens outnumber its reds by an order of
+/// magnitude.
 ///
 /// Green: the tail keeps the END of a stream and never exceeds its cap, because a verify fails
-/// at the end; `prune` drops the OLDEST by run id whatever order the directory listed them in,
-/// which is the difference between a bound and a lottery; the store's ceiling is a number this
-/// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
-/// out of a child that writes to each.
+/// at the end; a write never deletes an earlier log; and `run_tee` really does carry both
+/// streams, in arrival order, out of a child that writes to each.
 fn probe_a_red_runs_output_is_kept() -> Probe {
     use crate::cmd::record::run_tee_to;
-    use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
+    use crate::cmd::runlog::{Tail, keeps_output, write};
 
     // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
     // and a killed run is the one most likely to be the loaded machine this bead is about.
@@ -10533,20 +10556,6 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     let keeps_the_end = tail_of(4, &[b"abc", b"de"]) == b"bcde"
         && tail_of(3, &[b"abcdefgh"]) == b"fgh"
         && tail_of(0, &[b"x"]).is_empty();
-
-    // Age order is id order (ULIDs), never listing order. Shuffled on purpose.
-    let names: Vec<String> = ["03.log", "01.log", "04.log", "02.log"]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    let bounded = prune(&names, 5).is_empty()
-        && prune(&names, 4) == vec!["01.log".to_string()]
-        && prune(&names, 2).len() == 3
-        // Whatever it deletes, exactly `keep - 1` are left for the new one to join.
-        && names.len().saturating_sub(prune(&names, 3).len()) == 2;
-
-    // The ceiling is a number, not a hope: 20 x 64 KiB.
-    let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
 
     // End to end: a child that writes to BOTH streams, and the tail carries both — and the
     // two sinks get them too, which is what `run_tee` exists for and what the tail alone never
@@ -10578,24 +10587,25 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     })
     .unwrap_or(false);
 
-    // A write really lands and really prunes, in a scratch dir of this probe's own.
+    // A write really lands and never deletes an earlier one, in a scratch dir of its own.
     let stored = (|| -> Option<bool> {
         let air = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&air).ok()?;
-        let p = write(&air, "01ZZZ", b"the failure")?;
+        write(&air, "01ZZZ", b"the first")?;
+        let p = write(&air, "02ZZZ", b"the failure")?;
         let read_back = std::fs::read(&p).ok()? == b"the failure";
         let kept = std::fs::read_dir(crate::cmd::runlog::dir(&air))
             .ok()?
             .count()
-            == 1;
+            == 2;
         std::fs::remove_dir_all(&air).ok();
         Some(read_back && kept)
     })()
     .unwrap_or(false);
 
-    let green = keeps_the_end && bounded && ceiling && both && stored;
+    let green = keeps_the_end && both && stored;
     Probe {
-        name: "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        name: "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         red_fires: red,
         green_passes: green,
     }
@@ -11005,7 +11015,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
             m.check == "digest-untracked"
                 && m.detail.contains("does not track it")
                 && m.fix.contains("carry NO `Bead:` trailer")
-                && m.fix.starts_with("git add ")
+                && m.fix.starts_with("`git add ")
         });
 
         // Tracked: the same bytes, once git knows about them.
@@ -11388,9 +11398,9 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let stale = claim()?;
         let red = names_the_basics(&stale)
             && stale.contains("Air has no open claim behind that assignee")
-            && stale.contains("another worker just took this one")
-            && stale.contains("may also be left over")
-            && stale.contains("reopened bead can come back pencilled in");
+            // air-ch9p: stated as facts, the race and the reopen both, with no "most likely".
+            && stale.contains("Another actor may have just claimed it")
+            && stale.contains("through a close and a reopen");
 
         // GREEN: the precedence that makes the red sentence TRUE rather than a guess. With a
         // real claim recorded, the ledger check at step 1 refuses first and names the holder
@@ -11407,8 +11417,7 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
         let live = claim()?;
         let green = live.contains("is claimed by alerts")
             && live.contains("air reclaim zz-6wv2 --worker alerts")
-            && !live.contains("left over")
-            && !live.contains("reopened bead");
+            && !live.contains("through a close and a reopen");
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok((red, green))
@@ -11776,10 +11785,7 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     // Distinct sentences, each naming the number that distinguishes it.
     let distinct = four.iter().collect::<std::collections::BTreeSet<_>>().len() == 4
         && four[0].contains("no green verify is recorded to check")
-        && four[0].contains(&format!(
-            "last {} verify runs",
-            crate::cmd::batch::CANDIDATES
-        ))
+        && four[0].contains("none was recorded after the oldest of the 2 commit(s)")
         && four[1].contains("1 recorded green(s) checked")
         && four[1].contains("the main it was recorded over")
         && four[2].contains("1 green(s) contain main")
@@ -11788,10 +11794,10 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     // The half that actually differs: wait-for-the-next-batch versus stop-waiting are opposite
     // instructions, and they used to share a fix line.
     let fixes = [
-        fix_absent(&none_recorded),
-        fix_absent(&no_main),
-        fix_absent(&untouched),
-        fix_absent(&no_commits),
+        fix_absent("air-hgi9", &none_recorded),
+        fix_absent("air-hgi9", &no_main),
+        fix_absent("air-hgi9", &untouched),
+        fix_absent("air-hgi9", &no_commits),
     ];
     let acts = fixes
         .iter()
@@ -11803,6 +11809,8 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
         // the detail. Making the trailer the fix told a worker to add one when their next step
         // was a verify, and an existing probe caught it by going red on this very line.
         && fixes[3].contains("a green at this head")
+        // air-ch9p: and under a lane the trailer, which is what makes a branch batch-ready.
+        && fixes[3].contains("`Bead: air-hgi9`")
         && four[3].contains("trailer");
     // No fix names a command the worker must not run under a lane (air-155w).
     let flow_safe = fixes
@@ -13094,7 +13102,7 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
 ///
 /// Green is the constraint: a range with any commit that is not the coordinator's still needs
 /// a bead, an empty range is not the coordinator's, and the lane's refusal names `air batch
-/// cut` instead of an amend while a worker is still told to amend its own commit. The
+/// cut` instead of an amend, and a worker is told to add a trailered commit (air-ch9p). The
 /// end-to-end case is `a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead`.
 fn probe_a_coordinator_only_range_needs_no_bead() -> Probe {
     use crate::cmd::status::{coordinator_only, no_bead_fix};
@@ -13113,8 +13121,12 @@ fn probe_a_coordinator_only_range_needs_no_bead() -> Probe {
     let empty = !coordinator_only(&[], &coordinator);
     let lane = no_bead_fix("lane");
     let worker = no_bead_fix("alpha");
-    let fixes =
-        !lane.contains("--amend") && lane.contains("air batch cut") && worker.contains("--amend");
+    // air-ch9p: nobody is told to amend now; a worker adds a trailered commit (roles: commit
+    // forward once a sha has left the worktree).
+    let fixes = !lane.contains("--amend")
+        && lane.contains("air batch cut")
+        && !worker.contains("--amend")
+        && worker.contains("`Bead: <id>` trailer");
 
     Probe {
         name: "land: a lane batch of only the coordinator's commits lands with no bead, any other commit still needs one, and the lane is never told to amend",

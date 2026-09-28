@@ -679,7 +679,7 @@ fn pre_tool_use(
                         // moment it was dealing with a shared file. Both commands below exist;
                         // a probe holds every shipped advice string to that.
                         context: Some(format!(
-                            "air: {} is also journaled by {} — coordinate before overlapping edits (`air holdings` says who is in the file; `air status` shows their head and whether it is green)",
+                            "air: {} is also journaled by {}. `air holdings` shows who is in the file; `air status` shows their head and whether it is green",
                             rel,
                             peer_ages(&peers, &now())
                         )),
@@ -1039,8 +1039,7 @@ pub fn project_for(cwd: &Path) -> String {
 /// every assistant message, and the FIRST one is the model the session launched with, which is
 /// what the coordinator is asking.
 ///
-/// Pure, and bounded: it is handed a prefix of the file, never the whole thing. Transcripts run
-/// to megabytes and this is on the hook path.
+/// Pure: it is handed one line at a time by [`model_of`], which stops at the first match.
 pub fn model_in_transcript(head: &str) -> Option<String> {
     let key = "\"model\":\"";
     let start = head.find(key)?.checked_add(key.len())?;
@@ -1050,16 +1049,18 @@ pub fn model_in_transcript(head: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
-/// The first 64 KB of the transcript. The first assistant message is at the top, so this finds
-/// the launch model on the first read; a file that has not been written yet simply yields None
-/// and the next hook tries again.
-fn model_of(path: Option<&str>) -> Option<String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path?).ok()?;
-    let mut buf = vec![0u8; 64 * 1024];
-    let n = f.read(&mut buf).ok()?;
-    let head = String::from_utf8_lossy(buf.get(..n)?).into_owned();
-    model_in_transcript(&head)
+/// The transcript read line by line up to the first line that names a model (air-06k7). It
+/// read the first 64 KB, and a launched session's first assistant line sits past that, behind
+/// the appended role text, so every launched session showed `[?]`. Reading stops at the first
+/// match, which is near the top; a file with no assistant line yet yields None and the next
+/// hook tries again.
+pub fn model_of(path: Option<&str>) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path?).ok()?;
+    std::io::BufReader::new(f)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .find_map(|line| model_in_transcript(&String::from_utf8_lossy(&line)))
 }
 
 fn set_session(
@@ -1148,6 +1149,26 @@ mod tests {
     use super::{identity_from, inner_env};
     use std::path::Path;
     use std::process::Command;
+
+    /// air-06k7: the model is found when the first assistant line is past 64 KB, where a
+    /// launched session's sits behind the appended role text.
+    #[test]
+    fn the_model_is_found_past_the_first_64_kb() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let user = format!(
+            "{{\"type\":\"user\",\"message\":{{\"content\":\"{}\"}}}}\n",
+            "x".repeat(100 * 1024)
+        );
+        let assistant = "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-5-5\"}}\n";
+        std::fs::write(&path, format!("{user}{assistant}")).unwrap();
+        assert_eq!(
+            super::model_of(path.to_str()).as_deref(),
+            Some("claude-opus-5-5")
+        );
+        std::fs::write(&path, &user).unwrap();
+        assert_eq!(super::model_of(path.to_str()), None);
+    }
 
     /// A scratch repo with one commit; the ledger lands in `<dir>/.air`.
     fn scratch_repo() -> tempfile::TempDir {

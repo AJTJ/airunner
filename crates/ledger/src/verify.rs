@@ -393,6 +393,21 @@ impl Ledger {
         Ok(v)
     }
 
+    /// Every run of `kind` started at or after `at`, any verdict, newest first (air-06k7): what
+    /// the loop measurement reads, instead of the newest 500.
+    pub fn runs_started_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
+        let mut st = self.conn().prepare(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND started_at >= ?2 \
+             ORDER BY finished_at DESC",
+        )?;
+        let v = st
+            .query_map(params![kind.as_str(), at], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// The most recent *green* run of `kind` for `worker` at any sha (for "peer is green at Y").
     pub fn latest_green(&self, worker: &str, kind: Kind) -> Result<Option<VerifyRun>> {
         let row = self

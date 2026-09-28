@@ -2,7 +2,8 @@
 //!
 //! Derived, never stored (plan 0001 §2): uncommitted changes from `git status` per worktree,
 //! committed divergence from `git diff --name-only main...HEAD`, plus journaled intent from
-//! `edit_journal`. Unit is the file (tick 0400). Prints its denominator.
+//! `edit_journal`, whose rows end once their file is clean and unchanged against main
+//! ([`expire`], air-84lz). Unit is the file (tick 0400). Prints its denominator.
 //!
 //! Every tag names its tense (air-v7o; the adopter 2026-08-30, both directions in one day: a
 //! worker nearly released a bead over an `uncommitted` that had evaporated, and another nearly
@@ -90,24 +91,94 @@ pub fn age_text(earlier: &str, now: &str) -> String {
     }
 }
 
+/// What each worktree has that main does not, by worker name: `(dirty, committed)` from
+/// `git status` and `main...HEAD`. `Err` when git could not say for that worktree.
+type Live = BTreeMap<String, Result<(Vec<String>, Vec<String>), String>>;
+
+fn live(wts: &[(std::path::PathBuf, Option<String>)]) -> Live {
+    let mut out = Live::new();
+    for (path, _branch) in wts {
+        let name = air_ledger::paths::worker_name_for(path).unwrap_or_else(|_| {
+            path.file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+        let dirty = git::dirty_files(path).map_err(|e| format!("{}: {e}", path.display()));
+        let committed = if name == "main" {
+            Ok(Vec::new())
+        } else {
+            git::changed_since(path, "main").map_err(|e| format!("{}: {e}", path.display()))
+        };
+        out.insert(name, dirty.and_then(|d| committed.map(|c| (d, c))));
+    }
+    out
+}
+
+/// Pure: the journal rows whose holding has ended (air-84lz). A holding ends when the file is
+/// clean in the holder's worktree and its branch does not change it against main: its change is
+/// in main, or was dropped. A holder with no worktree has no tree to hold anything in. A
+/// worktree git could not read keeps its rows, since the safe direction is to keep warning.
+pub fn ended<'a>(rows: &'a [(String, String)], live: &Live) -> Vec<&'a (String, String)> {
+    rows.iter()
+        .filter(|(w, p)| match live.get(w) {
+            None => true,
+            Some(Ok((dirty, committed))) => !dirty.contains(p) && !committed.contains(p),
+            Some(Err(_)) => false,
+        })
+        .collect()
+}
+
+/// Delete the journal rows whose holding has ended, so neither `air holdings` nor the peer
+/// warning names them again (air-84lz). An adopter's warnings cited edits 18 h old and long
+/// landed, and a gone session held 481 files. Run when `air holdings` or `air status` reads
+/// and when `air land` moves main. Returns how many ended.
+pub fn expire(ledger: &air_ledger::Ledger, repo: &Path) -> usize {
+    let Ok(wts) = git::worktrees(repo) else {
+        return 0;
+    };
+    expire_with(ledger, &live(&wts))
+}
+
+fn expire_with(ledger: &air_ledger::Ledger, live: &Live) -> usize {
+    let rows: Vec<(String, String)> = ledger
+        .conn()
+        .prepare("SELECT worker, path FROM edit_journal")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap_or_default();
+    let mut n = 0usize;
+    for (w, p) in ended(&rows, live) {
+        if ledger
+            .conn()
+            .execute(
+                "DELETE FROM edit_journal WHERE worker=?1 AND path=?2",
+                rusqlite::params![w, p],
+            )
+            .is_ok_and(|k| k > 0)
+        {
+            n = n.saturating_add(1);
+        }
+    }
+    n
+}
+
 pub fn compute(repo: &Path, only: Option<&str>) -> Result<Report, String> {
     let (ledger, _worker) = open(repo)?;
     let at = crate::cmd::now();
     let mut files: BTreeMap<String, Vec<Holding>> = BTreeMap::new();
     let mut errors = Vec::new();
     let wts = git::worktrees(repo).map_err(|e| e.to_string())?;
-    for (path, _branch) in &wts {
-        let name = air_ledger::paths::worker_name_for(path).unwrap_or_else(|_| {
-            path.file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default()
-        });
+    let live = live(&wts);
+    expire_with(&ledger, &live);
+    for (name, state) in &live {
         let mut mark = |p: String, f: fn(&mut Holding)| {
             if only.is_some_and(|o| o != p) || is_tooling_path(&p) {
                 return;
             }
             let holders = files.entry(p).or_default();
-            if let Some(h) = holders.iter_mut().find(|h| h.worker == name) {
+            if let Some(h) = holders.iter_mut().find(|h| h.worker == *name) {
                 f(h);
             } else {
                 let mut h = Holding {
@@ -118,17 +189,16 @@ pub fn compute(repo: &Path, only: Option<&str>) -> Result<Report, String> {
                 holders.push(h);
             }
         };
-        match git::dirty_files(path) {
-            Ok(v) => v
-                .into_iter()
-                .for_each(|p| mark(p, |h| h.uncommitted = true)),
-            Err(e) => errors.push(format!("{}: {e}", path.display())),
-        }
-        if name != "main" {
-            match git::changed_since(path, "main") {
-                Ok(v) => v.into_iter().for_each(|p| mark(p, |h| h.committed = true)),
-                Err(e) => errors.push(format!("{}: {e}", path.display())),
+        match state {
+            Ok((dirty, committed)) => {
+                dirty
+                    .iter()
+                    .for_each(|p| mark(p.clone(), |h| h.uncommitted = true));
+                committed
+                    .iter()
+                    .for_each(|p| mark(p.clone(), |h| h.committed = true));
             }
+            Err(e) => errors.push(e.clone()),
         }
     }
     // Journaled intent, with when the tool last touched the path.
@@ -231,7 +301,7 @@ pub fn is_tooling_path(p: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Holding, age_text, is_tooling_path, tags};
+    use super::{Holding, Live, age_text, ended, is_tooling_path, tags};
 
     /// air-v7o: every tag says when. An edit and build dirt are told apart by the journal.
     #[test]
@@ -267,6 +337,31 @@ mod tests {
             "journaled 6 h ago, clean now, committed"
         );
         assert_eq!(age_text("garbage", now), "at an unknown time");
+    }
+
+    /// air-84lz: a holding ends when the file is clean in the holder's tree and its branch does
+    /// not change it against main; not before.
+    #[test]
+    fn a_holding_ends_once_its_change_is_on_main_and_the_tree_is_clean() {
+        let row = |w: &str, p: &str| (w.to_string(), p.to_string());
+        let rows = vec![
+            row("w1", "landed.rs"),
+            row("w1", "on-branch.rs"),
+            row("w1", "dirty.rs"),
+            row("gone", "x.rs"),
+            row("unreadable", "y.rs"),
+        ];
+        let mut live = Live::new();
+        live.insert(
+            "w1".into(),
+            Ok((vec!["dirty.rs".into()], vec!["on-branch.rs".into()])),
+        );
+        live.insert("unreadable".into(), Err("git failed".into()));
+        let gone: Vec<&str> = ended(&rows, &live)
+            .into_iter()
+            .map(|(w, p)| if w == "gone" { "gone" } else { p.as_str() })
+            .collect();
+        assert_eq!(gone, ["landed.rs", "gone"]);
     }
 
     #[test]

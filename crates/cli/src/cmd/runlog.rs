@@ -26,11 +26,10 @@
 //! `make verify` output is 32,670 bytes green and 32,700 red (two runs, 2026-09-06), so 64 KiB
 //! keeps the WHOLE log here and the tail in a repo whose build talks more.
 //!
-//! **When it is dropped.** At write time, by count: writing the [`KEEP_LOGS`]th+1 deletes the
-//! oldest. The store therefore cannot exceed `KEEP_LOGS × TAIL_BYTES` = 1.25 MB, ever, with
-//! no cron, no `gc` subcommand and nothing to remember. That is the difference from
-//! `.air/events/`, which grew to 14.19 MB before anyone collected it and needed a command
-//! built for the purpose.
+//! **When it is dropped.** Never, by Air (owner, 2026-09-28, air-06k7). It kept the newest 20,
+//! and an adopter's store deleted 5 of 7 red-batch logs within a day while the messages that
+//! named them still pointed there. Each red run adds at most [`TAIL_BYTES`]. `air gc` collects
+//! only `.air/events/` today, so nothing ages these out.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -38,11 +37,6 @@ use std::path::{Path, PathBuf};
 /// How much of a red run's output is kept: the last 64 KiB. See the module doc for why this
 /// number and not another — it is the size of this repo's entire verify output, doubled.
 pub const TAIL_BYTES: usize = 64 * 1024;
-
-/// How many red logs the store holds. Twenty is a round's worth of reds with room over:
-/// 2026-09-06 produced four across the whole fleet in a night. The ceiling this fixes —
-/// `KEEP_LOGS × TAIL_BYTES`, 1.25 MB — is the reason the number is a count rather than an age.
-pub const KEEP_LOGS: usize = 20;
 
 /// The last `cap` bytes of a stream, kept while it runs.
 ///
@@ -90,41 +84,17 @@ pub fn dir(air_dir: &Path) -> PathBuf {
 ///
 /// A kill is not a verdict (air-ppm) but its output is exactly what somebody wants: a killed
 /// run is the one most likely to be a loaded machine rather than a defect, which is the whole
-/// population air-5ik was filed about. A green keeps nothing, and that is not tidiness — it is
-/// what stops greens evicting the reds out of a store bounded by count.
+/// population air-5ik was filed about. A green keeps nothing: nobody reads it, and the store is
+/// never pruned, so greens would grow it by an order of magnitude more than reds.
 pub fn keeps_output(exit_code: i32) -> bool {
     exit_code != 0
 }
 
-/// Pure: which of `existing` to delete so that `keep` remain once one more is added.
-///
-/// `existing` is the store's file names, ANY order. Run ids are ULIDs, which sort
-/// lexicographically by creation time, so the oldest are the smallest — the same property
-/// `verify_runs.id` already relies on. Sorting here rather than trusting the caller's order
-/// is the point: a directory listing's order is the filesystem's business, and a prune that
-/// deleted whatever the OS happened to return first would look correct for years.
-pub fn prune(existing: &[String], keep: usize) -> Vec<String> {
-    let mut names: Vec<String> = existing.to_vec();
-    names.sort();
-    let over = names.len().saturating_add(1).saturating_sub(keep);
-    names.into_iter().take(over).collect()
-}
-
-/// Write `bytes` as the log for run `id`, prune the store to [`KEEP_LOGS`], and answer the
-/// path recorded on the row. `None` when nothing could be written: a log is a courtesy and
+/// Write `bytes` as the log for run `id` and answer the path recorded on the row. `None` when nothing could be written: a log is a courtesy and
 /// must never turn a recorded verdict into no verdict at all.
 pub fn write(air_dir: &Path, id: &str, bytes: &[u8]) -> Option<PathBuf> {
     let d = dir(air_dir);
     std::fs::create_dir_all(&d).ok()?;
-    let existing: Vec<String> = std::fs::read_dir(&d)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".log"))
-        .collect();
-    for name in prune(&existing, KEEP_LOGS) {
-        let _ = std::fs::remove_file(d.join(name));
-    }
     let path = d.join(format!("{id}.log"));
     std::fs::write(&path, bytes).ok()?;
     Some(path)
@@ -149,27 +119,5 @@ mod tests {
         let mut t = Tail::new(0);
         t.push(b"x");
         assert!(t.into_bytes().is_empty());
-    }
-
-    #[test]
-    fn prune_deletes_the_oldest_by_id_whatever_order_the_directory_gave_them() {
-        // ULIDs sort by creation time, so lexicographic order is age order.
-        let names: Vec<String> = ["03.log", "01.log", "04.log", "02.log"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        // Room for one more: nothing goes.
-        assert!(prune(&names, 5).is_empty());
-        // Full: the oldest goes, and it is 01 whatever order it was listed in.
-        assert_eq!(prune(&names, 4), vec!["01.log".to_string()]);
-        // Over: enough go to leave room for the new one.
-        assert_eq!(
-            prune(&names, 2),
-            vec![
-                "01.log".to_string(),
-                "02.log".to_string(),
-                "03.log".to_string()
-            ]
-        );
     }
 }

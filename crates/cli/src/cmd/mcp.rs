@@ -226,7 +226,7 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 // rather than against memory. `review-waiting` left with air-okc,
                 // `owner-decision-waiting` with air-uef. A surface describing something
                 // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, silent-with-claim, gone-with-claim, idle-without-claim, handover-not-green, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, idle-without-claim, silent-with-claim, gone-with-claim, handover-not-green, landable, rewound-and-carried, closed-not-landed, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
             }),
         ),
         "ping" => result(id, json!({})),

@@ -292,8 +292,16 @@ fn after_batch(
     if super::caller_role() == "lane" {
         super::fanout::told_lane(ledger, lane, &ready, &now());
     }
-    let mut v =
-        vec!["nothing lands on this batch; split it by its members, then cut again".to_string()];
+    // air-ch9p: a kill is no verdict and has nothing to split; a batch of one has nothing to
+    // split either, and its member stays out until it moves (air-hyli).
+    let first = if run.is_killed() {
+        "killed: no verdict and nothing lands; `air batch cut` cuts again".to_string()
+    } else if run.members.len() == 1 {
+        "red: nothing lands; its only member is batch-ready again after a new commit".to_string()
+    } else {
+        "red: nothing lands on this batch; split it by its members, then cut again".to_string()
+    };
+    let mut v = vec![first];
     v.extend(super::fanout::next_cut_lines(&ready));
     v
 }

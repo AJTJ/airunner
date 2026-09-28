@@ -57,6 +57,14 @@ missing notices, which are fixed or added below.
   its pid in `.air/dolt/server.pid` and its output in `.air/dolt/server.log`, instead of in a
   tmux session `<project>-dolt`. `air bd-server status` names the pid. This also stops a
   scratch `air init --write` leaving a session and a server on the owner's own tmux.
+- Air's messages state facts and the command that acts on them, with the opinions taken out
+  (air-ch9p). `air status` prints `in batch: <worker> at <head> is in batch <sha>, being
+  verified now` for a head inside a running batch, instead of listing it as batch-ready. The
+  coordinator is not sent `landable` while a lane session is live. A close refused for want
+  of a trailer names the `Bead:` trailer. Fixes are printed as `fix: ...` rather than wrapped
+  in "run `...`", and none suggests `git commit --amend`. A batch of one has its own green and
+  red text. "Close them now" names only beads the member still holds, and several messages
+  lose "most likely", "prompt them", "yours" and "closed is closed".
 - `air audit` prints, for every budget, the recorded median and maximum beside the budget and
   ten times the maximum, which the next release sets Air's numbers from; each budget names the
   measurement or the ceiling behind it. A wait that reaches its budget reads `over budget`.
@@ -129,6 +137,34 @@ missing notices, which are fixed or added below.
 
 - `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
   green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
+- A branch whose red batch had it as the only member stayed ready for the next batch, so the
+  lane merged the same red again. Such a branch is now left out until its worker commits past
+  it.
+- `air batch cut` refused for good once the lane's green batch fell behind main, and `air land`
+  refused that batch too, so the lane could neither cut nor land. The cut now refuses only a
+  green batch that could still land; a stale one is named and re-cut from main.
+- A `bd_server` unit test read a neighbour listening on its port as a running server and
+  failed under a loaded verify. `start` now checks for Air's database before it probes the
+  port, and the test holds a listener on its own port to prove the port does not matter.
+- A recorded edit never expired, so the peer warning and `air holdings` named edits days old
+  and long landed, and sessions long gone. An edit now ends once the file is clean in its
+  holder's worktree and unchanged against main.
+- `air claim` took a bead that an open `blocks` dependency keeps out of `bd ready`. It now
+  refuses, naming the blocker and its status.
+- Seven hard-coded limits that changed an answer without saying so are gone. The close gate
+  checks every green recorded after the bead's oldest commit, not the newest 12. The model
+  column reads the transcript up to the first model line, not the first 64 KB, so launched
+  sessions no longer show `[?]`. `bd ready` and `bd list --status` pass `-n 0`, so more than
+  100 ready beads or 50 in progress are all seen. The loop times read every run in their
+  window, `air init` walks the whole tree, and bead ids in prose have no length or count cap.
+  Red run logs are no longer pruned to the newest 20.
+- A worker that joined, or finished its claim, while beads were already ready was never told
+  them, because "beads are ready" went out only when the ready set changed. It is now told the
+  set as it stands, once.
+- A close in the seconds between a landing moving main and its record being written was
+  refused. The gate now asks git whether every commit naming the bead is in main. The "batch
+  green" notice now names only the beads the batch fully contains, and a member with no such
+  bead is not told to close anything.
 - A batch cut stopped by a leftover `index.lock` left no record, and a verify stopped by hand
   left no run. A failed cut now writes `batch-cut / failed` with its reason and who holds the
   lock, and `air record` survives SIGINT, SIGTERM and SIGHUP to write the run as interrupted

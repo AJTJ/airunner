@@ -12,7 +12,10 @@ use std::path::Path;
 
 use air_ledger::Ledger;
 use air_ledger::deliveries::Outgoing;
+use air_ledger::landings::Member;
 use serde_json::json;
+
+use crate::git;
 
 use super::status::{BatchReady, Snapshot, WorkerView};
 
@@ -22,7 +25,8 @@ use super::status::{BatchReady, Snapshot, WorkerView};
 const READY_REFRESH_SECS: i64 = 60;
 
 /// The bd cache key holding the ready set as of the last tick, so a restarted channel does
-/// not announce what was already there.
+/// not count what was already there as new. A worker without a claim is still told it once
+/// (air-oerm).
 const READY_SEEN: &str = "fanout_ready_seen";
 
 /// Workers told about new beads: every worker with a live session holding no claim, whatever
@@ -104,14 +108,23 @@ pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -
     // racing on it. So it says so, and names where the current list is.
     format!(
         "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
-         first claim wins, and a refused claim means someone else took it. This list is as of \
+         first claim wins, and a refusal names its reason. This list is as of \
          now: after a refused claim or a finished bead, pick from `bd ready`, not from here.",
         listed.join(" ")
     )
 }
 
+/// The bd cache key holding the workers without a claim as of the last tick (air-oerm).
+const READY_RECIPIENTS: &str = "fanout_ready_recipients";
+
 /// Queue "beads are ready" for every worker without a claim when the claimable set gained
-/// a bead since the last tick. Returns the workers queued for.
+/// a bead since the last tick, and for a worker that is newly without a claim (it joined, or
+/// its claim ended) while the set is not empty. Returns the workers queued for.
+///
+/// air-oerm: an adopter's fleet started with 100 beads ready and four workers sat idle, because
+/// the notice went out only when the set changed; every trial had hidden it by filing beads
+/// after the workers joined. A worker told this exact set before is not told again, since a
+/// delivery is keyed by the set, so a restarted channel repeats nothing.
 pub fn fan_out_ready(
     ledger: &Ledger,
     worker: &str,
@@ -120,34 +133,42 @@ pub fn fan_out_ready(
     priorities: &[i64],
     at: &str,
 ) -> Vec<String> {
-    let seen: Option<Vec<String>> = ledger
-        .bd_cache_get(READY_SEEN)
-        .ok()
-        .flatten()
-        .and_then(|(v, _)| serde_json::from_str(&v).ok());
-    if let Ok(v) = serde_json::to_string(ready) {
-        let _ = ledger.bd_cache_put(READY_SEEN, &v, at);
-    }
-    // The first tick after a restart seeds the set and says nothing: the beads were there
-    // before this channel was, and the Stop nudge tells a worker about them when it stops.
-    let Some(seen) = seen else {
-        return Vec::new();
+    let cached = |k: &str| -> Option<Vec<String>> {
+        ledger
+            .bd_cache_get(k)
+            .ok()
+            .flatten()
+            .and_then(|(v, _)| serde_json::from_str(&v).ok())
     };
-    let new = added(&seen, ready);
-    if new.is_empty() {
+    let seen = cached(READY_SEEN);
+    let before = cached(READY_RECIPIENTS);
+    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
+    let mut recipients = without_claim(s);
+    recipients.sort();
+    for (k, v) in [
+        (READY_SEEN, ready),
+        (READY_RECIPIENTS, recipients.as_slice()),
+    ] {
+        if let Ok(v) = serde_json::to_string(v) {
+            let _ = ledger.bd_cache_put(k, &v, at);
+        }
+    }
+    let new = seen.map(|seen| added(&seen, ready)).unwrap_or_default();
+    let joined = before.map_or_else(|| recipients.clone(), |b| added(&b, &recipients));
+    if ready.is_empty() || (new.is_empty() && joined.is_empty()) {
         return Vec::new();
     }
     let key = ready.join(" ");
     let mut told = Vec::new();
-    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
-    let mut recipients = without_claim(s);
-    recipients.sort();
-    for (i, w) in recipients.into_iter().enumerate() {
+    for (i, w) in recipients.iter().enumerate() {
+        if new.is_empty() && !joined.contains(w) {
+            continue;
+        }
         let text = beads_ready_text(ready, priorities, i);
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
-                    to: &w,
+                    to: w,
                     kind: "beads-ready",
                     key: &key,
                     subject: &key,
@@ -158,20 +179,33 @@ pub fn fan_out_ready(
             )
             .unwrap_or(false);
         if queued {
-            told.push(w);
+            told.push(w.clone());
         }
+    }
+    // A change of the set is logged even when nobody was told, as before; a join only when
+    // someone was.
+    if new.is_empty() && told.is_empty() {
+        return told;
     }
     super::log_event(
         ledger,
         worker,
         super::decisions::FANOUT_BEADS_READY,
-        &json!({"ready": ready, "new": new, "to": told}),
+        &json!({"ready": ready, "new": new, "joined": joined, "to": told}),
+        // air-ch9p (air-23ve): queued, not told, and true as of this tick. A worker can claim
+        // in the seconds before delivery, and the line read as if it had been told regardless.
         &format!(
-            "{} new bead(s); told {} worker(s) without a claim",
+            "{} new bead(s), {} worker(s) newly without a claim; queued for {} worker(s) \
+             holding no claim at this tick",
             new.len(),
+            joined.len(),
             told.len()
         ),
-        "1 change of the ready set",
+        if new.is_empty() {
+            "a worker without a claim joined a non-empty ready set"
+        } else {
+            "1 change of the ready set"
+        },
     );
     told
 }
@@ -276,15 +310,16 @@ pub fn capture_to_coordinator(ledger: &Ledger, from: &str, id: &str, text: &str,
     queued
 }
 
-pub fn queue_empty_text(idle: usize, epics: Option<&[String]>) -> String {
+pub fn queue_empty_text(free: usize, epics: Option<&[String]>) -> String {
     let epics = match epics {
         None => "unknown (bd did not answer)".to_string(),
         Some([]) => "none".to_string(),
         Some(v) => v.join(" "),
     };
     format!(
-        "the ready queue is empty: {idle} worker(s) idle; epics with no open child: {epics}. \
-         File the next wave, or decompose one of those epics."
+        // air-ch9p: the count is workers holding no claim, whatever their state, not idle ones.
+        "the ready queue is empty: {free} worker(s) hold no claim; epics with no open child: \
+         {epics}. File the next wave, or decompose one of those epics."
     )
 }
 
@@ -384,7 +419,13 @@ pub fn lanes(s: &Snapshot) -> Vec<String> {
 }
 
 fn batch_ready_line(b: &BatchReady) -> String {
-    format!("{} at {} ({})", b.worker, short(&b.head), b.beads.join(" "))
+    // air-ch9p: the coordinator's branch carries no bead, and printed `()`.
+    let beads = if b.beads.is_empty() {
+        "no bead".to_string()
+    } else {
+        b.beads.join(" ")
+    };
+    format!("{} at {} ({beads})", b.worker, short(&b.head))
 }
 
 /// What the lane does next, given the batch-ready set as of now: the set and `air batch cut`,
@@ -476,64 +517,155 @@ pub struct MemberNote {
     pub content: String,
 }
 
-/// The beads a member's commits name between main and its sha.
-fn member_beads(repo: &Path, main_sha: &str, sha: &str) -> Vec<String> {
-    super::attribution::attributed_in_range(repo, &format!("{main_sha}..{sha}")).declared
+/// The beads a branch's commits name between `from` and `to`, by trailer.
+fn beads_between(repo: &Path, from: &str, to: &str) -> Vec<String> {
+    super::attribution::attributed_in_range(repo, &format!("{from}..{to}")).declared
+}
+
+/// A member's beads as a batch result sees them (air-5ynn).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberBeads {
+    /// Beads whose every trailer commit on the member's branch the batch contains.
+    pub covered: Vec<String>,
+    /// Beads in the batch with a later commit on the member's branch that the batch lacks.
+    pub later: Vec<String>,
+}
+
+/// The member's beads, read against its CURRENT head (air-5ynn): a bead the batch took is
+/// `covered` only when no commit naming it sits on the branch beyond the batch. An adopter's
+/// worker was told "close now" twice for a bead with a newer commit the batch did not have,
+/// and the close was refused both times.
+fn member_beads(
+    repo: &Path,
+    ledger: &Ledger,
+    main_sha: &str,
+    batch: &str,
+    m: &Member,
+) -> MemberBeads {
+    let taken = beads_between(repo, main_sha, &m.sha);
+    let head = git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(p, _)| air_ledger::paths::worker_name_for(p).is_ok_and(|w| w == m.worker))
+        .and_then(|(p, _)| git::head(&p).ok())
+        .unwrap_or_else(|| m.sha.clone());
+    let after = beads_between(repo, batch, &head);
+    // Only beads the member still holds open (air-ch9p): a bead it closed before the batch
+    // recorded is not one to close now, and the notice said so for six at once on 2026-09-28.
+    let held: Vec<String> = ledger
+        .open_claims()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.worker == m.worker)
+        .map(|c| c.bead)
+        .collect();
+    let mut out = MemberBeads::default();
+    for b in taken {
+        if out.covered.contains(&b) || out.later.contains(&b) || !held.contains(&b) {
+            continue;
+        }
+        if after.contains(&b) {
+            out.later.push(b);
+        } else {
+            out.covered.push(b);
+        }
+    }
+    out
 }
 
 /// What each member hears when the lane records a batch verify: `close` on a green, the exit
 /// and the kept output on a red. A kill is no verdict and says nothing. Pure over the run and
 /// each member's beads.
+///
+/// A green names only the beads it covers (air-5ynn). A member with none, such as the
+/// coordinator whose commits name no bead, hears the green with no close instruction: an
+/// adopter's coordinator had about fifteen "close them now" in a day with nothing to close.
 pub fn batch_result_notes(
     run: &air_ledger::verify::VerifyRun,
-    beads_of: &dyn Fn(&str) -> Vec<String>,
+    beads_of: &dyn Fn(&Member) -> MemberBeads,
 ) -> Vec<MemberNote> {
     use air_ledger::verify::Verdict;
     let verdict = run.verdict();
     if verdict == Verdict::Killed {
         return Vec::new();
     }
+    let alone = run.members.len() == 1;
     run.members
         .iter()
         .filter(|m| !m.worker.is_empty())
         .map(|m| {
-            let beads = beads_of(&m.sha);
-            let list = if beads.is_empty() {
-                "your commits".to_string()
-            } else {
-                beads.join(" ")
-            };
-            let (kind, content) = if verdict == Verdict::Green {
-                (
-                    "batch-green",
+            let beads = beads_of(m);
+            let (kind, content, named) = if verdict == Verdict::Green {
+                let later = if beads.later.is_empty() {
+                    String::new()
+                } else {
                     format!(
-                        "batch green at {} contains your {} ({list}). Close them now with \
-                         `air close <id> --reason-file <proof>`; the proof is the lane's green at \
-                         {}. `air handover` says whether the close will pass.",
+                        " {} has a later commit this batch does not contain; the next batch \
+                         covers it.",
+                        beads.later.join(" ")
+                    )
+                };
+                // air-ch9p (air-23ve): a batch of one fast-forwards, so "batch green at X
+                // contains your X" named one commit twice.
+                let what = if alone {
+                    format!("your {} is green as a batch of one", short(&m.sha))
+                } else {
+                    format!(
+                        "batch green at {} contains your {}",
                         short(&run.sha),
-                        short(&m.sha),
-                        run.sha
-                    ),
-                )
-            } else {
-                (
-                    "batch-red",
+                        short(&m.sha)
+                    )
+                };
+                let content = if beads.covered.is_empty() {
+                    format!("{what}; it covers no bead you hold open.{later}")
+                } else {
                     format!(
-                        "batch red at {} (exit {}); your {} ({list}) was a member. Output: {}. \
-                         Nothing lands on it and the lane splits the batch. If the failure is \
-                         in your change, fix it with a new commit.",
+                        "{what} ({}). Close them now with `air close <id> --reason-file \
+                         <proof>`; the proof is the lane's green at {}. `air handover` says \
+                         whether the close will pass.{later}",
+                        beads.covered.join(" "),
+                        run.sha
+                    )
+                };
+                ("batch-green", content, beads.covered)
+            } else {
+                let mut all = beads.covered;
+                all.extend(beads.later);
+                let list = if all.is_empty() {
+                    "your commits".to_string()
+                } else {
+                    all.join(" ")
+                };
+                let output = run.log_path.as_deref().unwrap_or("not kept");
+                // air-ch9p (air-23ve): a batch of one has nothing to split, and since
+                // air-hyli its member stays out of the next batch until it moves.
+                let content = if alone {
+                    format!(
+                        "batch red at {} (exit {}); your {} ({list}) was its only member. \
+                         Output: {output}. Nothing lands on it. Your branch is batch-ready \
+                         again once it has a new commit.",
                         short(&run.sha),
                         run.exit_code,
                         short(&m.sha),
-                        run.log_path.as_deref().unwrap_or("not kept")
-                    ),
-                )
+                    )
+                } else {
+                    format!(
+                        "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
+                         Output: {output}. Nothing lands on it and the lane splits the batch. \
+                         If the failure is in your change, fix it with a new commit.",
+                        short(&run.sha),
+                        run.exit_code,
+                        short(&m.sha),
+                        run.members.len(),
+                    )
+                };
+                ("batch-red", content, all)
             };
             MemberNote {
                 to: m.worker.clone(),
                 kind,
                 key: run.id.clone(),
-                beads: beads.join(" "),
+                beads: named.join(" "),
                 content,
             }
         })
@@ -577,7 +709,7 @@ pub fn batch_result(repo: &Path, ledger: &Ledger, run: &air_ledger::verify::Veri
     let Some(main_sha) = run.main_sha.clone() else {
         return;
     };
-    let notes = batch_result_notes(run, &|sha| member_beads(repo, &main_sha, sha));
+    let notes = batch_result_notes(run, &|m| member_beads(repo, ledger, &main_sha, &run.sha, m));
     queue_notes(
         ledger,
         &run.worker,
@@ -681,7 +813,8 @@ pub fn main_moved_text(
         ));
     }
     if !to_coordinator {
-        t.push_str(" Merge main only if these files touch your own work.");
+        // air-ch9p: a fact and its command; whether to merge is the worker's call.
+        t.push_str(" `git merge main` brings these into your branch.");
     }
     t.push_str(" No reply needed.");
     t
@@ -726,7 +859,7 @@ pub fn main_moved(
     for w in &to {
         let member = members.iter().find(|(m, _)| &m.worker == w);
         let mine = member
-            .map(|(m, tip)| member_beads(repo, tip, &m.sha))
+            .map(|(m, tip)| beads_between(repo, tip, &m.sha))
             .unwrap_or_default();
         let text = main_moved_text(
             merge,
@@ -959,7 +1092,7 @@ mod tests {
         assert_eq!(rows[0].0, "coordinator");
         assert_eq!(
             rows[0].1,
-            "the ready queue is empty: 1 worker(s) idle; epics with no open child: zz-9. \
+            "the ready queue is empty: 1 worker(s) hold no claim; epics with no open child: zz-9. \
              File the next wave, or decompose one of those epics."
         );
         // The coordinator's channel takes it; an undelivered one would be replaced instead.
@@ -978,7 +1111,7 @@ mod tests {
         assert!(rows.iter().all(|(to, _)| to == "coordinator"), "{rows:?}");
         assert_eq!(
             queue_empty_text(2, None),
-            "the ready queue is empty: 2 worker(s) idle; epics with no open child: unknown \
+            "the ready queue is empty: 2 worker(s) hold no claim; epics with no open child: unknown \
              (bd did not answer). File the next wave, or decompose one of those epics."
         );
         assert!(queue_empty_text(1, Some(&[])).contains("no open child: none."));
@@ -1061,7 +1194,7 @@ mod tests {
             "{w}"
         );
         assert!(
-            w.contains("Merge main only if these files touch your own work."),
+            w.contains("`git merge main` brings these into your branch."),
             "{w}"
         );
     }

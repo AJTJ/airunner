@@ -2661,6 +2661,102 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "close-reads-main-from-git",
+        since: "2026-09-28 (air-5ynn)",
+        headline: "`air close` passes a bead whose every `Bead:` trailer commit is in main, \
+                   asked of git rather than of the landing row, so a close in the seconds \
+                   between `air land`'s fast-forward and its row is no longer refused. `batch \
+                   green` is read against the member's current head: it tells the member to \
+                   close only the beads the batch fully contains, names a bead with a later \
+                   commit as waiting for the next batch, and tells a member with no such bead \
+                   (the coordinator) that nothing is to close.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "beads-ready-on-join",
+        since: "2026-09-28 (air-oerm)",
+        headline: "A worker that joins, or whose claim ends, while beads are ready is told \
+                   `beads are ready` with the set as it stands; before, the notice went out only \
+                   when the set gained a bead, so a fleet started over a full queue sat idle. \
+                   This includes the channel's first tick, which used to only record the set. \
+                   No worker is told the same set twice.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "no-hidden-limits",
+        since: "2026-09-28 (air-06k7)",
+        headline: "Seven limits that changed an answer silently are removed. The close gate \
+                   checks every green recorded after the bead's oldest commit (it read the \
+                   newest 12, and a refusal said \"12\"); `bd ready` and `bd list --status` \
+                   pass `-n 0` (bd's defaults capped them at 100 and 50); the model column reads \
+                   the transcript to its first model line (launched sessions showed `[?]`); the \
+                   loop times, `air init`'s tree walk and prose bead ids are uncapped. Red run \
+                   logs in `.air/logs/` are kept, never pruned to 20, and `air gc` does not \
+                   collect them: each red run adds up to 64 KiB.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "claim-refuses-blocked",
+        since: "2026-09-28 (air-g7hr)",
+        headline: "`air claim` refuses a bead with a `blocks` dependency on a bead that is not \
+                   closed, naming the blocker and its status (`refused: <id> is blocked by \
+                   <blocker> (<status>)`). bd's own claim takes such a bead although `bd ready` \
+                   does not list it.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "holdings-expire",
+        since: "2026-09-28 (air-84lz)",
+        headline: "A recorded edit (a row in `edit_journal`) ends once its file is clean in the \
+                   holder's worktree and the holder's branch does not change it against main, \
+                   and for a holder with no worktree. `air holdings` and `air status` delete \
+                   ended rows when they read, and `air land` after it moves main, so the peer \
+                   warning no longer names edits that have landed or sessions that are gone. \
+                   `journaled ..., clean now` now appears only beside `committed`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "stale-batch-re-cut",
+        since: "2026-09-28 (air-tml4)",
+        headline: "`air batch cut` refuses the lane's green head only while it could land (it \
+                   contains main). A green batch main has moved past is re-cut from main, and \
+                   the cut prints `stale: head <h> was green over <m0>; main is at <m1>, so that \
+                   batch is stale and is re-cut`. Before, the lane could neither cut nor land.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "red-member-held",
+        since: "2026-09-28 (air-hyli)",
+        headline: "A branch whose head was the only member of a red batch is not batch-ready \
+                   until its worker commits past that head, read from the batch's recorded \
+                   members. Before, only a red recorded at the head itself counted, which a \
+                   batch built on main never is, so the lane merged the same red again.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "facts-not-opinions",
+        since: "2026-09-28 (air-ch9p)",
+        headline: "Messages state facts and the fixing command. `air status` prints `in batch: \
+                   <worker> at <head> is in batch <sha>, being verified now` for a head inside a \
+                   running batch, which is no longer batch-ready (`not_batch_ready` check \
+                   `in-batch`). `landable` is not pushed while a lane session is live. The \
+                   no-trailer close refusal names `Bead: <id>`. Gate fixes print as `fix: ...`, \
+                   never \"run `...`\", and none suggests `git commit --amend`. A batch of one has \
+                   its own green and red text; \"close them now\" names only beads the member \
+                   still holds; `batch-ready` prints `(no bead)` for a branch carrying none.",
+        silent_break: true,
+        action: "A script that matched the old wording (\"run `\", \"prompt them\", \"most \
+                 likely\", \"the lane splits\" for a one-member batch, \"worker(s) idle\" in the \
+                 queue-empty notice) matches nothing now; read the new lines.",
+    },
+    SurfaceChange {
         id: "dolt-server-no-tmux",
         since: "2026-09-28 (air-8iu7)",
         headline: "Air starts the project's Dolt server as a background process, pid in \

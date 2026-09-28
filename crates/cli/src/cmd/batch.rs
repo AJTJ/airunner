@@ -21,7 +21,7 @@
 //!   current main and did not move: a close says the bead's work was verified, a landing says
 //!   main will still be green, and only the second expires.
 //! - An empty range was read as "this bead has no commits" when it also means "every commit of
-//!   this bead is already in main". [`landed_by`] tells the two apart.
+//!   this bead is already in main". [`in_main`] tells the two apart, from git (air-5ynn).
 //!
 //! Removal condition: never, while the gate exists; this is the gate's definition of green.
 
@@ -65,7 +65,7 @@ pub struct Candidate {
 /// `covering` short-circuits without finishing the count.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Scanned {
-    /// Recorded greens considered (at most [`CANDIDATES`]).
+    /// Recorded greens considered: every one recorded after the bead's oldest commit.
     pub candidates: usize,
     /// Of those, the ones containing the main they were recorded over.
     pub with_main: usize,
@@ -73,6 +73,16 @@ pub struct Scanned {
     pub touching: usize,
     /// The bead's commits in [`BRANCH_RANGE`].
     pub commits: usize,
+}
+
+/// A bead whose every commit is in main (air-5ynn).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct InMain {
+    /// The newest commit on main naming the bead in a `Bead:` trailer.
+    pub newest: String,
+    /// The landing row that put it there, when written: (merge commit, worker). `None` in the
+    /// seconds between `air land`'s fast-forward and its row, and for a hand landing.
+    pub landing: Option<(String, String)>,
 }
 
 /// What the candidates say about one bead.
@@ -84,10 +94,9 @@ pub struct Batch {
     /// (batch sha, batch worker, the newest commit it lacks, that commit's subject). The
     /// refusal names it: the batch predates the worker's last commit.
     pub predates: Option<(String, String, String, String)>,
-    /// The bead has no commit left for main to be missing: Air landed it, and main still
-    /// contains that merge (air-9ij). `(merge commit, the worker whose branch was merged)`.
-    /// No green is looked for, because the landing already required one.
-    pub landed: Option<(String, String)>,
+    /// The bead has no commit left for main to be missing: main has every commit naming it
+    /// (air-9ij, air-5ynn). No green is looked for, because main moves only through a green.
+    pub landed: Option<InMain>,
     /// What the scan looked at (air-hgi9). Meaningful only when nothing covered the bead.
     pub scanned: Scanned,
 }
@@ -157,26 +166,67 @@ pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
         .collect()
 }
 
-/// How many recent greens are tried. A batch is one of the last few verifies in a round;
-/// each candidate costs one `git merge-base` plus one per bead commit, only on the path where
-/// HEAD itself has no green.
-pub const CANDIDATES: usize = 12;
+/// Every green that can contain the bead's work: the ones recorded after its oldest commit was
+/// made (air-06k7). A green recorded before a commit existed cannot contain it, so this reads
+/// every candidate there is and no others. It was the newest 12 greens, a number nobody ruled:
+/// a covering green 13th newest was refused, and the refusal said "12". Each candidate costs
+/// one `git merge-base` plus one per bead commit, only on the path where HEAD has no green.
+///
+/// The commit time is git's committer time in whole seconds, and a run's `finished_at` has
+/// sub-seconds, so the bound is one second earlier. When git cannot say, every green is read.
+fn greens_for(
+    ledger: &Ledger,
+    repo: &Path,
+    oldest: Option<&BeadCommit>,
+) -> Result<Vec<air_ledger::verify::VerifyRun>, String> {
+    let since = oldest
+        .and_then(|c| git::run(repo, &["log", "-1", "--format=%ct", &c.sha]).ok())
+        .and_then(|t| t.trim().parse::<i64>().ok())
+        .and_then(|t| jiff::Timestamp::from_second(t.saturating_sub(1)).ok())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    ledger
+        .greens_since(Kind::Verify, &since)
+        .map_err(|e| e.to_string())
+}
 
-/// Air landed this bead, and main still contains the merge (air-9ij).
+/// The newest commit on main whose `Bead:` trailer names `bead`, if any (air-5ynn).
 ///
-/// The judgement this encodes, recorded because it was a judgement: **when a bead's work is
-/// already in main, the close passes.** `air land` refuses a branch without a recorded green
-/// at a head containing main, and the commit it fast-forwards main onto has that green's
-/// exact tree (air-odv), so the work reached main carrying precisely the proof this gate
-/// asks for. Demanding a fresh green naming the merge would make Air refuse the close of a
-/// bead Air itself landed.
+/// **When a bead has no commit in [`BRANCH_RANGE`] and main has one naming it, every commit of
+/// the bead is in main, and the close passes.** Main moves only through a landing, and `air
+/// land` refuses a branch without a recorded green at a head containing main, so being in main
+/// is the proof by itself. (The owner landing by hand is the owner's call.)
 ///
-/// It is a landing ROW, not "HEAD is an ancestor of main", because the row names the bead by
-/// the same `Bead:` trailer the rest of the gate reads. A worker that claimed a bead and
-/// committed nothing has no row, so it still has nothing to close on — the looser branch-level
-/// test would have handed it a pass. A repo that lands by hand writes no row and its workers
-/// re-verify as before; that is the status quo, not a regression.
-pub fn landed_by(ledger: &Ledger, repo: &Path, bead: &str) -> Option<(String, String)> {
+/// This used to be asked of the landing ROW (air-9ij), which `air land` writes after the
+/// fast-forward. A close in the seconds between the two found the commits gone from
+/// `main..HEAD` and no row naming them, and was refused: an adopter counted five in one day,
+/// each right after "close them now", each passing on a retry. Git is the fact; the row is a
+/// record of it. A worker that claimed a bead and committed nothing still has nothing here,
+/// so it still has nothing to close on.
+pub fn in_main(repo: &Path, bead: &str) -> Option<String> {
+    let text = git::run(
+        repo,
+        &[
+            "log",
+            "--format=%H%x1f%B%x1e",
+            "-F",
+            &format!("--grep={bead}"),
+            "main",
+        ],
+    )
+    .ok()?;
+    text.split('\u{1e}').find_map(|rec| {
+        let (sha, body) = rec.trim_start_matches('\n').split_once('\u{1f}')?;
+        super::attribution::trailer_ids(body)
+            .iter()
+            .any(|b| b == bead)
+            .then(|| sha.trim().to_string())
+    })
+}
+
+/// The landing that put `bead` in main, when the ledger has its row: (merge, worker). Only
+/// for the message; [`in_main`] decides.
+fn landed_by(ledger: &Ledger, repo: &Path, bead: &str) -> Option<(String, String)> {
     ledger.landings().ok()?.into_iter().find_map(|l| {
         let merge = l.merge_commit.clone()?;
         (l.landed()
@@ -194,14 +244,16 @@ pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, Strin
         // have landed, which is what a worker's own `git merge main` produces the moment its
         // batch is on main. Returning `Batch::default()` here refused those closes and said
         // there was no green at HEAD, naming nothing.
+        let landed = in_main(repo, bead).map(|newest| InMain {
+            newest,
+            landing: landed_by(ledger, repo, bead),
+        });
         return Ok(Batch {
-            landed: landed_by(ledger, repo, bead),
+            landed,
             ..Batch::default()
         });
     }
-    let greens = ledger
-        .latest_greens(Kind::Verify, CANDIDATES)
-        .map_err(|e| e.to_string())?;
+    let greens = greens_for(ledger, repo, commits.last())?;
     let candidates: Vec<Candidate> = greens
         .into_iter()
         .map(|g| {
@@ -429,8 +481,14 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         .iter()
         .map(|m| format!("{}@{}", m.worker, short(&m.sha)))
         .collect();
+    // air-ch9p: a batch of one has nothing to split.
+    let then = if b.members.len() == 1 {
+        "its only member is batch-ready again after a new commit"
+    } else {
+        "the lane splits by hand"
+    };
     format!(
-        "batch red at {} ({}): members {}; nothing lands on it, the lane splits by hand",
+        "batch red at {} ({}): members {}; nothing lands on it, {then}",
         short(&b.sha),
         b.worker,
         members.join(", ")
@@ -469,8 +527,8 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
     }
     if s.candidates == 0 {
         return format!(
-            "no green verify is recorded to check: looked at the last {CANDIDATES} verify runs \
-             and found no green among them, against {} commit(s) of {bead}",
+            "no green verify is recorded to check: none was recorded after the oldest of the {} \
+             commit(s) of {bead}",
             s.commits
         );
     }
@@ -500,24 +558,30 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
 /// Each states what must become TRUE rather than which command makes it so (air-155w): under a
 /// lane the worker runs no verify, and a fix naming one is followed successfully by the wrong
 /// worker.
-pub fn fix_absent(s: &Scanned) -> &'static str {
+pub fn fix_absent(bead: &str, s: &Scanned) -> String {
     if s.commits == 0 {
-        // The missing trailer is a FACT and belongs in the detail; the green is still what is
-        // missing. Making the trailer the FIX here told a worker to add a trailer when their
-        // actual next step was a verify — caught by an existing probe, which asserted this
-        // line and went red. The detail gains a fact; the fix keeps its subject.
-        return "a green at this head; `air handover` names what your flow needs to produce one";
+        // The green stays the subject: with no lane, a green at this head is the fix, and a
+        // probe caught the version that named only the trailer. air-ch9p: under a lane it is
+        // the trailer, because a branch whose commits name no bead it holds is never
+        // batch-ready, so no batch green comes. The line names both and which is which.
+        return format!(
+            "a green at this head; a batch covers only commits whose message carries \
+             `Bead: {bead}`, so under a lane that trailer comes first"
+        );
     }
     if s.candidates == 0 {
-        return "a green containing main and your commits; nothing has recorded one recently, \
-                and `air handover` names what your flow needs to produce one";
+        return "a green containing main and your commits; none is recorded since your oldest \
+                commit, and `air handover` names what your flow needs to produce one"
+            .to_string();
     }
     if s.with_main == 0 {
         return "a green whose run contained main; where a lane runs, that is the next batch \
-                that merges main before it verifies";
+                that merges main before it verifies"
+            .to_string();
     }
     "a green recorded at or after your commits: the ones on record are all older, so where a \
      lane runs it is the next batch rather than this one"
+        .to_string()
 }
 
 pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
@@ -525,13 +589,19 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
     let mut out = Described::default();
     for bead in beads {
         let b = for_bead(ledger, repo, bead).unwrap_or_default();
-        if let Some((merge, worker)) = b.landed {
+        if let Some(m) = b.landed {
             // air-9ij: nothing of this bead is outstanding, so there is no green to look for.
-            covered.push(format!(
-                "every commit of {bead} is already in main, landed at {} (branch by {worker}), \
-                 which required a green containing main",
-                short(&merge)
-            ));
+            covered.push(match m.landing {
+                Some((merge, worker)) => format!(
+                    "every commit of {bead} is already in main, landed at {} (branch by \
+                     {worker}), which required a green containing main",
+                    short(&merge)
+                ),
+                None => format!(
+                    "every commit of {bead} is already in main (newest {})",
+                    short(&m.newest)
+                ),
+            });
             continue;
         }
         match (b.covering, b.predates) {
@@ -551,7 +621,7 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             (None, None) => {
                 // air-hgi9: the state that used to be silent. The counts say which it is.
                 out.absent = Some(why_absent(bead, &b.scanned));
-                out.absent_fix = Some(fix_absent(&b.scanned).to_string());
+                out.absent_fix = Some(fix_absent(bead, &b.scanned));
                 return out;
             }
         }
@@ -619,6 +689,105 @@ mod tests {
         assert_eq!((&lacks_main.covering, &lacks_main.predates), (&None, &None));
         let no_commits = cover(&[cand("x", true, &[true])], &[]);
         assert_eq!((&no_commits.covering, &no_commits.predates), (&None, &None));
+    }
+
+    /// air-06k7: the covering green is found however many greens were recorded after it. The
+    /// gate read the newest 12, so a batch green followed by twelve others refused the close.
+    #[test]
+    fn a_covering_green_thirteenth_newest_still_covers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let g = |args: &[&str]| git::run(repo, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.name", "air"]);
+        g(&["config", "user.email", "air@example.invalid"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "root"]);
+        let main = g(&["rev-parse", "HEAD"]);
+        g(&["checkout", "-q", "-b", "work"]);
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: x\n\nBead: zz-13\n",
+        ]);
+        let batch = g(&["rev-parse", "HEAD"]);
+        let ledger = Ledger::open_in_memory().unwrap();
+        let green = |sha: &str, at: &str| {
+            ledger
+                .record_verify(&air_ledger::verify::VerifyRun {
+                    id: format!("run-{at}"),
+                    worker: "lane".into(),
+                    sha: sha.into(),
+                    kind: Kind::Verify,
+                    exit_code: 0,
+                    trigger: "test".into(),
+                    failing_step: None,
+                    started_at: at.into(),
+                    finished_at: at.into(),
+                    log_path: None,
+                    command: None,
+                    duration_ms: None,
+                    output_bytes: None,
+                    dirty: false,
+                    tree: None,
+                    members: vec![],
+                    main_sha: Some(main.clone()),
+                })
+                .unwrap();
+        };
+        green(&batch, "2099-01-01T00:00:00Z");
+        for i in 1..=12 {
+            green(&main, &format!("2099-01-01T00:{i:02}:00Z"));
+        }
+        let b = for_bead(&ledger, repo, "zz-13").unwrap();
+        assert_eq!(b.covering, Some((batch, "lane".to_string())), "{b:?}");
+        assert_eq!(b.scanned.candidates, 13);
+    }
+
+    /// air-5ynn: a bead whose trailer commits are all in main passes with no landing row. That
+    /// is the state between `air land`'s fast-forward and its row, where an adopter's closes
+    /// were refused. A bead nothing on main names still has nothing to close on.
+    #[test]
+    fn a_bead_in_main_is_covered_without_a_landing_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let g = |args: &[&str]| git::run(repo, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.name", "air"]);
+        g(&["config", "user.email", "air@example.invalid"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "root"]);
+        g(&["checkout", "-q", "-b", "work"]);
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: x\n\nBead: zz-11\n",
+        ]);
+        let work = g(&["rev-parse", "HEAD"]);
+        g(&["checkout", "-q", "main"]);
+        g(&["merge", "-q", "--ff-only", "work"]);
+        g(&["checkout", "-q", "work"]);
+        let ledger = Ledger::open_in_memory().unwrap();
+
+        let b = for_bead(&ledger, repo, "zz-11").unwrap();
+        assert_eq!(
+            b.landed,
+            Some(InMain {
+                newest: work,
+                landing: None
+            })
+        );
+        let d = describe(&ledger, repo, &["zz-11".to_string()]);
+        assert!(
+            d.green
+                .as_deref()
+                .is_some_and(|m| m.contains("already in main")),
+            "{d:?}"
+        );
+        // A prefix of the id is not the id.
+        assert_eq!(for_bead(&ledger, repo, "zz-1").unwrap().landed, None);
     }
 
     /// air-hgi9: the counts that let a refusal say WHICH not-green state it is, taken from the
