@@ -173,7 +173,7 @@ branch to main before it merges, so work of the lane's own does not survive a cu
 
 The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
 merges every batch-ready branch at the sha `air status` lists, refusing while your tree has
-uncommitted changes or your head is a passing batch not yet landed, never a sha from a message, and drops and names a branch
+uncommitted changes or your head is a passing batch that could still land (a passing batch main has moved past is re-cut), never a sha from a message, and drops and names a branch
 that conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the
 repo's test-state reset if it has one, and `air record verify -- <verify command>`. A dropped
 branch is resolved by its worker, never by the lane. A red batch lands nothing.

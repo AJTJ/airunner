@@ -172,6 +172,8 @@ pub struct Cut {
     /// The lane's head before the cut reset it to main, when that head held commits main does
     /// not (a red batch's, or nothing recorded); on a dry run, the head it would reset from.
     pub reset_from: Option<String>,
+    /// `reset_from` was a green batch main moved past: the main it was recorded over (air-tml4).
+    pub stale_over: Option<String>,
     pub next: Option<String>,
 }
 
@@ -221,6 +223,19 @@ pub fn render(c: &Cut) -> String {
             d.stage
         ));
         out.push_str(&format!("    {}\n", drop_advice(d)));
+    }
+    if let (Some(r), Some(over)) = (&c.reset_from, &c.stale_over) {
+        out.push_str(&format!(
+            "  stale: head {} was green over {}; main is at {}, so that batch is stale and is \
+             re-cut\n",
+            short(r),
+            if over.is_empty() {
+                "an unrecorded main"
+            } else {
+                short(over)
+            },
+            short(&c.main)
+        ));
     }
     if let Some(r) = &c.reset_from {
         out.push_str(&format!(
@@ -274,16 +289,29 @@ pub fn drop_advice(d: &Dropped) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaneStart {
     /// Move the branch to main's tip. `from` is the old head when it held commits main does not.
-    Reset { from: Option<String> },
+    /// `stale_over` is set when that head was a green batch main has moved past: the main it
+    /// was recorded over, empty when the run did not record one (air-tml4).
+    Reset {
+        from: Option<String>,
+        stale_over: Option<String>,
+    },
     /// The head is a batch that passed (a green recorded there) and has not landed.
     LandFirst { head: String },
 }
 
-/// THE start rule, pure: refuse only a recorded green at a head main does not contain. A head
-/// in main has nothing to lose; a red or unrecorded head holds nothing the next batch should
-/// carry. A killed run is no verdict and reads as no record.
-pub fn land_first(head_in_main: bool, head_verdict: Option<Verdict>) -> bool {
-    !head_in_main && head_verdict == Some(Verdict::Green)
+/// THE start rule, pure: refuse only a head that could land, a recorded green that main does not
+/// contain and that contains main. A head in main has nothing to lose; a red or unrecorded head
+/// holds nothing the next batch should carry. A killed run is no verdict and reads as no record.
+///
+/// air-tml4: a green batch that main has moved past cannot land (`air land` needs its head to
+/// contain main), so refusing the cut left the lane able neither to cut nor to land. That batch
+/// is stale and is re-cut from main like a red one.
+pub fn land_first(
+    head_in_main: bool,
+    head_contains_main: bool,
+    head_verdict: Option<Verdict>,
+) -> bool {
+    !head_in_main && head_contains_main && head_verdict == Some(Verdict::Green)
 }
 
 /// Apply [`land_first`] to the lane at `repo`: read its head's ancestry and verdict, and reset
@@ -296,13 +324,16 @@ pub fn lane_start(
 ) -> Result<LaneStart, String> {
     let head = git::head(repo).map_err(|e| e.to_string())?;
     let in_main = git::is_ancestor(repo, &head, main).map_err(|e| e.to_string())?;
-    let verdict = ledger
+    let contains_main = git::is_ancestor(repo, main, &head).map_err(|e| e.to_string())?;
+    let run = ledger
         .latest_run_at_commit(&head, Kind::Verify)
-        .map_err(|e| e.to_string())?
-        .map(|r| r.verdict());
-    if land_first(in_main, verdict) {
+        .map_err(|e| e.to_string())?;
+    let verdict = run.as_ref().map(air_ledger::verify::VerifyRun::verdict);
+    if land_first(in_main, contains_main, verdict) {
         return Ok(LaneStart::LandFirst { head });
     }
+    let stale_over = (!in_main && verdict == Some(Verdict::Green))
+        .then(|| run.and_then(|r| r.main_sha).unwrap_or_default());
     if !dry_run && head != main {
         let (code, _, err) = git_status(repo, &["reset", "--hard", main], GIT_BUDGET)?;
         if code != 0 {
@@ -315,6 +346,7 @@ pub fn lane_start(
     }
     Ok(LaneStart::Reset {
         from: (!in_main).then_some(head),
+        stale_over,
     })
 }
 
@@ -541,8 +573,8 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     };
 
     // Every batch starts from main (0.4.8 trial): a red batch's merges never carry forward.
-    let reset_from = match lane_start(repo, &ledger, &main, dry_run) {
-        Ok(LaneStart::Reset { from }) => from,
+    let (reset_from, stale_over) = match lane_start(repo, &ledger, &main, dry_run) {
+        Ok(LaneStart::Reset { from, stale_over }) => (from, stale_over),
         Ok(LaneStart::LandFirst { head }) => {
             return refuse(format!(
                 "air batch cut: refused: {lane}'s head {} is a batch that passed (a green is \
@@ -561,6 +593,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         lane: lane.clone(),
         main: main.clone(),
         reset_from,
+        stale_over,
         ..Default::default()
     };
     if dry_run {
@@ -655,6 +688,29 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-tml4: only a green head that could land refuses the cut. Once main moves past it,
+    /// the cut proceeds and says the batch is stale.
+    #[test]
+    fn a_green_batch_main_moved_past_is_re_cut_and_named_stale() {
+        let g = Some(Verdict::Green);
+        assert!(land_first(false, true, g), "landable: land it first");
+        assert!(!land_first(false, false, g), "main moved past it: re-cut");
+        assert!(!land_first(true, true, g), "already in main");
+        assert!(!land_first(false, true, Some(Verdict::Red)));
+        let c = Cut {
+            lane: "lane".into(),
+            main: "m1m1m1m1m1".into(),
+            reset_from: Some("hhhhhhhhhh".into()),
+            stale_over: Some("m0m0m0m0m0".into()),
+            ..Default::default()
+        };
+        let out = render(&c);
+        assert!(
+            out.contains("head hhhhhhhh was green over m0m0m0m0; main is at m1m1m1m1, so that batch is stale and is re-cut"),
+            "{out}"
+        );
+    }
 
     fn dropped(against: &str) -> Dropped {
         Dropped {

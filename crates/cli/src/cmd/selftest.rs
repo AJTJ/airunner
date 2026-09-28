@@ -7277,12 +7277,14 @@ fn probe_batch_cut_starts_from_main() -> Probe {
         let dry_ok =
             dry == LaneStart::Reset {
                 from: Some(red.clone()),
+                stale_over: None,
             } && g(&["rev-parse", "HEAD"])? == red;
 
         let cut = lane_start(&dir, &l, &main, false)?;
         let red_fires =
             cut == LaneStart::Reset {
                 from: Some(red.clone()),
+                stale_over: None,
             } && g(&["rev-parse", "HEAD"])? == main
                 && g(&["merge-base", "--is-ancestor", &red, "HEAD"]).is_err();
 
@@ -7297,12 +7299,26 @@ fn probe_batch_cut_starts_from_main() -> Probe {
                 && g(&["rev-parse", "HEAD"])? == green)
         };
         let unlanded = refused(true)? && refused(false)?;
+        // air-tml4: main moves past the green batch by another landing. The batch can no longer
+        // land, so the cut is not refused; it names the batch as stale and would re-cut.
+        let tree = g(&["rev-parse", "HEAD^{tree}"])?;
+        let moved = g(&["commit-tree", &tree, "-p", &main, "-m", "another landing"])?;
+        let stale = lane_start(&dir, &l, &moved, true)?
+            == LaneStart::Reset {
+                from: Some(green.clone()),
+                stale_over: Some(String::new()),
+            }
+            && g(&["rev-parse", "HEAD"])? == green;
         g(&["branch", "-f", "main", &green])?;
-        let landed = lane_start(&dir, &l, &green, false)? == LaneStart::Reset { from: None }
+        let landed = lane_start(&dir, &l, &green, false)?
+            == LaneStart::Reset {
+                from: None,
+                stale_over: None,
+            }
             && g(&["rev-parse", "HEAD"])? == green;
 
         std::fs::remove_dir_all(&dir).ok();
-        Ok((red_fires, dry_ok && unlanded && landed))
+        Ok((red_fires, dry_ok && unlanded && stale && landed))
     })()
     .unwrap_or_else(blocked);
     Probe {

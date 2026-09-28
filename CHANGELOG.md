@@ -112,6 +112,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air batch cut` refused for good once the lane's green batch fell behind main, and `air land`
+  refused that batch too, so the lane could neither cut nor land. The cut now refuses only a
+  green batch that could still land; a stale one is named and re-cut from main.
 - A `bd_server` unit test read a neighbour listening on its port as a running server and
   failed under a loaded verify. `start` now checks for Air's database before it probes the
   port, and the test holds a listener on its own port to prove the port does not matter.
