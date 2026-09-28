@@ -424,7 +424,8 @@ It also does not refuse a bead whose own commits are covered, whatever the head 
 them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when main
 contains every one of them, asked of git and not of the landing row (`batch::in_main`), or when
 a recorded green contains all of them and the main it ran over (`batch::describe`, which the
-green check already reads). Main moves only through a green landing, so being in main is proof
+green check already reads). Every green recorded after the bead's oldest commit is checked,
+since no earlier one can contain it (air-06k7). Main moves only through a green landing, so being in main is proof
 by itself; asking the row refused closes in the seconds between `air land`'s fast-forward and
 its row, five in one day at an adopter (air-5ynn). In the 0.4.7 live trial a worker whose bead
 had just landed committed its next bead and was then refused as behind main; a worker keeps

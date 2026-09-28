@@ -170,13 +170,13 @@ pub fn prose_ids(text: &str) -> Vec<String> {
         // narrower drops real beads, and a false positive costs one more argument to a single
         // lookup. Restored after the move out of status.rs — this comment is what stops the
         // next person tightening a parser that is meant to be frozen.
+        // No length or count cap either (air-06k7): a 12-character prefix or suffix and 64
+        // ids per text silently dropped longer ids and the ones after the 64th.
         let looks_like_id = !pre.is_empty()
-            && pre.len() <= 12
             && pre.chars().all(|c| c.is_ascii_lowercase())
             && !suf.is_empty()
-            && suf.len() <= 12
             && suf.chars().all(|c| c.is_ascii_alphanumeric());
-        if looks_like_id && out.len() < 64 && !out.iter().any(|x| x == raw) {
+        if looks_like_id && !out.iter().any(|x| x == raw) {
             out.push(raw.to_string());
         }
     }

@@ -469,8 +469,10 @@ pub fn parse_issues(json: &str) -> Result<Vec<Issue>> {
 }
 
 impl WorkLedger for BdCli {
+    // `-n 0` on both (air-06k7): bd's defaults, 100 for ready and 50 for list, capped ready
+    // depth, the fan-out and the in-progress set without saying so. An adopter started with 88.
     fn ready(&self) -> Result<Vec<Issue>> {
-        parse_issues(&self.run(&["ready", "--json"])?)
+        parse_issues(&self.run(&["ready", "-n", "0", "--json"])?)
     }
 
     fn in_progress(&self) -> Result<Vec<Issue>> {
@@ -478,7 +480,7 @@ impl WorkLedger for BdCli {
     }
 
     fn by_status(&self, status: &str) -> Result<Vec<Issue>> {
-        parse_issues(&self.run(&["list", "--status", status, "--json"])?)
+        parse_issues(&self.run(&["list", "--status", status, "-n", "0", "--json"])?)
     }
 
     fn children(&self, id: &str) -> Result<Vec<Issue>> {

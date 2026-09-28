@@ -157,10 +157,10 @@ fn list_files(dir: &Path) -> Vec<String> {
             if name.starts_with('.') || name == "node_modules" || name == "target" {
                 continue;
             }
+            // The whole tree (air-06k7): it stopped descending at 5000 files, so the
+            // proposal worked from a partial walk and did not say so.
             if p.is_dir() {
-                if v.len() < 5000 {
-                    stack.push(p);
-                }
+                stack.push(p);
             } else if let Ok(rel) = p.strip_prefix(dir) {
                 v.push(rel.to_string_lossy().to_string());
             }

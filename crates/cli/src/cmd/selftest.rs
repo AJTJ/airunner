@@ -771,7 +771,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     // green under it would be reading the array out of the middle of the stream rather than
     // from its first byte, which is not what a parser does.
     (
-        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         Mutation {
             file: "crates/cli/src/cmd/selftest.rs",
             // NOT `std::io::stdout(), std::io::stderr()`, which is the original bug: it
@@ -817,13 +817,12 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // air-5ik. The anchor is the keep-or-not test alone: the tail, the prune, the ceiling and
-    // the end-to-end write all survive it, so what changes is only WHICH runs write a log.
-    // Under it a green writes one too, and since the store is bounded by COUNT rather than by
-    // age, a fleet's greens evict the reds the store exists for. Anchor taken from the file
-    // AFTER rustfmt, per air-gei.
+    // air-5ik. The anchor is the keep-or-not test alone: the tail and the end-to-end write both
+    // survive it, so what changes is only WHICH runs write a log. Under it a green writes one
+    // too, into a store that is never pruned (air-06k7). Anchor taken from the file AFTER
+    // rustfmt, per air-gei.
     (
-        "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         Mutation {
             file: "crates/cli/src/cmd/runlog.rs",
             from: "pub fn keeps_output(exit_code: i32) -> bool {\n    exit_code != 0\n}",
@@ -11351,17 +11350,15 @@ fn probe_the_gate_runs_what_the_makefile_says() -> Probe {
 /// all under load 66-67) are undiagnosable now for exactly that reason.
 ///
 /// Red (declared mutation: `exit_code != 0` becomes `true`): a GREEN run keeps its output too.
-/// That is not untidiness — the store is bounded by COUNT, so greens would evict the reds it
-/// exists to keep, and a fleet's greens outnumber its reds by an order of magnitude.
+/// The store is never pruned (air-06k7), and a fleet's greens outnumber its reds by an order of
+/// magnitude.
 ///
 /// Green: the tail keeps the END of a stream and never exceeds its cap, because a verify fails
-/// at the end; `prune` drops the OLDEST by run id whatever order the directory listed them in,
-/// which is the difference between a bound and a lottery; the store's ceiling is a number this
-/// asserts rather than a hope; and `run_tee` really does carry both streams, in arrival order,
-/// out of a child that writes to each.
+/// at the end; a write never deletes an earlier log; and `run_tee` really does carry both
+/// streams, in arrival order, out of a child that writes to each.
 fn probe_a_red_runs_output_is_kept() -> Probe {
     use crate::cmd::record::run_tee_to;
-    use crate::cmd::runlog::{KEEP_LOGS, TAIL_BYTES, Tail, keeps_output, prune, write};
+    use crate::cmd::runlog::{Tail, keeps_output, write};
 
     // RED: green keeps nothing, every non-green keeps something. 143/137 are the killed exits,
     // and a killed run is the one most likely to be the loaded machine this bead is about.
@@ -11383,20 +11380,6 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     let keeps_the_end = tail_of(4, &[b"abc", b"de"]) == b"bcde"
         && tail_of(3, &[b"abcdefgh"]) == b"fgh"
         && tail_of(0, &[b"x"]).is_empty();
-
-    // Age order is id order (ULIDs), never listing order. Shuffled on purpose.
-    let names: Vec<String> = ["03.log", "01.log", "04.log", "02.log"]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    let bounded = prune(&names, 5).is_empty()
-        && prune(&names, 4) == vec!["01.log".to_string()]
-        && prune(&names, 2).len() == 3
-        // Whatever it deletes, exactly `keep - 1` are left for the new one to join.
-        && names.len().saturating_sub(prune(&names, 3).len()) == 2;
-
-    // The ceiling is a number, not a hope: 20 x 64 KiB.
-    let ceiling = KEEP_LOGS.saturating_mul(TAIL_BYTES) == 1_310_720;
 
     // End to end: a child that writes to BOTH streams, and the tail carries both — and the
     // two sinks get them too, which is what `run_tee` exists for and what the tail alone never
@@ -11427,24 +11410,25 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
     })
     .unwrap_or(false);
 
-    // A write really lands and really prunes, in a scratch dir of this probe's own.
+    // A write really lands and never deletes an earlier one, in a scratch dir of its own.
     let stored = (|| -> Option<bool> {
         let air = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&air).ok()?;
-        let p = write(&air, "01ZZZ", b"the failure")?;
+        write(&air, "01ZZZ", b"the first")?;
+        let p = write(&air, "02ZZZ", b"the failure")?;
         let read_back = std::fs::read(&p).ok()? == b"the failure";
         let kept = std::fs::read_dir(crate::cmd::runlog::dir(&air))
             .ok()?
             .count()
-            == 1;
+            == 2;
         std::fs::remove_dir_all(&air).ok();
         Some(read_back && kept)
     })()
     .unwrap_or(false);
 
-    let green = keeps_the_end && bounded && ceiling && both && stored;
+    let green = keeps_the_end && both && stored;
     Probe {
-        name: "record: a red run's output is kept, bounded by its tail and by a count of logs, and a green run's is not",
+        name: "record: a red run's output is kept, bounded by its tail and never pruned, and a green run's is not",
         red_fires: red,
         green_passes: green,
     }
@@ -12634,10 +12618,7 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     // Distinct sentences, each naming the number that distinguishes it.
     let distinct = four.iter().collect::<std::collections::BTreeSet<_>>().len() == 4
         && four[0].contains("no green verify is recorded to check")
-        && four[0].contains(&format!(
-            "last {} verify runs",
-            crate::cmd::batch::CANDIDATES
-        ))
+        && four[0].contains("none was recorded after the oldest of the 2 commit(s)")
         && four[1].contains("1 recorded green(s) checked")
         && four[1].contains("the main it was recorded over")
         && four[2].contains("1 green(s) contain main")

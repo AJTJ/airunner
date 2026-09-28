@@ -65,7 +65,7 @@ pub struct Candidate {
 /// `covering` short-circuits without finishing the count.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Scanned {
-    /// Recorded greens considered (at most [`CANDIDATES`]).
+    /// Recorded greens considered: every one recorded after the bead's oldest commit.
     pub candidates: usize,
     /// Of those, the ones containing the main they were recorded over.
     pub with_main: usize,
@@ -166,10 +166,29 @@ pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
         .collect()
 }
 
-/// How many recent greens are tried. A batch is one of the last few verifies in a round;
-/// each candidate costs one `git merge-base` plus one per bead commit, only on the path where
-/// HEAD itself has no green.
-pub const CANDIDATES: usize = 12;
+/// Every green that can contain the bead's work: the ones recorded after its oldest commit was
+/// made (air-06k7). A green recorded before a commit existed cannot contain it, so this reads
+/// every candidate there is and no others. It was the newest 12 greens, a number nobody ruled:
+/// a covering green 13th newest was refused, and the refusal said "12". Each candidate costs
+/// one `git merge-base` plus one per bead commit, only on the path where HEAD has no green.
+///
+/// The commit time is git's committer time in whole seconds, and a run's `finished_at` has
+/// sub-seconds, so the bound is one second earlier. When git cannot say, every green is read.
+fn greens_for(
+    ledger: &Ledger,
+    repo: &Path,
+    oldest: Option<&BeadCommit>,
+) -> Result<Vec<air_ledger::verify::VerifyRun>, String> {
+    let since = oldest
+        .and_then(|c| git::run(repo, &["log", "-1", "--format=%ct", &c.sha]).ok())
+        .and_then(|t| t.trim().parse::<i64>().ok())
+        .and_then(|t| jiff::Timestamp::from_second(t.saturating_sub(1)).ok())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    ledger
+        .greens_since(Kind::Verify, &since)
+        .map_err(|e| e.to_string())
+}
 
 /// The newest commit on main whose `Bead:` trailer names `bead`, if any (air-5ynn).
 ///
@@ -234,9 +253,7 @@ pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, Strin
             ..Batch::default()
         });
     }
-    let greens = ledger
-        .latest_greens(Kind::Verify, CANDIDATES)
-        .map_err(|e| e.to_string())?;
+    let greens = greens_for(ledger, repo, commits.last())?;
     let candidates: Vec<Candidate> = greens
         .into_iter()
         .map(|g| {
@@ -504,8 +521,8 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
     }
     if s.candidates == 0 {
         return format!(
-            "no green verify is recorded to check: looked at the last {CANDIDATES} verify runs \
-             and found no green among them, against {} commit(s) of {bead}",
+            "no green verify is recorded to check: none was recorded after the oldest of the {} \
+             commit(s) of {bead}",
             s.commits
         );
     }
@@ -660,6 +677,60 @@ mod tests {
         assert_eq!((&lacks_main.covering, &lacks_main.predates), (&None, &None));
         let no_commits = cover(&[cand("x", true, &[true])], &[]);
         assert_eq!((&no_commits.covering, &no_commits.predates), (&None, &None));
+    }
+
+    /// air-06k7: the covering green is found however many greens were recorded after it. The
+    /// gate read the newest 12, so a batch green followed by twelve others refused the close.
+    #[test]
+    fn a_covering_green_thirteenth_newest_still_covers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let g = |args: &[&str]| git::run(repo, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.name", "air"]);
+        g(&["config", "user.email", "air@example.invalid"]);
+        g(&["commit", "-q", "--allow-empty", "-m", "root"]);
+        let main = g(&["rev-parse", "HEAD"]);
+        g(&["checkout", "-q", "-b", "work"]);
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: x\n\nBead: zz-13\n",
+        ]);
+        let batch = g(&["rev-parse", "HEAD"]);
+        let ledger = Ledger::open_in_memory().unwrap();
+        let green = |sha: &str, at: &str| {
+            ledger
+                .record_verify(&air_ledger::verify::VerifyRun {
+                    id: format!("run-{at}"),
+                    worker: "lane".into(),
+                    sha: sha.into(),
+                    kind: Kind::Verify,
+                    exit_code: 0,
+                    trigger: "test".into(),
+                    failing_step: None,
+                    started_at: at.into(),
+                    finished_at: at.into(),
+                    log_path: None,
+                    command: None,
+                    duration_ms: None,
+                    output_bytes: None,
+                    dirty: false,
+                    tree: None,
+                    members: vec![],
+                    main_sha: Some(main.clone()),
+                })
+                .unwrap();
+        };
+        green(&batch, "2099-01-01T00:00:00Z");
+        for i in 1..=12 {
+            green(&main, &format!("2099-01-01T00:{i:02}:00Z"));
+        }
+        let b = for_bead(&ledger, repo, "zz-13").unwrap();
+        assert_eq!(b.covering, Some((batch, "lane".to_string())), "{b:?}");
+        assert_eq!(b.scanned.candidates, 13);
     }
 
     /// air-5ynn: a bead whose trailer commits are all in main passes with no landing row. That
