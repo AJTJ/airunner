@@ -4,6 +4,7 @@
   "metis": true,
   "project": "ai_runner",
   "verify_key": "tree",
+  "verify_lane": true,
   "worker_deny": [
     "Bash(cargo publish *)"
   ]
