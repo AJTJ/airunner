@@ -633,7 +633,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
                 "",
                 true,
                 bins,
-                crate::cmd::bd_server::START_WAIT,
+                crate::cmd::bd_server::start_wait(),
             );
             if let crate::cmd::bd_server::Outcome::Failed { why } = o {
                 return Err(format!("bd server: {why}"));
