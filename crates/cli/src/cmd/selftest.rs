@@ -237,6 +237,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-oerm: nobody counts as joining, which is the fan-out as it stood: only a change of
+    // the set tells anyone.
+    (
+        "fanout: a worker that joins or loses its claim while beads are ready is told them once, without the set changing",
+        Mutation {
+            file: "crates/cli/src/cmd/fanout.rs",
+            from: "    let joined = before.map_or_else(|| recipients.clone(), |b| added(&b, &recipients));",
+            to: "    let joined: Vec<String> = before.map(|_| Vec::new()).unwrap_or_default();",
+            also_red: &[],
+        },
+    ),
     // air-1vri: the channel marks the row delivered and pushes nothing, which is exactly what a
     // session that did not load the server as a channel would see. Seen red 2026-09-26.
     (
@@ -2858,6 +2869,7 @@ fn all_probes() -> Vec<Probe> {
         probe_a_timed_out_fast_forward_is_not_reported_as_untouched(),
         messaging::probe_a_message_reaches_only_its_session(),
         messaging::probe_new_beads_reach_idle_workers_once(),
+        messaging::probe_a_joining_worker_hears_the_ready_set(),
         messaging::probe_the_lane_and_members_hear_batch_events_at_once(),
         messaging::probe_loop_times_are_measured_from_rows(),
         messaging::probe_a_fleet_stop_refuses_new_work_and_only_the_coordinator_sets_it(),

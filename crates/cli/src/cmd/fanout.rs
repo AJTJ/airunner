@@ -25,7 +25,8 @@ use super::status::{BatchReady, Snapshot, WorkerView};
 const READY_REFRESH_SECS: i64 = 60;
 
 /// The bd cache key holding the ready set as of the last tick, so a restarted channel does
-/// not announce what was already there.
+/// not count what was already there as new. A worker without a claim is still told it once
+/// (air-oerm).
 const READY_SEEN: &str = "fanout_ready_seen";
 
 /// Workers told about new beads: every worker with a live session holding no claim, whatever
@@ -109,8 +110,17 @@ pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -
     )
 }
 
+/// The bd cache key holding the workers without a claim as of the last tick (air-oerm).
+const READY_RECIPIENTS: &str = "fanout_ready_recipients";
+
 /// Queue "beads are ready" for every worker without a claim when the claimable set gained
-/// a bead since the last tick. Returns the workers queued for.
+/// a bead since the last tick, and for a worker that is newly without a claim (it joined, or
+/// its claim ended) while the set is not empty. Returns the workers queued for.
+///
+/// air-oerm: an adopter's fleet started with 100 beads ready and four workers sat idle, because
+/// the notice went out only when the set changed; every trial had hidden it by filing beads
+/// after the workers joined. A worker told this exact set before is not told again, since a
+/// delivery is keyed by the set, so a restarted channel repeats nothing.
 pub fn fan_out_ready(
     ledger: &Ledger,
     worker: &str,
@@ -119,34 +129,42 @@ pub fn fan_out_ready(
     priorities: &[i64],
     at: &str,
 ) -> Vec<String> {
-    let seen: Option<Vec<String>> = ledger
-        .bd_cache_get(READY_SEEN)
-        .ok()
-        .flatten()
-        .and_then(|(v, _)| serde_json::from_str(&v).ok());
-    if let Ok(v) = serde_json::to_string(ready) {
-        let _ = ledger.bd_cache_put(READY_SEEN, &v, at);
-    }
-    // The first tick after a restart seeds the set and says nothing: the beads were there
-    // before this channel was, and the Stop nudge tells a worker about them when it stops.
-    let Some(seen) = seen else {
-        return Vec::new();
+    let cached = |k: &str| -> Option<Vec<String>> {
+        ledger
+            .bd_cache_get(k)
+            .ok()
+            .flatten()
+            .and_then(|(v, _)| serde_json::from_str(&v).ok())
     };
-    let new = added(&seen, ready);
-    if new.is_empty() {
+    let seen = cached(READY_SEEN);
+    let before = cached(READY_RECIPIENTS);
+    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
+    let mut recipients = without_claim(s);
+    recipients.sort();
+    for (k, v) in [
+        (READY_SEEN, ready),
+        (READY_RECIPIENTS, recipients.as_slice()),
+    ] {
+        if let Ok(v) = serde_json::to_string(v) {
+            let _ = ledger.bd_cache_put(k, &v, at);
+        }
+    }
+    let new = seen.map(|seen| added(&seen, ready)).unwrap_or_default();
+    let joined = before.map_or_else(|| recipients.clone(), |b| added(&b, &recipients));
+    if ready.is_empty() || (new.is_empty() && joined.is_empty()) {
         return Vec::new();
     }
     let key = ready.join(" ");
     let mut told = Vec::new();
-    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
-    let mut recipients = without_claim(s);
-    recipients.sort();
-    for (i, w) in recipients.into_iter().enumerate() {
+    for (i, w) in recipients.iter().enumerate() {
+        if new.is_empty() && !joined.contains(w) {
+            continue;
+        }
         let text = beads_ready_text(ready, priorities, i);
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
-                    to: &w,
+                    to: w,
                     kind: "beads-ready",
                     key: &key,
                     subject: &key,
@@ -157,20 +175,30 @@ pub fn fan_out_ready(
             )
             .unwrap_or(false);
         if queued {
-            told.push(w);
+            told.push(w.clone());
         }
+    }
+    // A change of the set is logged even when nobody was told, as before; a join only when
+    // someone was.
+    if new.is_empty() && told.is_empty() {
+        return told;
     }
     super::log_event(
         ledger,
         worker,
         super::decisions::FANOUT_BEADS_READY,
-        &json!({"ready": ready, "new": new, "to": told}),
+        &json!({"ready": ready, "new": new, "joined": joined, "to": told}),
         &format!(
-            "{} new bead(s); told {} worker(s) without a claim",
+            "{} new bead(s), {} worker(s) newly without a claim; told {} worker(s)",
             new.len(),
+            joined.len(),
             told.len()
         ),
-        "1 change of the ready set",
+        if new.is_empty() {
+            "a worker without a claim joined a non-empty ready set"
+        } else {
+            "1 change of the ready set"
+        },
     );
     told
 }

@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A worker that joined, or finished its claim, while beads were already ready was never told
+  them, because "beads are ready" went out only when the ready set changed. It is now told the
+  set as it stands, once.
 - A close in the seconds between a landing moving main and its record being written was
   refused. The gate now asks git whether every commit naming the bead is in main. The "batch
   green" notice now names only the beads the batch fully contains, and a member with no such

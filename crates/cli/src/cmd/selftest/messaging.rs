@@ -146,14 +146,77 @@ pub(super) fn view(
     }
 }
 
+/// air-oerm: a worker that joins, or loses its claim, while beads are ready is told them without
+/// the set having to change. An adopter's fleet started with 100 beads ready and four workers
+/// sat idle; every trial had hidden it by filing beads after the workers joined.
+///
+/// Red: the channel's first tick over a non-empty set tells `busy`, already without a claim;
+/// `idle` joining later, with the set unchanged, is told it, rotated by its place. Green: a
+/// repeat tells nobody, the worker holding a claim and the lane are never told, and a worker
+/// whose claim ended is told only a set it was not already told.
+pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
+    use crate::cmd::fanout::fan_out_ready;
+    use crate::cmd::status::{Snapshot, WorkerView};
+
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = air_ledger::Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let early = vec![
+            view("holding", "worker", "idle", Some("zz-9")),
+            view("lane", "lane", "idle", None),
+            view("busy", "worker", "working", None),
+        ];
+        let mut all = early.clone();
+        all.push(view("idle", "worker", "idle", None));
+        let snap = |w: &[WorkerView]| Snapshot {
+            workers: w.to_vec(),
+            ..Default::default()
+        };
+        let set = ["zz-1".to_string(), "zz-2".to_string()];
+        let tick =
+            |w: &[WorkerView], at: &str| fan_out_ready(&l, "coordinator", &snap(w), &set, &[], at);
+        let first = tick(&early, "2026-09-26T00:00:00Z");
+        let joined = tick(&all, "2026-09-26T00:00:30Z");
+        let again = tick(&all, "2026-09-26T00:01:00Z");
+        // `busy` takes a claim and drops it again: the set is unchanged and it was told it.
+        let mut claimed = all.clone();
+        if let Some(b) = claimed.iter_mut().find(|w| w.worker == "busy") {
+            *b = view("busy", "worker", "working", Some("zz-8"));
+        }
+        let _ = tick(&claimed, "2026-09-26T00:01:30Z");
+        let back = tick(&all, "2026-09-26T00:02:00Z");
+        let rows = l
+            .deliveries_since("2026-09-26T00:00:00Z")
+            .map_err(|e| e.to_string())?;
+        let red = first == ["busy"]
+            && joined == ["idle"]
+            && rows.iter().any(|d| {
+                d.to_worker == "idle" && d.content.starts_with("beads are ready: zz-2 zz-1 (")
+            });
+        let green = again.is_empty()
+            && back.is_empty()
+            && rows.len() == 2
+            && !rows
+                .iter()
+                .any(|d| matches!(d.to_worker.as_str(), "holding" | "lane"));
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "fanout: a worker that joins or loses its claim while beads are ready is told them once, without the set changing",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-dkm1, air-ludo: when the claimable ready set gains a bead, "beads are ready" is queued
 /// once for each worker with a live session holding no claim, whatever its state, and for
 /// nobody else.
 ///
-/// Red: after a seeding tick, a tick where `zz-2` joins the set queues one row each for `idle`
-/// and `busy` (mid-turn, holding nothing), naming both beads. Green: the worker holding a claim
-/// and the lane get nothing; the seeding tick, a repeat of the same set, and a set that only shrank queue
-/// nothing more.
+/// Red: after a seeding tick over an empty set, a tick where the set gains beads queues one
+/// row each for `idle` and `busy` (mid-turn, holding nothing), naming both beads. Green: the
+/// worker holding a claim and the lane get nothing; the seeding tick, a repeat of the same
+/// set, and a set that only shrank queue nothing more. (A first tick over a non-empty set does
+/// tell: that is air-oerm's probe.)
 pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
     use crate::cmd::fanout::fan_out_ready;
     use crate::cmd::status::Snapshot;
@@ -172,7 +235,7 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
         let tick =
             |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), &[], at);
-        let seeded = tick(&["zz-1"], "2026-09-26T00:00:00Z");
+        let seeded = tick(&[], "2026-09-26T00:00:00Z");
         let grew = tick(&["zz-1", "zz-2"], "2026-09-26T00:00:30Z");
         let same = tick(&["zz-1", "zz-2"], "2026-09-26T00:01:00Z");
         let shrank = tick(&["zz-2"], "2026-09-26T00:01:30Z");

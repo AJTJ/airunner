@@ -545,9 +545,13 @@ Deliveries are queued by whatever notices the change. After each 30-second tick,
 coordinator's server compares the claimable ready list with the one it saw last (asking beads
 again when the cached list is more than a minute old) and, when a bead was added, queues
 "beads are ready" for every worker with a live session holding no claim, whatever its state; one
-mid-turn reads it after that turn. The lane and a worker holding a claim are never told. A later list replaces a worker's undelivered one, so a session that was
-away hears the latest. The first tick after the server starts only records the list. One
-fanout event line records each change and who was told.
+mid-turn reads it after that turn. A worker that is newly without a claim, because it joined or
+its claim ended, is told the list as it stands without the list having to change, and that
+includes every such worker on the first tick after the server starts: an adopter's fleet
+started with 100 beads ready and sat idle (air-oerm). A worker is never told the same list
+twice, since a delivery is keyed by the list. The lane and a worker holding a claim are never
+told. A later list replaces a worker's undelivered one, so a session that was away hears the
+latest. One fanout event line records each change and who was told.
 
 The lane and its members are told the same way. The coordinator's tick queues "batch-ready"
 for the lane once per branch head. air batch cut queues "dropped from batch" for each worker it
