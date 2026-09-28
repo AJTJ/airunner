@@ -3621,7 +3621,13 @@ mod tests {
         assert!(stopped_phrase("stop_failure", "T", "").contains("no reason given"));
         assert!(stopped_phrase("stop_failure", "T", "overloaded").contains("API error"));
         // Instants, not text: "00Z" sorts after "00.1Z" as a string and is earlier as time.
-        assert!(!sticky_holds("2026-09-27T10:00:00Z", "2026-09-27T10:00:00.1Z"));
-        assert!(sticky_holds("2026-09-27T10:00:00.5Z", "2026-09-27T10:00:00.45Z"));
+        assert!(!sticky_holds(
+            "2026-09-27T10:00:00Z",
+            "2026-09-27T10:00:00.1Z"
+        ));
+        assert!(sticky_holds(
+            "2026-09-27T10:00:00.5Z",
+            "2026-09-27T10:00:00.45Z"
+        ));
     }
 }
