@@ -56,7 +56,7 @@ pub const BUDGET: Duration = Duration::from_secs(4);
 const COMMAND_WIDTH: usize = 20;
 
 /// One process as `ps` reports it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Proc {
     pub pid: i64,
     pub ppid: i64,
@@ -113,10 +113,40 @@ impl TreeReaders {
 }
 
 /// What the OS said: every process, and the cwd of each one it would tell us.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct Raw {
     pub procs: Vec<Proc>,
     pub cwds: Vec<(i64, String)>,
+}
+
+/// How long a process reading stands for the channel poll (air-czbg).
+pub const CACHE_SECS: i64 = 30;
+const CACHE_KEY: &str = "tree_readers_raw";
+
+/// Keep a reading for the channel poll, which never runs `lsof` itself (air-czbg): five
+/// sessions polling every few seconds kept three or four `lsof` scans of every process on the
+/// machine running at once, 40-50% CPU each, on the owner's machine at load 38.
+pub fn cache_put(ledger: &air_ledger::Ledger, raw: &Raw, at: &str) {
+    if let Ok(v) = serde_json::to_string(raw) {
+        let _ = ledger.bd_cache_put(CACHE_KEY, &v, at);
+    }
+}
+
+/// The reading a person's `air status` or `air land` took in the last [`CACHE_SECS`], else
+/// why there is none. An unknown reading answers "not busy", as before readers existed.
+pub fn cached(ledger: &air_ledger::Ledger, at: &str) -> Result<Raw, String> {
+    let (v, seen) =
+        ledger.bd_cache_get(CACHE_KEY).ok().flatten().ok_or(
+            "no process reading yet; the channel poll does not run lsof, `air status` does",
+        )?;
+    let age = super::status::seconds_between(&seen, at).unwrap_or(i64::MAX);
+    if age > CACHE_SECS {
+        return Err(format!(
+            "the last process reading is {age} s old; the channel poll does not run lsof, \
+             `air status` does"
+        ));
+    }
+    serde_json::from_str(&v).map_err(|e| e.to_string())
 }
 
 /// `ps -A -o pid=,ppid=,etime=,comm=`: three fields, then the executable (which may contain
@@ -629,6 +659,31 @@ pub fn gather(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+
+    /// air-czbg: the poll's reading is the last one a person's status or a landing took, and
+    /// only while it is younger than CACHE_SECS; otherwise it is unknown, never a fresh lsof.
+    #[test]
+    fn the_poll_reads_a_recent_reading_or_none() {
+        let l = air_ledger::Ledger::open_in_memory().unwrap();
+        assert!(
+            cached(&l, "2026-09-28T10:00:00Z").is_err(),
+            "nothing read yet"
+        );
+        let raw = Raw {
+            procs: vec![Proc {
+                pid: 7,
+                ppid: 1,
+                elapsed_secs: Some(3),
+                command: "cargo".into(),
+            }],
+            cwds: vec![(7, "/w".into())],
+        };
+        cache_put(&l, &raw, "2026-09-28T10:00:00Z");
+        let got = cached(&l, "2026-09-28T10:00:20Z").unwrap();
+        assert_eq!((got.procs, got.cwds), (raw.procs, raw.cwds));
+        let stale = cached(&l, "2026-09-28T10:00:31Z").unwrap_err();
+        assert!(stale.contains("31 s old"), "{stale}");
+    }
     use super::*;
 
     fn p(pid: i64, ppid: i64, secs: i64, command: &str) -> Proc {

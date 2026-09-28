@@ -412,28 +412,21 @@ pub struct Landing {
     pub blocked: Option<String>,
 }
 
-/// A ready epic with nothing open under it (air-84u): the coordinator's next decomposition.
+/// A ready epic with no children (air-84u): the coordinator's next decomposition.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct EpicToDecompose {
     pub epic: String,
-    /// Children bd has, all of them closed. `0` is an epic that was never decomposed at all,
-    /// which is the same duty and is why the count is reported rather than required.
-    pub closed_children: usize,
 }
 
-/// Pure: is this epic the coordinator's to decompose now? Yes when no child is open — either
-/// they are all closed, or there are none. A child in any status but `closed` is work in
-/// flight (`awaiting_review` and `blocked` included), and an epic with one is not waiting on
-/// anybody: this must never name an epic that has open children, because the whole value of
-/// the line is that it costs nothing to trust.
+/// Pure: is this epic the coordinator's to decompose now? Yes when it has no children at all.
+/// An epic whose children are all closed is finished, not waiting to be decomposed: `air land`
+/// closes it (air-92o0), and an adopter's status listed three such epics as "to decompose" on
+/// every run. A child in any status but `closed` is work in flight, and this must never name
+/// an epic with one, because the whole value of the line is that it costs nothing to trust.
 pub fn to_decompose(epic: &str, children: &[air_bd::Issue]) -> Option<EpicToDecompose> {
-    children
-        .iter()
-        .all(|c| c.status == "closed")
-        .then(|| EpicToDecompose {
-            epic: epic.to_string(),
-            closed_children: children.len(),
-        })
+    children.is_empty().then(|| EpicToDecompose {
+        epic: epic.to_string(),
+    })
 }
 
 /// Pure: does this range carry ONLY session-journal commits (air-kexg)?
@@ -890,6 +883,17 @@ pub fn interrupted_line(r: &air_ledger::verify::VerifyRun) -> Option<String> {
             r.duration_ms.unwrap_or(0) / 1000
         )
     })
+}
+
+/// ` (a b)` after a branch that carries beads, and ` (no bead)` after one that carries none,
+/// such as the coordinator's, which printed `()` (air-92o0; air-ch9p's wording). Used by
+/// `air batch cut`'s member and dropped lines.
+pub fn beads_suffix(beads: &[String]) -> String {
+    if beads.is_empty() {
+        " (no bead)".to_string()
+    } else {
+        format!(" ({})", beads.join(" "))
+    }
 }
 
 /// A bead bd has closed whose commits have not reached main (air-gazh).
@@ -1882,8 +1886,10 @@ pub fn gather(repo: &Path) -> Result<Snapshot, String> {
 pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let t0 = std::time::Instant::now();
     // Started first and joined last: `lsof` costs most of a second (`cmd::readers`), and
-    // nothing below needs it until the snapshot is assembled.
-    let readers_job = std::thread::spawn(super::readers::lookup);
+    // nothing below needs it until the snapshot is assembled. air-czbg: only when a person
+    // asked; the channel poll reads the last reading instead and never runs `lsof`.
+    let readers_job =
+        matches!(bd_use, BdUse::Fresh).then(|| std::thread::spawn(super::readers::lookup));
     let (ledger, _me) = open(repo)?;
     let at = now();
     let mut trees: Vec<(String, std::path::PathBuf)> = Vec::new();
@@ -2269,7 +2275,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             if let Some(ip) = &in_progress_issues {
                 pool.extend(ip.iter().cloned());
             }
-            without_initiative = Some(super::metis::without_initiative(&pool));
+            // air-92o0: only where initiatives are declared (`"metis": true`). An adopter with
+            // no initiative codes was told "16 of 16" on every run.
+            if super::metis::config(repo).on {
+                without_initiative = Some(super::metis::without_initiative(&pool));
+            }
             // air-f10: one partition of one answer; the counts are its lengths.
             let split = super::ready_cache::split(&v);
             let ids = split.claimable;
@@ -2380,13 +2390,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let selection = select(repo);
     let session_pids: std::collections::BTreeSet<i64> =
         all_sessions.iter().filter_map(|(_, _, x)| x.pid).collect();
-    let tree_readers = super::readers::gather(
-        readers_job
-            .join()
-            .unwrap_or_else(|_| Err("the process lookup panicked".into())),
-        &trees,
-        &session_pids,
-    );
+    let raw = match readers_job {
+        Some(job) => {
+            let r = job
+                .join()
+                .unwrap_or_else(|_| Err("the process lookup panicked".into()));
+            if let Ok(raw) = &r {
+                super::readers::cache_put(&ledger, raw, &at);
+            }
+            r
+        }
+        None => super::readers::cached(&ledger, &at),
+    };
+    let tree_readers = super::readers::gather(raw, &trees, &session_pids);
     // air-jc2p.3: a launched session whose process runs in the main checkout. Live rows only.
     let live: Vec<(String, String, i64)> = all_sessions
         .iter()
@@ -2924,14 +2940,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // the reasons a branch is absent are in `--json` (`not_batch_ready`).
     for b in &s.batch_ready {
         out.push_str(&format!(
-            "batch-ready: {} at {} ({})\n",
+            "batch-ready: {} at {}{}\n",
             b.worker,
             b.head.get(..8).unwrap_or(&b.head),
-            if b.beads.is_empty() {
-                "no bead".to_string()
-            } else {
-                b.beads.join(" ")
-            }
+            beads_suffix(&b.beads)
         ));
     }
     // air-ch9p: a head inside the batch being verified is named as such, not left out.
@@ -3035,8 +3047,8 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // when there is none, which is the normal state.
     for e in s.epics_to_decompose.iter().flatten() {
         out.push_str(&format!(
-            "epic ready to decompose: {} (0 open children, {} closed)\n",
-            e.epic, e.closed_children
+            "epic ready to decompose: {} (no children yet)\n",
+            e.epic
         ));
     }
     // air-btz: the deadlock nobody can see. Both sides wait forever, and every other reading
@@ -3658,6 +3670,16 @@ mod tests {
         assert!(
             attention(&s, NOW, Thresholds::default()).is_empty(),
             "a full queue of owner-labelled beads is nothing to prompt anyone about"
+        );
+    }
+
+    /// air-92o0: a branch that carries no bead prints no empty parentheses.
+    #[test]
+    fn a_branch_with_no_beads_prints_no_parentheses() {
+        assert_eq!(beads_suffix(&[]), " (no bead)");
+        assert_eq!(
+            beads_suffix(&["zz-1".to_string(), "zz-2".to_string()]),
+            " (zz-1 zz-2)"
         );
     }
 

@@ -56,6 +56,15 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air land` closes an epic once bd reports every one of its children closed, and never an
+  epic with no children. `air status` names an epic to decompose only when it has no
+  children, and prints the beads-without-initiative count only when `"metis": true` is set.
+  The decomposition skill puts an epic's "Done when" in its last child and files children
+  with their `--deps`.
+- The channel poll no longer runs `lsof`. Five sessions polling every few seconds kept three
+  or four `lsof` scans running at 40-50% CPU each on a loaded machine. Only `air status` run by
+  a person and `air land` read processes; the poll uses their last reading while it is under
+  30 s old, and otherwise treats the tree's readers as unknown.
 - The project's Dolt server runs as a plain background process in its own process group, with
   its pid in `.air/dolt/server.pid` and its output in `.air/dolt/server.log`, instead of in a
   tmux session `<project>-dolt`. `air bd-server status` names the pid. This also stops a
@@ -141,6 +150,10 @@ missing notices, which are fixed or added below.
 - Tests that waited a fixed ten seconds for a freshly written script or binary went red under
   fleet load, while macOS checked the new executable. The bd-server probe now runs with no
   real server, and the launch, init and MCP tests allow up to 60 or 120 seconds.
+- Three tests that timed Air against a stalled child asserted a fixed number of seconds and
+  went red on a loaded machine. Each now asserts that the command finished before the stall
+  it injects, which is the fact under test. The status test's seeding call also gets a bd
+  budget no loaded machine reaches.
 - `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
   green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
 - `air handover` and `air close` said only "no green" at a head where a red was recorded, and
