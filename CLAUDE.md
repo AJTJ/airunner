@@ -45,7 +45,10 @@ Index items are 1–3 lines; detail lives behind the link.
   count) + the same version in `Cargo.toml` + `make release`, which refuses a dirty tree or a
   non-main branch, runs `air release-check` then `make verify`, and tags what it verified.
   **Each release also gets a `CHANGELOG.md` entry** (owner, 2026-09-26): plain lines under
-  Added, Changed, Removed and Fixed, written as the round's work lands.
+  Added, Changed, Removed and Fixed, written as the round's work lands. A bead writes its line
+  as a fragment, `changelog.d/<bead-id>.md`, never into `CHANGELOG.md` itself: every bead
+  editing one heading conflicted every landing (air-be6d). `make changelog` folds them in at
+  round end; `changelog.d/README.md` has the format.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
   as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,

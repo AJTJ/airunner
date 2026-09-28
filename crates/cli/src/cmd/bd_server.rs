@@ -38,6 +38,16 @@ use serde_json::json;
 /// under two seconds on 2026-09-26; the rest is headroom for a loaded machine.
 pub const START_WAIT: Duration = Duration::from_secs(10);
 
+/// [`START_WAIT`], or `AIR_BD_START_WAIT_MS` when set (air-1fg7). The override exists for tests
+/// that start a freshly written fake `dolt`: under fleet load macOS checks a new executable
+/// before its first run, and that alone took longer than ten seconds.
+pub fn start_wait() -> Duration {
+    std::env::var("AIR_BD_START_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(START_WAIT, Duration::from_millis)
+}
+
 /// What `.beads/` says about how bd reaches its data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -394,7 +404,7 @@ pub fn up(repo: &Path) -> Outcome {
         Listener::None => {}
     }
     match bins() {
-        Ok(b) => start(&main, port, &database, false, &b, START_WAIT),
+        Ok(b) => start(&main, port, &database, false, &b, start_wait()),
         Err(why) => Outcome::Failed { why },
     }
 }
@@ -653,7 +663,7 @@ pub fn keep_alive_tick(repo: &Path, ledger: &Ledger, worker: &str) {
         &super::now(),
         &mut |port| listener(&main, port),
         &mut |port, db| match bins() {
-            Ok(b) => start(&main, port, db, false, &b, START_WAIT),
+            Ok(b) => start(&main, port, db, false, &b, start_wait()),
             Err(why) => Outcome::Failed { why },
         },
     );

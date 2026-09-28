@@ -58,6 +58,8 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- A bead writes its changelog line as a fragment, `changelog.d/<bead-id>.md`, instead of into
+  this file, which every landing conflicted on. This is the last line written here directly.
 - `air land` closes an epic once bd reports every one of its children closed, and never an
   epic with no children. `air status` names an epic to decompose only when it has no
   children, and prints the beads-without-initiative count only when `"metis": true` is set.
@@ -151,6 +153,12 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- Tests that waited a fixed ten seconds for a freshly written script or binary went red under
+  fleet load, while macOS checked the new executable. The bd-server probe now runs with no
+  real server, and the launch, init and MCP tests allow up to 60 or 120 seconds.
+- A branch whose bead was closed on a green, and which then fell behind main before the lane
+  landed it, could neither land nor join a batch, because batch-ready needed a bead the worker
+  still held. A closed bead now counts, and `air status` names it `closed, waiting for the lane`.
 - Three tests that timed Air against a stalled child asserted a fixed number of seconds and
   went red on a loaded machine. Each now asserts that the command finished before the stall
   it injects, which is the fact under test. The status test's seeding call also gets a bd
