@@ -480,7 +480,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
     // is the gate.
     let bd_present = bd.version.is_some();
     // A new project's bd runs on its own Dolt server (owner, 2026-09-26), so a new project
-    // also needs dolt and tmux, and a free port. An existing `.beads/` is left as it is.
+    // also needs dolt and a free port. An existing `.beads/` is left as it is.
     let server = (!has_beads).then(|| {
         let bins = crate::cmd::bd_server::bins();
         let port = crate::cmd::bd_server::free_port(&dir);
@@ -629,7 +629,6 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
             // The server first: `bd init --server` connects to it and creates the database.
             let o = crate::cmd::bd_server::start(
                 &dir,
-                &crate::cmd::bd_server::session(&dir),
                 *port,
                 "",
                 true,

@@ -536,7 +536,6 @@ fn green_and_red_at_one_head_are_counted_by_record_and_handover() {
 
 #[test]
 fn init_gates_then_builds_a_project_from_nothing() {
-    const FAKE_TMUX: &str = "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in\n*\" new-session \"*) sh -c \"$last\" </dev/null >/dev/null 2>&1 & ;;\n*\" has-session \"*) exit 1 ;;\nesac\nexit 0\n";
     const FAKE_DOLT: &str = "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --port ] && port=$2; shift; done\nexec perl -MIO::Socket::INET -e '$s=IO::Socket::INET->new(LocalAddr=>\"127.0.0.1\",LocalPort=>$ARGV[0],Listen=>5,ReuseAddr=>1) or exit 1; alarm 5; while(my $c=$s->accept){close $c}' \"$port\"\n";
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -559,14 +558,14 @@ fn init_gates_then_builds_a_project_from_nothing() {
         .to_string();
     let fake_claude = root.join("claude");
     std::fs::write(&fake_claude, "#!/bin/sh\necho '9.9.9 (Claude Code)'\n").unwrap();
-    // A new project's bd runs on its own Dolt server: a fake tmux that runs the start command
-    // detached, and a fake dolt that listens on its port for a few seconds.
-    std::fs::write(root.join("tmux"), FAKE_TMUX).unwrap();
+    // A new project's bd runs on its own Dolt server: a fake dolt that listens on its port for
+    // a few seconds. No tmux is on this PATH: the server is a plain background process
+    // (air-8iu7), so a start that reached for tmux would fail here.
     std::fs::write(root.join("dolt"), FAKE_DOLT).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for f in [fake_claude.clone(), root.join("tmux"), root.join("dolt")] {
+        for f in [fake_claude.clone(), root.join("dolt")] {
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
@@ -623,6 +622,10 @@ fn init_gates_then_builds_a_project_from_nothing() {
     let meta = std::fs::read_to_string(proj.join(".beads/metadata.json")).unwrap();
     assert!(!meta.contains("dolt_server_port"), "{meta}");
     assert!(proj.join(".air/dolt/data").is_dir());
+    // air-8iu7: a plain background process, its pid recorded where `air bd-server status`
+    // reads it.
+    let pid = std::fs::read_to_string(proj.join(".air/dolt/server.pid")).unwrap();
+    assert!(pid.trim().parse::<u32>().is_ok(), "{pid}");
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     // air-gn5o: no custom bd status is declared; no flow uses `awaiting_review`.
     assert!(!proj.join(".beads/config.args").exists());

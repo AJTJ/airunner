@@ -13,7 +13,8 @@ checks that `bd list --json` answers, and exits 2 when it does not. Fix bd befor
 
 In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs
 `git init` if needed, starts a Dolt server for bd on a free port in 3400..3900 (data in
-`.air/dolt/`, tmux session `<project>-dolt`), and runs `bd init --server --skip-agents
+`.air/dolt/`, a background process whose pid is in `.air/dolt/server.pid`), and runs
+`bd init --server --skip-agents
 --skip-hooks` against it, which names the bead prefix after the directory unless you pass
 `--prefix`. The port goes in `.beads/dolt-server.port`, which is not committed. From then on
 `air fleet up` and the launchers start the server when it does not answer, `air bd-server up`

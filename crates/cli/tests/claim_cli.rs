@@ -2065,8 +2065,10 @@ fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
             lane.to_str().unwrap(),
         ],
     );
+    // air-k81s: no member, so the cut exits 1 and names what held alpha.
     let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
-    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("held: alpha at"), "{out}{err}");
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let held: i64 = conn
         .query_row(
@@ -2373,6 +2375,56 @@ fn a_claim_held_by_a_peer_points_at_bd_ready() {
         text.contains("is claimed by") && text.contains("`bd ready` lists what is claimable now"),
         "{text}"
     );
+}
+
+/// air-1pu5: a worker's precheck and the wait after it are on its `air status` line, once the
+/// worker's next tool call has stamped the run.
+#[test]
+fn status_shows_a_workers_precheck_and_the_wait_after() {
+    use std::io::Write;
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let (code, o, e) = air_env(
+        &alpha,
+        &bd,
+        &["record", "precheck", "--", "true"],
+        &[("AIR_ROLE", "worker")],
+    );
+    assert_eq!(code, 0, "{o}{e}");
+    let (_, s, _) = air(&main, &bd, &["status"]);
+    assert!(s.contains("wait after p50 none yet"), "{s}");
+    // The worker's next tool call.
+    let mut child = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&alpha)
+        .arg("hook")
+        .env("AIR_BD_BIN", &bd)
+        .env("FAKE_BD_DIR", &main)
+        .env("AIR_ROLE", "worker")
+        .current_dir(&alpha)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let body = serde_json::json!({
+        "session_id": "s-pre", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": {"command": "true"}, "cwd": alpha.to_string_lossy(),
+    });
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.to_string().as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let (_, s, _) = air(&main, &bd, &["status"]);
+    let line = s
+        .lines()
+        .find(|l| l.starts_with("worktree-alpha") || l.contains("precheck p50"));
+    let line = line.unwrap_or_default();
+    assert!(line.contains("precheck p50 0s, wait after p50 "), "{s}");
+    assert!(!line.contains("none yet"), "{s}");
 }
 
 /// air-5lg: `tmux ls` is machine-wide and said nothing about what a lane was doing, so
@@ -3347,10 +3399,11 @@ fn a_cut_starts_from_main_and_refuses_an_unlanded_green() {
     assert_eq!(git(&lane, &["rev-parse", "HEAD"]), green);
     git(&lane, &["checkout", "README"]);
 
-    // Landed: the head is in main, so the cut resets and runs.
+    // Landed: the head is in main, so the cut resets and runs. Nothing is batch-ready, so it
+    // exits 1 (air-k81s) after the reset.
     git(&main, &["merge", "-q", "--ff-only", &green]);
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
-    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(code, 1, "{out}{err}");
     assert!(json(&out)["reset_from"].is_null(), "{out}");
     assert_eq!(
         git(&lane, &["rev-parse", "HEAD"]),
