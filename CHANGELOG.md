@@ -13,6 +13,9 @@ missing notices, which are fixed or added below.
 
 ### Added
 
+- `air status` shows, per worker with a precheck in the last day, `precheck p50 Ns, wait after
+  p50 Ns`: how long its prechecks ran and how long from a run's end to its next tool call.
+  `air audit` prints the totals. The ledger gains `verify_runs.resumed_at` (schema v26).
 - The verification lane is its own role. `air lane` starts it, and only the lane lands.
 - Every role runs in its own worktree and tmux session, named `worker-<N>`, `lane` and
   `coordinator`, with the project name in front.
@@ -53,6 +56,10 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- The project's Dolt server runs as a plain background process in its own process group, with
+  its pid in `.air/dolt/server.pid` and its output in `.air/dolt/server.log`, instead of in a
+  tmux session `<project>-dolt`. `air bd-server status` names the pid. This also stops a
+  scratch `air init --write` leaving a session and a server on the owner's own tmux.
 - Air's messages state facts and the command that acts on them, with the opinions taken out
   (air-ch9p). `air status` prints `in batch: <worker> at <head> is in batch <sha>, being
   verified now` for a head inside a running batch, instead of listing it as batch-ready. The
@@ -131,6 +138,8 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
+  green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
 - `air handover` and `air close` said only "no green" at a head where a red was recorded, and
   where the repo gates batches on a precheck that had not run. They now name the red with its
   kept output, and the missing precheck with `air record precheck`.

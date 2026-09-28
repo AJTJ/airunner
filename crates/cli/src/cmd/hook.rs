@@ -624,6 +624,10 @@ fn pre_tool_use(
         input.tool_name.as_deref(),
     )?;
     let moved = transition(&prev, "running");
+    // air-1pu5: the first tool call after a precheck ends is when the worker got going again.
+    if super::is_worker_like(role) {
+        let _ = ledger.stamp_precheck_resumed(worker, &now());
+    }
     // The worktree fence (air-8gj) was here: a worker's Edit/Write whose resolved path left
     // its worktree was denied. Deleted 2026-09-28 (air-w18h, owner): its recorded refusals at
     // an adopter, 6 of 6, were writes to the session's own scratchpad under /private/tmp, this

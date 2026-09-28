@@ -175,6 +175,8 @@ pub struct Cut {
     /// `reset_from` was a green batch main moved past: the main it was recorded over (air-tml4).
     pub stale_over: Option<String>,
     pub next: Option<String>,
+    /// Why each branch that is not a member was left out (air-k81s), from the batch-ready rule.
+    pub held: Vec<String>,
 }
 
 fn short(s: &str) -> &str {
@@ -250,7 +252,10 @@ pub fn render(c: &Cut) -> String {
         ));
     }
     if c.members.is_empty() && c.dropped.is_empty() {
-        out.push_str("  nothing is batch-ready (`air status --json` `not_batch_ready` says why)\n");
+        out.push_str("  nothing is batch-ready\n");
+        for h in &c.held {
+            out.push_str(&format!("  held: {h}\n"));
+        }
     }
     if let Some(n) = &c.next {
         out.push_str(&format!("next: {n}\n"));
@@ -580,7 +585,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         }
     }
 
-    let (ready, _, errors) = status::batch_ready_for(&ledger, repo);
+    let (ready, not_ready, errors) = status::batch_ready_for(&ledger, repo);
     for e in &errors {
         eprintln!("air batch cut: {e}");
     }
@@ -625,6 +630,11 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         lane: lane.clone(),
         main: main.clone(),
         reset_from,
+        held: not_ready
+            .iter()
+            .filter(|n| n.worker != lane)
+            .map(|n| n.detail.clone())
+            .collect(),
         stale_over,
         ..Default::default()
     };
@@ -712,13 +722,30 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
         &format!("{considered} batch-ready member(s)"),
     );
     super::emit(json, &cut, || render(&cut));
-    0
+    // air-k81s: a cut with no members exits non-zero, so `air batch cut && air record verify`
+    // stops there. In the 0.4.9 trial a memberless cut exited 0 and the chained record wrote a
+    // pointless green at bare main.
+    // A dry run is never chained into a record, so it keeps exiting 0.
+    i32::from(!dry_run && cut.members.is_empty())
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-k81s: a cut with no members names what held each branch.
+    #[test]
+    fn a_memberless_cut_names_what_held_each_branch() {
+        let out = render(&Cut {
+            lane: "lane".into(),
+            main: "0123456789ab".into(),
+            held: vec!["w1 at abcdef01: no commit in main..abcdef01 names a bead w1 holds".into()],
+            ..Default::default()
+        });
+        assert!(out.contains("nothing is batch-ready"), "{out}");
+        assert!(out.contains("  held: w1 at abcdef01: no commit"), "{out}");
+    }
 
     /// air-tml4: only a green head that could land refuses the cut. Once main moves past it,
     /// the cut proceeds and says the batch is stale.

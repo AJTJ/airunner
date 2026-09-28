@@ -142,6 +142,9 @@ pub struct WorkerView {
     /// The worker's live tmux session (`<project>-<worker>`), when one exists: `tmux ls` is
     /// machine-wide, so status is where the owner goes from a lane to its pane (air-5lg).
     pub tmux_session: Option<String>,
+    /// air-1pu5: `precheck p50 Ns, wait after p50 Ns` over the last 24 hours, when this worker
+    /// recorded a precheck; see [`precheck_line`].
+    pub precheck: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1221,6 +1224,38 @@ pub fn acceptance_with(
         .collect())
 }
 
+/// A worker's precheck cost (air-1pu5): the median run and the median gap from its end to the
+/// worker's next tool call, over `(worker, duration_ms, finished_at, resumed_at)` rows. `None`
+/// with no precheck; a wait not yet stamped is not a sample. A worker cannot edit while its
+/// precheck reads its tree, so both numbers are time the worker was held.
+#[allow(clippy::type_complexity)]
+pub fn precheck_line(rows: &[&(String, Option<i64>, String, Option<String>)]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let runs: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| r.1)
+        .map(|ms| ms.checked_div(1000).unwrap_or(0))
+        .collect();
+    let waits: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| {
+            r.3.as_deref()
+                .and_then(|resumed| seconds_between(&r.2, resumed))
+        })
+        .map(|s| s.max(0))
+        .collect();
+    let p50 = |v: &[i64]| {
+        super::loops::median(v).map_or_else(|| "none yet".to_string(), |m| format!("{m}s"))
+    };
+    Some(format!(
+        "precheck p50 {}, wait after p50 {}",
+        p50(&runs),
+        p50(&waits)
+    ))
+}
+
 /// Minutes between two RFC 3339 timestamps; None when either does not parse.
 pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let a: jiff::Timestamp = earlier.parse().ok()?;
@@ -2143,6 +2178,14 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             v.tmux_session = live.iter().find(|s| **s == want).cloned();
         }
     }
+    // air-1pu5: what a precheck costs each worker, from the ledger. One query over the day.
+    {
+        let waits = ledger.precheck_waits(&day_before(&at)).unwrap_or_default();
+        for (name, v) in &mut views {
+            let mine: Vec<_> = waits.iter().filter(|w| &w.0 == name).collect();
+            v.precheck = precheck_line(&mine);
+        }
+    }
 
     // Files held and overlaps (derived; may be slow-ish, CLI only).
     let mut overlaps = BTreeMap::new();
@@ -2779,7 +2822,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             && w.session.as_ref().is_some_and(|x| x.state == "idle")
             && !verify_running(s, &w.worker);
         out.push_str(&format!(
-            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}{}\n",
+            "{:<12} {:<11} {}  head {} {}  files {}  claims: {}{}{}{}\n",
             w.worker,
             w.role,
             sess,
@@ -2799,6 +2842,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             } else {
                 String::new()
             },
+            w.precheck
+                .as_deref()
+                .map(|p| format!("  {p}"))
+                .unwrap_or_default(),
             if idle_no_claim {
                 "  idle, no claim"
             } else {
@@ -3305,6 +3352,7 @@ mod tests {
             handed_over: vec![],
             files_held: 0,
             tmux_session: None,
+            precheck: None,
         }
     }
 
@@ -3726,6 +3774,32 @@ mod tests {
             minutes_between(NOW, &past()),
             past_every_line_min().checked_neg()
         );
+    }
+
+    /// air-1pu5: a worker's precheck line: median run and median wait after, and a wait not yet
+    /// stamped is not a sample.
+    #[test]
+    fn a_precheck_line_names_the_run_and_the_wait_after() {
+        let row = |ms: i64, end: &str, resumed: Option<&str>| {
+            (
+                "w1".to_string(),
+                Some(ms),
+                end.to_string(),
+                resumed.map(str::to_string),
+            )
+        };
+        let a = row(40_000, "2026-09-28T10:00:40Z", Some("2026-09-28T10:00:47Z"));
+        let b = row(60_000, "2026-09-28T11:01:00Z", None);
+        let c = row(20_000, "2026-09-28T12:00:20Z", Some("2026-09-28T12:00:23Z"));
+        assert_eq!(
+            precheck_line(&[&a, &b, &c]).as_deref(),
+            Some("precheck p50 40s, wait after p50 3s")
+        );
+        assert_eq!(
+            precheck_line(&[&b]).as_deref(),
+            Some("precheck p50 60s, wait after p50 none yet")
+        );
+        assert!(precheck_line(&[]).is_none());
     }
 
     /// air-n9f3: no negative ages, a reasonless stop said as such, and instants over text.
