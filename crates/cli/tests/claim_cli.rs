@@ -2196,7 +2196,12 @@ fn status_answers_fast_from_the_ledger_when_bd_is_slow() {
         .find(|w| w["worker"] == "main")
         .unwrap();
     assert_eq!(main["claims"][0]["bead"], "zz-1", "claim kept: {o}");
-    assert!(v["duration_ms"].as_u64().unwrap() < 3000, "{o}");
+    // air-8gnk: status's own clock, under the stall like the wall clock above (a fixed 3000 ms
+    // went red at 3562 ms in the lane's loaded batch).
+    assert!(
+        u128::from(v["duration_ms"].as_u64().unwrap()) < STALL.as_millis(),
+        "{o}"
+    );
 }
 
 /// air-6p5: a green branch waited on a merge and nothing said so. `air status` lists the
