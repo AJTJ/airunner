@@ -536,8 +536,8 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` | `no-precheck` |
-    /// `nothing-ahead` (the coordinator)
+    /// `green-at-head` | `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
+    /// `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
 }
@@ -571,6 +571,9 @@ pub struct BatchFacts {
     pub red_batch_at_head: bool,
     /// A cut dropped this exact head for a conflict and told its worker (0.4.9 trial).
     pub dropped_at_head: bool,
+    /// This exact head is a member of a batch whose verify is running now: the batch's sha
+    /// (air-ch9p).
+    pub in_batch: Option<String>,
 }
 
 /// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
@@ -610,6 +613,18 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
             format!(
                 "{} at {short} is already green with main merged: landable on its own, nothing to batch",
                 f.worker
+            ),
+        ));
+    }
+    // air-ch9p: a head inside a batch being verified now is in that batch, not waiting for
+    // one. An adopter's coordinator read it as batch-ready twice and thought it was skipped.
+    if let Some(b) = &f.in_batch {
+        return Err(not(
+            "in-batch",
+            format!(
+                "{} at {short} is in batch {}, being verified now",
+                f.worker,
+                b.get(..8).unwrap_or(b)
             ),
         ));
     }
@@ -698,6 +713,24 @@ pub fn precheck_declared(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Each verify running now, with the member shas its batch cut recorded: `(batch sha, members)`
+/// (air-ch9p). A run with no cut row is a worker's own verify and has no members but its sha.
+fn in_flight_members(ledger: &Ledger) -> Vec<(String, Vec<String>)> {
+    verifies_in_flight(ledger)
+        .into_iter()
+        .filter(|f| f.kind == Kind::Verify)
+        .map(|f| {
+            let members = ledger
+                .batch_cut_members(&f.sha, &f.worker)
+                .ok()
+                .flatten()
+                .map(|v| v.into_iter().map(|m| m.sha).collect())
+                .unwrap_or_default();
+            (f.sha, members)
+        })
+        .collect()
+}
+
 /// A red batch whose only member was `head` (air-hyli). A batch starts from main, so its
 /// commit is a merge and never the member's own sha: asking for a red AT the head, as this
 /// did, missed every such batch, and an adopter's lane merged the same red member into the next
@@ -739,6 +772,7 @@ pub fn batch_ready_for(
     let claims = ledger.open_claims().unwrap_or_default();
     let red_batches = ledger.red_batches(Kind::Verify).unwrap_or_default();
     let dropped = ledger.batch_dropped_heads().unwrap_or_default();
+    let running = in_flight_members(ledger);
     let precheck_required = precheck_declared(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
@@ -782,9 +816,14 @@ pub fn batch_ready_for(
             .is_some_and(|n| n > 0);
         let red_batch_at_head = red_alone(&red_batches, &head);
         let dropped_at_head = dropped.iter().any(|(w, h)| *w == worker && *h == head);
+        let in_batch = running
+            .iter()
+            .find(|(_, members)| members.iter().any(|m| *m == head))
+            .map(|(b, _)| b.clone());
         let facts = BatchFacts {
             red_batch_at_head,
             dropped_at_head,
+            in_batch,
             precheck_required,
             precheck_green_at_head,
             coordinator,
@@ -1702,10 +1741,19 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         // both of that trial's `landable` rows were for it and cleared in 32 s with nothing
         // for the coordinator to do.
         let lanes = super::fanout::lanes(s);
+        // air-ch9p: with a lane session live, landing is the lane's and it lands what its
+        // batches cover; an adopter's coordinator, pushed a landable branch, told the lane to
+        // land it by hand. Pushed only when no lane is running.
+        let lane_live = s.workers.iter().any(|w| {
+            w.role == "lane"
+                && w.session
+                    .as_ref()
+                    .is_some_and(|x| x.pid_alive != Some(false))
+        });
         for l in s
             .landable
             .iter()
-            .filter(|l| l.blocked.is_none() && !lanes.contains(&l.worker))
+            .filter(|l| l.blocked.is_none() && !lanes.contains(&l.worker) && !lane_live)
         {
             let e = by_worker
                 .entry(&l.worker)
@@ -2827,8 +2875,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             "batch-ready: {} at {} ({})\n",
             b.worker,
             b.head.get(..8).unwrap_or(&b.head),
-            b.beads.join(" ")
+            if b.beads.is_empty() {
+                "no bead".to_string()
+            } else {
+                b.beads.join(" ")
+            }
         ));
+    }
+    // air-ch9p: a head inside the batch being verified is named as such, not left out.
+    for n in s.not_batch_ready.iter().filter(|n| n.check == "in-batch") {
+        out.push_str(&format!("in batch: {}\n", n.detail));
     }
     if let Some(l) = super::loops::line(&s.loops) {
         out.push_str(&format!("{l}\n"));
@@ -3121,6 +3177,79 @@ mod tests {
             ..base
         };
         assert!(batch_ready_rule(&moved).is_ok());
+    }
+
+    /// air-ch9p: a head inside a batch being verified is `in-batch`, named with the batch, and
+    /// the text render says so; the same head with no batch running is batch-ready.
+    #[test]
+    fn a_head_in_a_running_batch_is_in_batch_not_batch_ready() {
+        let base = BatchFacts {
+            worker: "w2".into(),
+            head: "2d2ea33dd9cc3571".into(),
+            carried: vec!["zz-2".into()],
+            held: vec!["zz-2".into()],
+            ..Default::default()
+        };
+        assert!(batch_ready_rule(&base).is_ok());
+        let n = batch_ready_rule(&BatchFacts {
+            in_batch: Some("b0b0b0b0b0b0".into()),
+            ..base
+        })
+        .unwrap_err();
+        assert_eq!(n.check, "in-batch");
+        assert_eq!(
+            n.detail,
+            "w2 at 2d2ea33d is in batch b0b0b0b0, being verified now"
+        );
+        let snap = Snapshot {
+            not_batch_ready: vec![n],
+            batch_ready: vec![BatchReady {
+                worker: "coordinator".into(),
+                head: "c0c0c0c0c0".into(),
+                beads: vec![],
+            }],
+            ..Default::default()
+        };
+        let out = render(&snap, &[]);
+        assert!(
+            out.contains("in batch: w2 at 2d2ea33d is in batch b0b0b0b0, being verified now"),
+            "{out}"
+        );
+        assert!(
+            out.contains("batch-ready: coordinator at c0c0c0c0 (no bead)"),
+            "{out}"
+        );
+    }
+
+    /// air-ch9p: the members come from the cut row of the batch whose verify is running.
+    #[test]
+    fn a_running_batch_names_its_cut_members() {
+        let l = Ledger::open_in_memory().unwrap();
+        l.record_batch_cut(
+            "b0b0",
+            "lane",
+            "m0m0",
+            &[air_ledger::landings::Member {
+                worker: "w2".into(),
+                sha: "c2c2".into(),
+            }],
+            "t",
+        )
+        .unwrap();
+        l.verify_started(&air_ledger::verify::InFlight {
+            id: "r1".into(),
+            worker: "lane".into(),
+            sha: "b0b0".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid: None,
+            started_at: "t".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            in_flight_members(&l),
+            vec![("b0b0".to_string(), vec!["c2c2".to_string()])]
+        );
     }
 
     fn claim(bead: &str, worker: &str, at: &str, attempts: i64) -> Claim {

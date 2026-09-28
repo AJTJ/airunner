@@ -418,7 +418,13 @@ pub fn lanes(s: &Snapshot) -> Vec<String> {
 }
 
 fn batch_ready_line(b: &BatchReady) -> String {
-    format!("{} at {} ({})", b.worker, short(&b.head), b.beads.join(" "))
+    // air-ch9p: the coordinator's branch carries no bead, and printed `()`.
+    let beads = if b.beads.is_empty() {
+        "no bead".to_string()
+    } else {
+        b.beads.join(" ")
+    };
+    format!("{} at {} ({beads})", b.worker, short(&b.head))
 }
 
 /// What the lane does next, given the batch-ready set as of now: the set and `air batch cut`,

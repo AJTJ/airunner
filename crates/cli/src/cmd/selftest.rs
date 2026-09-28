@@ -5029,7 +5029,29 @@ fn probe_landable_pushes_once_per_branch() -> Probe {
             ..snap("abcdef1234", &["air-1"], 5)
         })
         .iter()
-        .any(|a| a.kind == "landable");
+        .any(|a| a.kind == "landable")
+        // air-ch9p: while a lane session is live, landing is the lane's; a worker's landable
+        // branch is not pushed to the coordinator. A lane row with a dead pid does not count.
+        && {
+            let lane = |alive: Option<bool>| crate::cmd::status::WorkerView {
+                worker: "lane".into(),
+                role: "lane".into(),
+                session: Some(crate::cmd::status::Session {
+                    pid_alive: alive,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let with = |alive: Option<bool>| {
+                at(&Snapshot {
+                    workers: vec![lane(alive)],
+                    ..snap("abcdef1234", &["air-1"], 5)
+                })
+                .iter()
+                .any(|a| a.kind == "landable")
+            };
+            !with(Some(true)) && !with(None) && with(Some(false))
+        };
     Probe {
         name: "landable: a branch green with main merged pushes once per head, not while it sits",
         red_fires: red,
@@ -11017,7 +11039,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
             m.check == "digest-untracked"
                 && m.detail.contains("does not track it")
                 && m.fix.contains("carry NO `Bead:` trailer")
-                && m.fix.starts_with("git add ")
+                && m.fix.starts_with("`git add ")
         });
 
         // Tracked: the same bytes, once git knows about them.
@@ -13104,7 +13126,7 @@ fn probe_status_json_says_why_a_branch_cannot_land() -> Probe {
 ///
 /// Green is the constraint: a range with any commit that is not the coordinator's still needs
 /// a bead, an empty range is not the coordinator's, and the lane's refusal names `air batch
-/// cut` instead of an amend while a worker is still told to amend its own commit. The
+/// cut` instead of an amend, and a worker is told to add a trailered commit (air-ch9p). The
 /// end-to-end case is `a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead`.
 fn probe_a_coordinator_only_range_needs_no_bead() -> Probe {
     use crate::cmd::status::{coordinator_only, no_bead_fix};
@@ -13123,8 +13145,12 @@ fn probe_a_coordinator_only_range_needs_no_bead() -> Probe {
     let empty = !coordinator_only(&[], &coordinator);
     let lane = no_bead_fix("lane");
     let worker = no_bead_fix("alpha");
-    let fixes =
-        !lane.contains("--amend") && lane.contains("air batch cut") && worker.contains("--amend");
+    // air-ch9p: nobody is told to amend now; a worker adds a trailered commit (roles: commit
+    // forward once a sha has left the worktree).
+    let fixes = !lane.contains("--amend")
+        && lane.contains("air batch cut")
+        && !worker.contains("--amend")
+        && worker.contains("`Bead: <id>` trailer");
 
     Probe {
         name: "land: a lane batch of only the coordinator's commits lands with no bead, any other commit still needs one, and the lane is never told to amend",
