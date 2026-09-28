@@ -160,8 +160,8 @@ You read beads and add comments with `bd comment`; every other change to a bead 
 Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
 changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
-`air capture`. An Edit or Write whose resolved path leaves your worktree is denied by Air's
-PreToolUse hook, except under the main checkout's `.air/journal/` and `.air/digests/`.
+`air capture`. Work only in your worktree, never in the main checkout, and use your scratchpad
+for anything that is not part of the repo.
 
 ### Verification lane
 

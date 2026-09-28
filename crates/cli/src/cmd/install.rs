@@ -2548,6 +2548,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "A script that read `landed-not-closed`, `landed-refuted` or the clause marks \
                  reads nothing now; read the bead's acceptance in the `air land` output.",
     },
+    SurfaceChange {
+        id: "worktree-fence-removed",
+        since: "2026-09-28 (air-w18h)",
+        headline: "Air's hook no longer denies a worker's Edit or Write outside its worktree \
+                   (`hook.PreToolUse / refuse-outside-worktree` is gone). The roles text now \
+                   says: work only in your worktree, never in the main checkout, and use your \
+                   scratchpad for anything that is not part of the repo.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3660,11 +3670,12 @@ mod tests {
         assert!(!has("bd close"));
         assert!(has("You need not merge main to stay batch-ready"));
         assert!(has("commit forward and never amend"));
-        // The worktree fence is Air's hook, not the harness's; the harness claim stays absent
+        // air-w18h: no fence; the roles say where to work. The harness claim stays absent
         // because it would promise a block that is not there (air-8gj).
         assert!(has(
-            "resolved path leaves your worktree is denied by Air's PreToolUse hook"
+            "Work only in your worktree, never in the main checkout, and use your scratchpad"
         ));
+        assert!(!has("denied by Air's PreToolUse hook"));
         assert!(!has("the main checkout is blocked natively"));
         // A `digest_dir` digest is tracked, and its route past a cut batch (air-ahl).
         assert!(has("It also has to be tracked by git there"));

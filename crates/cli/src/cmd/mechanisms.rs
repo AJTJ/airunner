@@ -125,6 +125,12 @@ pub struct Mechanism {
 ///   it misparsed a possessive path (air-dqa). Close-with-proof already covers the failure it
 ///   was built for: the adopter's 99 beads closed on branch containment alone. `air land`
 ///   still prints each bead's acceptance text, with no verdict.
+/// - `edit-outside-worktree`, the worktree fence (2026-09-06, air-8gj; removed 2026-09-28,
+///   air-w18h, owner: remove it, tell workers in the roles). Its recorded refusals at an
+///   adopter, 6 of 6, were writes to the session's own Claude Code scratchpad under
+///   /private/tmp; this repo's event log holds none (`grep -c refuse-outside-worktree
+///   .air/events/*`, 2026-09-28), and no write outside a worktree was ever recorded. roles.md tells a
+///   worker to work only in its worktree and use the scratchpad for the rest.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
@@ -149,18 +155,6 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("close", "refuse"),
         ]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
-    },
-    Mechanism {
-        id: "edit-outside-worktree",
-        class: "refusal",
-        what: "A worker's Edit/Write whose resolved path leaves its worktree is denied; the \
-               harness's --worktree isolation it replaces is off.",
-        added: "2026-09-06 (air-8gj)",
-        source: "crates/hooks/src/fence.rs; private/notes/2026-09-06-answers-worktree-and-verify.md",
-        fires: Fires::Decisions(&[("hook.PreToolUse", "refuse-outside-worktree")]),
-        removal: Removal::Judgement(
-            "the harness keys its isolation on the cwd rather than the flag; or a round records zero refuse-outside-worktree firings AND the owner prefers the harness block back",
-        ),
     },
     Mechanism {
         id: "lease-needed",

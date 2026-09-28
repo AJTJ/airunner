@@ -95,6 +95,9 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The worktree fence: a worker's Edit or Write outside its worktree is no longer denied. Its
+  only recorded refusals were writes to the session's own scratchpad. The roles text tells a
+  worker to work only in its worktree and use its scratchpad for the rest.
 - The `landed-not-closed` condition, and the per-clause verdicts in `air land` it came from.
   `air land` still prints each landed bead with its acceptance text.
 - `air batch cut` no longer tells a worker its branch was held out for a missing precheck, and

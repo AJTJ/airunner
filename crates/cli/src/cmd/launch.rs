@@ -3,7 +3,7 @@
 //! launchers never start headless sessions).
 //!
 //! Worker: `claude` started IN the worktree Air made (air-fdz, air-8gj; no `--worktree`, and
-//! the isolation is the cwd plus the PreToolUse fence in `air_hooks::fence`), the roles prose
+//! the isolation is the cwd, the deny list and the roles text), the roles prose
 //! appended to the system prompt, a deny list that holds in every permission mode, and env
 //! that used to drift in per-worktree files (`AIR_ROLE`, `BEADS_ACTOR`).
 //! Lane (`air lane`, air-jc2p.2): a worker launch with `AIR_ROLE=lane` and `air land` allowed.
@@ -575,8 +575,8 @@ const RESERVED: &[&str] = &["main", "coordinator", "lane"];
 /// the command, plus a native build refused with no prompt and permission prompts nobody could
 /// answer unattended (`private/notes/2026-09-06-answers-worktree-and-verify.md`, owner
 /// ruling 2026-09-06). What holds the line instead: the cwd, the deny list below, the
-/// peer-on-file and hand-over hooks, and one PreToolUse denial of an Edit/Write whose resolved
-/// path leaves the worktree (`hook.rs`, `air_hooks::fence`).
+/// peer-on-file warning, the hand-over gate, and roles.md telling a worker to work only in
+/// its worktree (the edit fence was removed by air-w18h).
 pub fn worker_argv(name: &str, project: &str, roles: &Path, extra: &[String]) -> Vec<String> {
     role_argv("worker", name, project, roles, WORKER_DENY, extra)
 }
@@ -1399,7 +1399,7 @@ mod tests {
             Path::new("/r/.air/roles.md"),
             &["--model".into(), "x".into()],
         );
-        // air-8gj: no `--worktree`; the cwd is the worktree and the fence hook holds the line.
+        // air-8gj: no `--worktree`; the cwd is the worktree.
         assert!(!v.contains(&"--worktree".to_string()));
         assert_eq!(v[0], "--append-system-prompt-file");
         assert!(
