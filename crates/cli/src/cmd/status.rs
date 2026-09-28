@@ -133,6 +133,9 @@ pub struct WorkerView {
     /// rather than in `green_detail`, which is air-7wf's tree-versus-commit reason and means
     /// something else.
     pub red_log: Option<String>,
+    /// This worker's newest verify, when it was stopped by a signal (air-nwat): the signal, the
+    /// commit and how long it had run. A verify stopped by hand used to leave no row at all.
+    pub interrupted: Option<String>,
     pub claims: Vec<Claim>,
     /// Open claims bd shows in `awaiting_review`: still held (the files are still the
     /// worker's) but no longer work in progress (air-3eu).
@@ -829,6 +832,19 @@ pub fn batch_ready_for(
 /// order it will land in (air-3pz).
 fn sort_by_wait(v: &mut [Landing]) {
     v.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.bead.cmp(&b.bead)));
+}
+
+/// `interrupted (SIGINT) at abc1234 after 12 s` for a run `air record` wrote as stopped by a
+/// signal, else None (air-nwat).
+pub fn interrupted_line(r: &air_ledger::verify::VerifyRun) -> Option<String> {
+    let step = r.failing_step.as_deref()?;
+    step.starts_with(super::record::INTERRUPTED).then(|| {
+        format!(
+            "{step} at {} after {} s",
+            r.sha.get(..7).unwrap_or(&r.sha),
+            r.duration_ms.unwrap_or(0) / 1000
+        )
+    })
 }
 
 /// A bead bd has closed whose commits have not reached main (air-gazh).
@@ -1845,6 +1861,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                             .and_then(|r| r.log_path)
                     })
                     .flatten();
+                let interrupted = ledger
+                    .latest_run_any(&name, Kind::Verify)
+                    .ok()
+                    .flatten()
+                    .and_then(|r| interrupted_line(&r));
                 views.insert(
                     name.clone(),
                     WorkerView {
@@ -1854,6 +1875,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         green_at_head,
                         green_detail: evidence.as_ref().and_then(super::green::Evidence::detail),
                         red_log,
+                        interrupted,
                         ..Default::default()
                     },
                 );
@@ -2726,6 +2748,10 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             Some(p) => format!("{green} (output: {p})"),
             None => green,
         };
+        let green = match w.interrupted.as_deref() {
+            Some(i) => format!("{green}; last verify {i}"),
+            None => green,
+        };
         let claims: Vec<String> = w
             .claims
             .iter()
@@ -3150,6 +3176,7 @@ mod tests {
             green_at_head: green,
             green_detail: None,
             red_log: None,
+            interrupted: None,
             claims,
             handed_over: vec![],
             files_held: 0,

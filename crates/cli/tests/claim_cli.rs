@@ -2738,6 +2738,67 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
 /// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's
 /// head holding main plus exactly alpha's and gamma's commits, and each drop is an event line.
 /// The main checkout is refused.
+/// air-nwat: a verify stopped by hand is still written. `air record` is sent SIGTERM mid-run,
+/// stops its check, and writes the run as interrupted with its duration; `air status` names it
+/// under the worker. Before, the process died and left no row at all.
+#[test]
+fn killing_air_record_mid_run_leaves_an_interrupted_run() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let child = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&alpha)
+        .args(["record", "verify", "--", "sleep", "30"])
+        .env("AIR_BD_BIN", &bd)
+        .env("FAKE_BD_DIR", &alpha)
+        .current_dir(&alpha)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The in-flight row is written just before the check starts: once it is there, the
+    // handlers are installed and the check is running.
+    let db = main.join(".air/ledger.db");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let n: i64 = rusqlite::Connection::open(&db)
+            .and_then(|c| c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0)))
+            .unwrap_or(0);
+        if n > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never started"
+        );
+        std::thread::yield_now();
+    }
+    let killed = common::command("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("interrupted (SIGTERM)"), "{err}");
+
+    let (step, exit): (Option<String>, i64) = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT failing_step, exit_code FROM verify_runs ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(step.as_deref(), Some("interrupted (SIGTERM)"));
+    assert_ne!(exit, 0);
+    let (_, status, _) = air(&main, &bd, &["status"]);
+    assert!(
+        status.contains("last verify interrupted (SIGTERM) at"),
+        "{status}"
+    );
+}
+
 /// air-nwat: a cut stopped by a leftover `index.lock` writes a `batch-cut / failed` line naming
 /// the lock, so the record between a landing and the next cut has no silent gap.
 #[test]

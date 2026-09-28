@@ -118,6 +118,10 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A batch cut stopped by a leftover `index.lock` left no record, and a verify stopped by hand
+  left no run. A failed cut now writes `batch-cut / failed` with its reason and who holds the
+  lock, and `air record` survives SIGINT, SIGTERM and SIGHUP to write the run as interrupted
+  with its duration, which `air status` shows under the worker.
 - `air fleet up` logged and printed that it had started the fleet when every launch was
   refused. It now names each launch that did not start and why, and its event reads
   `incomplete` rather than `up`.

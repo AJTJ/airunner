@@ -127,8 +127,18 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         // Never fail the check over the announcement: the exit is the fact, this is courtesy.
         eprintln!("air record: could not publish the in-flight row: {e}");
     }
+    // air-nwat: a Ctrl-C in the pane reaches this process as well as the check, and by default
+    // it died before writing anything, so a verify stopped by hand left no row at all.
+    let stop = Interrupt::register();
     let t0 = std::time::Instant::now();
-    let (exit_code, output_bytes, tail) = match run_tee(prog, args, repo) {
+    let (exit_code, output_bytes, tail) = match run_tee_to(
+        prog,
+        args,
+        repo,
+        std::io::stdout(),
+        std::io::stderr(),
+        stop.as_ref(),
+    ) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("air record: could not run {prog}: {e}");
@@ -145,6 +155,12 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         .then(|| super::runlog::write(ledger.dir(), &id, &tail))
         .flatten()
         .map(|p| p.display().to_string());
+    // A signal that the check outlived is not an interruption: it finished and its exit stands.
+    let interrupted = stop
+        .as_ref()
+        .and_then(Interrupt::which)
+        .filter(|_| exit_code != 0)
+        .map(|sig| format!("{INTERRUPTED} ({sig})"));
     let run = VerifyRun {
         id,
         worker: worker.clone(),
@@ -152,7 +168,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         kind,
         exit_code,
         trigger: "record".into(),
-        failing_step: None,
+        failing_step: interrupted.clone(),
         started_at,
         finished_at,
         log_path: log_path.clone(),
@@ -188,6 +204,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     let (greens, reds) = ledger.runs_at(&head, kind).unwrap_or((0, 0));
     if greens.saturating_add(reds) > 1 {
         flags.push(format!("at this commit: {greens} green / {reds} red"));
+    }
+    if let Some(i) = &interrupted {
+        flags.push(format!("{i} after {duration_ms} ms"));
     }
     let reason = if flags.is_empty() {
         format!("exit {exit_code} in {duration_ms} ms, {output_bytes} bytes")
@@ -287,7 +306,59 @@ fn after_batch(
 /// showed — so a red run can be read after the fact. It is buffered for EVERY run because the
 /// verdict is not known until the child exits; only a non-green one is written to disk.
 pub fn run_tee(prog: &str, args: &[String], repo: &Path) -> std::io::Result<(i32, i64, Vec<u8>)> {
-    run_tee_to(prog, args, repo, std::io::stdout(), std::io::stderr())
+    run_tee_to(prog, args, repo, std::io::stdout(), std::io::stderr(), None)
+}
+
+/// What a run stopped by a signal is marked with, in `failing_step` (air-nwat).
+pub const INTERRUPTED: &str = "interrupted";
+
+/// The signals that stop `air record` by hand, caught so the run is still written.
+///
+/// SIGINT is the pane's Ctrl-C, which the check receives too, so the check stops itself and this
+/// only has to wait for it. SIGTERM and SIGHUP are sent to this process alone (`kill`, a closed
+/// pane), so the check is stopped on its behalf. A handler does not survive `exec`, so the check
+/// still dies on the signals it would have died on.
+#[derive(Debug)]
+pub struct Interrupt {
+    int: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    term: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    hup: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Interrupt {
+    /// None when a handler could not be installed: the run proceeds exactly as before.
+    pub fn register() -> Option<Self> {
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+        let me = Self {
+            int: std::sync::Arc::default(),
+            term: std::sync::Arc::default(),
+            hup: std::sync::Arc::default(),
+        };
+        signal_hook::flag::register(SIGINT, std::sync::Arc::clone(&me.int)).ok()?;
+        signal_hook::flag::register(SIGTERM, std::sync::Arc::clone(&me.term)).ok()?;
+        signal_hook::flag::register(SIGHUP, std::sync::Arc::clone(&me.hup)).ok()?;
+        Some(me)
+    }
+
+    /// The signal that arrived, if any.
+    pub fn which(&self) -> Option<&'static str> {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.term.load(Relaxed) {
+            Some("SIGTERM")
+        } else if self.hup.load(Relaxed) {
+            Some("SIGHUP")
+        } else if self.int.load(Relaxed) {
+            Some("SIGINT")
+        } else {
+            None
+        }
+    }
+
+    /// A signal the check did not receive itself, so it must be stopped for it.
+    fn stops_the_check(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.term.load(Relaxed) || self.hup.load(Relaxed)
+    }
 }
 
 /// [`run_tee`] with the two sinks named instead of hardcoded (air-e21v).
@@ -308,6 +379,7 @@ pub fn run_tee_to<O: Write + Send + 'static, E: Write + Send + 'static>(
     repo: &Path,
     out_sink: O,
     err_sink: E,
+    stop: Option<&Interrupt>,
 ) -> std::io::Result<(i32, i64, Vec<u8>)> {
     let mut child = Command::new(prog)
         .args(args)
@@ -353,7 +425,22 @@ pub fn run_tee_to<O: Write + Send + 'static, E: Write + Send + 'static>(
         .stderr
         .take()
         .map(|e| pump(e, err_sink, std::sync::Arc::clone(&tail)));
-    let status = child.wait()?;
+    let status = match stop {
+        None => child.wait()?,
+        Some(stop) => {
+            use wait_timeout::ChildExt;
+            let mut killed = false;
+            loop {
+                if let Some(s) = child.wait_timeout(std::time::Duration::from_millis(100))? {
+                    break s;
+                }
+                if !killed && stop.stops_the_check() {
+                    let _ = child.kill();
+                    killed = true;
+                }
+            }
+        }
+    };
     let out_bytes = out.and_then(|h| h.join().ok()).unwrap_or(0);
     let err_bytes = err.and_then(|h| h.join().ok()).unwrap_or(0);
     let bytes = out_bytes.saturating_add(err_bytes);

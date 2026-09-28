@@ -11252,6 +11252,7 @@ fn probe_a_red_runs_output_is_kept() -> Probe {
         &std::env::temp_dir(),
         out_sink.clone(),
         err_sink.clone(),
+        None,
     )
     .map(|(code, _, tail)| {
         let s = String::from_utf8_lossy(&tail).to_string();

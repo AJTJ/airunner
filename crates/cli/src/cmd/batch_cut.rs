@@ -723,7 +723,7 @@ mod tests {
         let held = failure_reason(err, |_| Ok(vec![(42, "git".to_string())]));
         assert!(held.ends_with("held by pid 42 (git)]"), "{held}");
         assert_eq!(
-            failure_reason("git timed out after 120s", |_| unreachable!()),
+            failure_reason("git timed out after 120s", |_| Err("not asked".to_string())),
             "git timed out after 120s"
         );
     }
