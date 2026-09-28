@@ -353,6 +353,10 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         let green = batch_result_notes(&batch_run("g0g0g0g0", 0, &members), &beads);
         let red = batch_result_notes(&batch_run("r0r0r0r0", 2, &members), &beads);
         let killed = batch_result_notes(&batch_run("k0k0k0k0", 143, &members), &beads);
+        // air-ch9p (air-23ve): a batch of one names its commit once and splits nothing.
+        let one = [("w1", "a1a1a1a1a1")];
+        let green_one = batch_result_notes(&batch_run("a1a1a1a1a1", 0, &one), &beads);
+        let red_one = batch_result_notes(&batch_run("f6f6f6f6f6", 2, &one), &beads);
         batch_dropped(
             &l,
             "lane",
@@ -389,6 +393,19 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             && green
                 .iter()
                 .any(|n| n.to == "w2" && n.content.contains("zz-b has a later commit"))
+            && green_one.first().is_some_and(|n| {
+                n.content
+                    .starts_with("your a1a1a1a1 is green as a batch of one (zz-a). Close them now")
+            })
+            && red_one.first().is_some_and(|n| {
+                n.content.contains("was its only member")
+                    && n.content
+                        .contains("batch-ready again once it has a new commit")
+                    && !n.content.contains("splits")
+            })
+            && red
+                .first()
+                .is_some_and(|n| n.content.contains("one of 4 members"))
             && red.first().is_some_and(|n| {
                 n.kind == "batch-red"
                     && n.content.contains("exit 2")
