@@ -138,6 +138,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- Tests that waited a fixed ten seconds for a freshly written script or binary went red under
+  fleet load, while macOS checked the new executable. The bd-server probe now runs with no
+  real server, and the launch, init and MCP tests allow up to 60 or 120 seconds.
 - `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
   green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
 - `air handover` and `air close` said only "no green" at a head where a red was recorded, and
