@@ -117,6 +117,13 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- The lane piped `air land` into `tail`, the auto-mode classifier refused it, and the session
+  then refused every later landing. The lane's settings now allow its whole loop (`air land`,
+  `air batch cut`, `air record`, `air status`, `git merge`, `git reset --hard main`), and the
+  roles text tells it to run them bare.
+- `air audit` said 0 closes passed while beads were closing, counted `uds:` messages to live
+  sessions as unresolved, counted one subject for many beads or heads, and described the Stop
+  nudge as naming beads once beside a count of its repeats. All four now match the ledger.
 - `air land` refused while any verify ran anywhere in the fleet, so a lane's green batch could
   wait indefinitely behind workers' own runs. Only a verify in the main checkout or the lane's
   tree refuses it now.
