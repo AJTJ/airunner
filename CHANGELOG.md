@@ -142,6 +142,10 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- Three tests that timed Air against a stalled child asserted a fixed number of seconds and
+  went red on a loaded machine. Each now asserts that the command finished before the stall
+  it injects, which is the fact under test. The status test's seeding call also gets a bd
+  budget no loaded machine reaches.
 - `air batch cut` with no members exited 0, so `air batch cut && air record verify` recorded a
   green at bare main. It now names what held each branch and exits 1; a dry run still exits 0.
 - `air handover` and `air close` said only "no green" at a head where a red was recorded, and
