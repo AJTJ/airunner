@@ -56,6 +56,8 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- This repo sets `verify_lane: true`: the lane verifies once per batch; workers run no verify of their own (four parallel Rust verifies had put the owner's machine at load 40).
+
 - The channel poll no longer runs `lsof`. Five sessions polling every few seconds kept three
   or four `lsof` scans running at 40-50% CPU each on a loaded machine. Only `air status` run by
   a person and `air land` read processes; the poll uses their last reading while it is under
