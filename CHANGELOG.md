@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air fleet up` logged and printed that it had started the fleet when every launch was
+  refused. It now names each launch that did not start and why, and its event reads
+  `incomplete` rather than `up`.
 - The coordinator could put a question prompt to the owner and wait on it for hours, hearing no
   notices; an adopter's coordinator sat in one for six hours. It is now denied the prompt, like
   workers and the lane, and roles.md says a question for the owner is a bead labelled `owner`.

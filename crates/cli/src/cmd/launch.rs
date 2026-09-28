@@ -820,25 +820,22 @@ fn spawn_tmux(
     argv: &[String],
     detached: bool,
     print: bool,
-) -> i32 {
+) -> Result<i32, String> {
     let bin = claude_bin();
     let socket = tmux_socket();
     let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
     let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, argv);
     if print {
         println!("{}", print_line("tmux", &targv));
-        return 0;
+        return Ok(0);
     }
     // A session of this name already running: this role's own is attached to, another
     // checkout's is refused naming it (air-jc2p.4).
     let ours = super::readers::resolved(cwd);
     let same = |a: &str, b: &str| super::readers::resolved(Path::new(a)) == b;
     match super::tmux::existing(&session, &ours, &super::tmux::sessions_with_paths(), same) {
-        Err(e) => {
-            eprintln!("air: {e}");
-            return 1;
-        }
-        Ok(super::tmux::Existing::Ours) => return attach_existing(&session, socket, detached),
+        Err(e) => return Err(format!("air: {e}")),
+        Ok(super::tmux::Existing::Ours) => return Ok(attach_existing(&session, socket, detached)),
         Ok(super::tmux::Existing::None) => {}
     }
     if !detached {
@@ -849,17 +846,13 @@ fn spawn_tmux(
         {
             use std::os::unix::process::CommandExt;
             let err = cmd.exec();
-            eprintln!("air worker: could not exec tmux: {err}");
-            return 1;
+            return Err(format!("air worker: could not exec tmux: {err}"));
         }
         #[cfg(not(unix))]
         {
             return match cmd.status() {
-                Ok(s) => s.code().unwrap_or(1),
-                Err(e) => {
-                    eprintln!("air worker: could not run tmux: {e}");
-                    1
-                }
+                Ok(s) => Ok(s.code().unwrap_or(1)),
+                Err(e) => Err(format!("air worker: could not run tmux: {e}")),
             };
         }
     }
@@ -871,16 +864,10 @@ fn spawn_tmux(
                 .unwrap_or_default();
             println!("started tmux session {session} (detached)");
             println!("attach: tmux {l}attach -t {session}");
-            0
+            Ok(0)
         }
-        Ok(s) => {
-            eprintln!("air worker: tmux exited with {s}");
-            1
-        }
-        Err(e) => {
-            eprintln!("air worker: could not run tmux: {e}");
-            1
-        }
+        Ok(s) => Err(format!("air worker: tmux exited with {s}")),
+        Err(e) => Err(format!("air worker: could not run tmux: {e}")),
     }
 }
 
@@ -1093,7 +1080,7 @@ fn install_output_refusal(repo: &Path, who: &str) -> Option<String> {
 
 /// Create or reuse `.claude/worktrees/<name>` (air-fdz). Not under `--print`, which runs
 /// nothing. `who` prefixes every line.
-fn ensure_worktree(repo: &Path, name: &str, who: &str) -> Result<(), ()> {
+fn ensure_worktree(repo: &Path, name: &str, who: &str) -> Result<(), String> {
     match super::worktree::ensure(&super::worktree::main_checkout(repo), name) {
         Ok(c) => {
             if !c.existed {
@@ -1110,10 +1097,7 @@ fn ensure_worktree(repo: &Path, name: &str, who: &str) -> Result<(), ()> {
             }
             Ok(())
         }
-        Err(e) => {
-            eprintln!("{who}: {e}");
-            Err(())
-        }
+        Err(e) => Err(format!("{who}: {e}")),
     }
 }
 
@@ -1135,7 +1119,10 @@ fn launch_worker_like(
         fixed: None,
         detached: false,
     };
-    launch_role(repo, role, name, extra, start, print)
+    launch_role(repo, role, name, extra, start, print).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        1
+    })
 }
 
 /// The fixed first prompt `air fleet up` gives the lane, so it starts its loop without anyone
@@ -1196,26 +1183,51 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
             fixed: (role == "lane").then_some(LANE_START),
             detached: true,
         };
-        if launch_role(repo, role, &name, &[], start, print) != 0 {
-            failed.push(name);
+        match launch_role(repo, role, &name, &[], start, print) {
+            Ok(0) => {}
+            Ok(code) => failed.push((name, format!("exited {code}"))),
+            Err(why) => failed.push((name, why)),
         }
     }
+    let (trace, line) = fleet_outcome(&failed);
     if !print && let Ok((ledger, me)) = super::open(repo) {
+        let names: Vec<&str> = failed.iter().map(|(n, _)| n.as_str()).collect();
         super::log_event(
             &ledger,
             &me,
-            super::decisions::FLEET_UP,
-            &serde_json::json!({"workers": fleet_workers(repo), "failed": failed}),
-            "started the lane and the workers that were not already running",
+            trace,
+            &serde_json::json!({"workers": fleet_workers(repo), "failed": names}),
+            &line,
             "1 fleet",
         );
     }
     if failed.is_empty() {
         0
     } else {
-        eprintln!("air fleet up: did not start {}", failed.join(", "));
+        eprintln!("air fleet up: {line}");
         1
     }
+}
+
+/// What `air fleet up` did, as its event's decision and the line it prints (air-eeuf). `up`
+/// only when every launch started; otherwise each one that did not, with why. The 0.4.9 first
+/// run refused all four launches on a session-name clash and still logged "up, started the
+/// lane and the workers".
+pub fn fleet_outcome(failed: &[(String, String)]) -> (super::decisions::Trace, String) {
+    if failed.is_empty() {
+        return (
+            super::decisions::FLEET_UP,
+            "started the lane and the workers that were not already running".to_string(),
+        );
+    }
+    let each: Vec<String> = failed
+        .iter()
+        .map(|(n, why)| format!("{n} ({why})"))
+        .collect();
+    (
+        super::decisions::FLEET_INCOMPLETE,
+        format!("did not start {}", each.join("; ")),
+    )
 }
 
 /// One event line per refused launch (air-hqj8), so `launch-install-refusal` is counted. Not
@@ -1275,7 +1287,7 @@ fn launch_role(
     extra: &[String],
     start: Start<'_>,
     print: bool,
-) -> i32 {
+) -> Result<i32, String> {
     let Start {
         tmux,
         task,
@@ -1285,46 +1297,31 @@ fn launch_role(
     let tmux = tmux || force_detached;
     let who = format!("air {role}");
     if let Some(refusal) = install_output_refusal(repo, &who) {
-        eprintln!("{refusal}");
         log_install_refusal(repo, &who, &refusal, print);
-        return 1;
+        return Err(refusal);
     }
-    let roles = match roles_file(repo, !print) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{who}: {e}");
-            return 1;
-        }
-    };
+    let roles = roles_file(repo, !print).map_err(|e| format!("{who}: {e}"))?;
     // The worktree is Air's to create and fill (air-fdz); claude starts inside it (air-8gj).
-    if !print && ensure_worktree(repo, name, &who).is_err() {
-        return 1;
+    if !print {
+        ensure_worktree(repo, name, &who)?;
     }
     let env = with_pin(
         repo,
         role_env(role, name, &super::tmux::project_prefix(repo)),
     );
-    let argv = match worker_argv_for(repo, role, name, &roles, extra) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{who}: {e}");
-            return 1;
-        }
-    };
+    let argv =
+        worker_argv_for(repo, role, name, &roles, extra).map_err(|e| format!("{who}: {e}"))?;
     // claude runs IN the worktree (air-8gj): the cwd is the isolation now, with the hook.
     let wt = super::worktree::dir_for(&super::worktree::main_checkout(repo), name);
     if !(tmux || task.is_some()) {
-        return exec_claude(&wt, &env, &argv, print);
+        return Ok(exec_claude(&wt, &env, &argv, print));
     }
     // The task goes to a file; argv gets a fixed sentence naming it (air-er0). Not written
     // under `--print`, which writes nothing (air-rr98); the printed line names the path.
     let prompt = match task.filter(|t| !t.trim().is_empty()) {
         Some(t) => match task_file(repo, name, t, !print) {
             Ok(p) => Some(task_prompt(&p)),
-            Err(e) => {
-                eprintln!("{who}: {e}");
-                return 1;
-            }
+            Err(e) => return Err(format!("{who}: {e}")),
         },
         None => fixed.map(str::to_string),
     };
@@ -1385,12 +1382,19 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
     // Always in tmux, so the owner attaches to it the way they attach to every worker; a second
     // `air coordinator` attaches to the running one rather than starting another.
     let name = "coordinator";
-    if !print && ensure_worktree(repo, name, "air coordinator").is_err() {
-        return 1;
-    }
     let wt = super::worktree::dir_for(&super::worktree::main_checkout(repo), name);
     let detached = launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
-    spawn_tmux(repo, &wt, name, &env, &argv, detached, print)
+    let started = if print {
+        Ok(())
+    } else {
+        ensure_worktree(repo, name, "air coordinator")
+    };
+    started
+        .and_then(|()| spawn_tmux(repo, &wt, name, &env, &argv, detached, print))
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            1
+        })
 }
 
 #[cfg(test)]
@@ -1428,6 +1432,23 @@ mod tests {
         let i = v.iter().position(|a| a == "--disallowed-tools").unwrap();
         assert_eq!(&v[i + 1..i + 1 + WORKER_DENY.len()], WORKER_DENY);
         assert_eq!(&v[v.len() - 2..], ["--model", "x"]);
+    }
+
+    /// air-eeuf: `up` only when every launch started; a failed one is named with why.
+    #[test]
+    fn fleet_up_names_each_launch_that_failed() {
+        let (t, line) = fleet_outcome(&[]);
+        assert_eq!(t, crate::cmd::decisions::FLEET_UP);
+        assert!(line.starts_with("started"), "{line}");
+        let (t, line) = fleet_outcome(&[(
+            "worker-2".to_string(),
+            "air: tmux session air-worker-2 belongs to /elsewhere".to_string(),
+        )]);
+        assert_eq!(t, crate::cmd::decisions::FLEET_INCOMPLETE);
+        assert_eq!(
+            line,
+            "did not start worker-2 (air: tmux session air-worker-2 belongs to /elsewhere)"
+        );
     }
 
     /// air-jc2p.2: the lane is a worker with `air land` allowed, and nothing else changed.

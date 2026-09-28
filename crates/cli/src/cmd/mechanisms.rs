@@ -570,7 +570,7 @@ pub const MECHANISMS: &[Mechanism] = &[
                configured workers, each in its worktree and tmux session.",
         added: "2026-09-25 (owner, air-jc2p.5)",
         source: "crates/cli/src/cmd/launch.rs, fleet_up",
-        fires: Fires::Decisions(&[("fleet", "up")]),
+        fires: Fires::Decisions(&[("fleet", "up"), ("fleet", "incomplete")]),
         // Owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator; before this
         // nothing started the lane and workers started only when the coordinator decided to.
         removal: Removal::Judgement(
