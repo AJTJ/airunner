@@ -81,6 +81,10 @@ pub struct HookInput {
     /// `permission_prompt`. Absent on a harness that does not send one.
     #[serde(alias = "notificationType")]
     pub notification_type: Option<String>,
+    /// Present only when the hook fires inside a subagent (https://code.claude.com/docs/en/hooks,
+    /// accessed 2026-09-28). Its events are not the parent session's own (air-n9f3).
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
 }
 
 impl HookInput {

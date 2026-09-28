@@ -271,8 +271,9 @@ timeout.
 | Session start and end | The session's row is created, idle, or removed. |
 | Before a tool runs | For an edit, Air warns if another worker is editing the same file. If the session's role is worker or lane and the file is outside its worktree, the edit is denied. The worker and lane launchers deny every bd command that writes, `bd close` and `bd update` among them, in the settings they pass; `bd comment` and the read commands stay allowed. Closes are not read from the command text. A command the repository declares as needing a lease is refused to a session not holding it when enforcement is on, which the worker and lane launchers turn on; redirections such as `2>&1` or `> file` are removed before the match. For a message to another agent, Air records the message and its content. |
 | After a tool runs | The edited file goes in the journal and the session is marked working. |
-| Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. |
-| Stop and subagent stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
+| Tool failure, permission request, permission denied, notification, stop failure | The session's state is updated and an event line is written. A stop failure, a quota notification, or a permission or idle prompt is recorded as the session's sticky fact, and `air status` shows it only until the session's next event of its own. |
+| Stop | For a worker, Air adds the gate's verdict when something is missing, and nudges a worker with no claim once, naming ready beads it has confirmed. The lane and the coordinator get neither, by AIR_ROLE. |
+| Subagent stop, and any hook inside a subagent | Only an event line. A subagent's hooks carry its parent's session id and never change the parent's state or clock. |
 
 Every hook call, including the silent ones, writes one event line.
 

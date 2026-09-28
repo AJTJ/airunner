@@ -6288,6 +6288,7 @@ fn probe_attention() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -6356,6 +6357,7 @@ fn probe_standstill() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -6438,6 +6440,7 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             ..Default::default()
         }],
@@ -11112,7 +11115,8 @@ fn probe_ancestor_deadlock_is_named() -> Probe {
 ///
 /// Green: the two halves that separate a recorded fact from a guess. A
 /// `quota_auto_resume_fired` reads as "leave it alone" rather than as one more stopped session,
-/// and a `Notification` that is not about a stop at all (a permission prompt) marks NOTHING —
+/// and a `Notification` that is not about a stop at all (a permission prompt) is never a stop —
+/// it is recorded as waiting for the person (air-n9f3), never as stopped —
 /// the kind is read from the harness's declared field, so a type Air has never met is logged
 /// and reported as not-a-stop rather than invented into one.
 fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
@@ -11151,11 +11155,11 @@ fn probe_a_stopped_session_is_recorded_and_says_whether_it_recovers() -> Probe {
             && is_stop_kind(&stop_kind(&stale))
             && stop_kind(&api) == "stop_failure"
             && is_stop_kind(&stop_kind(&api))
-            && stopped_phrase("quota_auto_resume_stale", "T").contains("NOT resuming"),
+            && stopped_phrase("quota_auto_resume_stale", "T", "").contains("NOT resuming"),
         green_passes: is_stop_kind(&stop_kind(&fired))
-            && stopped_phrase(&stop_kind(&fired), "T").contains("leave it alone")
+            && stopped_phrase(&stop_kind(&fired), "T", "").contains("leave it alone")
             // Not every notification is a stop: a permission prompt, a bare one, and a type
-            // from a later harness all write nothing rather than a phantom stopped session.
+            // from a later harness never read as a phantom stopped session.
             && !is_stop_kind(&stop_kind(&perm))
             && !is_stop_kind(&stop_kind(&bare))
             && !is_stop_kind(&stop_kind(&unknown))
@@ -13262,6 +13266,7 @@ fn probe_a_row_with_no_transcript_is_named_and_never_announced() -> Probe {
         enforce: None,
         has_transcript,
         stopped: None,
+        waiting: None,
     };
     let row = |id: &str, has_transcript: bool| {
         (

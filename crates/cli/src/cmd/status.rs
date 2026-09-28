@@ -103,7 +103,13 @@ pub struct Session {
     /// says the harness is bringing the session back by itself and nothing should touch it,
     /// while `quota_auto_resume_stale`, `quota_auto_resume_disabled` and `stop_failure` say it
     /// is not.
+    ///
+    /// Shown only while no own event of the session follows it (`sticky_holds`, air-n9f3).
     pub stopped: Option<(String, String, String)>,
+    /// air-n9f3: `(since, kind)` when the harness's last word about this session is that it
+    /// waits for the person (a `permission_prompt` or `idle_prompt` notification) and the
+    /// session has done nothing of its own since.
+    pub waiting: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1248,7 +1254,7 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
     let l = &f.landing;
     let merge = l.merge_commit.as_deref().unwrap_or("");
     let elapsed = seconds_between(&l.finished_at, at)
-        .map(|s| format!("{s}s ago"))
+        .map(|s| format!("{}s ago", s.max(0)))
         .unwrap_or_else(|| "at an unreadable time".into());
     let state = match f.alive {
         // air-odv: `air land` runs no verify and arms no rollback; the fast-forward is the
@@ -1403,8 +1409,9 @@ pub fn verifies_in_flight(ledger: &Ledger) -> Vec<air_ledger::verify::InFlight> 
 /// One line for a verify in flight: who, how long, and at which sha. Seconds, not minutes —
 /// a verify is ~420 s in the adopter's repo, so a minutes-only reading rounds most of it to 0.
 pub fn in_flight_line(f: &air_ledger::verify::InFlight, at: &str) -> String {
+    // Never negative: an age is never before its start, whichever clock read `at` is (air-n9f3).
     let elapsed = seconds_between(&f.started_at, at)
-        .map(|s| format!("{s}s"))
+        .map(|s| format!("{}s", s.max(0)))
         .unwrap_or_else(|| "unknown".into());
     format!(
         "{} started {} ago: {} at {}",
@@ -1923,25 +1930,24 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                         has_transcript: r
                             .get::<_, Option<String>>(13)?
                             .is_some_and(|t| !t.trim().is_empty()),
-                        stopped: match (
-                            r.get::<_, Option<String>>(10)?,
-                            r.get::<_, Option<String>>(11)?,
-                        ) {
-                            (Some(at), Some(kind)) => Some((
-                                at,
-                                kind,
-                                r.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                            )),
-                            _ => None,
-                        },
+                        stopped: None,
+                        waiting: None,
                     },
+                    // The session's sticky fact and the time of its latest own event, sorted
+                    // into `stopped` or `waiting` below.
+                    (
+                        r.get::<_, Option<String>>(10)?,
+                        r.get::<_, Option<String>>(11)?,
+                        r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                    ),
                 ))
             })
             .map_err(|e| e.to_string())?;
         let worktree_names: Vec<String> = views.keys().cloned().collect();
         let mut pruned = Vec::new();
         for row in rows {
-            let (worker, role, mut sess) = row.map_err(|e| e.to_string())?;
+            let (worker, role, mut sess, sticky) = row.map_err(|e| e.to_string())?;
+            (sess.stopped, sess.waiting) = sticky_fact(sticky, &sess.changed_at);
             sess.pid_alive = sess.pid.map(super::lease::pid_alive);
             // A session whose worktree no longer exists and whose process is not alive is
             // a leftover (SessionEnd is not guaranteed on crash or worktree removal). Prune it
@@ -2343,7 +2349,10 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     let bd_listener = super::bd_server::view(&bd_main, &bd_mode);
     Ok(Snapshot {
         main_checkout_sessions,
-        at,
+        // Ages are computed against this, so it is read when the facts are all in, not when
+        // the gather began: a gather takes up to 30 s, and a run that started during it read
+        // "started -6s ago" (air-n9f3). `at` above stays the gather's own start, for writes.
+        at: now(),
         workers: views.into_values().collect(),
         inbox_depth: inbox.len(),
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
@@ -2610,14 +2619,55 @@ pub fn render_for_probe(s: &Snapshot) -> String {
     render(s, &[])
 }
 
+/// Does a sticky fact written at `fact_at` still hold, given the session's latest own event
+/// at `changed_at`? It holds until the session does something of its own after it (air-n9f3):
+/// the stop columns are never cleared, and before this rule sessions resumed at 04:4x read
+/// "STOPPED at 04:4x" 16.5 h later while running. Compared as instants, not as text: the
+/// timestamps drop trailing zeros, so their strings do not sort as time. A value that does not
+/// parse keeps the fact, as before this rule.
+pub fn sticky_holds(fact_at: &str, changed_at: &str) -> bool {
+    match (
+        fact_at.parse::<jiff::Timestamp>(),
+        changed_at.parse::<jiff::Timestamp>(),
+    ) {
+        (Ok(f), Ok(c)) => f >= c,
+        _ => true,
+    }
+}
+
+/// A row's sticky columns `(at, kind, text)` as the session's `(stopped, waiting)`: a stop
+/// kind is a stop, a waiting kind is waiting, and either only while it still holds.
+#[allow(clippy::type_complexity)]
+pub fn sticky_fact(
+    (at, kind, text): (Option<String>, Option<String>, String),
+    changed_at: &str,
+) -> (Option<(String, String, String)>, Option<(String, String)>) {
+    let (Some(at), Some(kind)) = (at, kind) else {
+        return (None, None);
+    };
+    if !sticky_holds(&at, changed_at) {
+        return (None, None);
+    }
+    if super::hook::is_waiting_kind(&kind) {
+        (None, Some((at, kind)))
+    } else {
+        (Some((at, kind, text)), None)
+    }
+}
+
 /// How a stopped session reads on its `air status` line (air-1n3).
 ///
 /// The distinction the phrase has to carry is not "stopped or not" but "coming back or not",
 /// because they call for opposite actions: a session the harness is auto-resuming must be left
 /// alone (typing at it cancels the recovery), and one it is not needs a wake. `kind` is the
 /// harness's own declared notification type, never read out of the message text.
-pub fn stopped_phrase(kind: &str, at: &str) -> String {
+pub fn stopped_phrase(kind: &str, at: &str, text: &str) -> String {
     match kind {
+        // An adopter's 233 StopFailure events all came with an empty reason, and each read as
+        // "API error", which nothing had said (air-n9f3).
+        "stop_failure" if text.trim().is_empty() => {
+            format!("STOPPED at {at} (stopped, no reason given)")
+        }
         "quota_auto_resume_fired" => {
             format!("STOPPED at {at} (limit; the harness is resuming it, leave it alone)")
         }
@@ -2680,10 +2730,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 let stopped = x
                     .stopped
                     .as_ref()
-                    .map(|(at, kind, _)| format!(" {}", stopped_phrase(kind, at)))
+                    .map(|(at, kind, text)| format!(" {}", stopped_phrase(kind, at, text)))
+                    .unwrap_or_default();
+                // air-n9f3: a session in a permission prompt read `running` for 6 h 9 min.
+                let waiting = x
+                    .waiting
+                    .as_ref()
+                    .map(|(at, kind)| format!(" waiting for the person since {at} ({kind})"))
                     .unwrap_or_default();
                 format!(
-                    "{} since {} [{model}]{unenforced}{synthetic}{stopped}",
+                    "{} since {} [{model}]{unenforced}{synthetic}{stopped}{waiting}",
                     x.state, x.changed_at
                 )
             })
@@ -3118,6 +3174,7 @@ mod tests {
                 enforce: None,
                 has_transcript: true,
                 stopped: None,
+                waiting: None,
             }),
             head: Some("abc".into()),
             green_at_head: green,
@@ -3544,5 +3601,27 @@ mod tests {
             minutes_between(NOW, &past()),
             past_every_line_min().checked_neg()
         );
+    }
+
+    /// air-n9f3: no negative ages, a reasonless stop said as such, and instants over text.
+    #[test]
+    fn ages_are_never_negative_and_a_stop_says_what_is_known() {
+        // air-n9f3: a run that started after the clock was read is 0 s old, never negative.
+        let f = air_ledger::verify::InFlight {
+            id: "r".into(),
+            worker: "w1".into(),
+            sha: "abcdef0123".into(),
+            kind: Kind::Verify,
+            command: "make verify".into(),
+            pid: None,
+            started_at: "2026-09-27T10:00:06Z".into(),
+        };
+        assert!(in_flight_line(&f, "2026-09-27T10:00:00Z").contains("started 0s ago"));
+        // A stop with no reason says so rather than naming an API error.
+        assert!(stopped_phrase("stop_failure", "T", "").contains("no reason given"));
+        assert!(stopped_phrase("stop_failure", "T", "overloaded").contains("API error"));
+        // Instants, not text: "00Z" sorts after "00.1Z" as a string and is earlier as time.
+        assert!(!sticky_holds("2026-09-27T10:00:00Z", "2026-09-27T10:00:00.1Z"));
+        assert!(sticky_holds("2026-09-27T10:00:00.5Z", "2026-09-27T10:00:00.45Z"));
     }
 }

@@ -327,7 +327,7 @@ fn dispatch(
             }
             d
         }
-        HookEvent::Stop | HookEvent::SubagentStop if role != "worker" => {
+        HookEvent::Stop if role != "worker" => {
             // The coordinator holds no lane and never hands over: no advisory (the adopter
             // adoption log §9: the coordinator received a worker's hand-over advisory). The
             // lane neither: its branch carries every member's trailers, so the advisory would
@@ -336,19 +336,17 @@ fn dispatch(
             let prev = set_session(ledger, input, worker, role, "idle", None)?;
             Dispatched::new(
                 HookOutcome::Allow { context: None },
-                if input.event() == HookEvent::Stop {
-                    dec::STOP_OBSERVED
-                } else {
-                    dec::SUBAGENT_STOP_OBSERVED
-                },
+                dec::STOP_OBSERVED,
                 format!("{}; {role}: no hand-over check", transition(&prev, "idle")),
             )
         }
-        // A subagent stopping is not the worker stopping: the main agent is mid-turn and
-        // about to read the subagent's result. Treating it as a Stop marked a working
-        // session idle and, with no claim held, ran the nudge's `bd ready` confirm — one bd
-        // process (~2 s) per subagent stop, 241 of them on the adopter's 2026-08-30, none of
-        // which could ever be acted on (air-bp0). Observed, and nothing else.
+        // A subagent stopping is not its parent stopping, in any role: the main agent is
+        // mid-turn and about to read the subagent's result. Treating it as a Stop marked a
+        // working session idle and, with no claim held, ran the nudge's `bd ready` confirm —
+        // one bd process (~2 s) per subagent stop, 241 of them on the adopter's 2026-08-30,
+        // none of which could ever be acted on (air-bp0). The coordinator and the lane kept
+        // that path until air-n9f3: 491 subagent stops flipped a working parent to idle in an
+        // adopter's 2026-09-26/27 round. Observed, and nothing else.
         HookEvent::SubagentStop => Dispatched::new(
             HookOutcome::Allow { context: None },
             dec::SUBAGENT_STOP_OBSERVED,
@@ -489,10 +487,11 @@ fn dispatch(
                 .chars()
                 .take(400)
                 .collect();
-            // A notification that is not about a stop (a permission prompt, an idle prompt)
-            // is logged like any other event and writes nothing: `air status` must not report
-            // a session stopped because it asked for permission.
-            if is_stop_kind(&kind) {
+            // A stop, or the session waiting on the person (a permission prompt, an idle
+            // prompt), is written as the session's sticky fact; `air status` tells the two
+            // apart by kind and shows either only until the session's next own event
+            // (air-n9f3). Any other notification is logged and writes nothing.
+            if is_stop_kind(&kind) || is_waiting_kind(&kind) {
                 let _ = mark_stopped(ledger, &input.session_id, &kind, &text);
             }
             Dispatched::new(
@@ -548,8 +547,23 @@ pub fn is_stop_kind(kind: &str) -> bool {
     kind == "stop_failure" || kind.starts_with("quota_auto_resume")
 }
 
-/// Record why a session stopped (schema v20). Best effort: this is an observation, and a
-/// failure to write it must never turn into a refusal.
+/// Whether a kind means the session is waiting for the person: the harness showed a
+/// permission prompt, or has sat at an empty prompt. Recorded so `air status` can say
+/// "waiting for the person since T": an adopter's coordinator sat in a permission prompt for
+/// 6 h 9 min and read `running` throughout, with the notification already in the ledger
+/// (air-n9f3).
+pub fn is_waiting_kind(kind: &str) -> bool {
+    matches!(kind, "permission_prompt" | "idle_prompt")
+}
+
+/// Record why a session stopped, or that it waits on the person (schema v20's columns; the
+/// kind says which). Best effort: this is an observation, and a failure to write it must
+/// never turn into a refusal.
+///
+/// Nothing clears these columns. The fact holds only until the session's next own event,
+/// which `set_session` stamps as `changed_at`, and `air status` compares the two when it reads
+/// (`status::sticky_holds`). Before that rule, sessions resumed at 04:4x still read "STOPPED
+/// at 04:4x" 16.5 h later while running (an adopter, 2026-09-27; air-n9f3).
 fn mark_stopped(ledger: &Ledger, session_id: &str, kind: &str, text: &str) -> Result<(), String> {
     ledger
         .conn()
@@ -1077,6 +1091,12 @@ fn set_session(
     detail: Option<&str>,
 ) -> Result<Option<String>, String> {
     let prev = session_state(ledger, &input.session_id)?;
+    // A subagent's hooks carry the parent's session id and are not the parent's own events:
+    // they change neither its state nor its clock (air-n9f3). Its tool calls still pass the
+    // same gate and fence, which do not read this row.
+    if input.agent_id.is_some() {
+        return Ok(prev);
+    }
     let t = now();
     // Which fleet this session belongs to, so "is that peer one of ours?" is a ledger question
     // (air-0lk). `AIR_PROJECT` when the launcher set it; the beads prefix otherwise.
@@ -1506,6 +1526,93 @@ mod tests {
         assert!(start("c", "coordinator", "coordinator").is_some_and(|c| c.contains("CronCreate")));
         assert_eq!(start("w", "worker", "w1"), None);
         assert_eq!(start("l", "lane", "lane"), None);
+    }
+
+    /// air-n9f3: fire a hook as `role` on session `s9` and read back what `air status` would
+    /// show for it: `(state, stopped kind, waiting kind)`.
+    fn fire_as(repo: &Path, role: &str, body: serde_json::Value) {
+        let mut v = body;
+        v["session_id"] = "s9".into();
+        v["cwd"] = repo.to_string_lossy().to_string().into();
+        inner_env(
+            repo,
+            &v.to_string(),
+            Some(role),
+            Some(role),
+            std::time::Instant::now(),
+        )
+        .unwrap();
+    }
+
+    fn seen(repo: &Path) -> (String, Option<String>, Option<String>) {
+        let ledger = air_ledger::Ledger::open_in(&repo.join(".air")).unwrap();
+        let (state, changed_at, at, kind): (String, String, Option<String>, Option<String>) =
+            ledger
+                .conn()
+                .query_row(
+                    "SELECT state, changed_at, stopped_at, stopped_kind FROM sessions \
+                     WHERE session_id='s9'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+        let (stopped, waiting) =
+            crate::cmd::status::sticky_fact((at, kind, String::new()), &changed_at);
+        (state, stopped.map(|x| x.1), waiting.map(|x| x.1))
+    }
+
+    /// air-n9f3: a sticky fact yields to the session's next own event, and a subagent's hooks
+    /// are not the parent's own. Red before: the stop never cleared, a permission prompt wrote
+    /// nothing, and a coordinator's SubagentStop set it idle.
+    #[test]
+    fn sticky_facts_yield_to_the_sessions_next_own_event() {
+        let dir = scratch_repo();
+        let repo = dir.path().canonicalize().unwrap();
+        let repo = repo.as_path();
+        let bash = serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "true"}});
+        fire_as(repo, "coordinator", bash.clone());
+
+        // Stop, then an own event: no longer stopped.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "StopFailure"}),
+        );
+        assert_eq!(seen(repo).1.as_deref(), Some("stop_failure"));
+        fire_as(repo, "coordinator", bash.clone());
+        assert_eq!(seen(repo), ("running".into(), None, None));
+
+        // A permission prompt, then nothing: waiting for the person.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "Notification",
+                "notification_type": "permission_prompt", "message": "Claude needs your permission"}),
+        );
+        assert_eq!(
+            seen(repo),
+            ("running".into(), None, Some("permission_prompt".into()))
+        );
+
+        // A subagent's stop and its tool calls change neither the state nor the clock, so the
+        // parent still reads as waiting.
+        fire_as(
+            repo,
+            "coordinator",
+            serde_json::json!({"hook_event_name": "SubagentStop", "agent_id": "a1"}),
+        );
+        let mut sub = bash.clone();
+        sub["agent_id"] = "a1".into();
+        fire_as(repo, "coordinator", sub);
+        assert_eq!(
+            seen(repo),
+            ("running".into(), None, Some("permission_prompt".into()))
+        );
+
+        // The parent's own next event ends the wait.
+        fire_as(repo, "coordinator", bash);
+        assert_eq!(seen(repo), ("running".into(), None, None));
     }
 
     /// air-ludo: a worker `air fleet up` launched with no task has had SessionStart and nothing

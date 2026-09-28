@@ -100,6 +100,10 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air status` kept showing `STOPPED at <t>` after the session resumed; it now shows only
+  until the session's next event of its own. A session in a permission or idle prompt shows
+  `waiting for the person since <t>`, a subagent's hooks no longer mark its parent idle, a
+  stop with no reason says so instead of naming an API error, and no age reads negative.
 - After a red batch, the next `air batch cut` built on the red merges and would have carried
   them into the next batch. Every cut now resets the lane's branch to main first. It refuses
   while the lane has uncommitted changes, or while its head is a passing batch not yet landed.
