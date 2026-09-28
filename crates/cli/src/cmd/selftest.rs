@@ -1856,15 +1856,14 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        "gate: a bead whose every commit is already in main closes with no landing row, and only when a commit on main names it by trailer",
         Mutation {
-            // Stop asking whether main still contains the merge, so a rewound or abandoned
-            // landing would close a bead whose work is no longer anywhere. The bead-naming and
-            // landed() conditions are untouched: this reaches the containment question alone,
-            // which is the one that makes the row evidence rather than a memory.
+            // Stop reading the trailer: any commit on main whose message mentions the id
+            // counts, so prose naming a bead, or a longer id it prefixes, would close it. The
+            // search itself is untouched, so this reaches the trailer question alone.
             file: "crates/cli/src/cmd/batch.rs",
-            from: "            && git::is_ancestor(repo, &merge, \"main\").unwrap_or(false))",
-            to: "            && true)",
+            from: "        super::attribution::trailer_ids(body)\n            .iter()\n            .any(|b| b == bead)\n            .then(|| sha",
+            to: "        (!body.is_empty())\n            .then(|| sha",
             also_red: &[],
         },
     ),
@@ -9828,31 +9827,23 @@ fn probe_batch_green_survives_main_moving_under_it() -> Probe {
 
 /// air-9ij, limb 1, and the judgement it forced: **when every commit of a bead is already in
 /// main, the close passes.** `main..HEAD` is empty then, and reading that as "this bead has no
-/// commits" refused the close of a bead Air had itself landed, in any repo that keys green by
-/// commit. The landing gate already demanded a green at a head containing main, and the commit
-/// main is fast-forwarded onto carries that green's tree (air-odv), so the proof this gate
-/// asks for is the proof the work arrived with. Requiring a fresh green naming the merge would
-/// have Air refuse the close it nags for as `landed-not-closed`.
+/// commits" refused the close of a bead Air had itself landed. Main moves only through a green
+/// landing, so the work arrived with the proof this gate asks for.
 ///
-/// Red (declared mutation: the landing row says `refused` rather than `landed`): the work is
-/// not on main, so an empty range closes nothing. Green: the `landed` row closes it, a row
-/// that named a different bead does not, and a landing whose merge commit main no longer
-/// contains does not either — a worker that claimed a bead and committed nothing has no row
-/// and still has nothing to close on.
+/// air-5ynn: asked of git, not of the landing row. `air land` writes the row after the
+/// fast-forward, and a close in between was refused; an adopter counted five in one day.
+///
+/// Red (declared mutation: the trailer is not read, so a mention counts): a bead main names
+/// only in prose, or only as a prefix of a longer id, closes nothing. Green: a bead a commit on
+/// main names in its `Bead:` trailer closes with an empty ledger, so no landing row is needed.
 fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
-    use air_ledger::landings::Landing;
-
     let res = (|| -> Result<(bool, bool), String> {
         let dir = probe_repo()?;
         let g = |args: &[&str]| probe_git(&dir, args);
         let out = (|| -> Result<(bool, bool), String> {
             g(&["init", "-q", "-b", "main"])?;
             g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
-            // A commit main never gets, to stand for a landing that was rewound.
-            g(&["checkout", "-q", "-b", "stray"])?;
-            g(&["commit", "-q", "--allow-empty", "-m", "stray"])?;
-            let stray = g(&["rev-parse", "HEAD"])?;
-            g(&["checkout", "-q", "-b", "w", "main"])?;
+            g(&["checkout", "-q", "-b", "w"])?;
             g(&[
                 "commit",
                 "-q",
@@ -9861,43 +9852,26 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
                 "work\n\nBead: ad-1\n",
             ])?;
             g(&["checkout", "-q", "main"])?;
+            g(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "docs: ad-2 is next\n\nBead: ad-33\n",
+            ])?;
             g(&["merge", "-q", "--no-ff", "w", "-m", "land: w"])?;
-            let merge = g(&["rev-parse", "HEAD"])?;
             // The worker's next `git merge main` fast-forwards: main..HEAD is now empty.
             g(&["checkout", "-q", "w"])?;
             g(&["merge", "-q", "--ff-only", "main"])?;
             let empty = crate::cmd::batch::bead_commits(&dir, "ad-1").is_empty();
-
-            let landed = |result: &str, beads: &[&str], at: &str| -> Result<bool, String> {
-                let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-                l.record_landing(&Landing {
-                    id: new_id(),
-                    worker: "lane".into(),
-                    sha: "wwww".into(),
-                    tip_sha: None,
-                    result: result.into(),
-                    failing_step: None,
-                    verify_run_id: None,
-                    attempt_no: 1,
-                    beads: beads.iter().map(|b| (*b).to_string()).collect(),
-                    open_beads: vec![],
-                    merge_commit: Some(at.to_string()),
-                    pid: None,
-                    started_at: "t0".into(),
-                    finished_at: "t1".into(),
-                    despite_inflight: vec![],
-                    members: vec![],
-                })
-                .map_err(|e| e.to_string())?;
-                Ok(crate::cmd::batch::for_bead(&l, &dir, "ad-1")?
+            let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+            let landed = |bead: &str| -> Result<bool, String> {
+                Ok(crate::cmd::batch::for_bead(&l, &dir, bead)?
                     .landed
                     .is_some())
             };
-            let red = empty && !landed("refused", &["ad-1"], &merge)?;
-            let green = landed("landed", &["ad-1"], &merge)?
-                && landed("landed-refuted", &["ad-1"], &merge)?
-                && !landed("landed", &["ad-2"], &merge)?
-                && !landed("landed", &["ad-1"], &stray)?;
+            let red = empty && !landed("ad-2")? && !landed("ad-3")?;
+            let green = landed("ad-1")? && landed("ad-33")?;
             Ok((red, green))
         })();
         std::fs::remove_dir_all(&dir).ok();
@@ -9905,7 +9879,7 @@ fn probe_a_landed_bead_closes_on_its_landing() -> Probe {
     })();
     let (red, green) = res.unwrap_or((false, false));
     Probe {
-        name: "gate: a bead whose every commit is already in main closes on the landing that put it there, and only on one that named it and that main still contains",
+        name: "gate: a bead whose every commit is already in main closes with no landing row, and only when a commit on main names it by trailer",
         red_fires: red,
         green_passes: green,
     }
