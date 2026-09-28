@@ -320,6 +320,7 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             worker: w.into(),
             head: h.into(),
             beads: vec![format!("zz-{w}")],
+            closed: vec![],
         };
         let mut s = Snapshot {
             workers: vec![view("lane", "lane", "working", None)],

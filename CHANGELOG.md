@@ -147,6 +147,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A branch whose bead was closed on a green, and which then fell behind main before the lane
+  landed it, could neither land nor join a batch, because batch-ready needed a bead the worker
+  still held. A closed bead now counts, and `air status` names it `closed, waiting for the lane`.
 - Three tests that timed Air against a stalled child asserted a fixed number of seconds and
   went red on a loaded machine. Each now asserts that the command finished before the stall
   it injects, which is the fact under test. The status test's seeding call also gets a bd

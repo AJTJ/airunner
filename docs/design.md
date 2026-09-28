@@ -444,7 +444,7 @@ tree, at any commit with the same tree. When a verification lane runs, the lane'
 batch commit that contains both the worker's commit and main also counts. That lets workers
 close without running verification themselves. A commit made after the batch was cut is refused,
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
-names a bead its worker holds, or, for the coordinator's branch, has any commit main lacks; it
+names a bead its worker holds or that is closed (a bead closed on a green whose branch then fell behind main waits for the lane, air-voeb), or, for the coordinator's branch, has any commit main lacks; it
 does not have to contain main, because the lane starts each
 batch from main. A branch whose head was the only member of a red batch is not ready again
 until it has a new commit; the batch commit is a merge onto main, so this is asked of the
@@ -1045,7 +1045,7 @@ section 8.1.
 | worktree | A separate checkout of the repository on its own branch, one per session: each worker, the lane, and the coordinator. |
 | main checkout | The repository's own directory, on main, where the ledger lives. |
 | green | A successful recorded verification run at a commit, a tree, or a batch. |
-| batch ready | A branch that is not landable on its own and names a bead its worker holds, or, for the coordinator's branch, has a commit main lacks. It need not contain main. Where the repo declares `precheck`, it also has a green precheck at its head. |
+| batch ready | A branch that is not landable on its own and names a bead its worker holds or that is closed, or, for the coordinator's branch, has a commit main lacks. It need not contain main. Where the repo declares `precheck`, it also has a green precheck at its head. |
 | landing | Moving main forward onto a verified tree. |
 | digest | A worker's note for a bead, naming the bead: in `.air/digests/`, or committed under `digest_dir`. |
 | capture | One item in the coordinator's inbox. |
