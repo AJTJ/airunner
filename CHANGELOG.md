@@ -90,6 +90,9 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The two fallbacks dated 2026-08-23: a commit with no `Bead:` trailer is no longer attributed
+  from its message, and a digest with no `bead:` front matter no longer counts by its file name
+  and time. `air doctor` no longer reports dated rules, since none are left.
 - The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell
   command: neither the hand-over check on it nor the claim release after it. Workers and the
   lane close with `air close`, and their launchers deny bd's write commands.

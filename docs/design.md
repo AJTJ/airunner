@@ -908,10 +908,10 @@ built is described in sections 4 and 6.
       session; air fleet up does the same later, and the single launchers stay (air-jc2p.5,
       crates/cli/src/cmd/launch.rs).
 - [ ] Update the README's quick start once the coordinator sets up the default fleet on request.
-- [ ] On a fresh repository, air doctor reports two expired dated rules and says to delete their
-      fallbacks. Delete them, since both expired on 2026-08-23 (`FALLBACK_BEFORE` in
-      attribution.rs, `FRONTMATTER_SINCE` in handover.rs). (Seen running the quick start,
-      2026-09-14.)
+- [x] On a fresh repository, air doctor reported two expired dated rules. Both fallbacks are
+      deleted, and so is the dated-rule report, which existed only for them: a commit is
+      attributed by its `Bead:` trailer and a digest by its `bead:` front matter, whatever their
+      date (air-jsee, 2026-09-28).
 
 Messaging, added 2026-09-26 (air-1vri, owner: the coordinator sends one message to Air and Air
 fans it out).

@@ -5,7 +5,7 @@
 //! **Writing a probe (air-jc0): never hold a second copy of a number some rule owns.** The
 //! dangerous literal is the one only ONE side of the assertion knows about; a fixture whose
 //! expectation is computed from itself cannot rot. So derive the fixture from the threshold
-//! (`Thresholds::default().idle_with_claim_min`, `attribution::cutoff()`, `install::SURFACE`)
+//! (`Thresholds::default().idle_with_claim_min`, `install::SURFACE`)
 //! rather than
 //! writing a number beside it, and put the value in the probe's name so a changed rule RENAMES
 //! the probe instead of breaking it. Two controls before you believe a probe: neutralise the rule
@@ -1510,8 +1510,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // the ONE rule the probe's red case names — that a digest declaring a different
             // bead is not this bead's digest — and leaves the cutoff and mtime paths alone.
             file: "crates/cli/src/cmd/handover.rs",
-            from: "Some(b) => beads.contains(&b),",
-            to: "Some(_) => true,",
+            from: ".is_some_and(|b| beads.contains(&b))",
+            to: ".is_some()",
             also_red: &[],
         },
     ),
@@ -1533,17 +1533,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/cli/src/cmd/status.rs",
             from: "sess.liveness == super::lease::Liveness::Alive",
             to: "true",
-            also_red: &[],
-        },
-    ),
-    (
-        "doctor: a dated rule says so when its cutoff has passed",
-        Mutation {
-            // The comparison itself, so a rule's date stops being read. Renaming the function
-            // would not build, which proves nothing (failure mode 1).
-            file: "crates/cli/src/cmd/doctor.rs",
-            from: "expired: date.parse::<jiff::Timestamp>().is_ok_and(|t| now >= t),",
-            to: "expired: false,",
             also_red: &[],
         },
     ),
@@ -2732,7 +2721,6 @@ fn all_probes() -> Vec<Probe> {
         probe_nudge_names_only_claimable(),
         probe_standstill(),
         probe_idle_without_claim_needs_a_live_session(),
-        probe_expired_cutoff_is_reported(),
         probe_handover_not_green_is_one_line_per_worker(),
         probe_status_bd_budget_follows_the_measurement(),
         probe_agent_traffic_is_counted(),
@@ -2772,7 +2760,6 @@ fn all_probes() -> Vec<Probe> {
         probe_coordinator_may_commit_never_push(),
         probe_bead_attribution_reads_a_trailer(),
         probe_digest_names_its_bead(),
-        probe_land_selection_is_never_silent(),
         probe_audit_registry(),
         probe_audit_unregistered_firing(),
         probe_land_refusals(),
@@ -3327,60 +3314,14 @@ fn probe_registry_traces_are_unambiguous() -> Probe {
     }
 }
 
-/// air-6u5: selection never answers "nothing" when it means "something broke", and a bead
-/// stays attributed after the branch merges `main`.
-///
-/// Red, the bug that made `air land` unusable in the adopter: the old narrowing required a claim
-/// `claimed_at >= branch_point`, and merging `main` moves the branch point FORWARD past the
-/// claim that started the work — while landing requires merging main. So preparing to land
-/// destroyed the attribution. Here the claim is older than the branch point, as it is for
-/// every real branch that has merged main, and it must still be attributed.
-///
-/// Green: a ledger error is an error, not an empty queue. `{"landed": [], "ok": true}` was the
-/// worst answer available because there was nothing to disbelieve.
-fn probe_land_selection_is_never_silent() -> Probe {
-    use crate::cmd::status::Skipped;
-
-    // The narrowing that broke it is gone: what remains is claimed-by-this-worker and
-    // not-already-landed, neither of which moves when git does.
-    let red = (|| -> Result<bool, String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        // Claimed BEFORE the branch point, which is what merging main produces.
-        l.record_claim("zz-1", "alpha", &[], "2026-08-22T10:00:00Z")
-            .map_err(|e| e.to_string())?;
-        let kept = crate::cmd::status::attributable_for_test(&l, &["zz-1".to_string()], "alpha")?;
-        // ...and a bead already landed is dropped, which is the bound that replaced the time.
-        let dropped =
-            crate::cmd::status::attributable_for_test(&l, &["zz-other".to_string()], "alpha")?;
-        Ok(kept == ["zz-1"] && dropped.is_empty())
-    })()
-    .unwrap_or(false);
-
-    // A Skipped row carries the check name and the fixing command, so nothing is ever a bare
-    // absence.
-    let sk = Skipped {
-        worker: "alpha".to_string(),
-        check: "green-at-head",
-        detail: "alpha has no recorded green at its head abc12345".to_string(),
-        fix: "a green at that head; `air handover` in that worktree names what it needs"
-            .to_string(),
-    };
-    let green = !sk.fix.is_empty() && !sk.detail.is_empty() && sk.check == "green-at-head";
-    Probe {
-        name: "land: a claim older than the branch point still attributes; every skip names its check and fix",
-        red_fires: red,
-        green_passes: green,
-    }
-}
-
 /// air-agq: the digest gate reads a declared `bead:` field instead of guessing from a
 /// filename and an mtime.
 ///
 /// It GUARDS, so every way it used to be wrong failed toward permitting, and a missing refusal
 /// looks exactly like a satisfied one. Red covers the three ways it passed when it should not:
 /// a digest for a different bead, a digest touched rather than written, and a file that merely
-/// has the worker's name in it. Green: the digest that declares this bead is accepted, and a
-/// pre-cutoff digest with no front matter still passes so today's work is not invalidated.
+/// has the worker's name in it. Green: the digest that declares this bead is accepted. The
+/// pre-2026-08-23 filename fallback it also covered was deleted on 2026-09-28 (air-jsee).
 fn probe_digest_names_its_bead() -> Probe {
     use crate::cmd::handover::{Digest, declared_bead, digest_for_bead};
 
@@ -3388,9 +3329,6 @@ fn probe_digest_names_its_bead() -> Probe {
         let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
         std::fs::create_dir_all(&root).ok()?;
         let dir = root.as_path();
-        // Strict: every file here counts as written after the cutoff, so only a declaration
-        // is accepted. The lenient cutoff below is the history case.
-        let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().ok()?;
         let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).ok();
         // air-ahl: this probe is about DECLARING a bead, not about tracking, so everything it
         // writes is declared tracked and the tracked rule is probed separately.
@@ -3407,14 +3345,13 @@ fn probe_digest_names_its_bead() -> Probe {
         // Red: it declares a different bead, so it is not this bead's digest, whatever its
         // name or mtime say.
         let tracked = all_tracked(&["2026-08-23-beta-air-other.md"]);
-        let wrong_bead =
-            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Missing;
-        // Red: a file carrying the worker's name and no declaration, written after the
-        // cutoff, is not a substitute — this is the `touch` case and the substring case.
+        let wrong_bead = digest_for_bead(dir, &ours, Some(&tracked)) == Digest::Missing;
+        // Red: a file carrying the worker's name and no declaration is not a substitute —
+        // this is the `touch` case and the substring case.
         write("2026-08-23-beta-notes.md", "# just some notes\n")?;
         let tracked = all_tracked(&["2026-08-23-beta-air-other.md", "2026-08-23-beta-notes.md"]);
         let undeclared_after_cutoff =
-            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Missing;
+            digest_for_bead(dir, &ours, Some(&tracked)) == Digest::Missing;
         let red =
             wrong_bead && undeclared_after_cutoff && declared_bead("# no front matter").is_none();
 
@@ -3428,26 +3365,10 @@ fn probe_digest_names_its_bead() -> Probe {
             "2026-08-23-beta-notes.md",
             "2026-08-23-beta-air-agq.md",
         ]);
-        let declared_ok =
-            digest_for_bead(dir, "beta", &ours, None, cut, Some(&tracked)) == Digest::Tracked;
+        let declared_ok = digest_for_bead(dir, &ours, Some(&tracked)) == Digest::Tracked;
 
-        // Green: history still passes. A digest written before the cutoff with no front
-        // matter is matched the old way, so the change does not invalidate what exists.
-        let old = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&old).ok()?;
-        std::fs::write(old.join("2026-08-22-beta-air-old.md"), "# old\n").ok()?;
-        let far_future: jiff::Timestamp = "2999-01-01T00:00:00Z".parse().ok()?;
-        let fallback_ok = digest_for_bead(
-            &old,
-            "beta",
-            &ours,
-            None,
-            far_future,
-            Some(&all_tracked(&["2026-08-22-beta-air-old.md"])),
-        ) == Digest::Tracked;
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&old);
-        Some((red, declared_ok && fallback_ok))
+        Some((red, declared_ok))
     })();
     // An Option, not a Result: this fixture has no error text to carry.
     let (red, green) = res.unwrap_or((false, false));
@@ -3465,37 +3386,20 @@ fn probe_digest_names_its_bead() -> Probe {
 /// have identical grammar. air-7kp needed an authorship filter and a branch-point bound on top
 /// of the scan and still went 8 → 6 → 3 against one real branch.
 ///
-/// Green: the dated fallback still reads history (a commit before the cutoff with no trailer),
-/// and a commit after it with no trailer is attributed to nothing rather than guessed at.
+/// Green: a commit with no trailer is attributed to nothing rather than guessed at. The dated
+/// prose fallback for commits before 2026-08-23 was deleted on 2026-09-28 (air-jsee).
 fn probe_bead_attribution_reads_a_trailer() -> Probe {
-    use crate::cmd::attribution::{Commit, cutoff, ids_of, prose_ids, trailer_ids};
+    use crate::cmd::attribution::{Commit, ids_of, trailer_ids};
 
     let mentions = "fix(land): select from the merge range\n\nBuilds on air-3pz, measured in \
                     air-869, supersedes air-7kp.\n\nBead: air-4re\n";
-    let red = trailer_ids(mentions) == ["air-4re"]
-        && ids_of(
-            &[Commit {
-                committed: "2026-08-22T10:00:00Z".to_string(),
-                message: mentions.to_string(),
-            }],
-            prose_ids,
-            cutoff(),
-        ) == ["air-4re"]
-        // ...and the scan on its own would indeed have taken all four.
-        && prose_ids(mentions).len() >= 4;
-
-    let old = Commit {
-        committed: "2020-01-01T00:00:00Z".to_string(),
-        message: "fix: the work (air-old)\n".to_string(),
+    let commit = |message: &str| Commit {
+        message: message.to_string(),
     };
-    let new = Commit {
-        committed: "2999-01-01T00:00:00Z".to_string(),
-        message: "fix: the work (air-new)\n".to_string(),
-    };
-    let green = ids_of(&[old], prose_ids, cutoff()) == ["air-old"]
-        && ids_of(&[new], prose_ids, cutoff()).is_empty();
+    let red = trailer_ids(mentions) == ["air-4re"] && ids_of(&[commit(mentions)]) == ["air-4re"];
+    let green = ids_of(&[commit("fix: the work (air-old)\n")]).is_empty();
     Probe {
-        name: "land: a `Bead:` trailer attributes the commit; a mention does not; the prose fallback is dated",
+        name: "land: a `Bead:` trailer attributes the commit; a mention does not",
         red_fires: red,
         green_passes: green,
     }
@@ -6556,26 +6460,6 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
         name: "attention: idle-without-claim fires for a live session, not a dead one",
         red_fires: red.iter().any(|a| a.kind == "idle-without-claim"),
         green_passes: !green.iter().any(|a| a.kind == "idle-without-claim"),
-    }
-}
-
-/// air-24e: a rule with a date in it goes quiet when the date passes. Both of Air's cutoffs
-/// passed on 2026-08-23, seven tests went red because their fixtures had been written inside
-/// the fallback window, and main stayed red six days because nothing watches a date. Red: a
-/// clock past the cutoff reports it EXPIRED. Green: a clock before it reports it active.
-///
-/// The mutation that made it red: hardcoding `expired: false` in `doctor::dated_rules` — the
-/// probe's red half then finds no expired rule.
-fn probe_expired_cutoff_is_reported() -> Probe {
-    use crate::cmd::doctor::dated_rules;
-    // Two clocks that need no date of their own, so this probe holds no copy of a rule's
-    // number: after every possible cutoff, and before every one Air will ever carry.
-    let after = dated_rules(jiff::Timestamp::MAX);
-    let before = dated_rules(jiff::Timestamp::UNIX_EPOCH);
-    Probe {
-        name: "doctor: a dated rule says so when its cutoff has passed",
-        red_fires: !after.is_empty() && after.iter().all(|r| r.expired),
-        green_passes: !before.is_empty() && before.iter().all(|r| !r.expired),
     }
 }
 
@@ -11943,17 +11827,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
         let digests = dir.join("docs").join("digests");
         std::fs::create_dir_all(&digests).map_err(|e| e.to_string())?;
         let beads = vec!["air-ahl".to_string()];
-        let cut: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().map_err(|_| "cutoff")?;
-        let state = || {
-            digest_for_bead(
-                &digests,
-                "w1",
-                &beads,
-                None,
-                cut,
-                Some(&tracked_in(&dir, &digests)),
-            )
-        };
+        let state = || digest_for_bead(&digests, &beads, Some(&tracked_in(&dir, &digests)));
 
         // Nothing written yet.
         let missing = state() == Digest::Missing;

@@ -825,69 +825,6 @@ fn sort_by_wait(v: &mut [Landing]) {
     v.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.bead.cmp(&b.bead)));
 }
 
-/// The landings alone, without a full `gather`: bd's `awaiting_review` list, the claim row
-/// that names who handed each over, and that worker's green at HEAD. Derived every time, so
-/// two readers cannot disagree (air-6p5). bd absent or slow means no landings, not an error.
-/// Which candidate ids this worker is responsible for, from Air's OWN ledger — no bd call.
-///
-/// **Claimed by this worker, and not already landed.** Both halves come from tables Air
-/// writes, so neither moves when git does. There used to be a third: claimed since the branch
-/// point. It was the bug that made `air land` unusable in the adopter (air-6u5) — **merging main
-/// moves the branch point forward past the claim that started the work, and landing requires
-/// merging main**, so preparing to land was what destroyed the attribution. air-4re had
-/// already taken that narrowing off declared ids for the same reason; this takes it off the
-/// guessed ones, which is what a repo with no trailers has.
-///
-/// "Not already landed" is the bound that replaces it, and it is exact rather than a
-/// heuristic: Air records the beads of every landing itself.
-///
-/// `bd show` does not batch — 1 id ~1.4 s, 17 ids 19-21 s, measured 2026-08-22 — so no bd call
-/// happens here at all. `air land` fetches acceptance for the one branch it is landing.
-fn known_beads(
-    ledger: &air_ledger::Ledger,
-    ids: &[String],
-    worker: &str,
-) -> Result<Vec<String>, String> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let claimed: Vec<String> = {
-        let mut st = ledger
-            .conn()
-            .prepare("SELECT DISTINCT bead FROM claims WHERE worker=?1")
-            .map_err(|e| format!("claims: {e}"))?;
-        let rows = st
-            .query_map([worker], |r| r.get::<_, String>(0))
-            .map_err(|e| format!("claims: {e}"))?;
-        rows.collect::<rusqlite::Result<_>>()
-            .map_err(|e| format!("claims: {e}"))?
-    };
-    let landed: Vec<String> = ledger
-        .landings()
-        .map_err(|e| format!("landings: {e}"))?
-        .into_iter()
-        // air-8zn: positive on what landed. This filter was already positive but named one
-        // result, so a bead on a `landed-refuted` row still counted as unlanded here.
-        .filter(air_ledger::landings::Landing::landed)
-        .flat_map(|l| l.beads)
-        .collect();
-    Ok(ids
-        .iter()
-        .filter(|i| claimed.iter().any(|c| c == *i) && !landed.iter().any(|l| l == *i))
-        .cloned()
-        .collect())
-}
-
-/// The narrowing, exposed for `air selftest`: it is the half of air-6u5 that a probe can
-/// reach without a git repo, and the half that was wrong.
-pub fn attributable_for_test(
-    ledger: &air_ledger::Ledger,
-    ids: &[String],
-    worker: &str,
-) -> Result<Vec<String>, String> {
-    known_beads(ledger, ids, worker)
-}
-
 /// A bead bd has closed whose commits have not reached main (air-gazh).
 ///
 /// **How this state is reached with no error anywhere.** A worker closes on a batch green,
@@ -1068,16 +1005,7 @@ pub fn select(repo: &Path) -> Selection {
             Err(why) => Some(why),
         };
         let range = format!("main..{head}");
-        let found = super::attribution::attributed_in_range(repo, &range);
-        // A declared bead stands as it is; only a guessed one is narrowed (air-4re).
-        let mut ids = found.declared;
-        match known_beads(&ledger, &found.guessed, &worker) {
-            Ok(g) => ids.extend(g),
-            Err(e) => {
-                out.errors.push(format!("{worker}: {e}"));
-                continue;
-            }
-        }
+        let ids = super::attribution::attributed_in_range(repo, &range).declared;
         // air-kexg: a branch whose ONLY commits are session-journal entries carries no bead by
         // design, and is landable anyway. The journal (air-3xww) is explicitly not work on a
         // bead, so a journal commit is the one commit a worker legitimately writes that names
