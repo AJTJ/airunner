@@ -652,6 +652,59 @@ machine's load rather than a defect. The twenty-second ceiling on the status too
 five-second hook cap are Air's own choices, not Claude Code's, and they are what keep the status
 and git budgets short.
 
+### 6.8 The bead and branch lifecycle
+
+A bead and the branch that carries it move through these states under a verification lane. The
+states are facts Air reads, not fields it stores: a branch is batch-ready because the rule says
+so at this moment, and stale because main does not contain its green. Every transition below is
+decided by one pure function, named in the last column, and the model test in
+`crates/cli/src/cmd/lifecycle.rs` drives those same functions through every interleaving of the
+events for two workers and a lane (air-k52n).
+
+```mermaid
+stateDiagram-v2
+  [*] --> claimed: air claim
+  claimed --> committed: commit with Bead trailer
+  committed --> batch_ready: rule holds
+  batch_ready --> in_batch: air batch cut
+  in_batch --> batch_green: lane records green
+  in_batch --> batch_red: lane records red
+  batch_red --> committed: a new commit
+  batch_green --> closed: air close
+  batch_green --> landed: air land
+  closed --> landed: air land
+  batch_green --> stale: main moves
+  closed --> stale: main moves
+  stale --> batch_ready: rule holds (closed bead counts)
+  landed --> [*]
+```
+
+| State | Event | Next state | Decided by |
+|---|---|---|---|
+| claimed | commit carrying `Bead: <id>` | committed | the trailer, `attribution::attributed_in_range` |
+| committed | the rule holds | batch-ready: a bead held or closed named in `main..head`, not landable alone, not in a running batch, not a lone red member, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| batch-ready | `air batch cut` | in-batch; the lane's branch is reset to main and every batch-ready head merged | `batch_cut::run`, refusing only when `batch_cut::land_first` holds |
+| in-batch | lane records green | batch-green | `record::run` |
+| in-batch | lane records red | batch-red: nothing lands; a lone member is held out until it moves | `status::red_alone` |
+| batch-red | a new commit | committed, and batch-ready again | `status::red_alone` no longer matches the head |
+| batch-green | `air close` | closed | `air_hooks::handover_verdict`, green through `batch::cover` |
+| batch-green | `air land --worker lane` | landed: main fast-forwards onto the batch's tree | `land::check` (green at head, head contains main) |
+| batch-green | main moves first | stale: the lane cannot land it, and the next cut resets past it | `batch_cut::land_first` (air-tml4) |
+| closed | main moves before the landing | stale, closed: the branch is batch-ready again because a closed bead counts | `status::batch_ready_rule` (air-voeb) |
+| closed, lone red | the lane records red for it alone | held out until a new commit; Air does not refuse that commit, and the roles text asks for a new bead | `status::red_alone` |
+| landed | `air close` | closed, the work read from git as in main | `batch::in_main` (air-5ynn) |
+| any | fleet stop | unchanged: `air claim`, `air batch cut` and `air land` refuse until resume | `fleet::stopped` |
+| claimed | `air release` | open, claimable again | `claim::release` |
+
+No cell above lacks a way out, and the model test checks that over every reachable state (86,895
+of them in 3 s on 2026-09-28): from each, some order of the permitted events lands and closes
+every bead. Three cells had none until 2026-09-28, and the test fails on the code before them:
+a green batch that main moved past (air-tml4), a closed bead that main moved past (air-voeb), and
+a close in the seconds between `air land`'s fast-forward and its landing row (air-5ynn, which the
+model does not interleave because the two steps are one event there). The model also shows that
+`air close` passes a bead with no commit naming it when a green stands at the worker's head,
+through the head check; that is Air's rule today, and it is reported on air-k52n for a ruling.
+
 ## 7. Guarantees and failure model
 
 | Always true | Enforced by | A violation shows up as |
