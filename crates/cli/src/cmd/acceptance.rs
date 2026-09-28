@@ -89,8 +89,8 @@ pub fn listing(beads: &[(String, Vec<String>)]) -> String {
         return String::new();
     }
     let mut s = format!(
-        "\nacceptance for {} bead(s) in this merge (air land closes nothing; the worker closes \
-         its own bead with proof):\n",
+        "\nacceptance for {} bead(s) in this merge (air land closes no worker's bead; the \
+         worker closes its own with proof):\n",
         beads.len()
     );
     for (bead, clauses) in beads {
