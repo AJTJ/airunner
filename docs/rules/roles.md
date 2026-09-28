@@ -134,7 +134,8 @@ coordinator files owner questions as beads labelled `owner`.
 Air delivers these messages into your session through its channel, each once, marked as coming
 from `air`:
 
-- `beads are ready: <ids>` arrives when new beads became claimable while you held no claim. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
+- `beads are ready: <ids>` arrives when new beads became claimable while you held no claim,
+  or when you join or your claim ends while beads are ready. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
   refused claim means someone else took it; take another from `bd ready`, since the list in the
   notice is as of when it was sent.
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
@@ -177,12 +178,13 @@ branch to main before it merges, so work of the lane's own does not survive a cu
 
 The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
 merges every batch-ready branch at the sha `air status` lists, never a sha from a message,
-refusing while your tree has uncommitted changes or your head is a passing batch not yet
-landed, and drops and names a branch that conflicts with main or with an earlier member.
-`--dry-run` merges nothing. Then run the repo's test-state reset if it has one, and `air record
-verify -- <verify command>`. A dropped branch is resolved by its worker, never by the lane. A
-red batch lands nothing. Run these and `air land` bare, with no pipe or redirect: your settings
-allow only the bare line, and one auto-mode classifier refusal can stop every later landing.
+refusing while your tree has uncommitted changes or your head is a passing batch that could
+still land (a passing batch main has moved past is re-cut), and drops and names a branch that
+conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the repo's
+test-state reset if it has one, and `air record verify -- <verify command>`. A dropped branch is
+resolved by its worker, never by the lane. A red batch lands nothing. Run these and `air land`
+bare, with no pipe or redirect: your settings allow only the bare line, and one auto-mode
+classifier refusal can stop every later landing.
 
 Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
 batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air
@@ -269,7 +271,8 @@ one command to Air, not a `SendMessage` to each session. Only you and the owner 
 stop does not stop you: triage and file as usual, and nothing new starts until you resume.
 
 What Air carries for you, so you do not send it: when the claimable ready set gains a bead,
-Air tells every worker without a claim which beads are ready. The `idle-without-claim`
+Air tells every worker without a claim which beads are ready, and it tells a worker that joins
+without a claim the beads already ready. The `idle-without-claim`
 condition still names a worker that stays idle after that. Air also tells the lane each
 branch that becomes batch-ready, and tells each member its batch's result or its drop.
 When main moves, Air tells you and every worker `main moved to <sha>: landed <beads>; files

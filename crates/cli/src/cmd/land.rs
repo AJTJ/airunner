@@ -92,8 +92,10 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
         return None;
     }
     let mut s = String::from(
-        "refused: a verify is in flight, and landing now would destroy it: main moves, so its \
-         green would be for a head that no longer contains main.",
+        // air-ch9p: the run is not destroyed; it finishes and is recorded, at a head that no
+        // longer contains main.
+        "refused: a verify is in flight. Landing moves main, so its green would be recorded at \
+         a head that no longer contains main.",
     );
     for f in flights {
         s.push_str(&format!("\n  {}", in_flight_run_line(f, at)));
@@ -101,8 +103,7 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
     s.push_str(
         "\n  fix: wait for it (`air status` names it until it exits), or stop it by pid: \
          `kill <pid>` — never `pkill -f`, which reached every peer's argv (zz-ub34). To land \
-         anyway and destroy it: add `--despite-inflight`; the runs destroyed are recorded on \
-         the landing.",
+         anyway: add `--despite-inflight`; the runs in flight are recorded on the landing.",
     );
     Some(s)
 }
@@ -848,6 +849,8 @@ pub fn run(
         super::fanout::main_moved(
             repo, &ledger, &worker, role, before, merge, &landed, &moved.2,
         );
+        // air-84lz: a holding whose change this landing put in main, in a clean tree, ends.
+        super::holdings::expire(&ledger, repo);
     }
     // air-1vri.2: the lane's next step, as of this landing. It ran the command, so it learns
     // here and the channel does not tell it again.
@@ -1187,9 +1190,8 @@ fn land_one(
         Ok(landed) if landed == tree => {}
         Ok(landed) => {
             return Outcome::Refused(format!(
-                "main's tree after the fast-forward is {landed}, not `{branch}`'s {tree}. That \
-                 should be impossible; it would mean the recorded green does not describe what \
-                 landed."
+                "main's tree after the fast-forward is {landed}, not `{branch}`'s {tree}; the \
+                 recorded green is for {tree}."
             ));
         }
         Err(e) => return Outcome::Refused(format!("cannot read main's tree after landing: {e}")),

@@ -181,13 +181,13 @@ Any session may run these.
 | air record | Runs a check command and records the worker, the commit, the exit code, the duration, the output size, and whether the tree was dirty. It refuses a backgrounded command. A check killed by a signal counts as no verdict, not as a failure. It catches SIGINT, SIGTERM and SIGHUP (with the signal-hook crate, since the workspace forbids unsafe code): the check gets Ctrl-C itself, and for the other two air record stops it, then writes the run as interrupted with the signal and its duration, which air status shows under the worker (air-nwat). The kinds are verify, docs-check, fitness and precheck; a precheck is a worker's cheap check under a lane and is never read as a verify green. A verify at a batch head tells each member the result and ends with the lane's next step. |
 | air handover | Says what the gate would decide about this worktree right now, and which command would fix anything missing. On a pass it names the air close that would go through. |
 | air close | Closes beads in one beads process and releases their claims. For a worker or the lane it first runs the hand-over gate on each bead, whatever AIR_ENFORCE says, and closes nothing if any bead fails; the refusal is the gate's own text. The coordinator and the owner close without the gate, since they close what has already landed. |
-| air claim | The only way to claim a bead. It refuses while the fleet is stopped. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. If beads times out, Air reads the bead again instead of guessing. |
+| air claim | The only way to claim a bead. It refuses while the fleet is stopped. It checks the ledger, asks beads about the bead, claims it in beads, then writes the ledger row. It refuses a bead that a `blocks` dependency on an unclosed bead keeps out of `bd ready`, naming the blocker and its status (air-g7hr). If beads times out, Air reads the bead again instead of guessing. |
 | air release | Returns the caller's own bead in progress to open, passing the caller's bd actor. It never reopens a closed bead. |
 | air capture | Puts one item in the coordinator's inbox. It never blocks. |
-| air holdings | Shows who has edits in which files across all worktrees. |
+| air holdings | Shows who has edits in which files across all worktrees. A recorded edit ends once the file is clean in its holder's worktree and the holder's branch does not change it against main; the row is deleted then, when `air holdings` or `air status` reads and when `air land` moves main, so the peer warning stops naming it (air-84lz). |
 | air lease | Takes, releases, or reports a named shared resource such as a port. The holder is identified by worktree and process. `air lease needs "<cmd>"` says which lease a command needs, per `leases` in `.claude/air.json`; the PreToolUse hook refuses such a command from a worker not holding it. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, branches ready to batch, checks running (each named by its kind), what else is running in each tree (every process that is not a Claude Code session with its working directory in a worktree or the main checkout, by name and age, or `unknown` with why), a warning naming any launched session whose process runs in the main checkout (the owner's own shell is exempt; nothing is refused), and whether the install is out of date. |
-| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it resets the lane's branch to main's tip, so a batch is always main plus its own members and a red batch's merges never carry into the next (0.4.8 live trial). It refuses instead, changing nothing, when the lane's head has a recorded green and main does not contain it: that batch passed and has not landed. A head main contains, a recorded red, or no record is reset. Then it merges each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It tells each dropped worker its conflict, and it refuses while the fleet is stopped. A cut that stops part way, on a git lock left behind or any other error, writes batch-cut / failed with the reason and names whoever holds the lock, or says nobody does (air-nwat). It neither verifies nor lands; it prints the next command. |
+| air batch cut | The verification lane's cut, run in its worktree and refused in the main checkout or on a tree with uncommitted changes. It takes the branches ready for a batch, oldest ready first by the commit time of each listed head, and checks each against main and against each earlier accepted branch with git merge-tree, which writes nothing. A branch that conflicts is dropped, named with the other side and the paths, and written to the event stream. Then it resets the lane's branch to main's tip, so a batch is always main plus its own members and a red batch's merges never carry into the next (0.4.8 live trial). It refuses instead, changing nothing, when the lane's head has a recorded green, main does not contain it, and it contains main: that batch passed and can still land. A head main contains, a recorded red, no record, or a green batch main has moved past (which can no longer land, and is named as stale) is reset (air-tml4). Then it merges each remaining branch at its listed commit into the lane's branch, judging each merge by the index and by leftover conflict markers, not by git's output. It needs git 2.38 or later. With dry run it only checks. It tells each dropped worker its conflict, and it refuses while the fleet is stopped. A cut that stops part way, on a git lock left behind or any other error, writes batch-cut / failed with the reason and names whoever holds the lock, or says nobody does (air-nwat). It neither verifies nor lands; it prints the next command. |
 | air doctor | Reports where the ledger is, its size and schema version, whether beads is the pinned version, and beads' mode (embedded, or server with its port and whether it answers). |
 | air bd-server up, air bd-server status | For a project whose beads runs in server mode, up starts the Dolt server when its port does not answer and waits up to 10 seconds for it; status prints the mode and whether the port answers. Both count the server as up only when the process on the port serves this project's `.air/dolt/data`; when another process answers they name it and start nothing. With no `.beads/dolt-server.port`, up picks a free port in 3400..3900 and writes the file first. `air init --write` sets `dolt.auto-start: false` so bd never starts a server of its own. Neither touches a project whose beads is embedded. |
 | air audit | For each mechanism Air ships, how often it fired, over what, when last, and its removal condition. It gives facts, not verdicts. |
@@ -422,13 +422,22 @@ correct closes that way, each seconds after the worker's own batch landed. The g
 required.
 
 It also does not refuse a bead whose own commits are covered, whatever the head carries after
-them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when Air
-landed them and main still contains the merge, or when a recorded green contains all of them
-and the main it ran over (`batch::describe`, which the green check already reads). In the
-0.4.7 live trial a worker whose bead had just landed committed its next bead and was then
-refused as behind main; a worker keeps working while its last bead is verified (owner,
-2026-09-26). A bead with no trailer and no landing row gets the head check as before
-(`crates/hooks/src/gate.rs`, `bead_covered`).
+them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when main
+contains every one of them, asked of git and not of the landing row (`batch::in_main`), or when
+a recorded green contains all of them and the main it ran over (`batch::describe`, which the
+green check already reads). Every green recorded after the bead's oldest commit is checked,
+since no earlier one can contain it (air-06k7). Main moves only through a green landing, so being in main is proof
+by itself; asking the row refused closes in the seconds between `air land`'s fast-forward and
+its row, five in one day at an adopter (air-5ynn). In the 0.4.7 live trial a worker whose bead
+had just landed committed its next bead and was then refused as behind main; a worker keeps
+working while its last bead is verified (owner, 2026-09-26). A bead that no commit on main or
+on the branch names gets the head check as before (`crates/hooks/src/gate.rs`,
+`bead_covered`).
+
+A batch's "batch green" notice names only the beads whose every commit on the member's branch
+the batch contains, read against the member's head when the notice is sent. A bead with a later
+commit is named as waiting for the next batch, and a member with no covered bead is told the
+batch is green with nothing to close (air-5ynn).
 
 A green means a successful recorded run at the exact commit, or, if the repository matches by
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a
@@ -437,8 +446,9 @@ close without running verification themselves. A commit made after the batch was
 and the refusal names it. A branch is ready for a batch when it is not landable on its own and
 names a bead its worker holds, or, for the coordinator's branch, has any commit main lacks; it
 does not have to contain main, because the lane starts each
-batch from main. A branch whose head a red batch was recorded at, as a batch of one
-is, is not ready again until it has a new commit.
+batch from main. A branch whose head was the only member of a red batch is not ready again
+until it has a new commit; the batch commit is a merge onto main, so this is asked of the
+batch's recorded members, not of the commit the red was recorded at (air-hyli).
 
 The lane cuts with air batch cut, then records its verification at the new head. Which of two
 conflicting branches is dropped is decided by the order rule, oldest ready first, and never by
@@ -538,9 +548,13 @@ Deliveries are queued by whatever notices the change. After each 30-second tick,
 coordinator's server compares the claimable ready list with the one it saw last (asking beads
 again when the cached list is more than a minute old) and, when a bead was added, queues
 "beads are ready" for every worker with a live session holding no claim, whatever its state; one
-mid-turn reads it after that turn. The lane and a worker holding a claim are never told. A later list replaces a worker's undelivered one, so a session that was
-away hears the latest. The first tick after the server starts only records the list. One
-fanout event line records each change and who was told.
+mid-turn reads it after that turn. A worker that is newly without a claim, because it joined or
+its claim ended, is told the list as it stands without the list having to change, and that
+includes every such worker on the first tick after the server starts: an adopter's fleet
+started with 100 beads ready and sat idle (air-oerm). A worker is never told the same list
+twice, since a delivery is keyed by the list. The lane and a worker holding a claim are never
+told. A later list replaces a worker's undelivered one, so a session that was away hears the
+latest. One fanout event line records each change and who was told.
 
 The lane and its members are told the same way. The coordinator's tick queues "batch-ready"
 for the lane once per branch head. air batch cut queues "dropped from batch" for each worker it
