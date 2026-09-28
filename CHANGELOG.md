@@ -13,6 +13,9 @@ missing notices, which are fixed or added below.
 
 ### Added
 
+- `air status` shows, per worker with a precheck in the last day, `precheck p50 Ns, wait after
+  p50 Ns`: how long its prechecks ran and how long from a run's end to its next tool call.
+  `air audit` prints the totals. The ledger gains `verify_runs.resumed_at` (schema v26).
 - The verification lane is its own role. `air lane` starts it, and only the lane lands.
 - Every role runs in its own worktree and tmux session, named `worker-<N>`, `lane` and
   `coordinator`, with the project name in front.
