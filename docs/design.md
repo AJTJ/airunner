@@ -421,13 +421,21 @@ correct closes that way, each seconds after the worker's own batch landed. The g
 required.
 
 It also does not refuse a bead whose own commits are covered, whatever the head carries after
-them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when Air
-landed them and main still contains the merge, or when a recorded green contains all of them
-and the main it ran over (`batch::describe`, which the green check already reads). In the
-0.4.7 live trial a worker whose bead had just landed committed its next bead and was then
-refused as behind main; a worker keeps working while its last bead is verified (owner,
-2026-09-26). A bead with no trailer and no landing row gets the head check as before
-(`crates/hooks/src/gate.rs`, `bead_covered`).
+them. A bead's commits are the ones whose `Bead:` trailer names it. They are covered when main
+contains every one of them, asked of git and not of the landing row (`batch::in_main`), or when
+a recorded green contains all of them and the main it ran over (`batch::describe`, which the
+green check already reads). Main moves only through a green landing, so being in main is proof
+by itself; asking the row refused closes in the seconds between `air land`'s fast-forward and
+its row, five in one day at an adopter (air-5ynn). In the 0.4.7 live trial a worker whose bead
+had just landed committed its next bead and was then refused as behind main; a worker keeps
+working while its last bead is verified (owner, 2026-09-26). A bead that no commit on main or
+on the branch names gets the head check as before (`crates/hooks/src/gate.rs`,
+`bead_covered`).
+
+A batch's "batch green" notice names only the beads whose every commit on the member's branch
+the batch contains, read against the member's head when the notice is sent. A bead with a later
+commit is named as waiting for the next batch, and a member with no covered bead is told the
+batch is green with nothing to close (air-5ynn).
 
 A green means a successful recorded run at the exact commit, or, if the repository matches by
 tree, at any commit with the same tree. When a verification lane runs, the lane's green at a

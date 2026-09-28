@@ -12,7 +12,10 @@ use std::path::Path;
 
 use air_ledger::Ledger;
 use air_ledger::deliveries::Outgoing;
+use air_ledger::landings::Member;
 use serde_json::json;
+
+use crate::git;
 
 use super::status::{BatchReady, Snapshot, WorkerView};
 
@@ -472,17 +475,57 @@ pub struct MemberNote {
     pub content: String,
 }
 
-/// The beads a member's commits name between main and its sha.
-fn member_beads(repo: &Path, main_sha: &str, sha: &str) -> Vec<String> {
-    super::attribution::attributed_in_range(repo, &format!("{main_sha}..{sha}")).declared
+/// The beads a branch's commits name between `from` and `to`, by trailer.
+fn beads_between(repo: &Path, from: &str, to: &str) -> Vec<String> {
+    super::attribution::attributed_in_range(repo, &format!("{from}..{to}")).declared
+}
+
+/// A member's beads as a batch result sees them (air-5ynn).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberBeads {
+    /// Beads whose every trailer commit on the member's branch the batch contains.
+    pub covered: Vec<String>,
+    /// Beads in the batch with a later commit on the member's branch that the batch lacks.
+    pub later: Vec<String>,
+}
+
+/// The member's beads, read against its CURRENT head (air-5ynn): a bead the batch took is
+/// `covered` only when no commit naming it sits on the branch beyond the batch. An adopter's
+/// worker was told "close now" twice for a bead with a newer commit the batch did not have,
+/// and the close was refused both times.
+fn member_beads(repo: &Path, main_sha: &str, batch: &str, m: &Member) -> MemberBeads {
+    let taken = beads_between(repo, main_sha, &m.sha);
+    let head = git::worktrees(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(p, _)| air_ledger::paths::worker_name_for(p).is_ok_and(|w| w == m.worker))
+        .and_then(|(p, _)| git::head(&p).ok())
+        .unwrap_or_else(|| m.sha.clone());
+    let after = beads_between(repo, batch, &head);
+    let mut out = MemberBeads::default();
+    for b in taken {
+        if out.covered.contains(&b) || out.later.contains(&b) {
+            continue;
+        }
+        if after.contains(&b) {
+            out.later.push(b);
+        } else {
+            out.covered.push(b);
+        }
+    }
+    out
 }
 
 /// What each member hears when the lane records a batch verify: `close` on a green, the exit
 /// and the kept output on a red. A kill is no verdict and says nothing. Pure over the run and
 /// each member's beads.
+///
+/// A green names only the beads it covers (air-5ynn). A member with none, such as the
+/// coordinator whose commits name no bead, hears the green with no close instruction: an
+/// adopter's coordinator had about fifteen "close them now" in a day with nothing to close.
 pub fn batch_result_notes(
     run: &air_ledger::verify::VerifyRun,
-    beads_of: &dyn Fn(&str) -> Vec<String>,
+    beads_of: &dyn Fn(&Member) -> MemberBeads,
 ) -> Vec<MemberNote> {
     use air_ledger::verify::Verdict;
     let verdict = run.verdict();
@@ -493,25 +536,44 @@ pub fn batch_result_notes(
         .iter()
         .filter(|m| !m.worker.is_empty())
         .map(|m| {
-            let beads = beads_of(&m.sha);
-            let list = if beads.is_empty() {
-                "your commits".to_string()
-            } else {
-                beads.join(" ")
-            };
-            let (kind, content) = if verdict == Verdict::Green {
-                (
-                    "batch-green",
+            let beads = beads_of(m);
+            let (kind, content, named) = if verdict == Verdict::Green {
+                let later = if beads.later.is_empty() {
+                    String::new()
+                } else {
                     format!(
-                        "batch green at {} contains your {} ({list}). Close them now with \
-                         `air close <id> --reason-file <proof>`; the proof is the lane's green at \
-                         {}. `air handover` says whether the close will pass.",
+                        " {} has a later commit this batch does not contain; the next batch \
+                         covers it.",
+                        beads.later.join(" ")
+                    )
+                };
+                let content = if beads.covered.is_empty() {
+                    format!(
+                        "batch green at {} contains your {}; it covers no bead of yours \
+                         to close.{later}",
                         short(&run.sha),
                         short(&m.sha),
+                    )
+                } else {
+                    format!(
+                        "batch green at {} contains your {} ({}). Close them now with \
+                         `air close <id> --reason-file <proof>`; the proof is the lane's green \
+                         at {}. `air handover` says whether the close will pass.{later}",
+                        short(&run.sha),
+                        short(&m.sha),
+                        beads.covered.join(" "),
                         run.sha
-                    ),
-                )
+                    )
+                };
+                ("batch-green", content, beads.covered)
             } else {
+                let mut all = beads.covered;
+                all.extend(beads.later);
+                let list = if all.is_empty() {
+                    "your commits".to_string()
+                } else {
+                    all.join(" ")
+                };
                 (
                     "batch-red",
                     format!(
@@ -523,13 +585,14 @@ pub fn batch_result_notes(
                         short(&m.sha),
                         run.log_path.as_deref().unwrap_or("not kept")
                     ),
+                    all,
                 )
             };
             MemberNote {
                 to: m.worker.clone(),
                 kind,
                 key: run.id.clone(),
-                beads: beads.join(" "),
+                beads: named.join(" "),
                 content,
             }
         })
@@ -573,7 +636,7 @@ pub fn batch_result(repo: &Path, ledger: &Ledger, run: &air_ledger::verify::Veri
     let Some(main_sha) = run.main_sha.clone() else {
         return;
     };
-    let notes = batch_result_notes(run, &|sha| member_beads(repo, &main_sha, sha));
+    let notes = batch_result_notes(run, &|m| member_beads(repo, &main_sha, &run.sha, m));
     queue_notes(
         ledger,
         &run.worker,
@@ -722,7 +785,7 @@ pub fn main_moved(
     for w in &to {
         let member = members.iter().find(|(m, _)| &m.worker == w);
         let mine = member
-            .map(|(m, tip)| member_beads(repo, tip, &m.sha))
+            .map(|(m, tip)| beads_between(repo, tip, &m.sha))
             .unwrap_or_default();
         let text = main_moved_text(
             merge,

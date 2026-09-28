@@ -4443,6 +4443,90 @@ fn a_bead_already_in_main_closes_on_its_landing() {
     assert_eq!(v["pass"], false, "{out}");
 }
 
+/// air-5ynn, end to end: **a close between the fast-forward and the landing row passes.** The
+/// lane's green batch reaches main, and no landing row exists yet: `air land` writes it after
+/// the move. The gate used to ask the row whether the bead was in main, so this window refused
+/// the close with "no landing carries it either"; an adopter counted five in one day, each
+/// right after "close them now". Here main is fast-forwarded by hand, which is that window.
+#[test]
+fn a_close_between_the_fast_forward_and_the_landing_row_passes() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(main.join("bd.in_progress"), "ad-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "ad-1"], dead).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(alpha.join("more.txt"), "more\n").unwrap();
+    git(&alpha, &["add", "more.txt"]);
+    git(
+        &alpha,
+        &["commit", "-q", "-m", "feat: the work\n\nBead: ad-1\n"],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "worktree-alpha",
+            "-m",
+            "batch: alpha",
+        ],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    // What `air land` does, up to the fast-forward: a landing commit built off main with the
+    // batch's tree, which has no green of its own until the row is written.
+    let tree = git(&lane, &["rev-parse", "HEAD^{tree}"]);
+    let tip = git(&main, &["rev-parse", "HEAD"]);
+    let batch = git(&lane, &["rev-parse", "HEAD"]);
+    let landing = git(
+        &main,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &tip,
+            "-p",
+            &batch,
+            "-m",
+            "land: lane",
+        ],
+    );
+    git(&main, &["merge", "-q", "--ff-only", &landing]);
+    git(&alpha, &["merge", "-q", "main"]);
+    let landings: i64 = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM landings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(landings, 0, "the window has no landing row");
+
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-1"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let msg = v["message"].as_str().unwrap().to_string();
+    assert_eq!(v["pass"], true, "{msg}");
+    assert!(msg.contains("already in main"), "{msg}");
+
+    // A bead no commit on main names is still refused.
+    let (_, out, _) = air_env(&alpha, &bd, &["--json", "handover", "--bead", "ad-9"], dead);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["pass"], false, "{out}");
+}
+
 /// air-vsvt, end to end: a batch's recorded members are the shas the batch TOOK, not where the
 /// branches happen to be when the lane gets round to recording.
 ///

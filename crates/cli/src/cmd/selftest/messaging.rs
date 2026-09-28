@@ -268,8 +268,25 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         s.batch_ready.push(br("w2", "bbbb2222"));
         let already_told = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:01:00Z");
 
-        let beads = |sha: &str| vec![format!("zz-{}", sha.get(..1).unwrap_or(""))];
-        let members = [("w1", "a1a1a1a1a1"), ("", "c3c3c3c3c3")];
+        // air-5ynn: a member whose commits name no bead (the coordinator) hears the green
+        // with no close instruction; one with a later commit hears that bead as waiting.
+        let beads = |m: &air_ledger::landings::Member| match m.worker.as_str() {
+            "coordinator" => crate::cmd::fanout::MemberBeads::default(),
+            "w2" => crate::cmd::fanout::MemberBeads {
+                covered: Vec::new(),
+                later: vec!["zz-b".into()],
+            },
+            _ => crate::cmd::fanout::MemberBeads {
+                covered: vec![format!("zz-{}", m.sha.get(..1).unwrap_or(""))],
+                later: Vec::new(),
+            },
+        };
+        let members = [
+            ("w1", "a1a1a1a1a1"),
+            ("", "c3c3c3c3c3"),
+            ("coordinator", "e5e5e5e5e5"),
+            ("w2", "b2b2b2b2b2"),
+        ];
         let green = batch_result_notes(&batch_run("g0g0g0g0", 0, &members), &beads);
         let red = batch_result_notes(&batch_run("r0r0r0r0", 2, &members), &beads);
         let killed = batch_result_notes(&batch_run("k0k0k0k0", 143, &members), &beads);
@@ -295,13 +312,20 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             && rows.iter().any(|d| {
                 d.to_worker == "lane" && d.kind == "batch-ready" && d.key == "w1@aaaa1111"
             })
-            && green.len() == 1
+            && green.len() == 3
             && green.first().is_some_and(|n| {
                 n.to == "w1"
                     && n.kind == "batch-green"
                     && n.beads == "zz-a"
                     && n.content.contains("Close them now")
             })
+            && green
+                .iter()
+                .filter(|n| n.to == "coordinator" || n.to == "w2")
+                .all(|n| n.beads.is_empty() && !n.content.contains("air close"))
+            && green
+                .iter()
+                .any(|n| n.to == "w2" && n.content.contains("zz-b has a later commit"))
             && red.first().is_some_and(|n| {
                 n.kind == "batch-red"
                     && n.content.contains("exit 2")
@@ -318,7 +342,7 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         let green_half = again == 0
             && already_told == 0
             && killed.is_empty()
-            && red.len() == 1
+            && red.len() == 3
             && none.len() == 1
             && none.iter().all(|x| x.starts_with("nothing is batch-ready"));
         Ok((red_half, green_half))

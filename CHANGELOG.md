@@ -100,6 +100,10 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A close in the seconds between a landing moving main and its record being written was
+  refused. The gate now asks git whether every commit naming the bead is in main. The "batch
+  green" notice now names only the beads the batch fully contains, and a member with no such
+  bead is not told to close anything.
 - After a red batch, the next `air batch cut` built on the red merges and would have carried
   them into the next batch. Every cut now resets the lane's branch to main first. It refuses
   while the lane has uncommitted changes, or while its head is a passing batch not yet landed.
