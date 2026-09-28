@@ -1087,8 +1087,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Put the commit deny back: the probe's GREEN half is what falls, which is the half
             // the owner's ruling changed (air-iy1).
             file: "crates/cli/src/cmd/launch.rs",
-            from: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\"];",
-            to: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\", \"Bash(git commit *)\"];",
+            from: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\", \"AskUserQuestion\"];",
+            to: "pub const COORDINATOR_DENY: &[&str] = &[\"Bash(git push *)\", \"AskUserQuestion\", \"Bash(git commit *)\"];",
             also_red: &[],
         },
     ),
@@ -1173,13 +1173,13 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         },
     ),
     (
-        "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
+        "launch: every role is denied AskUserQuestion and the hook counts the attempt, and air capture stays open",
         Mutation {
-            // Drop the entry: the deny is gone and the matcher alone remains, which is the
-            // count without the refusal.
+            // Drop the coordinator's entry: the worker is still denied, and the probe must
+            // notice the role that waited 6 h 9 min on the prompt (air-jcfb).
             file: "crates/cli/src/cmd/launch.rs",
-            from: "    \"AskUserQuestion\",\n];",
-            to: "];",
+            from: "&[\"Bash(git push *)\", \"AskUserQuestion\"];",
+            to: "&[\"Bash(git push *)\"];",
             also_red: &[],
         },
     ),
@@ -8940,10 +8940,10 @@ fn probe_batch_green_closes_the_bead_it_covers() -> Probe {
 
 /// air-bm3 (owner, 2026-08-30): `AskUserQuestion` is denied to workers, and the PreToolUse
 /// matcher carries it so an attempt is recorded and the deny is countable. The owner is
-/// reached through `air capture`, filed by the coordinator as a bead labelled `owner`.
+/// reached through `air capture`, filed by the coordinator as a bead labelled `owner`. Since
+/// air-jcfb (owner, 2026-09-27) the coordinator is denied it too.
 ///
-/// Red: the worker argv denies the tool, the coordinator's does not, and the matcher names
-/// it. Green: the deny is the bare tool name (the shape `EnterWorktree` uses), and the
+/// Red: the worker argv and the coordinator's both deny the tool, and the matcher names it. Green: the deny is the bare tool name (the shape `EnterWorktree` uses), and the
 /// worker is not denied `air capture`, which is the path that does work.
 fn probe_worker_cannot_ask_the_owner_directly() -> Probe {
     use crate::cmd::install::hook_entries;
@@ -8957,12 +8957,12 @@ fn probe_worker_cannot_ask_the_owner_directly() -> Probe {
     });
 
     let red = denies(&worker, "AskUserQuestion")
-        && !denies(&coord, "AskUserQuestion")
+        && denies(&coord, "AskUserQuestion")
         && matcher_counts_it;
     let green = !worker.iter().any(|a| a.contains("AskUserQuestion("))
         && !worker.iter().any(|a| a.contains("air capture"));
     Probe {
-        name: "launch: a worker is denied AskUserQuestion and the hook counts the attempt; the coordinator is not, and air capture stays open",
+        name: "launch: every role is denied AskUserQuestion and the hook counts the attempt, and air capture stays open",
         red_fires: red,
         green_passes: green,
     }

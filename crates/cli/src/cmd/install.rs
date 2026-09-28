@@ -2504,6 +2504,15 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "coordinator-no-question-prompt",
+        since: "2026-09-28 (air-jcfb)",
+        headline: "The coordinator is denied `AskUserQuestion`, as workers and the lane already \
+                   were, and roles.md says in Every role that no role uses the question prompt: \
+                   a question for the owner is a bead labelled `owner` or an `air capture`.",
+        silent_break: false,
+        action: "Relaunch the coordinator (`air coordinator`) to pick up the deny.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3594,6 +3603,10 @@ mod tests {
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
         assert!(has("A close needs no message."));
+        // air-jcfb: no role waits on the question prompt, and every launcher denies it.
+        assert!(has(
+            "No role uses the question prompt (`AskUserQuestion`), and every launcher denies it."
+        ));
         assert!(has("then use `air capture`"));
         assert!(has(
             "Do not message a worker to hand it a bead unless the owner asks you to."

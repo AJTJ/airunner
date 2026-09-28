@@ -317,7 +317,8 @@ AIR_ROLE=worker BEADS_ACTOR=worker-9 AIR_ENFORCE=1 AIR_PROJECT=air AIR_CHANNEL=1
 The repository's own worker_deny patterns follow the list. The lane's launch is the same with
 AIR_ROLE lane, without the air land deny, and with `"permissions":{"allow":["Bash(air land
 *)"]}` in its settings. The coordinator launch attaches the channel the same way and denies git
-push plus the repository's coordinator_deny patterns.
+push and AskUserQuestion plus the repository's coordinator_deny patterns (air-jcfb: no role waits
+on the question prompt).
 
 ## 5. Data
 
@@ -639,7 +640,7 @@ percentile. The SQLite lock waited at most 131 milliseconds with six writers.
 | A worker's edits stay inside its worktree. | The fence in the hook. | A denied edit in the event stream. |
 | A worker runs a command the repo declares as needing a lease only while it holds that lease. | The lease gate in the hook, refusing for workers and advising the coordinator. | A lease-refuse or lease-would-refuse event. |
 | Permissions come from AIR_ROLE and never from the directory or the repository path. | Every role check reads the role from the environment. | A self-test probe going red. |
-| Workers cannot push, file beads, land, close, start sessions, or ask the owner a question directly. | Claude Code's deny list, backed by Air's role checks. | A permission denied event. |
+| Workers cannot push, file beads, land, close, start sessions, or ask the owner a question directly; no role, the coordinator included, can use the question prompt. | Claude Code's deny list, backed by Air's role checks. | A permission denied event. |
 | Every command and hook call leaves one event line. | Each command's logging and the hook's fail-open path. | A hook event with no follow-up. |
 | A check that finds nothing says what it looked at. | A rule for every check, probed by the self-test. | A green with nothing examined. |
 | Adopting repositories are told about every change that affects them. | A notice list, one release per round, and a release check. | The verify target failing. |

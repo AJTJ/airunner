@@ -201,7 +201,14 @@ pub fn lane_deny() -> Vec<&'static str> {
 /// **Removal**: if a coordinator commit ever lands something on main that no worker branch
 /// carried and no landing recorded, this comes back — and `air land` stays the route for
 /// landing a worker's branch regardless. Hand-committing is for the coordinator's own prose.
-pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)"];
+///
+/// `AskUserQuestion` (air-jcfb, owner 2026-09-27): the reasoning on `WORKER_DENY` holds for the
+/// coordinator too, and more strongly. A session waiting on the prompt receives no notices and
+/// does no work, and the owner may never open its pane: an adopter's coordinator sat in one for
+/// 6 h 9 min on 2026-09-27 while three captures went untriaged and every worker idled. The owner
+/// is reached through a bead labelled `owner`. Remove on the worker entry's condition, counted
+/// over coordinator sessions.
+pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)", "AskUserQuestion"];
 
 /// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
 /// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
@@ -1679,6 +1686,8 @@ mod tests {
         // The remote is the boundary, not main (air-iy1): push denied, commit allowed.
         assert!(v.contains(&"Bash(git push *)".to_string()));
         assert!(!v.contains(&"Bash(git commit *)".to_string()));
+        // air-jcfb: no role waits on the question prompt.
+        assert!(v.contains(&"AskUserQuestion".to_string()));
         assert!(!v.contains(&"--worktree".to_string()));
         let settings: serde_json::Value =
             serde_json::from_str(&v[v.iter().position(|a| a == "--settings").unwrap() + 1])

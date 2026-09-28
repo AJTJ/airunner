@@ -100,6 +100,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- The coordinator could put a question prompt to the owner and wait on it for hours, hearing no
+  notices; an adopter's coordinator sat in one for six hours. It is now denied the prompt, like
+  workers and the lane, and roles.md says a question for the owner is a bead labelled `owner`.
 - The coordinator's channel pushed the same condition on every poll when one worker had two
   beads in it: an adopter's coordinator got `closed-not-landed` 417 times in a day. Pushes
   are now keyed by the bead, branch or lease they are about, and a change-only condition's
