@@ -1,9 +1,10 @@
 {
+  "adopters": true,
   "coordinator_deny": [],
+  "metis": true,
+  "project": "ai_runner",
+  "verify_key": "tree",
   "worker_deny": [
     "Bash(cargo publish *)"
-  ],
-  "verify_key": "tree",
-  "metis": true,
-  "adopters": true
+  ]
 }
