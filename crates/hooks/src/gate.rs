@@ -172,12 +172,13 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             )
         } else if g > 0 && r > 0 {
             (
+                // Counts, not a diagnosis (air-qlx3): "flaky" blamed a test for an adopter's
+                // missing build directory.
                 format!(
-                    "verify at HEAD {} is flaky: {g} green / {r} red; latest is red",
+                    "verify at HEAD {}: {g} green / {r} red recorded; latest is red",
                     short(&f.head)
                 ),
-                "fix or quarantine the flaky test (file it), then get a green at this head"
-                    .to_string(),
+                "a green at this head".to_string(),
             )
         } else if let Some(tree) = f.tree_green.as_deref() {
             (
@@ -672,17 +673,18 @@ mod tests {
     }
 
     #[test]
-    fn flaky_head_is_named_in_the_refusal() {
+    fn a_head_with_green_and_red_is_stated_as_counts() {
         let mut f = facts();
         f.green_at_head = false;
         f.runs_at_head = (2, 1);
         let v = handover_verdict(&f);
+        let d = &v.missing[0].detail;
+        assert!(d.contains("2 green / 1 red recorded; latest is red"), "{d}");
+        // air-qlx3: counts, not a diagnosis.
         assert!(
-            v.missing[0].detail.contains("flaky"),
-            "{}",
-            v.missing[0].detail
+            !d.contains("flaky") && !v.missing[0].fix.contains("quarantine"),
+            "{d}"
         );
-        assert!(v.missing[0].fix.contains("quarantine"));
     }
 
     /// air-7wf: a green for this exact tree that the repo's key declines is named in the

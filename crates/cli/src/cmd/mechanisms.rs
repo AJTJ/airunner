@@ -105,6 +105,12 @@ pub struct Mechanism {
 ///   in the 2026-09-05 round. The heartbeat is the failsafe (`docs/rules/roles.md`). A wedge
 ///   that auto mode would show as a prompt is now caught by `idle-with-claim` or the
 ///   heartbeat, not by a state nothing ever wrote.
+/// - `suspicious` and `flaky-at-head` on `air record` (2026-08-21; removed 2026-09-28, air-qlx3,
+///   owner: "Air states facts, not opinions"). `suspicious` fired on 14 greens in one day at an
+///   adopter, every one a good docs-scope run compared with a full-scope one; `flaky-at-head`
+///   told a worker "the repo's test is the bug; file it" about a missing build directory. The
+///   facts stay: exit, duration, bytes, dirty tree, and the green and red counts at the commit.
+///   Neither had a registry row; both were words on `record / green` and `record / red`.
 pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",

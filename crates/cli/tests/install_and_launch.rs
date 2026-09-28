@@ -413,7 +413,7 @@ fn repo_deny_rules_are_appended_from_claude_air_json() {
 }
 
 #[test]
-fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
+fn record_keeps_the_command_and_names_a_changed_one() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     // Refuses backgrounding.
@@ -424,10 +424,10 @@ fn record_keeps_the_command_and_flags_suspicious_and_changed_runs() {
     );
     assert_eq!(code, 1);
     assert!(err.contains("backgrounded"));
-    // A silent, instant green is recorded and flagged.
+    // A silent, instant green is recorded, and Air draws no conclusion from it (air-qlx3).
     let (code, _, err) = air(&repo, None, &["record", "verify", "--", "true"]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("suspicious"), "{err}");
+    assert!(!err.contains("suspicious"), "{err}");
     // A different command next time is flagged as changed; output is counted.
     let (code, out, err) = air(
         &repo,
@@ -500,7 +500,7 @@ fn doctor_gates_on_bd_answering() {
 }
 
 #[test]
-fn flaky_head_is_reported_by_record_and_handover() {
+fn green_and_red_at_one_head_are_counted_by_record_and_handover() {
     let dir = scratch_repo();
     let repo = dir.path().canonicalize().unwrap();
     let (c, _, _) = air(
@@ -514,7 +514,9 @@ fn flaky_head_is_reported_by_record_and_handover() {
         None,
         &["record", "verify", "--", "sh", "-c", "echo boom; exit 1"],
     );
-    assert!(err.contains("flaky at HEAD: 1 green / 1 red"), "{err}");
+    // Counts, no diagnosis (air-qlx3).
+    assert!(err.contains("at this commit: 1 green / 1 red"), "{err}");
+    assert!(!err.contains("flaky") && !err.contains("file it"), "{err}");
     let (_, out, _) = air(&repo, None, &["--json", "handover"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let m = v["missing"]
@@ -523,7 +525,13 @@ fn flaky_head_is_reported_by_record_and_handover() {
         .iter()
         .find(|m| m["check"] == "verify-green-at-head")
         .unwrap();
-    assert!(m["detail"].as_str().unwrap().contains("flaky"), "{m}");
+    assert!(
+        m["detail"]
+            .as_str()
+            .unwrap()
+            .contains("1 green / 1 red recorded"),
+        "{m}"
+    );
 }
 
 #[test]

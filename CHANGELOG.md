@@ -95,6 +95,9 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- `air record` no longer labels a run `suspicious` or `flaky-at-head`. It prints the green and
+  red counts at the commit instead, and the close refusal states those counts rather than
+  calling the test flaky.
 - The Stop hook no longer reports what a close would refuse. `air close` and `air handover`
   still say it when they are run.
 - The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell

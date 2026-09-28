@@ -11747,7 +11747,8 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 /// tree.
 ///
 /// A conflicted tree makes the suite fail on conflict markers, and `air record` wrote that as a
-/// RED at the sha. The red is then read as evidence by everything downstream — `flaky-at-head`,
+/// RED at the sha. The red is then read as evidence by everything downstream — the green/red
+/// counts,
 /// the close gate, the landing gate, and any later question about whether this tree was ever
 /// green. A false red is the record being wrong about a fact nobody will re-derive, which is
 /// the same class as air-htmn, where a landing that happened was recorded as refused. I wrote

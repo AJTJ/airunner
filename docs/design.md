@@ -704,7 +704,7 @@ changed. Section 10 holds what is still to build and section 11 the technology c
 |---|---|---|
 | Closing a bead needs a green at a commit containing main, and a tracked digest only where `digest_dir` is set. | 2026-09-25 | hand-over gate, `AIR_ENFORCE=1` |
 | A green is keyed by commit and counts for any worker; it is keyed by tree only if the repo declares that. | 2026-09-05 | `verify_key` in `.claude/air.json` |
-| A backgrounded verify is refused; a fast, empty, dirty, drifted or flaky run is flagged. | 2026-08-21 | `air record` |
+| A backgrounded verify is refused; a dirty tree, a changed command, and the green and red counts at a commit with more than one run are stated beside the exit. The `suspicious` and `flaky-at-head` labels were removed 2026-09-28 (air-qlx3): Air states facts, not diagnoses. | 2026-08-21 | `air record` |
 | Landing while a verify is in flight is refused, and the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
 | Nothing reopens a closed bead. | 2026-08-21 | `air claim`, `air release`, `air reclaim` |
 | Air gets out of the way and tells agents facts as soon as they are true. Workarounds will always exist; a trial workaround is fixed only when Air caused it, and by removing or correcting that part of Air, not by adding a rule. | 2026-09-26 | trial reports (§9.1) |
@@ -785,7 +785,7 @@ The adoption check (make adoption-check, scripts/adoption-check.sh) copies examp
 temporary directory, deletes the files air init writes, and adopts it with this tree's binary
 first on the path: init as a dry run and with --write, a commit, install, the first recorded
 verify, status, and each launcher with --print. It fails on a non-zero exit, on output naming a
-warning, error, refusal or suspicious run, or on any difference between what init wrote and
+warning, error or refusal, or on any difference between what init wrote and
 examples/minimal. It needs beads and Claude Code, and took 18 to 22 seconds on 2026-09-26, so it
 runs in the release target and on demand, not in the verify target.
 

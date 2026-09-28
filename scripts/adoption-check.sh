@@ -48,7 +48,7 @@ step() {
     ! printf '%s' "$out" | grep -qiE -- "$refuse" || { echo "$out"; fail "$name: unexpected output matching /$refuse/"; }
     echo "ok  $name"
 }
-bad='warning|error|refus|suspicious|stale|NOT FOUND|mismatch'
+bad='warning|error|refus|stale|NOT FOUND|mismatch'
 
 step "air init" 'verify:   `make verify` (found in this repo)' "$bad" -- air init
 step "air init --write" "air record verify -- make verify" "$bad" -- air init --write
