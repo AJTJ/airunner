@@ -117,6 +117,9 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air audit` said 0 closes passed while beads were closing, counted `uds:` messages to live
+  sessions as unresolved, counted one subject for many beads or heads, and described the Stop
+  nudge as naming beads once beside a count of its repeats. All four now match the ledger.
 - `air land` refused while any verify ran anywhere in the fleet, so a lane's green batch could
   wait indefinitely behind workers' own runs. Only a verify in the main checkout or the lane's
   tree refuses it now.
