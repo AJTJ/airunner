@@ -126,17 +126,7 @@ fn air(repo: &Path, bd: &Path, args: &[&str]) -> (i32, String, String) {
     air_env(repo, bd, args, &[])
 }
 
-/// `air` with extra environment. The only thing it is used for today is pinning a **dated
-/// cutoff** so a test's colour does not depend on the day it runs.
-///
-/// Two of Air's rules have a date in them — `attribution::FALLBACK_BEFORE` and
-/// `handover::FRONTMATTER_SINCE`, both 2026-08-23T00:00:00Z — because each replaced a guess
-/// with a declaration and let the old artefacts age out. The tests below build their commits
-/// and digests at the CURRENT time, so on 2026-08-22 they were inside the fallback window and
-/// on 2026-08-23 they were outside it: seven tests in this file went red six days after they
-/// landed green, with no code change in between. Every test here now writes what today's rule
-/// wants (a `Bead:` trailer, a `bead:` front-matter line); the one test that is ABOUT a
-/// fallback pins its cutoff through this, and that pin is deleted when the fallback is.
+/// `air` with extra environment.
 fn air_env(repo: &Path, bd: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
     let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
     cmd.arg("--repo")
@@ -1783,6 +1773,17 @@ fn stop_nudge_skips_the_verification_lane() {
     .unwrap();
     let named = stop("s-named", "worker");
     assert!(named.contains("air claim zz-t"), "{named}");
+    // air-8goe: the same ready set is named once per session; a changed set is named again.
+    let again = stop("s-worker", "worker");
+    assert!(!again.contains("air claim"), "{again}");
+    std::fs::write(
+        main.join("bd.ready.json"),
+        r#"[{"id":"zz-t","status":"open","issue_type":"task"},{"id":"zz-u","status":"open","issue_type":"task"}]"#,
+    )
+    .unwrap();
+    assert_eq!(air(&main, &bd, &["status"]).0, 0);
+    let changed = stop("s-worker", "worker");
+    assert!(changed.contains("zz-u"), "{changed}");
 }
 
 /// air-v7o, end to end. Dirt from a build (an untracked file no tool edited) reads as
@@ -2173,51 +2174,6 @@ fn status_lists_green_landings_with_their_commands() {
     assert_eq!(l[0]["worker"], "alpha", "{out}");
     assert_eq!(l[0]["head"], head, "{out}");
     assert_eq!(l[0]["command"], "air land --worker alpha", "{out}");
-}
-
-/// air-6u5: the adopter's case end to end, with NO trailer anywhere.
-///
-/// Claim, commit naming the bead in prose, **merge main**, record the green, land. Merging main
-/// is the step that used to destroy the attribution: it moves the branch point forward past
-/// the claim, and the old narrowing required `claimed_at >= branch_point`. Landing requires
-/// merging main, so preparing to land was what made the branch unlandable — `air land --all`
-/// answered `{"landed": [], "ok": true}` with every precondition satisfied.
-///
-/// This is the one test in the file that is ABOUT the prose fallback, so it is the one that
-/// pins `attribution::FALLBACK_BEFORE` (see [`air_env`]) instead of writing a trailer. Delete
-/// the pin and the test together when the fallback goes.
-#[test]
-fn a_branch_that_merged_main_is_still_landable_without_a_trailer() {
-    let (_tmp, main, alpha) = land_repo("true");
-    let bd = fake_bd(&main);
-    // Far enough ahead that every commit this test makes is "before the cutoff", whenever it
-    // runs. The rule's own env override, not a second copy of the rule.
-    let pin: &[(&str, &str)] = &[("AIR_BEAD_TRAILER_SINCE", "2099-01-01T00:00:00Z")];
-
-    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
-    assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
-    std::fs::write(main.join("bd.in_progress"), "").unwrap();
-
-    // Prose only: this is a repo with no `Bead:` trailers, which is every repo that has not
-    // adopted them yet.
-    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
-    git(&alpha, &["add", "done.txt"]);
-    git(&alpha, &["commit", "-q", "-m", "feat: the work (zz-1)"]);
-
-    // main moves on, and the worker merges it — the ordinary pre-land step.
-    std::fs::write(main.join("other.txt"), "other\n").unwrap();
-    git(&main, &["add", "other.txt"]);
-    git(&main, &["commit", "-q", "-m", "chore: main moves"]);
-    git(&alpha, &["merge", "--no-edit", "-q", "main"]);
-    // Green LAST, at the merged head.
-    assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
-
-    // The branch point is now newer than the claim. It must still be landable.
-    let (code, out, err) = air_env(&main, &bd, &["--json", "land", "--all"], pin);
-    assert_eq!(code, 0, "{out}{err}");
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["ok"], true, "{out}");
-    assert_eq!(v["landed"][0], "zz-1", "{out}");
 }
 
 /// air-6u5: nothing landable is a REPORT. `ok: true` with an empty `landed` is impossible,
@@ -2782,6 +2738,122 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
 /// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's
 /// head holding main plus exactly alpha's and gamma's commits, and each drop is an event line.
 /// The main checkout is refused.
+/// air-nwat: a verify stopped by hand is still written. `air record` is sent SIGTERM mid-run,
+/// stops its check, and writes the run as interrupted with its duration; `air status` names it
+/// under the worker. Before, the process died and left no row at all.
+#[test]
+fn killing_air_record_mid_run_leaves_an_interrupted_run() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let child = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&alpha)
+        .args(["record", "verify", "--", "sleep", "30"])
+        .env("AIR_BD_BIN", &bd)
+        .env("FAKE_BD_DIR", &alpha)
+        .current_dir(&alpha)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The in-flight row is written just before the check starts: once it is there, the
+    // handlers are installed and the check is running.
+    let db = main.join(".air/ledger.db");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let n: i64 = rusqlite::Connection::open(&db)
+            .and_then(|c| c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0)))
+            .unwrap_or(0);
+        if n > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never started"
+        );
+        std::thread::yield_now();
+    }
+    let killed = common::command("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("interrupted (SIGTERM)"), "{err}");
+
+    let (step, exit): (Option<String>, i64) = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT failing_step, exit_code FROM verify_runs ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(step.as_deref(), Some("interrupted (SIGTERM)"));
+    assert_ne!(exit, 0);
+    let (_, status, _) = air(&main, &bd, &["status"]);
+    assert!(
+        status.contains("last verify interrupted (SIGTERM) at"),
+        "{status}"
+    );
+}
+
+/// air-nwat: a cut stopped by a leftover `index.lock` writes a `batch-cut / failed` line naming
+/// the lock, so the record between a landing and the next cut has no silent gap.
+#[test]
+fn a_cut_stopped_by_an_index_lock_is_recorded_as_failed() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    let wt = root.join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let lane = wt.canonicalize().unwrap();
+    // Main moves, so the cut has to reset the lane's branch, which needs the index lock.
+    std::fs::write(main.join("moved.txt"), "moved\n").unwrap();
+    git(&main, &["add", "moved.txt"]);
+    git(&main, &["commit", "-q", "-m", "main moves"]);
+    let lock = git(
+        &lane,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index.lock",
+        ],
+    );
+    std::fs::write(&lock, "").unwrap();
+
+    let (code, out, err) = air(&lane, &bd, &["batch", "cut"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("index.lock"), "{err}");
+    let events: String = std::fs::read_dir(main.join(".air/events"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    let failed: Vec<&str> = events
+        .lines()
+        .filter(|l| {
+            l.contains("\"command\":\"batch-cut\"") && l.contains("\"decision\":\"failed\"")
+        })
+        .collect();
+    assert_eq!(failed.len(), 1, "{events}");
+    assert!(failed[0].contains("index.lock"), "{}", failed[0]);
+    std::fs::remove_file(&lock).unwrap();
+}
+
 #[test]
 fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -3266,70 +3338,10 @@ fn close_with_proof(main: &Path, alpha: &Path, bd: &Path, bead: &str) {
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
 }
 
-/// The trailer that declares which bead a commit did the work for (air-4re). Guessing it from
-/// the message is the fallback, and the fallback expires: see [`air_env`].
+/// The trailer that declares which bead a commit did the work for (air-4re). A commit without
+/// one is attributed to nothing.
 fn bead_trailer(bead: &str) -> String {
     format!("feat: the work ({bead})\n\nBead: {bead}\n")
-}
-
-/// air-24e, the guard that would have caught this on the day rather than six days later.
-///
-/// Both fallbacks are pinned DEAD — every artefact this test writes is after the cutoff — and
-/// the ordinary claim / commit / green / close / land flow must still work. On 2026-08-22 this
-/// would have failed while the suite was green, which is the whole point: it makes the
-/// wall clock irrelevant to the suite's verdict instead of waiting for it to expire.
-///
-/// The pins come from the rules' own env overrides, so when `FALLBACK_BEFORE` and
-/// `FRONTMATTER_SINCE` are deleted, the variables go and this test goes with them. A pin
-/// written as a second copy of the date would outlive the rule and become the next stale
-/// number, which is the defect one level up from the one being fixed here.
-#[test]
-fn nothing_in_this_suite_leans_on_an_expired_fallback() {
-    let dead: &[(&str, &str)] = &[
-        ("AIR_BEAD_TRAILER_SINCE", "1970-01-01T00:00:00Z"),
-        ("AIR_DIGEST_FRONTMATTER_SINCE", "1970-01-01T00:00:00Z"),
-    ];
-    let (_tmp, main, alpha) = land_repo("true");
-    let bd = fake_bd(&main);
-
-    // The digest gate on, so both dead fallbacks are in play at once.
-    std::fs::write(
-        main.join(".claude/air.json"),
-        r#"{"verify_command": "true", "digest_dir": "docs/d"}"#,
-    )
-    .unwrap();
-    // Committed: `air land` refuses a dirty main, and rightly.
-    git(&main, &["add", ".claude/air.json"]);
-    git(&main, &["commit", "-q", "-m", "chore: digest gate on"]);
-    git(&alpha, &["merge", "--no-edit", "-q", "main"]);
-    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
-    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], dead).0, 0);
-    std::fs::write(main.join("bd.in_progress"), "").unwrap();
-
-    std::fs::create_dir_all(alpha.join("docs/d")).unwrap();
-    std::fs::write(
-        alpha.join("docs/d/2026-08-29-alpha-zz-1.md"),
-        "---\nbead: zz-1\n---\n\ndigest\n",
-    )
-    .unwrap();
-    std::fs::write(alpha.join("done.txt"), "done\n").unwrap();
-    git(&alpha, &["add", "done.txt", "docs/d"]);
-    git(&alpha, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
-    assert_eq!(
-        air_env(&alpha, &bd, &["record", "verify", "--", "true"], dead).0,
-        0
-    );
-
-    // The gate passes with no fallback left to lean on: the digest declares its bead.
-    let (_, o, _) = air_env(&alpha, &bd, &["--json", "handover"], dead);
-    let v: serde_json::Value = serde_json::from_str(&o).unwrap();
-    assert_eq!(v["pass"], true, "{o}");
-
-    // And the branch is attributed by its trailer, not by prose.
-    let (code, out, err) = air_env(&main, &bd, &["--json", "land", "--all"], dead);
-    assert_eq!(code, 0, "{out}{err}");
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["landed"][0], "zz-1", "{out}");
 }
 
 /// The `## Acceptance Criteria` bd returns for every listed bead, as a JSON string literal

@@ -444,6 +444,25 @@ fn check_ignore(repo: &Path, paths: &[String]) -> BTreeSet<String> {
 /// `air land`'s warning about the main checkout, or None when nothing but sessions is there.
 /// A warning, never a refusal: the landing moves files under these processes, and whether
 /// that matters is the coordinator's call.
+/// What [`main_warning`] is about, for saying it once (air-8goe): the pids it names, or why
+/// nothing could be seen. Empty when there is no warning. An adopter's 97 landings each
+/// printed the same six readers.
+pub fn main_fingerprint(r: &TreeReaders, main: &str) -> String {
+    if let Some(why) = &r.unknown {
+        return format!("unknown:{why}");
+    }
+    let mut pids: Vec<String> = r
+        .trees
+        .iter()
+        .filter(|t| t.path == main)
+        .flat_map(|t| t.readers.iter())
+        .filter(|x| !x.session)
+        .map(|x| x.pid.to_string())
+        .collect();
+    pids.sort();
+    pids.join(",")
+}
+
 pub fn main_warning(r: &TreeReaders, main: &str) -> Option<String> {
     if let Some(why) = &r.unknown {
         return Some(format!(
@@ -481,6 +500,24 @@ pub fn main_warning(r: &TreeReaders, main: &str) -> Option<String> {
 }
 
 // ----- the part that asks the OS -----
+
+/// The processes holding `path` open, as `(pid, command)`, from `lsof -Fpc`. Empty when none
+/// does, which for a git lock file means a git that stopped left it behind (air-nwat).
+pub fn holders_of(path: &str) -> Result<Vec<(i64, String)>, String> {
+    let out = run_child("lsof", &["-n", "-P", "-w", "-Fpc", "--", path])?;
+    let mut held = Vec::new();
+    let mut pid: Option<i64> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p.trim().parse().ok();
+        } else if let Some(c) = line.strip_prefix('c')
+            && let Some(p) = pid
+        {
+            held.push((p, c.to_string()));
+        }
+    }
+    Ok(held)
+}
 
 fn run_child(program: &str, args: &[&str]) -> Result<String, String> {
     let child = Command::new(program)

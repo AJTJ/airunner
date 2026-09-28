@@ -29,6 +29,11 @@ from `air`. Your role's section lists every one and what to do about it. The coo
 and resumes the whole fleet with one command to Air, and each section says what a stop means
 for that role.
 
+No role uses the question prompt (`AskUserQuestion`), and every launcher denies it. A session
+waiting on it hears no notices and does no work, and the owner is usually not watching its
+pane. A question for the owner is a bead labelled `owner` (coordinator) or an `air capture`
+(worker, lane), with your recommendation, and you take other work while it waits.
+
 Keep a journal: one file per session in the main checkout's `.air/journal/`, or in the repo's
 `journal_dir` where `.claude/air.json` names one. Append a timestamp and a line as you go. It
 is for things nothing else carries: a bug you hit and how it showed, a wrong turn and what
@@ -122,8 +127,8 @@ blocked, need a decision, or find work outside your bead, and then use `air capt
 
 A closed bead stays closed. Unfinished work is a new bead that references it, which you ask
 for with `air capture`. If part of a bead needs the owner, close what you did and capture the
-rest. For a genuine blocker, or a question only the owner can answer, run `air capture
-"<blocker>"`, then either `air release <id> --reason <reason>` or take unrelated work. The
+rest. For a genuine blocker, or a question only the owner can answer (never the question
+prompt; see Every role), run `air capture "<blocker>"`, then either `air release <id> --reason <reason>` or take unrelated work. The
 coordinator files owner questions as beads labelled `owner`.
 
 Air delivers these messages into your session through its channel, each once, marked as coming
@@ -231,7 +236,7 @@ session.
 
 Ask the owner only for a genuine edge case: a blocker only they can clear, a product or design
 decision only they can make, or a resource conflict. File it as a bead labelled `owner` with
-your recommendation in its description. An unclear acceptance is not an owner question; rewrite
+your recommendation in its description, never as a question prompt (see Every role). An unclear acceptance is not an owner question; rewrite
 it yourself. `air claim` refuses `owner` beads to workers, and `air status` counts them on its
 `ready:` line.
 

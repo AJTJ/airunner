@@ -62,6 +62,62 @@ pub fn pid_started(pid: i64) -> Option<String> {
     ps(pid, "lstart=").map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
+/// Is a session's process still the one that registered? (air-sai7)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Liveness {
+    Alive,
+    Dead,
+    #[default]
+    /// No pid or no start time was recorded, or `ps` could not answer. Never read as alive.
+    Unknown,
+}
+
+/// What `ps` said about a pid: `Err` when it could not be asked, `Ok(None)` when no such
+/// process, else `(stat, lstart)` with lstart normalised as [`pid_started`] does.
+pub type Probe = Result<Option<(String, String)>, ()>;
+
+fn probe(pid: i64) -> Probe {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=,lstart=", "-p", &pid.to_string()])
+        .output()
+        .map_err(|_| ())?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let mut words = s.split_whitespace();
+    let Some(stat) = words.next() else {
+        // `ps -p` exits 1 with nothing on stdout for a pid that does not exist; any other
+        // silence is a `ps` that did not answer.
+        return if out.status.code() == Some(1) {
+            Ok(None)
+        } else {
+            Err(())
+        };
+    };
+    Ok(Some((
+        stat.to_string(),
+        words.collect::<Vec<_>>().join(" "),
+    )))
+}
+
+/// Alive means a process with that pid exists, has the recorded start time, and is not a
+/// zombie. A pid alone says nothing: an adopter's worker row from 27 days earlier read alive
+/// because its pid now belonged to an unrelated `<defunct>` process (air-sai7).
+pub fn judge(pid: Option<i64>, started: Option<&str>, seen: impl FnOnce(i64) -> Probe) -> Liveness {
+    let (Some(pid), Some(started)) = (pid, started) else {
+        return Liveness::Unknown;
+    };
+    match seen(pid) {
+        Err(()) => Liveness::Unknown,
+        Ok(None) => Liveness::Dead,
+        Ok(Some((stat, lstart))) if !stat.starts_with('Z') && lstart == started => Liveness::Alive,
+        Ok(Some(_)) => Liveness::Dead,
+    }
+}
+
+pub fn liveness(pid: Option<i64>, started: Option<&str>) -> Liveness {
+    judge(pid, started, probe)
+}
+
 /// Why the current lease is not valid, or None when healthy (lease.sh `lock_defect`).
 pub fn defect(l: &Lease, now: &str, stale_secs: i64) -> Option<String> {
     let pid = l.pid?;
@@ -825,6 +881,26 @@ pub fn needs_cmd(repo: &Path, cmd: &str, json: bool) -> i32 {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
     use super::*;
+
+    /// air-sai7: a pid is only alive with the start time it registered with.
+    #[test]
+    fn liveness_needs_pid_start_time_and_no_zombie() {
+        let at = "Mon 28 Sep 13:41:23 2026";
+        let seen = |stat: &str, lstart: &str| {
+            let r = Ok(Some((stat.to_string(), lstart.to_string())));
+            move |_| r
+        };
+        assert_eq!(judge(Some(7), Some(at), seen("Ss", at)), Liveness::Alive);
+        assert_eq!(
+            judge(Some(7), Some(at), seen("Ss", "Tue 29 Sep 09:00:00 2026")),
+            Liveness::Dead
+        );
+        assert_eq!(judge(Some(7), Some(at), seen("Z", at)), Liveness::Dead);
+        assert_eq!(judge(Some(7), Some(at), |_| Ok(None)), Liveness::Dead);
+        assert_eq!(judge(Some(7), Some(at), |_| Err(())), Liveness::Unknown);
+        assert_eq!(judge(None, Some(at), seen("Ss", at)), Liveness::Unknown);
+        assert_eq!(judge(Some(7), None, seen("Ss", at)), Liveness::Unknown);
+    }
 
     #[test]
     fn segments_split_like_the_harness_and_keep_quotes_and_heredocs_whole() {

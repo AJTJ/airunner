@@ -2481,6 +2481,30 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "session-liveness",
+        since: "2026-09-28 (air-sai7)",
+        headline: "A session is alive only when its pid runs with the start time it registered \
+                   with and is not a zombie; `air status --json` gives `liveness` (alive, dead or \
+                   unknown) per session in place of `pid_alive`. Dead and unknown sessions hear \
+                   no ready notice and raise no idle-without-claim. A new session under a name \
+                   replaces that name's earlier rows, and the main checkout's session shows as \
+                   the owner, never a coordinator.",
+        silent_break: true,
+        action: "A script reading `pid_alive` from `air status --json` reads nothing: read \
+                 `liveness`.",
+    },
+    SurfaceChange {
+        id: "say-once-by-subject",
+        since: "2026-09-28 (air-8goe)",
+        headline: "Channel conditions are keyed by the bead, branch or lease they are about, not \
+                   by worker, so two beads of one kind on one worker push once each; a \
+                   change-only condition's `for_minutes` counts from when its subject first \
+                   appeared. The Stop nudge names an unchanged ready set once per session, and \
+                   `air land` warns about an unchanged set of main-checkout readers once.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
         id: "session-facts-yield",
         since: "2026-09-28 (air-n9f3)",
         headline: "`air status` shows `STOPPED at <t>` only until the session's next event of                    its own, and shows `waiting for the person since <t>` after a permission or                    idle prompt. A subagent's hooks no longer change its parent's state, a stop                    with no reason reads `stopped, no reason given`, and ages are measured                    against a clock read when the numbers are computed.",
@@ -2529,11 +2553,60 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "coordinator-no-question-prompt",
+        since: "2026-09-28 (air-jcfb)",
+        headline: "The coordinator is denied `AskUserQuestion`, as workers and the lane already \
+                   were, and roles.md says in Every role that no role uses the question prompt: \
+                   a question for the owner is a bead labelled `owner` or an `air capture`.",
+        silent_break: false,
+        action: "Relaunch the coordinator (`air coordinator`) to pick up the deny.",
+    },
+    SurfaceChange {
+        id: "fleet-up-incomplete",
+        since: "2026-09-28 (air-eeuf)",
+        headline: "When a launch does not start, `air fleet up` names each one with why, and its \
+                   event's decision is `fleet / incomplete` instead of `fleet / up`.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "dated-fallbacks-deleted",
+        since: "2026-09-28 (air-jsee)",
+        headline: "The 2026-08-23 fallbacks are gone: a commit with no `Bead:` trailer is \
+                   attributed to nothing and a digest with no `bead:` front matter does not \
+                   count, whatever their date. `air doctor` has no dated rules left and \
+                   `air doctor --json` no longer has `dated_rules`.",
+        silent_break: false,
+        action: "A branch or digest from before 2026-08-23 that is still in play needs a \
+                 `Bead:` trailer or a `bead:` line; `air handover` names which.",
+    },
+    SurfaceChange {
         id: "batch-held-removed",
         since: "2026-09-28 (air-aepb)",
         headline: "`air batch cut` no longer sends a `batch-held` notice to a worker whose branch \
                    has no green precheck, and writes no `batch-cut / no-precheck` line. The \
                    branch is still left out, and `air status` still names `no-precheck` for it.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "budgets-side-by-side",
+        since: "2026-09-28 (air-onqi)",
+        headline: "`air audit` prints each budget's recorded p50 and max beside the budget and \
+                   `max x 10`, with the measurement or ceiling the number came from; a budget \
+                   reached reads `over budget N time(s)` instead of `N hit(s)`.",
+        silent_break: true,
+        action: "A script that matched `hit(s)` in `air audit` output matches nothing now; read \
+                 `over budget` or the `hits` field of `--json`.",
+    },
+    SurfaceChange {
+        id: "failed-cut-and-interrupted-run",
+        since: "2026-09-28 (air-nwat)",
+        headline: "`air batch cut` writes `batch-cut / failed` with its reason when it stops part \
+                   way, naming who holds a git lock. `air record` no longer dies on SIGINT, SIGTERM \
+                   or SIGHUP: it stops the check and writes the run with `failing_step` \
+                   `interrupted (<signal>)`, and `air status` shows `last verify interrupted ...` \
+                   under the worker.",
         silent_break: false,
         action: "",
     },
@@ -3689,6 +3762,10 @@ mod tests {
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
         assert!(has("A close needs no message."));
+        // air-jcfb: no role waits on the question prompt, and every launcher denies it.
+        assert!(has(
+            "No role uses the question prompt (`AskUserQuestion`), and every launcher denies it."
+        ));
         assert!(has("then use `air capture`"));
         assert!(has(
             "Do not message a worker to hand it a bead unless the owner asks you to."

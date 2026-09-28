@@ -696,44 +696,83 @@ fn deliver_loop(repo: &Path, out: &Out, every: Duration) {
 
 // ---------- channel push ----------
 
-/// What has been pushed, keyed by (worker, kind): the minutes at which we last notified, and
-/// the value fingerprint we notified about. Bounded by workers × kinds; entries vanish when
-/// the condition clears.
-pub type Pushed = BTreeMap<(String, &'static str), (i64, String)>;
+/// What has been pushed, keyed by (kind, subject) (air-8goe): when the channel first saw the
+/// subject, the minutes at which we last notified, and the value fingerprint we notified
+/// about. Bounded by the conditions that hold; entries vanish when a condition clears.
+///
+/// It was keyed by (worker, kind). Two beads of one kind on one worker then overwrote each
+/// other's fingerprint, so each looked changed on every tick: an adopter's coordinator was
+/// pushed `closed-not-landed` 417 times in a day for two beads, evaluated 11 times.
+pub type Pushed = BTreeMap<(&'static str, String), PushedAs>;
 
-/// Pure: which conditions to push now.
+#[derive(Debug, Clone)]
+pub struct PushedAs {
+    first_seen: String,
+    minutes: i64,
+    fingerprint: String,
+}
+
+/// Pure: which conditions to push now. [`select_new_at`] with no clock, so every condition
+/// keeps the age it was evaluated with.
+pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> {
+    select_new_at(pushed, current, "")
+}
+
+/// Pure: which conditions to push now, one rule for every kind (air-8goe).
+///
+/// Keyed by (kind, subject), the subject being the bead, branch, lease or worker the condition
+/// is about ([`Attention::subject_key`]). Pushed when the subject is new, when its value
+/// changes, or when it escalates; otherwise silent.
 ///
 /// A condition that carries a `fingerprint` is **change-only** (air-s7c): pushed when it is
 /// new, and again only when that value differs from the one last pushed. Age is deliberately
 /// not part of it — re-pushing because the oldest item got older is the repeat under a new
 /// name, and it is what produced 3 971 `review-waiting` pushes carrying 13 distinct facts on
-/// 2026-08-22.
+/// 2026-08-22. Its age is how long the channel has seen this subject, measured from `now`
+/// when one is given: a condition 1 s old was pushed as 5 min old, because `landable` carried
+/// the branch's age rather than the condition's.
 ///
-/// A condition with no fingerprint keeps the older behaviour: new ones always, existing ones
-/// again once their duration has at least doubled (escalation without spam).
+/// A condition with no fingerprint escalates on age: new ones always, existing ones again once
+/// their duration has at least doubled (escalation without spam).
 ///
 /// Either way this suppresses the PUSH only. Every evaluation is still written to the event
 /// log by `record_and_log`, because that ratio is what made the finding visible in the first
 /// place. Clears entries whose condition is gone.
-pub fn select_new(pushed: &mut Pushed, current: &[Attention]) -> Vec<Attention> {
+pub fn select_new_at(pushed: &mut Pushed, current: &[Attention], now: &str) -> Vec<Attention> {
     let mut out = Vec::new();
-    let mut seen: Vec<(String, &'static str)> = Vec::with_capacity(current.len());
+    let mut seen: Vec<(&'static str, String)> = Vec::with_capacity(current.len());
     for a in current {
-        let key = (a.worker.clone(), a.kind);
+        let key = (a.kind, a.subject_key().to_string());
         seen.push(key.clone());
-        let again = match pushed.get(&key) {
+        let prev = pushed.get(&key);
+        let again = match prev {
             None => true,
-            Some((prev_min, prev_fp)) => {
+            Some(p) => {
                 if a.fingerprint.is_empty() {
-                    a.for_minutes >= prev_min.saturating_mul(2).max(prev_min.saturating_add(10))
+                    a.for_minutes
+                        >= p.minutes
+                            .saturating_mul(2)
+                            .max(p.minutes.saturating_add(10))
                 } else {
-                    a.fingerprint != *prev_fp
+                    a.fingerprint != p.fingerprint
                 }
             }
         };
         if again {
-            pushed.insert(key, (a.for_minutes, a.fingerprint.clone()));
-            out.push(a.clone());
+            let first_seen = prev.map_or_else(|| now.to_string(), |p| p.first_seen.clone());
+            let mut a = a.clone();
+            if !a.fingerprint.is_empty() && !now.is_empty() {
+                a.for_minutes = status::minutes_between(&first_seen, now).unwrap_or(0);
+            }
+            pushed.insert(
+                key,
+                PushedAs {
+                    first_seen,
+                    minutes: a.for_minutes,
+                    fingerprint: a.fingerprint.clone(),
+                },
+            );
+            out.push(a);
         }
     }
     pushed.retain(|k, _| seen.contains(k));
@@ -759,7 +798,7 @@ fn record_push(ledger: Option<&(air_ledger::Ledger, String)>, at: &str, a: &Atte
     } else {
         a.fingerprint.clone()
     };
-    let key = format!("channel:{}:{}", a.kind, a.worker);
+    let key = format!("channel:{}:{}", a.kind, a.subject_key());
     if !ledger
         .emit_if_changed(worker, &key, &fingerprint, at)
         .unwrap_or(true)
@@ -777,6 +816,25 @@ fn record_push(ledger: Option<&(air_ledger::Ledger, String)>, at: &str, a: &Atte
         &a.detail,
         "1 condition pushed",
     );
+}
+
+/// One poll tick's conditions: log the evaluation, push what is new, changed or escalating,
+/// and record each push. Separate from the loop so a probe can run ticks against a scratch
+/// ledger and read the counts back through `air audit` (air-8goe).
+pub fn push_tick(
+    ledger: Option<&(air_ledger::Ledger, String)>,
+    pushed: &mut Pushed,
+    snap: &status::Snapshot,
+    att: &[Attention],
+    send: &mut dyn FnMut(&Value),
+) {
+    if let Some((l, worker)) = ledger {
+        status::record_and_log(l, worker, snap, att, true);
+    }
+    for a in select_new_at(pushed, att, &snap.at) {
+        record_push(ledger, &snap.at, &a);
+        send(&channel_event(&a));
+    }
 }
 
 fn channel_event(a: &Attention) -> Value {
@@ -859,14 +917,12 @@ fn poll_loop(repo: &Path, out: &Out, every: Duration) {
                     let att = status::attention(&snap, &snap.at, thresholds);
                     let opened = crate::cmd::open(repo).ok();
                     if let Some((ledger, worker)) = opened.as_ref() {
-                        status::record_and_log(ledger, worker, &snap, &att, true);
                         // What other sessions should hear about this tick (air-1vri).
                         crate::cmd::fanout::tick(repo, ledger, worker, &snap);
                     }
-                    for a in select_new(&mut pushed, &att) {
-                        record_push(opened.as_ref(), &snap.at, &a);
-                        out.send(&channel_event(&a));
-                    }
+                    push_tick(opened.as_ref(), &mut pushed, &snap, &att, &mut |v| {
+                        out.send(v);
+                    });
                     for (kind, worker, text) in session_changes(&mut known_sessions, &snap.sessions)
                     {
                         out.send(&json!({
@@ -903,7 +959,56 @@ mod tests {
             // No fingerprint: these tests cover the age-escalation path, which is what a
             // kind without a change-only value still uses.
             fingerprint: String::new(),
+            subject: String::new(),
         }
+    }
+
+    /// air-8goe: two beads of one kind on one worker are two subjects. Each is pushed once and
+    /// neither is pushed again while unchanged; before, they shared a (worker, kind) key and
+    /// each overwrote the other's fingerprint, so both re-pushed on every tick.
+    #[test]
+    fn two_subjects_of_one_kind_on_one_worker_push_once_each() {
+        let cnl = |bead: &str| Attention {
+            worker: "w1".into(),
+            kind: "closed-not-landed",
+            detail: String::new(),
+            for_minutes: 0,
+            fingerprint: format!("{bead}/abc"),
+            subject: bead.into(),
+        };
+        let both = [cnl("zz-1"), cnl("zz-2")];
+        let mut p = Pushed::new();
+        assert_eq!(select_new(&mut p, &both).len(), 2);
+        for _ in 0..50 {
+            assert!(select_new(&mut p, &both).is_empty());
+        }
+    }
+
+    /// air-8goe: a change-only condition's age is the condition's, from when the channel first
+    /// saw that subject, so a new subject starts at 0 whatever the evaluator carried.
+    #[test]
+    fn a_new_subject_starts_at_zero_minutes() {
+        let landable = |head: &str, mins: i64| Attention {
+            worker: "w1".into(),
+            kind: "landable",
+            detail: String::new(),
+            for_minutes: mins,
+            fingerprint: format!("w1@{head}"),
+            subject: String::new(),
+        };
+        let mut p = Pushed::new();
+        let first = select_new_at(&mut p, &[landable("a", 5)], "2026-09-28T10:00:00Z");
+        assert_eq!(first[0].for_minutes, 0);
+        // The head moves 7 minutes later: pushed again, aged from first sight.
+        let moved = select_new_at(&mut p, &[landable("b", 12)], "2026-09-28T10:07:00Z");
+        assert_eq!(moved[0].for_minutes, 7);
+        // A second worker's subject is new: 0, not the first one's age.
+        let mut other = landable("c", 30);
+        other.worker = "w2".into();
+        other.fingerprint = "w2@c".into();
+        let new = select_new_at(&mut p, &[landable("b", 13), other], "2026-09-28T10:08:00Z");
+        assert_eq!(new.len(), 1);
+        assert_eq!((new[0].worker.as_str(), new[0].for_minutes), ("w2", 0));
     }
 
     #[test]
@@ -936,7 +1041,8 @@ mod tests {
             detail: None,
             changed_at: String::new(),
             pid: None,
-            pid_alive: None,
+            pid_started: None,
+            liveness: crate::cmd::lease::Liveness::Alive,
             project: String::new(),
             model: String::new(),
             enforce: None,

@@ -95,20 +95,6 @@ pub fn facts(
     };
     let digest_at = digest_location(repo);
     let digest = digest_at.as_ref().and_then(|d| {
-        // Newer than this worker's oldest open claim, or than the branch point from main,
-        // whichever is earlier: a re-claim after a bd timeout must not postdate a digest
-        // that was written between the first claim and the re-claim (air-y8m).
-        let claim = held.iter().map(|c| c.claimed_at.clone()).min();
-        let since = claim.map(|c| {
-            let bp = git::branch_point_time(repo, "main").ok();
-            match (
-                c.parse::<jiff::Timestamp>().ok(),
-                bp.and_then(|b| b.parse::<jiff::Timestamp>().ok()),
-            ) {
-                (Some(ct), Some(bt)) => ct.min(bt).to_string(),
-                _ => c,
-            }
-        });
         // The bead named on the command line, else every bead this worker still holds or
         // its branch carries: the check is "did you write the digest for the work you are
         // handing on". No bead at all means nothing to declare, and the check is skipped
@@ -117,14 +103,7 @@ pub fn facts(
         // Tracked only for `digest_dir`: the shared `.air/digests/` is gitignored, and its
         // being one directory every worktree writes to is what air-ahl's tracking bought.
         let tracked = d.tracked.then(|| tracked_in(repo, &d.path));
-        Some(digest_for_bead(
-            &d.path,
-            worker,
-            &beads,
-            since.as_deref(),
-            frontmatter_cutoff(),
-            tracked.as_ref(),
-        ))
+        Some(digest_for_bead(&d.path, &beads, tracked.as_ref()))
     });
     // air-ahl: `Untracked` is a refusal like `Missing`, with its own sentence.
     let digest_untracked = digest == Some(Digest::Untracked);
@@ -324,22 +303,6 @@ pub fn journal_dir(repo: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Digests written at or after this instant must declare their bead in front matter; older
-/// ones may still be matched by filename and mtime.
-///
-/// **Delete the fallback once no digest in play predates this** (air-agq). Dated so it goes on
-/// evidence rather than argument, the same shape as the `Bead:` trailer's fallback (air-4re).
-/// `AIR_DIGEST_FRONTMATTER_SINCE` overrides it for tests.
-pub const FRONTMATTER_SINCE: &str = "2026-08-23T00:00:00Z";
-
-pub fn frontmatter_cutoff() -> jiff::Timestamp {
-    std::env::var("AIR_DIGEST_FRONTMATTER_SINCE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .or_else(|| FRONTMATTER_SINCE.parse().ok())
-        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
-}
-
 /// The bead a digest declares, from `bead:` in its front matter.
 ///
 /// Front matter is a `---` line, then `key: value` lines, then `---`. This reads a **declared
@@ -371,10 +334,10 @@ pub fn declared_bead(text: &str) -> Option<String> {
 /// its title or its mtime is consulted, because a digest that says which bead it is about is
 /// the answer rather than evidence for a guess.
 ///
-/// The old rule (a `*<worker>*.md` newer than the claim) survives only for files written
-/// before [`FRONTMATTER_SINCE`]. It let a digest for a DIFFERENT bead satisfy the gate, and
-/// let `touch` on any old one do the same; it guards, so it failed toward permitting, and
-/// nothing proved it had fired (air-agq).
+/// The old rule (a `*<worker>*.md` newer than the claim) let a digest for a DIFFERENT bead
+/// satisfy the gate, and let `touch` on any old one do the same; it guards, so it failed toward
+/// permitting (air-agq). It survived for files written before 2026-08-23 and was deleted on
+/// 2026-09-28, when no digest in play predated that (air-jsee).
 /// What the directory holds for these beads (air-ahl): nothing, a file git does not track, or
 /// a tracked one. Three states because the fixes are three different sentences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,43 +358,22 @@ pub enum Digest {
 /// the call site instead of once per candidate file.
 pub fn digest_for_bead(
     dir: &Path,
-    worker: &str,
     beads: &[String],
-    since: Option<&str>,
-    cutoff: jiff::Timestamp,
     tracked: Option<&std::collections::BTreeSet<String>>,
 ) -> Digest {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Digest::Missing;
     };
-    let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
     let mut untracked = false;
     let declares = |e: &std::fs::DirEntry| -> bool {
         let name = e.file_name().to_string_lossy().to_string();
         if !name.ends_with(".md") {
             return false;
         }
-        let modified = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|m| jiff::Timestamp::try_from(m).ok());
-        let text = std::fs::read_to_string(e.path()).unwrap_or_default();
-        match declared_bead(&text) {
-            // Declared: it names the bead or it is not this bead's digest. mtime is not
-            // consulted — the file says what it is about.
-            Some(b) => beads.contains(&b),
-            // Undeclared: the old guess, and only for a file that predates the cutoff.
-            None => {
-                modified.is_some_and(|m| m < cutoff)
-                    && name.contains(worker)
-                    && match (since_ts, modified) {
-                        (Some(s), Some(m)) => m > s,
-                        (None, _) => true,
-                        _ => false,
-                    }
-            }
-        }
+        // Declared: it names the bead or it is not this bead's digest. Nothing else about the
+        // file is consulted.
+        declared_bead(&std::fs::read_to_string(e.path()).unwrap_or_default())
+            .is_some_and(|b| beads.contains(&b))
     };
     for e in rd.flatten() {
         if !declares(&e) {
@@ -461,29 +403,6 @@ pub fn tracked_in(repo: &Path, dir: &Path) -> std::collections::BTreeSet<String>
         .filter_map(|l| l.rsplit('/').next())
         .map(str::to_string)
         .collect()
-}
-
-/// Is there a `*<worker>*.md` in `dir` modified after `since` (RFC 3339)? Pure over the fs.
-///
-/// **Superseded by [`digest_for_bead`]** (air-agq) and kept only for its tests; it is the
-/// guess that could not tell one bead's digest from another's.
-#[cfg(test)]
-pub fn digest_newer_than(dir: &Path, worker: &str, since: Option<&str>) -> bool {
-    let since_ts: Option<jiff::Timestamp> = since.and_then(|s| s.parse().ok());
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    rd.flatten().any(|e| {
-        let name = e.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".md") || !name.contains(worker) {
-            return false;
-        }
-        match (since_ts, e.metadata().and_then(|m| m.modified()).ok()) {
-            (Some(since), Some(m)) => jiff::Timestamp::try_from(m).is_ok_and(|t| t > since),
-            (None, _) => true,
-            _ => false,
-        }
-    })
 }
 
 /// What `air land` would say about ONE worker's branch, rendered from `select`'s own answer
@@ -726,35 +645,4 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
         None => format!("{verdict}\n{landing}"),
     });
     if v.block { 2 } else { 0 }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod digest_tests {
-    use super::digest_newer_than;
-
-    #[test]
-    fn digest_must_match_worker_and_be_newer_than_claim() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("2026-08-21-frontend-icons.md"), "x").unwrap();
-        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
-        assert!(digest_newer_than(dir.path(), "frontend", None));
-        assert!(!digest_newer_than(dir.path(), "backend", None));
-        // A claim in the future: nothing is newer.
-        assert!(!digest_newer_than(
-            dir.path(),
-            "frontend",
-            Some("2999-01-01T00:00:00Z")
-        ));
-        assert!(digest_newer_than(
-            dir.path(),
-            "frontend",
-            Some("2000-01-01T00:00:00Z")
-        ));
-        assert!(!digest_newer_than(
-            &dir.path().join("missing"),
-            "frontend",
-            None
-        ));
-    }
 }
