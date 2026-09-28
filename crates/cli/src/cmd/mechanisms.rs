@@ -161,7 +161,8 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-would-refuse",
         class: "refusal",
-        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1.",
+        what: "The same gate, advisory: reports what it would refuse without AIR_ENFORCE=1. \
+               The Stop hook's arm of it was deleted 2026-09-28 (air-wau8).",
         added: "2026-08-18 (plan 0001)",
         source: "docs/design.md §6.2 (plan 0001 §5 at the time)",
         // `hook.handover` and `hook.stop` are the first slice's names for the same advisory
@@ -174,7 +175,10 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.stop", "would-refuse"),
             // The Stop hook's advisory under its dispatched name, written since the event was
             // dispatched by name and registered by nobody until air-hqj8 (30 in this repo's
-            // record on 2026-09-25).
+            // record on 2026-09-25). Deleted 2026-09-28 (air-wau8, owner: "a worker stops for
+            // many reasons; delete it, keep the nudge") after 443 lines in one day at an
+            // adopter, 329 of them repeats, all describing the normal wait for the lane. Kept
+            // here only so days recorded before then still attribute; nothing writes it now.
             ("hook.Stop", "would-refuse"),
         ]),
         // Recorded when the gate was designed: advisory in M0, "blocking only when the worker
@@ -394,7 +398,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "stop-nudge",
         class: "nudge",
-        what: "At WIP 0 with beads ready, the Stop hook names them once.",
+        what: "At WIP 0 with beads ready, the Stop hook names them once. Since air-wau8 \
+               (2026-09-28), under a verify lane, a worker whose every claim is batch-ready \
+               counts as WIP 0.",
         // air-7q5 asked whether this is an auto-start, since starting a session must not start
         // work. It is NOT, and it is left alone rather than gated. A Stop hook fires only after
         // the model has produced a turn, and a worker launched with no `--task` is given no

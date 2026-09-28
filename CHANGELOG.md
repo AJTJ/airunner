@@ -53,6 +53,8 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- Under a verify lane, a worker whose every claim is batch-ready is nudged with the ready beads
+  when it stops, the same as a worker with no claim.
 - Air expects bd 1.3.0 instead of 1.2.2 (`air doctor`'s pin, the install hint, the docs).
   bd 1.3.0 refuses the reopen `air release` makes on a bead someone else holds; see Fixed.
 - The fleet's protocol lives in Air's roles text (`.air/roles.md`). An adopting repository keeps
@@ -90,6 +92,8 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The Stop hook no longer reports what a close would refuse. `air close` and `air handover`
+  still say it when they are run.
 - The hook no longer reads `bd close` or `bd update -s closed|awaiting_review` from a shell
   command: neither the hand-over check on it nor the claim release after it. Workers and the
   lane close with `air close`, and their launchers deny bd's write commands.

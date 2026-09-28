@@ -139,10 +139,7 @@ traces! {
     POST_TOOL_USE_JOURNALED = "hook.PostToolUse" / "journaled";
     STOP_OBSERVED = "hook.Stop" / "observed";
     STOP_NUDGE = "hook.Stop" / "nudge";
-    STOP_PASS = "hook.Stop" / "pass";
     STOP_NO_CLAIM = "hook.Stop" / "no-claim";
-    STOP_WOULD_REFUSE = "hook.Stop" / "would-refuse";
-    STOP_WOULD_REFUSE_REPEAT = "hook.Stop" / "would-refuse-repeat";
     SUBAGENT_STOP_OBSERVED = "hook.SubagentStop" / "observed";
     NOTIFICATION_STOPPED = "hook.Notification" / "stopped";
     NOTIFICATION_OBSERVED = "hook.Notification" / "observed";
