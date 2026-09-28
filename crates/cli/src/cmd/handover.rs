@@ -109,6 +109,20 @@ pub fn facts(
     let digest_untracked = digest == Some(Digest::Untracked);
     let digest_present = digest.map(|d| d == Digest::Tracked);
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
+    // air-erii: read only when HEAD has no green, which is when a refusal can name them.
+    let (red_at_head, precheck_missing) = if green_at_head {
+        (None, false)
+    } else {
+        let red = ledger
+            .latest_run_at_commit(&head, Kind::Verify)
+            .ok()
+            .flatten()
+            .filter(|r| r.verdict() == air_ledger::verify::Verdict::Red)
+            .map(|r| r.log_path);
+        let precheck = super::status::precheck_declared(repo)
+            && !super::green::at(ledger, repo, &head, Kind::Precheck).is_ok_and(|e| e.holds());
+        (red, precheck)
+    };
     Ok(GateFacts {
         worker: worker.to_string(),
         // air-kcns: `air handover` IS the hand-over query, so there is no command to name and
@@ -132,6 +146,8 @@ pub fn facts(
         held_beads,
         carried_beads,
         runs_at_head,
+        red_at_head,
+        precheck_missing,
         digest_present,
         digest_untracked,
         digest_dir: digest_at.map(|d| d.shown),

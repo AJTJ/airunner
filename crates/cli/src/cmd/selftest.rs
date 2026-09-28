@@ -6806,6 +6806,8 @@ fn base_facts() -> GateFacts {
         main_moved: None,
         bead_claimed_or_carried: true,
         runs_at_head: (1, 0),
+        red_at_head: None,
+        precheck_missing: false,
         digest_present: None,
         digest_untracked: false,
         digest_dir: None,
