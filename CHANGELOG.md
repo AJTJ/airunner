@@ -56,6 +56,8 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- A bead writes its changelog line as a fragment, `changelog.d/<bead-id>.md`, instead of into
+  this file, which every landing conflicted on. This is the last line written here directly.
 - `air land` closes an epic once bd reports every one of its children closed, and never an
   epic with no children. `air status` names an epic to decompose only when it has no
   children, and prints the beads-without-initiative count only when `"metis": true` is set.
