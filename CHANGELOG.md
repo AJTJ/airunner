@@ -13,7 +13,6 @@ missing notices, which are fixed or added below.
 
 ### Added
 
-- `docs/solved-issues.md`: the register of every problem Air has hit and demonstrably solved, with the fix and what would regress it (owner, 2026-09-28).
 
 - `air status` shows, per worker with a precheck in the last day, `precheck p50 Ns, wait after
   p50 Ns`: how long its prechecks ran and how long from a run's end to its next tool call.
@@ -65,7 +64,6 @@ missing notices, which are fixed or added below.
   children, and prints the beads-without-initiative count only when `"metis": true` is set.
   The decomposition skill puts an epic's "Done when" in its last child and files children
   with their `--deps`.
-- This repo sets `verify_lane: true`: the lane verifies once per batch; workers run no verify of their own (four parallel Rust verifies had put the owner's machine at load 40).
 
 - The channel poll no longer runs `lsof`. Five sessions polling every few seconds kept three
   or four `lsof` scans running at 40-50% CPU each on a loaded machine. Only `air status` run by
