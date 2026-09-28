@@ -76,6 +76,12 @@ pub struct GateFacts {
     pub carried_beads: Vec<String>,
     /// (green, red) runs recorded at HEAD; disagreement is reported as flakiness.
     pub runs_at_head: (i64, i64),
+    /// The newest verify at HEAD is red: where its output was kept, or `None` when it kept
+    /// none (air-erii). Named in the refusal, which said only "no green".
+    pub red_at_head: Option<Option<String>>,
+    /// The repo declares a precheck and none is green at HEAD (air-erii). Under a lane the
+    /// branch is not batch-ready without one, so no batch green comes until the worker runs it.
+    pub precheck_missing: bool,
     /// Digest check (owner ruling D, 2026-08-21): `None` when the repo configures no digest
     /// directory, or when there is no bead to declare (no bead named and no claim held,
     /// air-xbl: a batching lane that merges other workers' green work holds nothing and hands
@@ -214,6 +220,14 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
                     .to_string(),
             )
         };
+        // air-erii: a red at this head is a fact the reader acts on, and so is its output.
+        let detail = match &f.red_at_head {
+            Some(log) => format!(
+                "{detail}; a red verify is recorded at this head, output: {}",
+                log.as_deref().unwrap_or("not kept")
+            ),
+            None => detail,
+        };
         missing.push(Missing {
             check: "verify-green-at-head",
             detail,
@@ -221,6 +235,20 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             // Recording a verify is the lane's job, never the worker's, where one runs.
             flow_dependent: true,
         });
+        // air-erii: "wait for the next batch" read as the worker having nothing to do, when a
+        // branch with no precheck never enters one. The fix is the worker's own.
+        if f.precheck_missing {
+            missing.push(Missing {
+                check: "precheck",
+                detail: format!(
+                    "no precheck recorded at {}, and this repo gates the batch on one",
+                    short(&f.head)
+                ),
+                fix: "`air record precheck -- <the repo's precheck command>` in this worktree"
+                    .to_string(),
+                flow_dependent: false,
+            });
+        }
     }
     // D1 (0.4.7 trial): judge the bead, not the branch head. When every commit naming the
     // bead is in main (landed) or in a recorded green that contained the main it ran over, the
@@ -524,6 +552,36 @@ mod tests {
 
     use super::*;
 
+    /// air-erii: a red at HEAD is named with its output, and a missing precheck is its own
+    /// check with the worker's fix; neither appears while HEAD is green.
+    #[test]
+    fn a_red_at_head_and_a_missing_precheck_are_named() {
+        let mut f = facts();
+        f.green_at_head = false;
+        f.runs_at_head = (0, 1);
+        f.red_at_head = Some(Some("/r/.air/logs/01X.log".into()));
+        f.precheck_missing = true;
+        let v = handover_verdict(&f);
+        assert!(
+            v.message
+                .contains("a red verify is recorded at this head, output: /r/.air/logs/01X.log"),
+            "{}",
+            v.message
+        );
+        assert!(
+            v.message.contains(
+                "precheck: no precheck recorded at f854145, and this repo gates the batch on one — fix: `air record precheck -- <the repo's precheck command>` in this worktree"
+            ),
+            "{}",
+            v.message
+        );
+        f.red_at_head = Some(None);
+        assert!(handover_verdict(&f).message.contains("output: not kept"));
+        let mut green = facts();
+        green.precheck_missing = true;
+        assert!(handover_verdict(&green).pass);
+    }
+
     fn facts() -> GateFacts {
         GateFacts {
             worker: "backend-leaning".into(),
@@ -542,6 +600,8 @@ mod tests {
             main_moved: None,
             bead_claimed_or_carried: true,
             runs_at_head: (1, 0),
+            red_at_head: None,
+            precheck_missing: false,
             digest_present: None,
             digest_untracked: false,
             digest_dir: None,
