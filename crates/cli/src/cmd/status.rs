@@ -38,11 +38,10 @@ pub mod kinds {
     pub const LANDABLE: &str = "landable";
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
-    pub const LANDED_NOT_CLOSED: &str = "landed-not-closed";
-    /// air-gazh: the inverse of the one above. Closed ∩ landed was reported; closed ∩ NOT
-    /// landed was not, and nothing else in this list covers it — `landable` needs a branch
-    /// containing main so it goes quiet the moment main moves, and `landed-not-closed` needs a
-    /// landing to have happened.
+    // `landed-not-closed` was here (air-ayp; DELETED by air-cizz, owner 2026-09-28): 7 of 8
+    // firings at an adopter were paths an acceptance clause only mentioned. See mechanisms.rs.
+    /// air-gazh: closed ∩ NOT landed, which nothing else in this list covers — `landable`
+    /// needs a branch containing main so it goes quiet the moment main moves.
     pub const CLOSED_NOT_LANDED: &str = "closed-not-landed";
     // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
     // Its subject was the owner capture queue, which is gone: the owner's queue is beads
@@ -59,7 +58,6 @@ pub mod kinds {
         HANDOVER_NOT_GREEN,
         LANDABLE,
         REWOUND_AND_CARRIED,
-        LANDED_NOT_CLOSED,
         CLOSED_NOT_LANDED,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
@@ -153,10 +151,7 @@ pub struct Snapshot {
     /// `lease_take` records a want only when it was refused by a HEALTHY lease, so a name in
     /// here is someone who asked and was told to wait.
     pub lease_wants: BTreeMap<String, Vec<String>>,
-    /// Beads a landing merged but did not close, and that nobody has closed since. A ledger
-    /// fact, never a bd status (air-ayp).
-    pub landed_open: Vec<air_ledger::landings::LandedOpen>,
-    /// air-gazh: the inverse. Beads bd has closed whose commits are in no tree but their
+    /// air-gazh: Beads bd has closed whose commits are in no tree but their
     /// author's worktree. Joined from two things already computed — `landable` (which names
     /// every bead on a branch not yet in main, blocked or not) and the ledger's `closed`
     /// release reason — so it costs no git walk and no bd call of its own.
@@ -1742,47 +1737,8 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
         });
     }
-    // air-ayp: a bead that landed while this merge contradicts one of its acceptance clauses.
-    // Not "Air could not read it" — refuted. Subject is the bead, so the channel says it once
-    // and says it again only when the reason changes.
-    //
-    // air-jy99: the sentence names no action whose permissibility depends on the repo's flow.
-    // It used to end "either reopen it or file what is left", and an adopter's CLAUDE.md says
-    // "closed is closed — never reopen": Air was instructing their coordinator to do what their
-    // own rules forbid. This is air-155w's ruling at a second surface — a flow-dependent fix
-    // states a CONDITION, not a command — and the same renderer in `land.rs` said it too, which
-    // is exactly how air-155w's own defect survived its first fix. No config key decides this:
-    // reading a repo's flow is the thing air-155w's comment calls "a claim about a decision made
-    // somewhere else". Removal: when Air is told a flow, which is not planned.
-    //
-    // air-ppf: the sentence names `contradicted`, never `why`. `why` is the whole record,
-    // refuted and unreadable clauses together, and rendering it here put "nothing Air can
-    // look up" under a headline asserting a contradiction; two sound closes read as wrong
-    // ones on 2026-08-30. The unreadable clauses stay on the row and in the `air land` print.
-    for o in &s.landed_open {
-        let (bead, why) = (&o.bead, &o.contradicted);
-        out.push(Attention {
-            worker: bead.clone(),
-            kind: kinds::LANDED_NOT_CLOSED,
-            detail: format!(
-                "{bead} landed in {} with an acceptance clause naming a file this merge did \
-                 not change: {why}. That is a lookup that did not answer, NOT a contradiction \
-                 (air-k6uh: six of nine such firings were clauses that held, satisfied in \
-                 another commit or naming a path the clause only mentions). Read the bead: the \
-                 worker closes its own with proof, so either it is done elsewhere, or what is \
-                 left is untracked and must not stay that way. How a closed bead's remainder \
-                 gets tracked is this repo's flow to say; Air reads no flow and prescribes \
-                 nothing here (air-jy99). Landed from {}.",
-                o.merge_commit.get(..8).unwrap_or(&o.merge_commit),
-                o.worker
-            ),
-            for_minutes: 0,
-            fingerprint: format!("{bead}/{why}"),
-        });
-    }
-
-    // air-gazh: the inverse of the condition above, and the state no other condition reaches.
-    // `landable` goes quiet the moment main moves; `landed-not-closed` needs a landing. A bead
+    // air-gazh: a bead closed and not landed, the state no other condition reaches.
+    // `landable` goes quiet the moment main moves. A bead
     // closed on a batch green whose batch then stopped containing main satisfies neither, and
     // an adopter had six of them at once with no error anywhere in how they got there.
     //
@@ -2183,10 +2139,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     }
     // A healthy answer also refreshes `.air/ready.json` for the Stop hook (air-09i); a slow
     // bd leaves that file as it was.
-    // Beads bd shows back in the work queue. Used to clear a `landed-not-closed` report once
-    // somebody reopened the bead (air-dlw); no extra bd call, these lists are already here.
-    let mut back_in_queue: std::collections::BTreeSet<String> =
-        in_progress.iter().flatten().cloned().collect();
     // air-uir: both counts come off the SAME `bd ready` answer and the same `claimable`
     // filter the Stop nudge uses, so the two can never disagree about one tick's beads.
     let mut claimable_depth: Option<usize> = None;
@@ -2218,7 +2170,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
                 pool.extend(ip.iter().cloned());
             }
             without_initiative = Some(super::metis::without_initiative(&pool));
-            back_in_queue.extend(v.iter().map(|i| i.id.clone()));
             // air-f10: one partition of one answer; the counts are its lengths.
             let split = super::ready_cache::split(&v);
             let ids = split.claimable;
@@ -2358,15 +2309,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         oldest_capture_at: inbox.first().map(|c| c.captured_at.clone()),
         leases,
         lease_wants,
-        // A ledger read, so it survives an absent bd (air-ayp). The ledger already drops a
-        // bead whose claim was released as closed (0.4.10 trial); a bead bd shows back in the
-        // work queue has been dealt with too: somebody reopened it.
-        landed_open: ledger
-            .landed_open()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|o| !back_in_queue.contains(&o.bead))
-            .collect(),
         sessions: all_sessions,
         ready_depth,
         claimable_depth,

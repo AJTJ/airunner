@@ -21,8 +21,9 @@
 //!   reported rather than silently dropped.
 //! - **Isolation is Air's, not the harness's.** claude is started with its working directory
 //!   in the worktree and no `--worktree` flag (air-8gj, owner ruling 2026-09-06), so the
-//!   harness's own worktree isolation is off. The edit fence in the hook
-//!   (`air_hooks::fence`) and the deny list hold the line instead; see `launch::worker_argv`.
+//!   harness's own worktree isolation is off. The cwd, the deny list and roles.md hold the
+//!   line instead (the edit fence that also did was removed by air-w18h); see
+//!   `launch::worker_argv`.
 //! - **WorktreeCreate hook.** The adopter's file says configuring one "replaces git's worktree
 //!   logic entirely and this file stops being processed". Checked against 2.1.261's messages
 //!   rather than exercised: the harness uses the hook's returned path in place of its own git

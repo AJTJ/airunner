@@ -1,91 +1,23 @@
-//! What a landing may close, and what it may only land (air-ayp).
+//! A bead's acceptance clauses, read for `air land` to print beside each landed bead (air-ayp).
 //!
-//! The adopter measured this failure in its own closer: 99 of 532 beads (18.6%) closed on branch
-//! containment alone, never reading acceptance, and accelerating — 84 of the last 172 closes,
-//! 48.8%, over two days. Verdicts on the 99: 82 done, 14 partial, 1 not done, 1 unverifiable,
-//! 1 moot. The misses are not random. They are beads carrying one clause the merging agent
-//! could not discharge itself: an owner decision, an owner-only config write, a deploy. One
-//! closed a privacy bead holding an unresolved owner ruling, which made the ruling stop
-//! existing; another left a locked-out user unable to reset their password, waiting on a
-//! config write nobody knew was outstanding.
+//! `air land` closes nothing: the worker closes its own bead with proof (owner ruling,
+//! 2026-08-22). It prints every landed bead with its acceptance text so a wrong close is
+//! visible where it lands, and draws no verdict from it.
 //!
-//! Source: `the adopter's docs/plans/0029-bead-closure.md` §D.6, relayed by that
-//! project's coordinator on 2026-08-22 and recorded in air-ayp. Not read from here: a session
-//! may only touch its own project (air-0lk), so these numbers are cited, not verified.
+//! It used to judge each clause by lookup (a green at the landed sha, a named path in the
+//! merge) and raise `landed-not-closed` for a path the merge did not change. Deleted
+//! 2026-09-28 (air-cizz, owner): at an adopter 7 of 8 firings were paths the text only
+//! mentioned, in this repo 6 of 9 held (air-k6uh), it never cleared for a bead closed outside
+//! `air close`, and it misparsed a possessive path. Close-with-proof already covers the
+//! failure it was built for (the adopter's 99 beads closed on branch containment alone).
 //!
-//! ## Where the criteria live, and how that was got wrong three times
+//! ## Where the criteria live
 //!
 //! bd keeps acceptance in two places and OMITS the `acceptance_criteria` key entirely when it
-//! is unset. So a key listing taken over beads that never set it reads as "bd has no such
-//! field" — which is what this repo's beads show (0 of 33 carry it) and what two coordinators
-//! and this module concluded, each having checked. The adopter's implementing agent surveyed all
-//! 711 of its beads and inverted it: 647 field, 57 section, 0 both, 7 neither. The shape is a
-//! property of how a repo files beads, and `air land` runs in every repo, so `clauses_of`
-//! reads the UNION. A fixture with one shape proves nothing about the other.
-//!
-//! Their formulation, which is the lesson: a verification that does not have the shape of the
-//! use is not a verification. Three parties, two real checks, still wrong, because all three
-//! sampled where the use required a survey.
-//!
-//! Air shipped `air land` with the same shape on 2026-08-22 (air-3pz), before the `landings`
-//! table had a writer, so the constraint is built in rather than retrofitted.
-//!
-//! ## The worker closes its own bead with proof
-//!
-//! Owner ruling, 2026-08-22: there is no hand-over-for-review. The worker that did the work
-//! closes its own bead, and the close reason is PROOF — a command and its output, a
-//! `file:line`, a passing test — not a description of what was built. So by the time a branch
-//! lands there is nothing left to close.
-//!
-//! `air land` therefore closes nothing. Its whole acceptance behaviour is to PRINT every bead
-//! in the merge range beside its criteria and Air's verdict on each clause, so a wrong close is
-//! visible at the moment it lands. That print is the only external check on the honour system.
-//! (This was built as a report layer plus a deletable closing layer; the ruling deleted the
-//! closing layer, which is what the split was for.)
-//!
-//! The green-at-HEAD gate matters more under this model, not less, since an agent is proving
-//! its own work: `air close` runs the gate on every close a worker makes, so the one refusal
-//! covers close-with-proof exactly as it covered hand-over.
-//!
-//! **Air is not the judge of prose.** It discharges exactly two clause shapes, and both are
-//! lookups rather than readings:
-//!
-//! 1. A clause asking for a recorded green → a `verify_runs` row at the landed sha. A ledger
-//!    lookup.
-//! 2. A clause naming repository paths → every path it names is in the merge's changed files.
-//!    A git lookup.
-//!
-//! Everything else is `Undecidable`: Air has nothing to look up, which is a fact about Air and
-//! not a criticism of the bead. 29 of the adopter's 99 were of that kind, and the bead requires
-//! that case be explicit — never silently closed, never blocked from landing.
-//!
-//! `Discharged` on every clause is what lets a reader trust a close at a glance. A clause Air
-//! can actively REFUTE — a bead naming a file the merge did not touch — is the signal worth
-//! carrying past scrollback, because that is a wrong close rather than an unreadable one.
-//!
-//! ## A path Air cannot resolve is unreadable, not refuted (air-dqa)
-//!
-//! `paths_named` reads path-like tokens out of prose, and a token it trims wrongly (the adopter
-//! wrote `docs/reference/tooling.md`'s, and the possessive survived the trim) matched nothing in
-//! the merge and was reported as CONTRADICTED. Three firings, zero true, in the mechanism whose
-//! job is to be believed. So a named path that is NOT in the merge's file list is checked
-//! against the tree at the landed commit before anything is asserted: a file that exists and
-//! was not touched is refuted (the ai_runner case, where the work correctly landed in a
-//! different file, and a person must read it); a token that is no file at all is reported as
-//! a path Air cannot resolve, which is the unreadable direction. No further trimming rule was
-//! added: a stricter trimmer is the same brittleness with a longer regex.
-//!
-//! **Decided, 2026-09-05: acceptance clauses are NOT required to declare paths in a fixed
-//! form.** The digest declares its bead (air-agq) because that fact guards a gate and fails
-//! toward permitting. This mechanism reports; its failure is a person reading a wrong line,
-//! and with the tree check the wrong line can only be the true fact "exists, untouched". A
-//! declared form would be a syntax every bead author in every adopting repo must know, for a
-//! reporter. Revisit if a false refutation is recorded after this change.
-//!
-//! Removal condition: remove when acceptance criteria are machine-checkable by construction,
-//! at which point the merge either satisfies them or does not and no judgement is involved.
-
-use serde::Serialize;
+//! is unset, so a key listing over beads that never set it reads as "bd has no such field".
+//! The adopter surveyed all 711 of its beads: 647 field, 57 section, 0 both, 7 neither. The
+//! shape is a property of how a repo files beads, and `air land` runs in every repo, so
+//! `clauses_of` reads the UNION.
 
 /// Every acceptance clause a bead states, from BOTH places bd keeps them (air-ayp).
 ///
@@ -151,326 +83,32 @@ pub fn section(description: &str) -> Vec<String> {
     out
 }
 
-/// What the merge lets Air say about one clause. Ordered by how much Air knows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "verdict", rename_all = "kebab-case")]
-pub enum Verdict {
-    /// Air looked it up and it holds. `how` names the lookup, so the close is checkable.
-    Discharged { how: String },
-    /// Air looked it up and the lookup did not answer: the bead names a file that exists at
-    /// the landed commit and that this merge did not touch.
-    ///
-    /// **It is not a contradiction, and calling it one was wrong** (air-k6uh). All nine
-    /// standing alerts were classified against the tree on 2026-09-06: three were true, six
-    /// were not, and the six divide into two causes the lookup cannot see. The work landed in
-    /// a DIFFERENT COMMIT than the merge — a coordinator's ruling written on main, an earlier
-    /// landing, a disjunctive clause the bead itself satisfies (air-9iz, air-8gj, air-srv). Or
-    /// the path is SUBJECT MATTER rather than a deliverable: "a note listing `.claude/air.json`
-    /// keys", "`air install` reports a stale entry in `.claude/settings.json`" — the path is a
-    /// noun in the sentence, and whether it is the thing to change is grammar (air-470,
-    /// air-80x.5, air-b5k).
-    ///
-    /// The second cause cannot be narrowed away without reading prose, which air-dqa already
-    /// refused in this module: "a stricter trimmer is the same brittleness with a longer
-    /// regex." So the fact is kept and the CLAIM is what changed — the underlying statement
-    /// ("this merge did not change X, and X exists at the landed commit") is true in all nine.
-    ///
-    /// Measured and NOT built: at the landed commit, does the named file reference the bead?
-    /// That is a lookup rather than a reading, it fired on exactly the three
-    /// satisfied-elsewhere cases and none of the true ones, and it would take nine alerts to
-    /// six. It is volume rather than correctness, needs the bead id plumbed through `Evidence`
-    /// and a git read per named path, and is worth building when the volume is the complaint
-    /// (`docs/design.md` has the numbers).
-    Unevidenced { how: String },
-    /// Air has nothing to look up. Not a defect in the bead. `how` says why: plain prose, or a
-    /// path-like token that is no file at the landed commit (air-dqa).
-    Undecidable { how: String },
-}
-
-/// The one reason most clauses are undecidable: they are prose.
-const PROSE: &str = "nothing Air can look up";
-
-impl Verdict {
-    pub fn discharged(&self) -> bool {
-        matches!(self, Verdict::Discharged { .. })
-    }
-}
-
-/// What Air can point at for one landing. Both fields are facts it already has: the verify run
-/// it recorded at the merge commit, and the merge's own file list.
-#[derive(Debug, Clone, Copy)]
-pub struct Evidence<'a> {
-    /// A green `verify_runs` row exists at the landed sha.
-    pub green_at_landed: bool,
-    /// Repo-relative paths the merge changed.
-    pub changed: &'a [String],
-    /// Every path in the tree at the landed commit (air-dqa). A named path in neither list is
-    /// a token Air cannot resolve, not a file the merge failed to touch.
-    pub tree: &'a [String],
-}
-
-/// Does this token look like a repository path? Deliberately narrow: a slash and a dot, no
-/// spaces. `docs/rules/roles.md` yes; `bd` and `awaiting_review` no.
-fn path_like(tok: &str) -> bool {
-    let t = tok.trim_matches(|c: char| {
-        !c.is_ascii_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
-    });
-    t.contains('/') && t.rsplit('/').next().is_some_and(|f| f.contains('.')) && !t.ends_with('/')
-}
-
-/// A bare filename (a dot, no slash, no spaces) is a path only when it exists in the landed
-/// tree (0.4.9 trial): `serve.sh` in "`serve.sh` exists on main" was prose to [`path_like`],
-/// so every one of the trial's twelve beads came back "could not discharge". The tree keeps
-/// the check exact: `v1.2.3` or `e.g.` is a path only if a file of that name is there.
-fn bare_file_in_tree(tok: &str, tree: &[String]) -> bool {
-    !tok.contains('/')
-        && tok.contains('.')
-        && !tok.starts_with('.')
-        && tree.iter().any(|t| t == tok)
-}
-
-/// The path-like tokens in a clause, in order, deduplicated; [`paths_named_in`] with no tree.
-#[cfg(test)]
-pub fn paths_named(clause: &str) -> Vec<String> {
-    paths_named_in(clause, &[])
-}
-
-/// [`paths_named`], plus bare filenames that exist in `tree` (see [`bare_file_in_tree`]).
-pub fn paths_named_in(clause: &str, tree: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for raw in clause.split_whitespace() {
-        // `path.rs:277` and `path.rs:12-30` are how this repo cites code; the path is the
-        // part before the colon.
-        let t = raw
-            .split(':')
-            .next()
-            .unwrap_or(raw)
-            .trim_matches(|c: char| {
-                !c.is_ascii_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
-            })
-            .trim_end_matches('.');
-        if (path_like(t) || bare_file_in_tree(t, tree)) && !out.iter().any(|p| p == t) {
-            out.push(t.to_string());
-        }
-    }
-    out
-}
-
-/// Does this clause ask for a recorded green? Both words, so "verify the merged result reads
-/// well" is not read as a request for a ledger row.
-fn asks_for_green(clause: &str) -> bool {
-    let c = clause.to_ascii_lowercase();
-    (c.contains("verify") || c.contains("make verify"))
-        && (c.contains("green") || c.contains("record"))
-}
-
-/// Judge one clause against what Air can look up. Pure.
-pub fn judge(clause: &str, ev: &Evidence<'_>) -> Verdict {
-    if asks_for_green(clause) {
-        return if ev.green_at_landed {
-            Verdict::Discharged {
-                how: "a green verify is recorded at the landed sha".into(),
-            }
-        } else {
-            Verdict::Unevidenced {
-                how: "no green verify is recorded at the landed sha".into(),
-            }
-        };
-    }
-    let paths = paths_named_in(clause, ev.tree);
-    if paths.is_empty() {
-        return Verdict::Undecidable { how: PROSE.into() };
-    }
-    let missing: Vec<&String> = paths
-        .iter()
-        .filter(|p| !ev.changed.iter().any(|c| c == *p))
-        .collect();
-    if missing.is_empty() {
-        return Verdict::Discharged {
-            how: format!("the merge changed {}", paths.join(", ")),
-        };
-    }
-    // air-dqa: before asserting the merge did not change a file, make sure it IS a file.
-    // A token the trimmer got wrong is no file at the landed commit, and saying "did not
-    // change" about it is a confident false accusation. An existing file the merge left alone
-    // is the true fact, and the one Air must keep saying.
-    let (untouched, unresolved): (Vec<&String>, Vec<&String>) = missing
-        .into_iter()
-        .partition(|p| ev.tree.iter().any(|t| t == *p));
-    let list = |v: &[&String]| v.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ");
-    if !untouched.is_empty() {
-        Verdict::Unevidenced {
-            how: format!("the merge did not change {}", list(&untouched)),
-        }
-    } else {
-        Verdict::Undecidable {
-            how: format!(
-                "names {}, which is not a path in the tree at the landed commit, so Air \
-                 cannot resolve it",
-                list(&unresolved)
-            ),
-        }
-    }
-}
-
-/// One bead's acceptance, judged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Judged {
-    pub bead: String,
-    pub clauses: Vec<(String, Verdict)>,
-}
-
-impl Judged {
-    /// Every clause looked up and held. What lets a reader trust a close at a glance. No
-    /// clauses at all is not a pass: it means Air read nothing (the adopter had 7 such beads).
-    pub fn all_discharged(&self) -> bool {
-        !self.clauses.is_empty() && self.clauses.iter().all(|(_, v)| v.discharged())
-    }
-
-    /// At least one clause names a file that exists at the landed commit and that this merge
-    /// did not change. Distinct from "could not read", and the only signal carried past the
-    /// print (air-ayp) — but NOT a contradiction (air-k6uh): six of nine such firings on
-    /// 2026-09-06 were clauses that were satisfied, in another commit or by a path the clause
-    /// merely mentions. See [`Verdict::Unevidenced`].
-    pub fn refuted(&self) -> bool {
-        self.clauses
-            .iter()
-            .any(|(_, v)| matches!(v, Verdict::Unevidenced { .. }))
-    }
-
-    /// One line naming every clause Air could not discharge, refuted and unreadable alike, for
-    /// the landings row. Complete, so the record is; NOT what the condition says (air-ppf).
-    pub fn why_open(&self) -> String {
-        if self.clauses.is_empty() {
-            return "the bead states no acceptance criteria, in the field or the description, \
-                    so Air read nothing to check"
-                .to_string();
-        }
-        let mut parts: Vec<String> = Vec::new();
-        for (text, v) in &self.clauses {
-            let short = text.chars().take(70).collect::<String>();
-            match v {
-                Verdict::Discharged { .. } => {}
-                Verdict::Unevidenced { how } | Verdict::Undecidable { how } => {
-                    parts.push(format!("\"{short}\": {how}"));
-                }
-            }
-        }
-        parts.join("; ")
-    }
-
-    /// One line naming only the clauses whose named file the merge did not change, for the
-    /// sentence that reports them (air-ppf). `why_open` under that headline presented every
-    /// unreadable clause the same way; on 2026-08-30 that read as two wrong closes that were
-    /// sound. The headline itself stopped claiming a contradiction in air-k6uh; the split
-    /// stays, because the two groups are still different facts.
-    pub fn why_contradicted(&self) -> String {
-        self.clauses
-            .iter()
-            .filter_map(|(text, v)| match v {
-                Verdict::Unevidenced { how } => {
-                    let short = text.chars().take(70).collect::<String>();
-                    Some(format!("\"{short}\": {how}"))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-}
-
-/// **Layer 1.** Every bead the merge carries, printed beside its acceptance and Air's verdict
-/// on each clause, so a wrong close is visible at the moment it lands. True under both closure
-/// models: if this repo adopts close-with-proof, the closing layer goes and this stays
-/// (the adopter `docs/plans/0029-bead-closure.md`, where the print is the only external check on
-/// the honour system). Pure.
-pub fn report(judged: &[Judged]) -> String {
-    if judged.is_empty() {
+/// Every landed bead beside its acceptance text, with no verdict (air-cizz). Pure.
+pub fn listing(beads: &[(String, Vec<String>)]) -> String {
+    if beads.is_empty() {
         return String::new();
     }
     let mut s = format!(
         "\nacceptance for {} bead(s) in this merge (air land closes nothing; the worker closes \
-         its own bead with proof, so this is the check on that):\n",
-        judged.len()
+         its own bead with proof):\n",
+        beads.len()
     );
-    for j in judged {
-        s.push_str(&format!(
-            "\n  {} — {}\n",
-            j.bead,
-            if j.refuted() {
-                "UNCONFIRMED: a clause names a file this merge did not change (air-k6uh: \
-                 this is a lookup that did not answer, not a contradiction; read it)"
-            } else if j.all_discharged() {
-                "every clause discharged"
-            } else {
-                "not fully checkable by Air; read it"
-            }
-        ));
-        if j.clauses.is_empty() {
-            s.push_str(
-                "    (no acceptance criteria in the field or the description; Air read \
-                 nothing)\n",
-            );
+    for (bead, clauses) in beads {
+        s.push_str(&format!("\n  {bead}\n"));
+        if clauses.is_empty() {
+            s.push_str("    (no acceptance criteria in the field or the description)\n");
         }
-        for (text, v) in &j.clauses {
-            match v {
-                // air-rud0: the tick carries the lookup that produced it, on its own line.
-                //
-                // A clause Air could not read said WHY, and a clause Air discharged said
-                // `ok`, with its reason on a line underneath. Read quickly — and a nine-bead
-                // landing is read quickly, by scanning this column — the bare tick is the
-                // stronger claim of the two, and it is the weaker one: `ok` means a lookup
-                // matched, not that anything about the clause's substance was checked. An
-                // adopter's batch 22 printed `ok` beside a clause about sections no longer
-                // carrying a sequential number, discharged because the merge touched that
-                // file; it would have printed the same had the change renamed a variable in
-                // it. Their lane's phrase: a lookup wearing the clothes of a judgement.
-                //
-                // It is right in this case and will be right most of the time, which is what
-                // made it invisible. Nothing about the JUDGEMENT changes — still discharged
-                // by lookup, still no reading of prose (`judge` is untouched, and so is
-                // `--json`, which carried `how` all along). Only the rendering moves, and the
-                // second line goes with it rather than repeating itself.
-                Verdict::Discharged { how } => {
-                    s.push_str(&format!("    ok ({how}) — {text}\n"));
-                }
-                // Unchanged: these were already honest, and their reasons are the long ones.
-                Verdict::Unevidenced { how } => {
-                    s.push_str(&format!("    MISS {text}\n         {how}\n"));
-                }
-                Verdict::Undecidable { how } => {
-                    s.push_str(&format!("    ?    {text}\n         {how}\n"));
-                }
-            }
+        for c in clauses {
+            s.push_str(&format!("    - {c}\n"));
         }
     }
     s
-}
-
-/// Judge already-parsed clauses. `air land` takes this path: the clauses came from the same
-/// `bd list --json` that produced the landing list, so nothing re-reads bd.
-pub fn judge_clauses(bead: &str, clauses: Vec<String>, ev: &Evidence<'_>) -> Judged {
-    Judged {
-        bead: bead.to_string(),
-        clauses: clauses
-            .into_iter()
-            .map(|c| {
-                let v = judge(&c, ev);
-                (c, v)
-            })
-            .collect(),
-    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-
-    /// Test convenience: parse then judge, the way `air land` does across two call sites.
-    fn judge_desc(bead: &str, description: &str, ev: &Evidence<'_>) -> Judged {
-        judge_clauses(bead, clauses_of("", description), ev)
-    }
 
     const BEAD: &str = "\
 ## Incident
@@ -500,123 +138,6 @@ Something happened. See docs/rules/roles.md for the rule.
         assert!(clauses_of("", "## Incident\n\n- a thing\n").is_empty());
     }
 
-    #[test]
-    fn a_path_the_merge_touched_discharges_and_one_it_did_not_is_unevidenced() {
-        let changed = vec!["docs/rules/roles.md".to_string()];
-        let tree = vec![
-            "docs/rules/roles.md".to_string(),
-            "docs/rules/adopting-air.md".to_string(),
-        ];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &tree,
-        };
-        assert!(judge("docs/rules/roles.md names the rule.", &ev).discharged());
-        let v = judge("docs/rules/adopting-air.md names the rule.", &ev);
-        assert!(
-            matches!(&v, Verdict::Unevidenced { how } if how.contains("docs/rules/adopting-air.md")),
-            "{v:?}"
-        );
-    }
-
-    #[test]
-    fn a_green_clause_reads_the_ledger_and_prose_is_undecidable() {
-        let none: Vec<String> = vec![];
-        let green = Evidence {
-            green_at_landed: true,
-            changed: &none,
-            tree: &none,
-        };
-        let red = Evidence {
-            green_at_landed: false,
-            changed: &none,
-            tree: &none,
-        };
-        assert!(judge("Verify recorded green at HEAD.", &green).discharged());
-        assert!(matches!(
-            judge("Verify recorded green at HEAD.", &red),
-            Verdict::Unevidenced { .. }
-        ));
-        // Air is not the judge of prose: it says so rather than guessing.
-        assert!(matches!(
-            judge("The owner is told what changed.", &green),
-            Verdict::Undecidable { .. }
-        ));
-        // "verify" without a request for evidence is not a ledger question.
-        assert!(matches!(
-            judge("Verify the merged result reads well.", &green),
-            Verdict::Undecidable { .. }
-        ));
-    }
-
-    /// The bead's own rule: close on evidence, land-but-hold on anything else.
-    #[test]
-    fn a_bead_closes_only_when_every_clause_is_discharged() {
-        let changed = vec!["docs/rules/roles.md".to_string()];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &changed,
-        };
-        // The probe clause is prose to Air, so this one lands and stays open.
-        let j = judge_desc("air-1", BEAD, &ev);
-        assert!(!j.all_discharged());
-        assert!(
-            j.why_open().contains("nothing Air can look up"),
-            "{}",
-            j.why_open()
-        );
-
-        let all_evidenced = "## Acceptance Criteria\n\n- docs/rules/roles.md names the rule.\n- Verify recorded green at HEAD.\n";
-        assert!(judge_desc("air-2", all_evidenced, &ev).all_discharged());
-
-        // No section at all: Air read nothing, so it does not close.
-        let j = judge_desc("air-3", "## Incident\n\nnothing\n", &ev);
-        assert!(!j.all_discharged());
-        assert!(j.why_open().contains("states no acceptance criteria"));
-    }
-
-    /// Layer 1 is the part that survives if this repo adopts close-with-proof: every bead is
-    /// printed beside its acceptance whether it closes or not.
-    #[test]
-    fn the_report_names_every_bead_and_every_clauses_verdict() {
-        let changed = vec!["docs/rules/roles.md".to_string()];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &changed,
-        };
-        let r = report(&[
-            judge_desc("air-1", BEAD, &ev),
-            judge_desc(
-                "air-2",
-                "## Acceptance Criteria\n\n- docs/rules/roles.md names the rule.\n",
-                &ev,
-            ),
-            judge_desc("air-3", "## Incident\n\nnothing\n", &ev),
-        ]);
-        assert!(r.contains("air land closes nothing"), "{r}");
-        assert!(r.contains("air-1 — not fully checkable by Air"), "{r}");
-        assert!(r.contains("air-2 — every clause discharged"), "{r}");
-        assert!(
-            r.contains("no acceptance criteria in the field or the"),
-            "{r}"
-        );
-        // Every clause is shown, discharged or not, so a wrong close is visible. air-rud0:
-        // and a discharged one carries the lookup that discharged it ON THE VERDICT LINE, so
-        // the tick cannot be read as a stronger claim than it is.
-        assert!(
-            r.contains(
-                "ok (the merge changed docs/rules/roles.md) — docs/rules/roles.md names the rule."
-            ),
-            "{r}"
-        );
-        assert!(!r.contains("ok   docs/rules/roles.md"), "bare tick: {r}");
-        assert!(r.contains("?    Red/green probe"), "{r}");
-        assert_eq!(report(&[]), "");
-    }
-
     /// air-ayp: the two storage shapes are BOTH real and which one a bead uses depends on how
     /// its repo files beads — 33 of 33 section-only here, 647 field / 57 section / 0 both /
     /// 7 neither in the adopter. `air land` runs in both, so a fixture with one shape proves
@@ -641,22 +162,10 @@ Something happened. See docs/rules/roles.md for the rule.
             clauses_of("field one", "## Acceptance Criteria\n\n- section one\n"),
             vec!["field one".to_string(), "section one".to_string()]
         );
-        // Neither: the adopter measured 7. No clauses, so it is reported, never assumed met.
-        let j = judge_clauses(
-            "zz-7",
-            clauses_of("", "## Incident\n\nno criteria anywhere\n"),
-            &Evidence {
-                green_at_landed: true,
-                changed: &[],
-                tree: &[],
-            },
-        );
-        assert!(!j.all_discharged() && !j.refuted());
-        assert!(
-            j.why_open().contains("no acceptance criteria"),
-            "{}",
-            j.why_open()
-        );
+        // Neither: the adopter measured 7. No clauses, and the listing says so.
+        let none = clauses_of("", "## Incident\n\nno criteria anywhere\n");
+        assert!(none.is_empty());
+        assert!(listing(&[("zz-7".to_string(), none)]).contains("no acceptance criteria"));
     }
 
     /// The heading is exactly `Acceptance Criteria`. The adopter has three descriptions with
@@ -672,165 +181,23 @@ Something happened. See docs/rules/roles.md for the rule.
         assert_eq!(section(d), vec!["a real one"]);
     }
 
-    /// A refuted clause is a wrong close; an unreadable one is not. Only the first is carried
-    /// past the print.
+    /// air-cizz: the listing names every bead and every clause, and judges none.
     #[test]
-    fn refuted_and_unreadable_are_different_signals() {
-        let changed = vec!["docs/rules/roles.md".to_string()];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &changed,
-        };
-        let tree = vec![
-            "docs/rules/roles.md".to_string(),
-            "docs/absent.md".to_string(),
-        ];
-        let ev = Evidence { tree: &tree, ..ev };
-        let refuted = judge_clauses("a", vec!["docs/absent.md says it.".into()], &ev);
-        let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
-        assert!(refuted.refuted() && !refuted.all_discharged());
-        assert!(!unreadable.refuted() && !unreadable.all_discharged());
-    }
-
-    /// air-ppf: the reported line names the undischarged clause alone; the row's `why` keeps
-    /// the unreadable ones beside it. (It said "the CONTRADICTS sentence" until air-k6uh
-    /// removed that claim from every renderer.)
-    #[test]
-    fn the_contradicted_line_omits_what_air_merely_could_not_read() {
-        let changed = vec!["docs/rules/roles.md".to_string()];
-        let tree = vec![
-            "docs/rules/roles.md".to_string(),
-            "docs/absent.md".to_string(),
-        ];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &tree,
-        };
-        let j = judge_clauses(
-            "a",
-            vec![
-                "docs/absent.md says it.".into(),
-                "The owner rules on it.".into(),
-                "docs/rules/roles.md names the rule.".into(),
-            ],
-            &ev,
-        );
-        assert_eq!(
-            j.why_contradicted(),
-            "\"docs/absent.md says it.\": the merge did not change docs/absent.md"
-        );
-        assert!(j.why_open().contains("nothing Air can look up"));
-        assert!(j.why_open().contains("docs/absent.md"));
-        let unreadable = judge_clauses("b", vec!["The owner rules on it.".into()], &ev);
-        assert_eq!(unreadable.why_contradicted(), "");
-    }
-
-    /// air-dqa, the two cases the bead names. The possessive: the adopter wrote
-    /// `docs/reference/tooling.md`'s, the trim stopped at the `s`, the token matched nothing
-    /// in a merge that HAD changed that file, and Air reported a contradiction. Now: no file by
-    /// that name at the landed commit, so unreadable, with the token named. The ai_runner case:
-    /// a clause naming a file the work correctly did not touch (the pin landed in install.rs
-    /// rather than install_and_launch.rs). The file exists and the merge left it alone, which is
-    /// the true fact, and stays refuted for a person to read.
-    #[test]
-    fn a_token_that_is_no_file_is_unreadable_and_an_untouched_file_is_refuted() {
-        let changed = vec!["docs/reference/tooling.md".to_string()];
-        let tree = vec![
-            "docs/reference/tooling.md".to_string(),
-            "crates/cli/tests/install_and_launch.rs".to_string(),
-            "crates/cli/src/cmd/install.rs".to_string(),
-        ];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &tree,
-        };
-        // The possessive, verbatim from.
-        let v = judge(
-            "Air's own `docs/reference/tooling.md`'s section is updated.",
-            &ev,
+    fn the_listing_names_every_bead_and_clause_and_no_verdict() {
+        let out = listing(&[
+            ("zz-1".to_string(), clauses_of("", BEAD)),
+            ("zz-2".to_string(), vec![]),
+        ]);
+        assert!(
+            out.contains("  zz-1\n") && out.contains("  zz-2\n"),
+            "{out}"
         );
         assert!(
-            matches!(&v, Verdict::Undecidable { how } if how.contains("cannot resolve")
-                && how.contains("docs/reference/tooling.md`'s")),
-            "{v:?}"
+            out.contains("    - docs/rules/roles.md names the rule."),
+            "{out}"
         );
-        // The same clause written plainly discharges, so the tree check costs nothing real.
-        assert!(judge("docs/reference/tooling.md is updated.", &ev).discharged());
-        // The true positive Air must keep: an existing file the merge did not touch.
-        let v = judge(
-            "Pin it in crates/cli/tests/install_and_launch.rs.",
-            &Evidence {
-                changed: &["crates/cli/src/cmd/install.rs".to_string()],
-                ..ev
-            },
-        );
-        assert!(
-            matches!(&v, Verdict::Unevidenced { how }
-                if how == "the merge did not change crates/cli/tests/install_and_launch.rs"),
-            "{v:?}"
-        );
-        // A file the merge deleted is in `changed` and not in `tree`: still discharged.
-        assert!(
-            judge(
-                "docs/old.md is removed.",
-                &Evidence {
-                    changed: &["docs/old.md".to_string()],
-                    ..ev
-                }
-            )
-            .discharged()
-        );
-        // Mixed: one real untouched file beside one unresolvable token is still refuted, and
-        // names only the real one.
-        let v = judge(
-            "crates/cli/tests/install_and_launch.rs and docs/nope.md`'s are touched.",
-            &ev,
-        );
-        assert!(
-            matches!(&v, Verdict::Unevidenced { how }
-                if how == "the merge did not change crates/cli/tests/install_and_launch.rs"),
-            "{v:?}"
-        );
-    }
-
-    /// 0.4.9 trial: "`serve.sh` exists on main" was prose, so no clause of twelve beads was
-    /// settled. A bare filename counts when the landed tree has it; a dotted token the tree
-    /// lacks is still prose, so the check stays exact.
-    #[test]
-    fn a_bare_filename_is_a_path_when_the_landed_tree_has_it() {
-        let changed = vec!["serve.sh".to_string()];
-        let tree = vec!["serve.sh".to_string(), "greet.sh".to_string()];
-        let ev = Evidence {
-            green_at_landed: true,
-            changed: &changed,
-            tree: &tree,
-        };
-        let v = judge("`serve.sh` exists on main.", &ev);
-        assert!(
-            matches!(&v, Verdict::Discharged { how } if how == "the merge changed serve.sh"),
-            "{v:?}"
-        );
-        let v = judge("greet.sh prints a greeting on line 2", &ev);
-        assert!(
-            matches!(&v, Verdict::Unevidenced { how } if how == "the merge did not change greet.sh"),
-            "{v:?}"
-        );
-        // Not in the tree: prose, as before.
-        let v = judge("out-N.txt is written per run, e.g. v1.2.3", &ev);
-        assert_eq!(v, Verdict::Undecidable { how: PROSE.into() });
-        assert!(paths_named("`serve.sh` exists on main").is_empty());
-    }
-
-    #[test]
-    fn path_detection_is_narrow() {
-        assert_eq!(
-            paths_named("`crates/cli/src/cmd/land.rs:277` and bd list --json"),
-            vec!["crates/cli/src/cmd/land.rs".to_string()]
-        );
-        assert!(paths_named("air land --all closes in one bd process").is_empty());
-        assert!(paths_named("status <> 'closed' AND status <> 'pinned'").is_empty());
+        for word in ["ok (", "MISS", "UNCONFIRMED", "discharged"] {
+            assert!(!out.contains(word), "{word}: {out}");
+        }
     }
 }
