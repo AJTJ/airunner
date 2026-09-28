@@ -40,7 +40,7 @@ pub fn without_claim(s: &Snapshot) -> Vec<String> {
                 && w.handed_over.is_empty()
                 && w.session
                     .as_ref()
-                    .is_some_and(|x| x.pid_alive != Some(false))
+                    .is_some_and(|x| x.liveness == super::lease::Liveness::Alive)
         })
         .map(|w| w.worker.clone())
         .collect()
@@ -246,7 +246,7 @@ pub fn capture_text(from: &str, id: &str, text: &str) -> String {
 /// the coordinator's checkout or the main one is the coordinator's or the owner's, and neither
 /// needs it pushed. Returns whether a message was queued.
 pub fn capture_to_coordinator(ledger: &Ledger, from: &str, id: &str, text: &str, at: &str) -> bool {
-    if super::hook::role_for(from) == "coordinator" {
+    if matches!(super::hook::role_for(from), "coordinator" | "owner") {
         return false;
     }
     let content = capture_text(from, id, text);
@@ -732,7 +732,7 @@ pub fn main_moved(
             merge,
             beads,
             &paths,
-            super::hook::role_for(w) == "coordinator",
+            matches!(super::hook::role_for(w), "coordinator" | "owner"),
             member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
         );
         let queued = ledger
@@ -919,7 +919,10 @@ mod tests {
                     release_reason: None,
                 })
                 .collect(),
-            session: Some(Session::default()),
+            session: Some(Session {
+                liveness: crate::cmd::lease::Liveness::Alive,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let busy = Snapshot {

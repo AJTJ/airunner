@@ -53,6 +53,9 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- `air audit` prints, for every budget, the recorded median and maximum beside the budget and
+  ten times the maximum, which the next release sets Air's numbers from; each budget names the
+  measurement or the ceiling behind it. A wait that reaches its budget reads `over budget`.
 - The `beads are ready` notice and a claim refused because a peer holds the bead now point
   at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
   after a hand-over caused most refused claims in the 0.4.10 trial.
@@ -95,6 +98,9 @@ missing notices, which are fixed or added below.
 
 ### Removed
 
+- The two fallbacks dated 2026-08-23: a commit with no `Bead:` trailer is no longer attributed
+  from its message, and a digest with no `bead:` front matter no longer counts by its file name
+  and time. `air doctor` no longer reports dated rules, since none are left.
 - The worktree fence: a worker's Edit or Write outside its worktree is no longer denied. Its
   only recorded refusals were writes to the session's own scratchpad. The roles text tells a
   worker to work only in its worktree and use its scratchpad for the rest.
@@ -117,6 +123,26 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- A batch cut stopped by a leftover `index.lock` left no record, and a verify stopped by hand
+  left no run. A failed cut now writes `batch-cut / failed` with its reason and who holds the
+  lock, and `air record` survives SIGINT, SIGTERM and SIGHUP to write the run as interrupted
+  with its duration, which `air status` shows under the worker.
+- `air fleet up` logged and printed that it had started the fleet when every launch was
+  refused. It now names each launch that did not start and why, and its event reads
+  `incomplete` rather than `up`.
+- The coordinator could put a question prompt to the owner and wait on it for hours, hearing no
+  notices; an adopter's coordinator sat in one for six hours. It is now denied the prompt, like
+  workers and the lane, and roles.md says a question for the owner is a bead labelled `owner`.
+- The coordinator's channel pushed the same condition on every poll when one worker had two
+  beads in it: an adopter's coordinator got `closed-not-landed` 417 times in a day. Pushes
+  are now keyed by the bead, branch or lease they are about, and a change-only condition's
+  age counts from when that subject first appeared. The Stop nudge names the same ready set
+  once per session, and `air land` warns about the same main-checkout readers once.
+- A session whose pid had been reused, or had become a zombie, read as alive and got most of
+  the ready notices. A session is now alive only when its pid runs with the start time it
+  registered with; `air status --json` shows `liveness` as alive, dead or unknown, and only
+  live sessions hear ready notices or raise idle-without-claim. A new session under a name
+  replaces that name's earlier rows, and the main checkout's session shows as the owner.
 - The lane piped `air land` into `tail`, the auto-mode classifier refused it, and the session
   then refused every later landing. The lane's settings now allow its whole loop (`air land`,
   `air batch cut`, `air record`, `air status`, `git merge`, `git reset --hard main`), and the

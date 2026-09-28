@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use air_hooks::{HookEvent, HookInput, HookOutcome, journal, stop_nudge};
 use air_ledger::Ledger;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::cmd::decisions::{self as dec, Trace};
 use crate::cmd::{handover, log_event_as, now, open, ready_cache};
@@ -414,9 +414,19 @@ fn dispatch(
                 .ok()
                 .flatten()
                 .map(|(_, at)| claim_followed(ledger, worker, &at));
-            if nudge.is_some() {
-                let _ = ledger.emit_if_changed(&input.session_id, "nudge", &now, &now);
+            // air-8goe: the nudge's subject is the ready set. The same set is named once per
+            // session, again only when it changes, and the slate is wiped once this worker has
+            // work, so its next idle stop names the set afresh. After `followed`, which reads
+            // the last nudge. It used to record the clock as its fingerprint, which always
+            // differs: an adopter's worker was handed the same ready set 13 times.
+            let unchanged = nudge.is_some()
+                && !ledger
+                    .emit_if_changed(&input.session_id, "nudge", &ready.join(","), &now)
+                    .unwrap_or(true);
+            if !free {
+                let _ = ledger.emit_if_changed(&input.session_id, "nudge", "", &now);
             }
+            let nudge = if unchanged { None } else { nudge };
             let decision = if nudge.is_some() {
                 dec::STOP_NUDGE
             } else if held.is_empty() {
@@ -917,7 +927,9 @@ pub fn identity_from(role: Option<&str>, actor: Option<&str>, derived: &str) -> 
 /// ([`super::role_from`]), so a worktree someone names `lane` lands nothing.
 pub fn role_for(worker: &str) -> &'static str {
     match worker {
-        "main" | "coordinator" => "coordinator",
+        "coordinator" => "coordinator",
+        // The main checkout: a session there with no `AIR_ROLE` is the owner (air-sai7).
+        "main" => "owner",
         "lane" => "lane",
         _ => "worker",
     }
@@ -1069,6 +1081,35 @@ fn set_session(
     let pid: Option<i64> = std::env::var("CLAUDE_PID")
         .ok()
         .and_then(|v| v.parse().ok());
+    // air-sai7: the pid's start time, so a reused pid or a zombie never reads as this session.
+    // `ps` runs only when this row has no start time for this pid yet, not on every hook.
+    let known: Option<(Option<i64>, Option<String>)> = ledger
+        .conn()
+        .query_row(
+            "SELECT pid, pid_started FROM sessions WHERE session_id=?1",
+            params![input.session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let pid_started: Option<String> = match (&known, pid) {
+        (Some((Some(had), Some(at))), Some(p)) if *had == p => Some(at.clone()),
+        (_, Some(p)) => super::lease::pid_started(p),
+        _ => None,
+    };
+    // air-sai7: one row per role name. A new session under a name replaces the rows earlier
+    // sessions left under it, so a registration from weeks ago cannot sit beside the live one
+    // (an adopter's status listed a dead `main` as a second coordinator). Claims are their
+    // own table and are untouched.
+    if known.is_none() {
+        ledger
+            .conn()
+            .execute(
+                "DELETE FROM sessions WHERE worker=?1 AND session_id<>?2",
+                params![worker, input.session_id],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     // Read once per hook, cheaply; None until the transcript has its first assistant message.
     let model = model_of(input.transcript_path.as_deref());
     // What THIS hook process sees, which is what the gate at hook.rs runs with (air-9dg:
@@ -1082,15 +1123,16 @@ fn set_session(
             // NULLIF plus COALESCE, so a hook that fires before the first assistant message
             // leaves the recorded model alone instead of blanking it. An empty string here
             // would be the "guess or empty" the bead rules out.
-            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model, enforce) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,''),?11) \
+            "INSERT INTO sessions (session_id, worker, transcript_path, state, detail, changed_at, started_at, role, pid, project, model, enforce, pid_started) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9,COALESCE(?10,''),?11,?12) \
              ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, \
              changed_at=excluded.changed_at, transcript_path=COALESCE(excluded.transcript_path, sessions.transcript_path), \
              worker=excluded.worker, role=excluded.role, pid=COALESCE(excluded.pid, sessions.pid), \
+             pid_started=CASE WHEN excluded.pid IS NULL THEN sessions.pid_started ELSE excluded.pid_started END, \
              project=excluded.project, \
              model=COALESCE(NULLIF(excluded.model,''), sessions.model), \
              enforce=excluded.enforce",
-            params![input.session_id, worker, input.transcript_path, state, detail, t, role, pid, project, model, enforce],
+            params![input.session_id, worker, input.transcript_path, state, detail, t, role, pid, project, model, enforce, pid_started],
         )
         .map_err(|e| e.to_string())?;
     Ok(prev)
@@ -1645,6 +1687,8 @@ mod tests {
                     session_id: "fresh".into(),
                     state,
                     changed_at,
+                    // `gather` fills this from `ps`; the test has no process behind the row.
+                    liveness: crate::cmd::lease::Liveness::Alive,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1669,5 +1713,50 @@ mod tests {
             x.state = "running".into();
         }
         assert_eq!(crate::cmd::fanout::without_claim(&busy), ["w1"]);
+        // air-sai7: a dead or unknown session is never a fan-out target.
+        for gone in [
+            crate::cmd::lease::Liveness::Dead,
+            crate::cmd::lease::Liveness::Unknown,
+        ] {
+            let mut g = s.clone();
+            if let Some(x) = g.workers[0].session.as_mut() {
+                x.liveness = gone;
+            }
+            assert!(crate::cmd::fanout::without_claim(&g).is_empty(), "{gone:?}");
+        }
+    }
+
+    /// air-sai7: a new session under a name replaces the earlier rows under that name, and
+    /// records its process's start time beside its pid.
+    #[test]
+    fn a_new_session_takes_its_names_slot() {
+        let dir = scratch_repo();
+        let hook = |sid: &str| {
+            let raw = serde_json::json!({
+                "hook_event_name": "SessionStart", "session_id": sid,
+                "cwd": dir.path().to_str().unwrap(), "source": "startup"
+            })
+            .to_string();
+            inner_env(
+                dir.path(),
+                &raw,
+                Some("worker"),
+                Some("worker-9"),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        };
+        hook("old");
+        hook("new");
+        let (ledger, _) = super::open(dir.path()).unwrap();
+        let rows: Vec<String> = ledger
+            .conn()
+            .prepare("SELECT session_id FROM sessions WHERE worker='worker-9'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows, ["new"]);
     }
 }
