@@ -210,6 +210,24 @@ fn mcp_over_stdio_serves_tools_resources_and_pushes_channel_events() {
         "rss grew from {before} KB to {after} KB over 200 requests"
     );
 
+    // air-czbg: the poll never runs lsof. Its event lines (`status.attention`) carry no
+    // `tree-readers` budget; the seeding `air status` above, which a person runs, may.
+    let mut poll_lines = 0;
+    for e in std::fs::read_dir(repo.join(".air/events"))
+        .unwrap()
+        .flatten()
+    {
+        let text = std::fs::read_to_string(e.path()).unwrap();
+        for line in text
+            .lines()
+            .filter(|l| l.contains("\"command\":\"status.attention\""))
+        {
+            poll_lines += 1;
+            assert!(!line.contains("tree-readers"), "the poll ran lsof: {line}");
+        }
+    }
+    assert!(poll_lines > 0, "the poll wrote no event line to check");
+
     // EOF on stdin: clean exit, no orphan.
     drop(stdin);
     let deadline = Instant::now() + Duration::from_secs(5);
