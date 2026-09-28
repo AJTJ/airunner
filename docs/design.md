@@ -210,7 +210,7 @@ Nothing refuses inbox, triage, install or init to a worker.
 | air fleet up | Starts beads' server if it is down (as air bd-server up), then the lane and the configured number of workers (three by default, from the workers key), each in its worktree and a detached tmux session, leaving any already running. Workers get no first prompt; the lane gets a fixed one to start its loop. |
 | air fleet stop, air fleet resume | The coordinator's and the owner's only; a worker or the lane is refused. Stop sets a fleet-wide stop in the ledger with its time, author and reason, and tells every other worktree's session. While it holds, air claim, air batch cut and air land refuse naming it, the ready fan-out and the stop nudge are silent, and air status leads with it. No session is killed, and a verify already running finishes and is recorded. Resume removes it and tells every session. |
 | air install | Adds the hooks and the channel server to the repository's Claude Code settings and writes the role prose and the air-* skills, removing any air-* skill it once installed and no longer ships. It shows the change first and writes only when told to. It refuses when the air on the path is a different binary, when .air is not ignored by git, or when the repository was installed by a newer version. With --pin it copies itself to .air/bin/air, points the hooks and the channel at the copy, and the launchers put .air/bin first on the path of every session they start; the path check does not apply then. In a pinned repository any other air hands every command but install to the pin before running it (air-qyrm). --unpin goes back to the path. |
-| air init | Sets up a new repository: checks for beads and Claude Code (and Dolt and tmux when there is no .beads yet), initialises git, starts a Dolt server on a free port and initialises beads in server mode against it, moving the port from the tracked metadata.json into .beads/dolt-server.port (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
+| air init | Sets up a new repository: checks for beads and Claude Code (and Dolt when there is no .beads yet), initialises git, starts a Dolt server on a free port and initialises beads in server mode against it, moving the port from the tracked metadata.json into .beads/dolt-server.port (the bead prefix is the directory name unless given), writes the ignore file and Air's config (the directory name as `project`, Metis on only when installed), then installs. It proposes the verify command the repository already has (a Makefile `verify` or `test` target, `cargo test`, `npm test`) and writes a failing `make verify` placeholder only when it finds none. |
 
 Two hidden commands, release-check and adopter-check, are run by the Makefile. Claude Code
 itself starts air mcp and air hook.
@@ -290,7 +290,7 @@ Every hook call, including the silent ones, writes one event line.
 | .claude/air.json | The repository's config: the project name for machine-wide names (`project`), extra deny patterns for each role, which commands need which lease (`leases`), the verification lane's name, whether batch-ready wants a green precheck (`precheck`), how greens are matched, whether a close needs a digest (`"digests": true` for `.air/digests/`, or a tracked `digest_dir`; neither means none), an optional tracked `journal_dir`, and whether Metis is attached. |
 | .claude/settings.json and .mcp.json | The hook entries and the channel server entry, merged in by install. |
 | .claude/worktrees | One worktree per session: each worker, the lane, and the coordinator. |
-| .air/dolt | beads' Dolt server when beads runs in server mode: the data in `data/`, the server's output in `server.log`. The server runs in the tmux session `<project>-dolt`. |
+| .air/dolt | beads' Dolt server when beads runs in server mode: the data in `data/`, the server's output in `server.log`, its pid in `server.pid`. |
 | .beads/metadata.json, .beads/dolt-server.port | beads' own files, which Air reads: `dolt_mode` says server or embedded, and the port file (gitignored by beads) holds the server's port. |
 | .worktreeinclude | Ignored files to copy into new worktrees. |
 
@@ -756,8 +756,9 @@ Install Air with cargo from this repository. In a new repository, run air init. 
 already uses beads, run air install. Both show their changes first and write only when told to.
 Air doctor exits cleanly when the ledger, the schema, and the beads version are right.
 
-In a project whose beads runs in server mode, its Dolt server runs in the tmux session
-`<project>-dolt` with its data in .air/dolt. The launchers start it when it is down, and
+In a project whose beads runs in server mode, its Dolt server runs as a background process in
+its own process group, pid in .air/dolt/server.pid, with its data in .air/dolt (a tmux session
+until 2026-09-28, air-8iu7). The launchers start it when it is down, and
 `air bd-server up` does the same by hand.
 
 Start the coordinator with air coordinator, which opens it in its own worktree and tmux

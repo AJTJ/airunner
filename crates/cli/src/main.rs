@@ -113,8 +113,9 @@ enum FleetOp {
 #[derive(Debug, Subcommand)]
 enum BdServerOp {
     /// Start this project's Dolt server for bd if it does not answer: `dolt sql-server` on
-    /// 127.0.0.1 and the port in `.beads/dolt-server.port`, data in `.air/dolt/data`, in the
-    /// tmux session `<project>-dolt`. Does nothing for a project whose bd is embedded.
+    /// 127.0.0.1 and the port in `.beads/dolt-server.port`, data in `.air/dolt/data`, as a
+    /// background process whose pid is in `.air/dolt/server.pid`. Does nothing for a project
+    /// whose bd is embedded.
     Up,
     /// Which mode bd is in here and, for server mode, whether the port answers.
     Status,

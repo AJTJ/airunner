@@ -53,6 +53,10 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- The project's Dolt server runs as a plain background process in its own process group, with
+  its pid in `.air/dolt/server.pid` and its output in `.air/dolt/server.log`, instead of in a
+  tmux session `<project>-dolt`. `air bd-server status` names the pid. This also stops a
+  scratch `air init --write` leaving a session and a server on the owner's own tmux.
 - The `beads are ready` notice and a claim refused because a peer holds the bead now point
   at `bd ready` for the next pick: the notice's list is a snapshot, and workers walking it
   after a hand-over caused most refused claims in the 0.4.10 trial.

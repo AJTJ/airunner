@@ -11,10 +11,15 @@
 //! its primary source for the port (bd warns that `dolt_server_port` in `metadata.json` is
 //! deprecated). A project in embedded mode is left alone.
 //!
-//! The server runs in a detached tmux session `<project>-dolt` so the owner can attach to it,
-//! as `dolt sql-server --host 127.0.0.1 --port <p> --data-dir <main>/.air/dolt/data`, its
-//! output appended to `<main>/.air/dolt/server.log`. Only 127.0.0.1: the server has a
-//! passwordless `root`.
+//! The server is a plain background process in its own process group, `dolt sql-server --host
+//! 127.0.0.1 --port <p> --data-dir <main>/.air/dolt/data`, its output appended to
+//! `<main>/.air/dolt/server.log` and its pid written to `<main>/.air/dolt/server.pid`. Only
+//! 127.0.0.1: the server has a passwordless `root`.
+//!
+//! It ran in a tmux session `<project>-dolt` until air-8iu7 (owner, 2026-09-28): the session
+//! was only a way to detach, the log already carries the output, and nobody types at a
+//! database. Being tmux, it also ignored `AIR_TMUX_SOCKET` and left a session and a server on
+//! the owner's own tmux after a scratch `air init --write`.
 //!
 //! Removal: when bd keeps its own server alive for a project, or Air's projects go back to
 //! embedded mode.
@@ -77,8 +82,19 @@ pub fn data_dir(main: &Path) -> PathBuf {
     dolt_dir(main).join("data")
 }
 
-pub fn session(repo: &Path) -> String {
-    super::tmux::session_name(&super::tmux::project_prefix(repo), "dolt")
+/// Where a start writes the server's pid (air-8iu7).
+pub fn pid_file(main: &Path) -> PathBuf {
+    dolt_dir(main).join("server.pid")
+}
+
+/// The pid a start recorded, when that process is still alive.
+pub fn recorded_pid(main: &Path) -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(pid_file(main))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    super::lease::pid_alive(i64::from(pid)).then_some(pid)
 }
 
 /// Whether something accepts a TCP connection on 127.0.0.1:`port`.
@@ -212,7 +228,7 @@ pub enum Outcome {
     },
     Started {
         port: u16,
-        session: String,
+        pid: u32,
     },
     Failed {
         why: String,
@@ -224,19 +240,17 @@ impl Outcome {
         match self {
             Outcome::NotServer => "bd is not in server mode here; nothing to start".to_string(),
             Outcome::Up { port } => format!("bd server is up on 127.0.0.1:{port}"),
-            Outcome::Started { port, session } => {
-                format!("started the bd server on 127.0.0.1:{port} in tmux session {session}")
+            Outcome::Started { port, pid } => {
+                format!("started the bd server on 127.0.0.1:{port} (pid {pid})")
             }
             Outcome::Failed { why } => format!("bd server not started: {why}"),
         }
     }
 }
 
-/// The programs a start runs, found on PATH by default. Absolute, because the command runs in
-/// the tmux server's environment, whose PATH may be older than this process's.
+/// The program a start runs, found on PATH by default.
 #[derive(Debug, Clone)]
 pub struct Bins {
-    pub tmux: PathBuf,
     pub dolt: PathBuf,
 }
 
@@ -250,17 +264,8 @@ fn which(name: &str) -> Option<PathBuf> {
 
 pub fn bins() -> Result<Bins, String> {
     Ok(Bins {
-        tmux: which("tmux").ok_or("tmux is not on PATH")?,
         dolt: which("dolt").ok_or("dolt is not on PATH (`brew install dolt`)")?,
     })
-}
-
-fn tmux(bins: &Bins, args: &[&str]) -> std::io::Result<std::process::Output> {
-    Command::new(&bins.tmux)
-        .args(super::tmux::socket_args())
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
 }
 
 /// Start the server for `main` on `port` if nothing answers there, and wait up to `wait` for
@@ -269,7 +274,6 @@ fn tmux(bins: &Bins, args: &[&str]) -> std::io::Result<std::process::Output> {
 /// would create an empty one into which nothing of the project's is.
 pub fn start(
     main: &Path,
-    session: &str,
     port: u16,
     database: &str,
     allow_empty: bool,
@@ -294,59 +298,65 @@ pub fn start(
             why: format!("{}: {e}", data.display()),
         };
     }
-    let exists = tmux(bins, &["has-session", "-t", &format!("={session}")])
-        .is_ok_and(|o| o.status.success());
-    if !exists {
-        let q = |p: &Path| super::launch::shell_quote(&p.to_string_lossy());
-        let cmd = format!(
-            "{} sql-server --host 127.0.0.1 --port {port} --data-dir {} 2>&1 | tee -a {}",
-            q(&bins.dolt),
-            q(&data),
-            q(&dolt_dir(main).join("server.log")),
-        );
-        let data_s = data.to_string_lossy();
-        match tmux(
-            bins,
-            &["new-session", "-d", "-s", session, "-c", &data_s, &cmd],
-        ) {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => {
-                return Outcome::Failed {
-                    why: format!(
-                        "tmux new-session: {}",
-                        String::from_utf8_lossy(&o.stderr).trim()
-                    ),
-                };
-            }
-            Err(e) => {
-                return Outcome::Failed {
-                    why: format!("tmux: {e}"),
-                };
-            }
+    let log = dolt_dir(main).join("server.log");
+    let open = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+    };
+    let (out, err) = match (open(), open()) {
+        (Ok(o), Ok(e)) => (o, e),
+        (Err(e), _) | (_, Err(e)) => {
+            return Outcome::Failed {
+                why: format!("{}: {e}", log.display()),
+            };
         }
+    };
+    let mut cmd = Command::new(&bins.dolt);
+    cmd.args([
+        "sql-server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+    ])
+    .arg("--data-dir")
+    .arg(&data)
+    .current_dir(&data)
+    .stdin(Stdio::null())
+    .stdout(out)
+    .stderr(err);
+    // Its own process group, so a terminal's hangup or Ctrl-C reaching this process's group
+    // does not reach the server; it outlives the `air` that started it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
+    let pid = match cmd.spawn() {
+        Ok(child) => child.id(),
+        Err(e) => {
+            return Outcome::Failed {
+                why: format!("{}: {e}", bins.dolt.display()),
+            };
+        }
+    };
+    let _ = std::fs::write(pid_file(main), format!("{pid}\n"));
     let deadline = Instant::now()
         .checked_add(wait)
         .unwrap_or_else(Instant::now);
     while Instant::now() < deadline {
         if answers(port) {
-            return Outcome::Started {
-                port,
-                session: session.to_string(),
-            };
+            return Outcome::Started { port, pid };
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     Outcome::Failed {
         why: format!(
-            "port {port} did not answer within {}s{}; see {} or `tmux attach -t {session}`",
+            "port {port} did not answer within {}s (pid {pid}); see {}",
             wait.as_secs(),
-            if exists {
-                " and the tmux session was already there, so Air started nothing"
-            } else {
-                ""
-            },
-            dolt_dir(main).join("server.log").display()
+            log.display()
         ),
     }
 }
@@ -380,15 +390,7 @@ pub fn up(repo: &Path) -> Outcome {
         Listener::None => {}
     }
     match bins() {
-        Ok(b) => start(
-            &main,
-            &session(repo),
-            port,
-            &database,
-            false,
-            &b,
-            START_WAIT,
-        ),
+        Ok(b) => start(&main, port, &database, false, &b, START_WAIT),
         Err(why) => Outcome::Failed { why },
     }
 }
@@ -449,7 +451,7 @@ pub fn status_cmd(repo: &Path, json: bool) -> i32 {
     let up = matches!(who, Listener::Ours | Listener::Unknown);
     super::emit(
         json,
-        &json!({"bd": m, "up": up, "listener": who, "session": session(repo)}),
+        &json!({"bd": m, "up": up, "listener": who, "pid": recorded_pid(&main)}),
         || match (&m, &who) {
             (Mode::Server { port: Some(p), .. }, Listener::Other { what }) => {
                 format!(
@@ -457,7 +459,10 @@ pub fn status_cmd(repo: &Path, json: bool) -> i32 {
                     other_text(*p, &main, what)
                 )
             }
-            _ => line(&m, &who),
+            _ => match recorded_pid(&main) {
+                Some(pid) if up => format!("{} (pid {pid})", line(&m, &who)),
+                _ => line(&m, &who),
+            },
         },
     );
     0
@@ -551,10 +556,10 @@ pub fn move_port_out_of_metadata(main: &Path, port: u16) -> Result<(), String> {
 /// bd cache key: the outage the coordinator has been told could not be fixed, or `""`.
 const OUTAGE_TOLD: &str = "bd_server_outage_told";
 
-pub fn restarted_text(port: u16, session: &str) -> String {
+pub fn restarted_text(port: u16, pid: u32) -> String {
     format!(
-        "bd server was down; restarted it on 127.0.0.1:{port} (tmux session {session}). A bd \
-         command that failed in the meantime can be run again."
+        "bd server was down; restarted it on 127.0.0.1:{port} (pid {pid}). A bd command that \
+         failed in the meantime can be run again."
     )
 }
 
@@ -606,10 +611,10 @@ pub fn keep_alive(
         Listener::None => start(*port, database),
     };
     let (content, trace) = match &o {
-        Outcome::Started { port, session } => {
+        Outcome::Started { port, pid } => {
             let _ = ledger.bd_cache_put(OUTAGE_TOLD, "", at);
             (
-                restarted_text(*port, session),
+                restarted_text(*port, *pid),
                 super::decisions::BD_SERVER_RESTARTED,
             )
         }
@@ -637,7 +642,6 @@ pub fn keep_alive(
 /// The poll's call: the repo's own mode and the real start.
 pub fn keep_alive_tick(repo: &Path, ledger: &Ledger, worker: &str) {
     let main = super::worktree::main_checkout(repo);
-    let session = session(repo);
     keep_alive(
         ledger,
         worker,
@@ -645,7 +649,7 @@ pub fn keep_alive_tick(repo: &Path, ledger: &Ledger, worker: &str) {
         &super::now(),
         &mut |port| listener(&main, port),
         &mut |port, db| match bins() {
-            Ok(b) => start(&main, &session, port, db, false, &b, START_WAIT),
+            Ok(b) => start(&main, port, db, false, &b, START_WAIT),
             Err(why) => Outcome::Failed { why },
         },
     );
@@ -733,11 +737,10 @@ mod tests {
     fn a_server_without_its_database_is_not_started() {
         let dir = tempfile::tempdir().unwrap();
         let b = Bins {
-            tmux: "/nonexistent/tmux".into(),
             dolt: "/nonexistent/dolt".into(),
         };
         let port = free_port(dir.path()).unwrap();
-        let o = start(dir.path(), "x-dolt", port, "zz", false, &b, Duration::ZERO);
+        let o = start(dir.path(), port, "zz", false, &b, Duration::ZERO);
         assert!(
             matches!(&o, Outcome::Failed { why } if why.contains("no database `zz`")),
             "{o:?}"

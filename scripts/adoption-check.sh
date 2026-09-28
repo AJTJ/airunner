@@ -7,9 +7,9 @@
 # that no test caught (air-gn5o). This is that run, repeated. Removed when `air init` is gone
 # or a test suite runs the same steps.
 #
-# Needs bd (pinned), dolt, tmux and claude on PATH, like `air init` itself. Uses a private tmux
-# socket, so the Dolt server `air init --write` starts for the example runs there and is stopped
-# on exit.
+# Needs bd (pinned), dolt, tmux and claude on PATH. Uses a private tmux socket for any launcher
+# `--print` that touches tmux, and stops the Dolt server `air init --write` starts, by the pid it
+# recorded, on exit (a background process since air-8iu7, not a tmux session).
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,7 +17,7 @@ bin="$here/target/debug"
 [ -x "$bin/air" ] || { echo "adoption-check: build first (cargo build -p air)"; exit 1; }
 
 tmp=$(mktemp -d)
-trap 'tmux -L "$AIR_TMUX_SOCKET" kill-server 2>/dev/null; rm -rf "$tmp"' EXIT
+trap 'kill "$(cat "$tmp/minimal/.air/dolt/server.pid" 2>/dev/null)" 2>/dev/null || true; tmux -L "$AIR_TMUX_SOCKET" kill-server 2>/dev/null || true; rm -rf "$tmp"' EXIT
 # A `metis` that is not there, so the result does not depend on whether this machine has it.
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nexit 127\n' > "$tmp/bin/metis"

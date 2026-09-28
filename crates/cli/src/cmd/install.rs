@@ -2587,6 +2587,18 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "dolt-server-no-tmux",
+        since: "2026-09-28 (air-8iu7)",
+        headline: "Air starts the project's Dolt server as a background process, pid in \
+                   `.air/dolt/server.pid`, output in `.air/dolt/server.log`, and no longer in a \
+                   tmux session `<project>-dolt`; tmux is no longer needed for it. `air bd-server \
+                   status` names the pid. A server already running in the old tmux session keeps \
+                   answering and is left alone.",
+        silent_break: false,
+        action: "Nothing required. To move a running server off tmux, stop the `<project>-dolt` \
+                 session and run `air bd-server up`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3054,7 +3066,7 @@ pub fn render_surface(changes: &[&SurfaceChange], written: bool) -> String {
 
 /// The `"project"` `air install --write` adds to an existing `.claude/air.json` that has none:
 /// the main checkout's directory name, which is what `air init` writes (owner, 2026-09-26).
-/// Without it session names, `<project>-dolt` included, fall back to the bead prefix. `None`
+/// Without it session names fall back to the bead prefix. `None`
 /// when the key is there, whatever its value, or when the file is not a JSON object.
 pub fn project_to_add(air_json: &Value, main_dir_name: &str) -> Option<String> {
     let m = air_json.as_object()?;

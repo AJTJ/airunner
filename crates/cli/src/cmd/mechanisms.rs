@@ -582,8 +582,9 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "bd-server-start",
         class: "action",
         what: "`air bd-server up`, `air fleet up`, the launchers and `air init --write` start the \
-               project's Dolt server for bd (tmux session `<project>-dolt`, data in \
-               `.air/dolt`) when bd is in server mode and the port does not answer.",
+               project's Dolt server for bd (a background process, pid in \
+               `.air/dolt/server.pid`, data in `.air/dolt`) when bd is in server mode and the \
+               port does not answer.",
         added: "2026-09-26 (owner)",
         source: "crates/cli/src/cmd/bd_server.rs, up and start",
         // Owner, 2026-09-26: bd moved to server mode, where every bd command fails while the
