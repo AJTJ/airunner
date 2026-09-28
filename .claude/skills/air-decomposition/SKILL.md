@@ -85,6 +85,12 @@ triaged children with edges. Never the whole feature.
 removed (Metis ADR-003:55 "criteria cannot be removed once defined, only refined"). If the epic
 fits one sentence of diff, stop: file one bead under an existing epic.
 
+**The epic carries no work of its own.** Its "Done when" command goes into the acceptance of
+its last child, a bead that depends on every other child. When that child closes, every child
+is closed, and `air land` closes the epic after the landing that finishes it (air-92o0; bd's
+`bd epic status` is what it reads). An epic with no children is never closed that way: it is
+work nobody has decomposed yet.
+
 ```bash
 bd create "<epic title>" --type=epic -p 2 --description "<why, one paragraph>" \
   --design-file - < design.md
@@ -184,15 +190,23 @@ finer than the one that failed. If anyone proposes one again, the discriminator 
 of a named observer or artefact, and **the rate must be measured and reported before it is
 wired in** — not after (owner, 2026-08-29).
 
+**File each child with its edges in the same `bd create`,** as `--deps blocked-by:<id>`, not
+as `bd dep add` afterwards. Between the two calls the bead exists with no edges, so it is
+ready, and Air announces it: an adopter's filing script created 56 beads and then added 258
+edges, and all 56 were announced ready for a moment (air-92o0). That means filing in dependency
+order, earlier children first. `bd dep add` is for an edge found later.
+
 ```bash
 echo "<what and why; cites file:line>" | bd create "<verb-first title>" --type=task -p 2 \
   --parent <epic> --description=- \
   --acceptance "cargo nextest run -p air-ledger claims::" \
-  --estimate 45
+  --estimate 45 \
+  --deps blocked-by:<earlier-child>
 bd create "Spike: <question>" --type=spike --parent <epic> -p 1 \
   --acceptance "bd comment on this bead names the chosen approach and the rejected ones, with reasons"
 # order and shared files: edges between CHILDREN, never on the epic
-# (an edge on an epic propagates to every child; the adopter)
+# (an edge on an epic propagates to every child; the adopter). At filing, with --deps above;
+# bd dep add only for an edge found after the child exists.
 bd dep add <later> <earlier>
 bd dep cycles                      # must print none BEFORE the wave is opened
 bd dep tree <epic> --json
