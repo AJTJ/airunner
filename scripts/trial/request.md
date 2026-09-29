@@ -11,7 +11,10 @@ or sha that shows it. Then, for you, the lane and every worker (ask each one bef
 every workaround or step done by hand, every refusal someone had to get around, every scenario
 that only passed on a second try, and anything that confused anyone. For each, say why it was
 needed, as far as anyone can tell. Write it from what you and the fleet saw
-during the run. Do not spawn an agent to re-read the whole event log or the transcripts.
+during the run. Do not spawn an agent to re-read the whole event log or the transcripts. Take every
+count (beads, landings, refusals, pushes) from `air status`, `air audit` or the ledger, and name
+the source beside it; do not count from memory or the bead list. The summary must not
+contradict the list above it.
 
 ## Setup, before filing any bead
 
