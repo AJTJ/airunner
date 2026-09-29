@@ -249,6 +249,29 @@ Fix: `in batch: <worker> at <head> is in batch <sha>` and `not_batch_ready` reas
 (`crates/cli/src/cmd/status.rs:616` `batch_ready_rule`). Commit 50a9d93 (air-ch9p); test
 `a_head_in_a_running_batch_is_in_batch_not_batch_ready`.
 
+**A bead closed on a green, then main moved, and its branch was neither landable nor batch-ready.**
+Seen: 2026-09-28 23:12Z, this repo: worker-2 closed air-92o0 at 14863f40 with main merged and
+claimed the next bead; worker-1's landing moved main; `air land --worker worker-2` refused (the
+branch did not contain main) and batch-ready said "no commit names a bead worker-2 holds",
+because a closed bead is not held. An adopter saw the same shape with six beads.
+Fix: `batch_ready_rule` (`crates/cli/src/cmd/status.rs:615`) counts a carried bead that is held
+or closed (ledger `closed_claims`, no bd); `air status` prints `<id>: closed, waiting for the
+lane`. Commit cba816b (air-voeb); test `a_closed_bead_not_on_main_is_batch_ready_and_named`;
+SURFACE `closed-bead-batch-ready`.
+Do not: require a held claim for a branch whose commits name a closed, unlanded bead.
+
+**Every bead's `CHANGELOG.md` line conflicted with every other branch's: nine lane drops in one day.**
+Seen: 2026-09-28, this repo; each drop cost the worker a merge, a resolve and a re-verify, and
+the lane a re-cut.
+Fix: a bead writes `changelog.d/<bead-id>.md` with the heading as its first word; `make
+changelog` runs `scripts/changelog-assemble.sh`, which folds every fragment under `[Unreleased]`
+and deletes it, refusing an unknown heading; `make release` refuses while a fragment is left
+(`Makefile:62`). Commits c8a73c7, a137a57 (air-be6d); tests
+`fragments_fold_under_their_heading_and_are_deleted` and `this_repos_fragments_assemble` in
+`crates/cli/tests/changelog.rs`.
+Do not: write a bead's line into `CHANGELOG.md`; two beads on one heading conflict at every
+landing.
+
 ## Sessions and liveness
 
 **A dead registration with a reused pid read as alive and got most of the ready notices.**
@@ -331,6 +354,18 @@ Fix: with no tty, Air spawns `tmux new-session -d` itself. Commit 1c01f66 (air-t
 Seen: 0.4.1 live trial, 2026-09-25.
 Fix: each launch approves the `air` server in its own settings (`enabledMcpjsonServers`).
 Commit 3a9a9ba (air-oe9k).
+
+**`air fleet up` started a second claude in every worker's worktree after the project name changed.**
+Seen: twice on 2026-09-28 (22:15Z and 23:59Z), this repo: `"project": "ai_runner"` landed, the
+tmux sessions were renamed from `air-*` to `ai_runner-*`, and `fleet up` saw no
+`ai_runner-worker-N` and started three duplicates in worktrees that already had live sessions;
+the coordinator killed each at the channel prompt before it registered.
+Fix: `launch_role` asks the ledger for a live session of the worker's name first
+(`crates/cli/src/cmd/launch.rs:1364,1381` `running_session`, `live_session`; alive by pid and
+start time, air-sai7) and prints `<name>: running (session <id>)`; a dead session is still
+relaunched. Commit 2a4ffa8 (air-4n5t); tests `fleet_up_starts_the_lane_and_workers_once`,
+`a_worker_with_a_live_ledger_session_is_running`; SURFACE `running-from-the-ledger`.
+Do not: decide whether a worker is running from its tmux session name.
 
 ## The channel and notices
 
@@ -726,6 +761,42 @@ test, `rev-parse` memoised; under 10 s. Commit 5ca8737 (air-4vu).
 Seen: 0.4.1 live trial, 2026-09-25.
 Fix: commit 6111ebe.
 
+**A selftest probe's synthetic hook inherited `CLAUDE_PID` and registered a worker as a live session owned by the claude running the suite.**
+Seen: 2026-09-29, the lane's batch red at 2a4ffa8: the probe "env reaches the hook" went
+BLOCKED because `air worker w` then read worker w as running.
+Fix: `air_command` (`crates/cli/src/cmd/selftest.rs:81`) and the tests' `common::command`
+(`crates/cli/tests/common/mod.rs:22`) clear `CLAUDE_PID` with the `AIR_*` variables. Commit
+b5f287c (air-4n5t).
+Do not: let a spawned probe or test inherit a variable a hook reads as its session's identity.
+
+**The bd-server probe and the tmux launch test waited a fixed 10 s for a freshly written executable, and went red under fleet load.**
+Seen: 2026-09-28, worker-2 at 7789c160 with three sessions verifying: the keep-alive probe
+failed "red SILENT / green BLOCKED" and passed on two reruns; the tmux test failed once; 2 of 3
+whole-file runs red at load 11. At 22:48Z `syspolicyd` sat at 412% CPU checking new
+executables, so a first exec took 62-165 s on failing runs against 13 s passing.
+Fix: the keep-alive probe drives `keep_alive` through its seams with no real server, port or
+fake dolt; the init test raises the start wait through `AIR_BD_START_WAIT_MS`
+(`crates/cli/src/cmd/bd_server.rs:44` `start_wait`); the tmux test polls up to 60 s and prints
+its wait; the MCP stdio reply wait is 60 s. Commits bb40cfa, 1b8946f (air-1fg7); 17 of 17 runs
+passed afterwards at loads 17 to 85, in up to 20.1 s. SURFACE `bd-start-wait-override`.
+Do not: put a wall-clock bar on the first exec of a file a test just wrote; macOS checks it
+before it runs.
+
+**Three flow defects in one day were each a lifecycle transition nobody had written down, and each was judged in isolation.**
+Seen: 2026-09-28: the cut deadlock (air-tml4), the stranded closed bead (air-voeb) and the
+landing race (air-5ynn); the owner: "we don't know what the effects of our decisions are going
+to be".
+Fix: `docs/design.md` §6 opens with the states x events table, every row citing the function
+it was read from; `crates/cli/src/cmd/lifecycle.rs` drives those same functions
+(`batch_ready_rule`, `land_first`, `cover`, `handover_verdict`, `red_alone`) through every
+interleaving of commit, cut, verify, land, close, merge and a move of main for two workers and
+a lane, and fails on any reachable state that cannot still land and close every bead. Commit
+9963e31 (air-k52n); test `every_reachable_state_can_still_land_and_close_every_bead` (86,895
+states in 2.96 s, debug build); shown failing on main at d23ef60f, before air-tml4: 9,718 of
+38,602 reachable states stuck, the first reached by `[Commit(0), Cut, Verify(true), MainMoves]`.
+Do not: add a transition, rule or notice from the model without an observed incident; a hole
+is answered first by removing the refusal that makes it (owner, 2026-09-28).
+
 ## Performance and load
 
 **Five sessions polling every few seconds kept three or four `lsof` scans at 40-50% CPU each.**
@@ -773,13 +844,19 @@ Seen: 2026-08-21 (bd-facts.md).
 Fix: no hook calls bd; the Stop nudge reads `.air/ready.json` written by commands that already
 paid for a `bd ready`. Commit 8f061e6 (air-09i).
 
+**Three workers and the lane each verifying the same Rust tree put the machine at load 40.**
+Seen: 2026-09-28, this repo. A shared `CARGO_TARGET_DIR` was tried first and rejected: cargo
+built another worktree's code under the one target dir (capture 01M3N4F902SVT1BR2149JDR153).
+Fix: `.claude/air.json` sets `"verify_lane": true`; the lane verifies once per batch and
+workers verify nothing. Commit 2cd5e37 (air-hxws part 2); every later bead of the round closed
+on the lane's batch green (air-be6d, air-gcjp, air-4n5t, air-fd8p, air-4l5w).
+Do not: share a cargo target dir across worktrees.
+
 ## Left out
 
 Found while reading, but with no evidence of being solved, or solved by something other than a
 landed Air change. The coordinator can check each.
 
-- `verify_lane: true` for this repo (air-hxws part 2; four parallel Rust verifies at load 40):
-  commit 2cd5e37 is on `worktree-coordinator` and not on main at `61f38f4`.
 - Shared `CARGO_TARGET_DIR` for fleet builds (air-hxws part 1): rejected, cargo ran another
   worktree's code under a shared target dir.
 - `air status` running 191 git calls per run, the poll running gather at most every 30 s, and
