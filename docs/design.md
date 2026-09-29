@@ -113,7 +113,7 @@ Any session may run these.
 | air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
 | air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, and beads' mode. |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
-| air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its median, maximum and ten times the maximum. Facts, not verdicts. |
+| air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its p50, p90, p99 and maximum beside the budget. Facts, not verdicts. |
 | air selftest | A red and a green probe for every check (165); `--prove` runs each probe's declared mutation. |
 | air gc | Reports what a retention period would remove from `.air/events` and removes it only with `--apply`. |
 
@@ -266,7 +266,7 @@ stateDiagram-v2
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
 | committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not a lone red member, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
-| batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing only when `batch_cut::land_first` holds |
+| batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
 | in-batch | lane records red | batch-red: nothing lands; a lone member is held out | `status::red_alone` |
 | batch-red | a new commit | committed | `status::red_alone` no longer matches |
@@ -278,10 +278,13 @@ stateDiagram-v2
 | claimed | `air release` | open again | `claim::release` |
 | any | fleet stop | unchanged: claim, cut and land refuse until resume | `fleet::stopped` |
 
-No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` drives these same
-functions through every order of commit, merge, close, cut, verify, land and a move of main for
-two workers and a lane (86,895 states in 3 s), and fails if any reachable state can no longer
-land and close every bead; it fails on the code before the fixes of 2026-09-28.
+No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` calls five of
+these functions, `batch_ready_rule`, `red_alone`, `land_first`, `cover` and `handover_verdict`,
+through every order of commit, merge, close, cut, verify, land and a move of main for two
+workers and a lane (86,895 states in 3 s). It models the rest itself: containment as set
+inclusion in place of `in_main`, and a landing as `land::check`'s two conditions. It fails if any
+reachable state can no longer land and close every bead, and it fails on the code before the
+fixes of 2026-09-28.
 
 ### 6.1 Claiming a bead
 
@@ -341,7 +344,7 @@ sequenceDiagram
   participant G as git
   participant L as ledger
   C->>A: air land --worker lane
-  A->>A: role lane or owner? no verify running? contains main, green at head?
+  A->>A: role lane or owner? no verify in main or the lane's tree? contains main, green at head?
   alt any no
     A-->>C: refused, names what is missing
   end
@@ -415,9 +418,10 @@ fact (stopped for quota, waiting for the person) shows until the session's next 
 
 ### 6.7 Timing budgets
 
-Every wait records its duration and whether it hit its limit; `air audit` prints each budget's
-median, maximum and ten times the maximum, from which a release sets the numbers Air chooses
-(`cmd/budgets.rs`), and a hit is reported as a fact about load. A beads call gets 60 s plus 5 s
+Every wait records its duration and whether it hit its limit. Each budget in `cmd/budgets.rs`
+names the measurement its number came from, `air audit` prints its p50, p90, p99 and maximum
+beside it, and a hit is reported as a fact about load. The numbers below are unchanged pending
+the owner's ruling on air-1cdr. A beads call gets 60 s plus 5 s
 per bead named, from one function every call uses, and fails closed naming `AIR_BD_TIMEOUT_MS`.
 The status tick gets four times beads' median (2 to 8 s) and falls back to cached counts; the
 stop nudge gets 3 s. Each MCP tool runs its command in its own process group, one beads limit
@@ -445,7 +449,8 @@ leaves the state unknown and the bead is read again; a killed verify is no verdi
 Dolt server is down every beads command fails; the launchers start it first and the
 coordinator's tick restarts it and says so, never over a data directory without the project's
 database. An unknown process reading counts as nothing running. Everything else fails closed
-and names its fix: landing during a verify unless overridden, the wrong role landing or
+and names its fix: landing while a verify runs in the main checkout or the lane's tree unless
+overridden (a worker's own verify never blocks it), the wrong role landing or
 closing, a repository path outside the project, and install over a newer version, an unignored
 `.air` or a different binary.
 
@@ -468,7 +473,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 | Closing needs a green containing main and the bead's commits; a digest only where configured. | 2026-09-25 | the close gate, `AIR_ENFORCE=1` |
 | A green is keyed by commit and counts for any worker; by tree only where declared. | 2026-09-05 | `verify_key` |
 | A backgrounded verify is refused; a dirty tree, a changed command and the counts at a commit with several runs are stated beside the exit. | 2026-09-28 | `air record` |
-| Landing during a verify is refused; the override is recorded. | 2026-09-05 | `air land --despite-inflight` |
+| Landing is refused while a verify runs in the main checkout or the lane's tree, never for a worker's own; the override is recorded. | 2026-09-28 | `land::at_risk`, `air land --despite-inflight` |
 | Nothing reopens a closed bead. | 2026-08-21 | claim, release, reclaim |
 | Air gets out of the way and states facts as soon as they are true; a trial workaround is fixed only where Air caused it, by removing or correcting that part. | 2026-09-26 | §9.1 |
 | Every message Air sends states what it observed and the fixing command, never an opinion. | 2026-09-28 | every notice and refusal |
@@ -478,7 +483,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 | The lane's loop commands run bare, with no pipe or redirect, under allow rules on its command line. | 2026-09-28 | `air lane` |
 | Taking back a bead never forces beads; it waits for the claim lease. | 2026-09-26 | `air reclaim` |
 | A new project's beads runs in server mode on one Dolt server per project, a plain background process Air starts and keeps up; an embedded project stays embedded. | 2026-09-28 | `air init`, `air bd-server` |
-| Budgets are ten times the recorded worst wait, set from measurement at each release; a hit is a fact. | 2026-09-28 | `cmd/budgets.rs`, `air audit` |
+| Each budget names the measurement its number came from, and `air audit` prints its p50 and maximum beside it; a hit is a fact. The numbers are unchanged pending air-1cdr. | 2026-09-28 | `cmd/budgets.rs`, `air audit` |
 | A worker cannot claim an `owner` bead; `owner` is authority and `human` means presence. | 2026-09-05 | `OWNER_LABEL` |
 | A default is closed only where a wrong denial is loud; a message is never refused. | 2026-08-22 | roles.md |
 | The ledger keeps only what git and beads cannot rebuild, and nothing expires by time. | 2026-08-17 | `crates/ledger` |
