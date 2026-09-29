@@ -1888,6 +1888,10 @@ pub enum BdUse {
     /// Answer from `bd_cache` while the cached counts are younger than this many minutes; pay
     /// for bd only when they are older.
     CachedFor(i64),
+    /// Do not call bd at all, so nothing is reconciled against it (air-4lci). For a command's
+    /// own fan-out, which reads the ledger and git: a claim made a second ago is not in bd's
+    /// in-progress list yet everywhere, and reconciling it there would release it.
+    Never,
 }
 
 /// Is the cached bd answer young enough to use? `false` when nothing is cached, so the first
@@ -2087,7 +2091,10 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
     // decision, no second code path to keep in step with the first.
     let mut bd_slow: Option<String> = None;
     let mut bd_skipped = false;
-    if let BdUse::CachedFor(mins) = bd_use
+    if matches!(bd_use, BdUse::Never) {
+        bd_slow = Some("bd not called: a command's own fan-out reads the ledger and git".into());
+        bd_skipped = true;
+    } else if let BdUse::CachedFor(mins) = bd_use
         && cache_is_fresh(&ledger, &at, mins)
     {
         bd_slow = Some(format!(

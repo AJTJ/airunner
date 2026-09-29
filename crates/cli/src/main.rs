@@ -562,13 +562,31 @@ fn main() -> ExitCode {
         Cmd::Batch {
             op: BatchOp::Cut { dry_run },
         } => cmd::batch_cut::run(&repo, dry_run, cli.json),
-        Cmd::Record { kind, command } => cmd::record::run(&repo, &kind, &command, cli.json),
+        // air-4lci: the command that changed the fact queues the notices about it, so they do
+        // not wait on the coordinator's channel poll.
+        Cmd::Record { kind, command } => {
+            let code = cmd::record::run(&repo, &kind, &command, cli.json);
+            cmd::fanout::after_change(&repo, false);
+            code
+        }
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }
         Cmd::Holdings { file } => cmd::holdings::run(&repo, file.as_deref(), cli.json),
-        Cmd::Claim { bead, files } => cmd::claim::claim(&repo, &bead, &files, cli.json),
-        Cmd::Release { bead, reason } => cmd::claim::release(&repo, &bead, &reason, cli.json),
+        Cmd::Claim { bead, files } => {
+            let code = cmd::claim::claim(&repo, &bead, &files, cli.json);
+            if code == 0 {
+                cmd::fanout::after_change(&repo, true);
+            }
+            code
+        }
+        Cmd::Release { bead, reason } => {
+            let code = cmd::claim::release(&repo, &bead, &reason, cli.json);
+            if code == 0 {
+                cmd::fanout::after_change(&repo, true);
+            }
+            code
+        }
         Cmd::Reclaim {
             bead,
             worker,
@@ -599,13 +617,19 @@ fn main() -> ExitCode {
             bead,
             reason,
             reason_file,
-        } => cmd::close::run(
-            &repo,
-            &bead,
-            reason.as_deref(),
-            reason_file.as_deref(),
-            cli.json,
-        ),
+        } => {
+            let code = cmd::close::run(
+                &repo,
+                &bead,
+                reason.as_deref(),
+                reason_file.as_deref(),
+                cli.json,
+            );
+            if code == 0 {
+                cmd::fanout::after_change(&repo, true);
+            }
+            code
+        }
         Cmd::Land {
             bead,
             worker,

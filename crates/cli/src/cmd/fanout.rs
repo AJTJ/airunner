@@ -231,7 +231,33 @@ fn ready_now(repo: &Path, at: &str) -> Option<(Vec<String>, Vec<i64>)> {
         .or_else(|| cached.map(|c| (c.ids, c.priorities)))
 }
 
-/// One pass of every producer, after the coordinator's channel gathered `s`.
+/// One pass of every producer from a command that just changed a fact (air-4lci): `air record`
+/// (a head may now be batch-ready), `air claim`, `air release` and `air close` (the ready set
+/// and who holds no claim). Every notice was produced by the coordinator's channel poll alone,
+/// so while that session was stopped or its channel lost, nobody was told anything: workers
+/// idled 54 min beside a claimable bead here, and an adopter's fleet two hours. The poll stays
+/// as the sweeper; a delivery's key makes the second producer's copy a no-op.
+///
+/// `refresh_ready` re-reads bd's ready list first, because the command just changed it and
+/// [`ready_now`] would otherwise answer from a cache up to a minute old. Silent, and never
+/// fails the command: a notice missed here is sent by the next poll.
+pub fn after_change(repo: &Path, refresh_ready: bool) {
+    let Ok((ledger, me)) = super::open(repo) else {
+        return;
+    };
+    if super::fleet::stopped(&ledger) {
+        return;
+    }
+    if refresh_ready {
+        let _ = super::ready_cache::refresh(repo, &super::claim::bd_for(repo), &super::now());
+    }
+    if let Ok(snap) = super::status::gather_with(repo, super::status::BdUse::Never) {
+        tick(repo, &ledger, &me, &snap);
+    }
+}
+
+/// One pass of every producer, after the coordinator's channel gathered `s`, or after a
+/// command changed a fact ([`after_change`]).
 pub fn tick(repo: &Path, ledger: &Ledger, worker: &str, s: &Snapshot) {
     // A stopped fleet starts nothing, so nothing invites it to (air-1vri.1).
     if super::fleet::stopped(ledger) {
