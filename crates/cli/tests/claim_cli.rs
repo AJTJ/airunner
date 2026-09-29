@@ -818,11 +818,19 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     let (code, out, err) = air(&repo, &bd, &argv);
     assert_eq!(code, 0, "{out}{err}");
 
+    // air-4lci: after the close, its fan-out re-reads `bd ready` once; the closes are still
+    // one process.
     let log = std::fs::read_to_string(repo.join("bd.log")).unwrap();
     assert_eq!(
-        log.lines().filter(|l| !l.trim().is_empty()).count(),
+        log.lines().filter(|l| l.starts_with("close ")).count(),
         1,
         "ten closes must be one bd process: {log}"
+    );
+    assert!(
+        log.lines()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| l.starts_with("close ") || l.starts_with("ready ")),
+        "{log}"
     );
     assert!(log.contains("close zz-1 "), "{log}");
     assert!(log.contains("zz-10"), "{log}");
@@ -2816,7 +2824,17 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
             "{name} batch-green: {told:?}"
         );
     }
-    assert!(!told.iter().any(|(_, k)| k == "batch-ready"), "{told:?}");
+    // air-4lci: the lane's own `air record` queues batch-ready for the members that were
+    // batch-ready then; what this guards is that the owner's landing told the lane nothing
+    // about delta, which the channel still will.
+    let delta_told: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE kind='batch-ready' AND key LIKE 'delta@%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(delta_told, 0, "{told:?}");
     // air-1vri.4: exactly one "main moved" to the coordinator and to every worker, members
     // and the bystander delta alike, and none to the lane. A member's close line rides in it,
     // so no second "landed" notice.
@@ -2907,6 +2925,155 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
 /// delta branched. The dry run names both drops and changes nothing; the cut leaves the lane's
 /// head holding main plus exactly alpha's and gamma's commits, and each drop is an event line.
 /// The main checkout is refused.
+/// A live worker session named `name`, registered the way a launched one is: `air hook`
+/// SessionStart with the launcher's env, and this test process standing in for `claude`, so
+/// the row reads alive (pid and start time, air-sai7).
+fn live_session(dir: &Path, bd: &Path, name: &str) {
+    use std::io::Write;
+    let mut child = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(dir)
+        .arg("hook")
+        .env("AIR_BD_BIN", bd)
+        .env("AIR_ROLE", "worker")
+        .env("BEADS_ACTOR", name)
+        .env("CLAUDE_PID", std::process::id().to_string())
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let body = serde_json::json!({
+        "session_id": format!("s-{name}"), "hook_event_name": "SessionStart",
+        "cwd": dir.to_string_lossy(), "source": "startup",
+    });
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.to_string().as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+/// Deliveries of `kind` queued for `to`.
+fn queued(main: &Path, to: &str, kind: &str) -> i64 {
+    rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE to_worker=?1 AND kind=?2",
+            rusqlite::params![to, kind],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// air-4lci: with no coordinator and no channel poll, the command that makes a branch
+/// batch-ready tells the lane, once however often it runs.
+#[test]
+fn a_precheck_that_makes_a_branch_batch_ready_tells_the_lane_with_no_poll() {
+    let (_tmp, main, alpha) = land_repo("true");
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "precheck": true}"#,
+    )
+    .unwrap();
+    let bd = fake_bd(&main);
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air(&alpha, &bd, &["claim", "zz-1"]).0, 0);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    assert_eq!(queued(&main, "lane", "batch-ready"), 0);
+    assert_eq!(air(&alpha, &bd, &["record", "precheck", "--", "true"]).0, 0);
+    assert_eq!(queued(&main, "lane", "batch-ready"), 1);
+    // The poll or a second command at the same head adds nothing: the key is the head.
+    assert_eq!(air(&alpha, &bd, &["record", "precheck", "--", "true"]).0, 0);
+    assert_eq!(queued(&main, "lane", "batch-ready"), 1);
+}
+
+/// air-4lci: a worker's close of its last claim tells it the beads that are ready, with no
+/// poll running.
+#[test]
+fn closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = [("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")];
+    live_session(&alpha, &bd, "alpha");
+    // The fake bd reads its files from the directory the command runs in.
+    std::fs::write(
+        alpha.join("bd.ready.json"),
+        r#"[{"id":"zz-2","status":"open","issue_type":"task"}]"#,
+    )
+    .unwrap();
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], &worker).0, 0);
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let (code, out, err) = air_env(&alpha, &bd, &["record", "verify", "--", "true"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(queued(&main, "alpha", "beads-ready"), 0);
+    let (code, out, err) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "x"], &worker);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(queued(&main, "alpha", "beads-ready"), 1);
+    // Another command over the same state adds nothing.
+    assert_eq!(
+        air_env(&alpha, &bd, &["record", "verify", "--", "true"], &worker).0,
+        0
+    );
+    assert_eq!(queued(&main, "alpha", "beads-ready"), 1);
+}
+
+/// air-4lci: claiming the last claimable bead while another worker holds nothing tells the
+/// coordinator the queue is empty, with no poll running.
+#[test]
+fn claiming_the_last_bead_tells_the_coordinator_the_queue_is_empty_with_no_poll() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let beta = main.parent().unwrap().join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    live_session(&beta, &bd, "beta");
+    // bd's ready list once zz-1 is claimed: empty.
+    std::fs::write(alpha.join("bd.ready.json"), "[]").unwrap();
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    let worker = [("AIR_ROLE", "worker"), ("BEADS_ACTOR", "alpha")];
+    assert_eq!(queued(&main, "coordinator", "queue-empty"), 0);
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], &worker).0, 0);
+    assert_eq!(queued(&main, "coordinator", "queue-empty"), 1);
+    // Once per emptying: the next command says nothing more.
+    assert_eq!(
+        air_env(&alpha, &bd, &["record", "verify", "--", "true"], &worker).0,
+        0
+    );
+    assert_eq!(queued(&main, "coordinator", "queue-empty"), 1);
+}
+
 /// air-nwat: a verify stopped by hand is still written. `air record` is sent SIGTERM mid-run,
 /// stops its check, and writes the run as interrupted with its duration; `air status` names it
 /// under the worker. Before, the process died and left no row at all.

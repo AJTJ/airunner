@@ -11207,7 +11207,8 @@ fn probe_close_takes_a_reason_file_whole() -> Probe {
         let path = dir.join("proof.md");
         std::fs::write(&path, &proof).map_err(|e| e.to_string())?;
 
-        // A bd that records the exact bytes it was handed after `--reason`.
+        // A bd that records the exact bytes it was handed after `--reason`, and the argv of the
+        // close itself (air-4lci: the close's fan-out then asks `bd ready`, which is not it).
         let script = dir.join("bd");
         std::fs::write(
             &script,
@@ -11215,7 +11216,7 @@ fn probe_close_takes_a_reason_file_whole() -> Probe {
                 "#!/bin/sh\nd='{d}'\ncase \"$1\" in\n  --version) echo 'bd version 1.3.0'; \
                  exit 0;;\nesac\nprev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = '--reason' ]; \
                  then printf '%s' \"$a\" > \"$d/reason.txt\"; fi\n  prev=\"$a\"\ndone\n\
-                 printf '%s\\n' \"$@\" | head -20 > \"$d/argv.txt\"\nexit 0\n",
+                 [ \"$1\" = close ] && printf '%s\\n' \"$@\" | head -20 > \"$d/argv.txt\"\nexit 0\n",
                 d = dir.display()
             ),
         )

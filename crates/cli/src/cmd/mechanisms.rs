@@ -830,7 +830,9 @@ pub const MECHANISMS: &[Mechanism] = &[
                set as it stands (air-oerm). No worker hears the same set twice; never the lane \
                or a worker holding a claim.",
         added: "2026-09-26 (air-dkm1)",
-        source: "crates/cli/src/cmd/fanout.rs, fan_out_ready",
+        // air-4lci: produced by `air claim`, `air release` and `air close` after their write
+        // (fanout::after_change), and by the coordinator's channel poll as the sweeper.
+        source: "crates/cli/src/cmd/fanout.rs, fan_out_ready; producers: air claim, air release, air close (after_change) and the coordinator's channel poll (tick)",
         // Owner, 2026-09-26: the coordinator should send one message to Air and Air fan it
         // out. An idle worker learned of new beads from its 5-minute wake, its Stop nudge, or
         // the coordinator's message.
@@ -846,7 +848,7 @@ pub const MECHANISMS: &[Mechanism] = &[
                that becomes batch-ready, unless a command's own output already told the lane \
                (`air land`, a red batch's `air record`).",
         added: "2026-09-26 (air-1vri.2)",
-        source: "crates/cli/src/cmd/fanout.rs, batch_ready_to_lane and told_lane",
+        source: "crates/cli/src/cmd/fanout.rs, batch_ready_to_lane and told_lane; producers: air record (after_change) and the coordinator's channel poll (tick)",
         // Owner, second live trial, 2026-09-26: the lane learned a branch was batch-ready only
         // on its 5-minute wake, and one bead waited minutes between done and closed.
         fires: Fires::Decisions(&[("fanout", "batch-ready")]),
@@ -910,7 +912,7 @@ pub const MECHANISMS: &[Mechanism] = &[
                with no children: <ids or none>\" once per emptying, and not again until the \
                set has had a bead.",
         added: "2026-09-26 (air-1vri.5)",
-        source: "crates/cli/src/cmd/fanout.rs, queue_empty; called from tick",
+        source: "crates/cli/src/cmd/fanout.rs, queue_empty; producers: air claim, air release, air close (after_change) and the coordinator's channel poll (tick)",
         // Owner, 2026-09-26: when the last bead closed or every remaining bead was blocked,
         // nothing told the coordinator to file the next wave or decompose an epic before its
         // wake.

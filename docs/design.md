@@ -387,13 +387,13 @@ is repeated unchanged.
 
 | Notice | Queued by | To |
 |---|---|---|
-| beads are ready | the coordinator's tick, when the claimable set gains a bead or a worker is newly without a claim | live workers holding no claim |
-| batch-ready | the tick, once per branch head | the lane |
+| beads are ready | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
+| batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
 | batch green, batch red | `air record` at a batch head | each member; a green names only beads it covers that the member still holds |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |
 | main moved | `air land` | every session but the lane and the one that landed |
 | capture from | `air capture` | the coordinator |
-| the ready queue is empty | the tick, once per emptying | the coordinator |
+| the ready queue is empty | `air claim`, `air release`, `air close`, and the tick, once per emptying | the coordinator |
 | bd server was down | the tick's check of the Dolt port | the coordinator, once per outage |
 | lease is free | `air lease release` or break | each worker waiting, oldest first |
 | fleet stop, fleet resumed | `air fleet` | every session |
