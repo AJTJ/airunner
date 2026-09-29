@@ -77,6 +77,30 @@ fn fragments_fold_under_their_heading_and_are_deleted() {
     assert!(frags.join("bad.md").exists());
 }
 
+/// A release leaves `[Unreleased]` empty (air-zese, 2026-09-29): a missing heading is added at the
+/// end of that section in the standard order, and an older release's headings are not touched.
+#[test]
+fn a_missing_heading_is_added_under_unreleased() {
+    let dir = tempfile::tempdir().unwrap();
+    let frags = dir.path().join("changelog.d");
+    std::fs::create_dir(&frags).unwrap();
+    let log = dir.path().join("CHANGELOG.md");
+    std::fs::write(
+        &log,
+        "# Changelog\n\n## [Unreleased]\n\n## [0.4.11]\n\n### Added\n\n- shipped\n",
+    )
+    .unwrap();
+    std::fs::write(frags.join("zz-1.md"), "Fixed the fix\n").unwrap();
+    std::fs::write(frags.join("zz-2.md"), "Added the thing\n").unwrap();
+    let (code, out, err) = assemble(&[&frags, &log], true);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- the thing\n\n### Fixed\n\n\
+         - the fix\n\n## [0.4.11]\n\n### Added\n\n- shipped\n"
+    );
+}
+
 /// This repo's own fragments assemble: every one lands in the dry run's output.
 #[test]
 fn this_repos_fragments_assemble() {
