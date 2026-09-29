@@ -3600,7 +3600,17 @@ fn probe_close_with_proof_sequence() -> Probe {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
         g(&["init", "-q", "-b", "main"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        // air-gcjp: every bead closes on a commit that names it; one commit may name two. The
+        // work is on a branch, as in a worktree: a commit already on main counts as landed.
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+        g(&["checkout", "-q", "-b", "w"])?;
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "a\n\nBead: zz-1\nBead: zz-2\n",
+        ])?;
         let head = g(&["rev-parse", "HEAD"])?;
 
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -3636,9 +3646,9 @@ fn probe_close_with_proof_sequence() -> Probe {
         green_at(&head)?;
         let first = passes("zz-1");
 
-        // Bead two, finished without moving HEAD (a docs bead already satisfied, a no-op fix).
-        // ONE verify run exists in total, and this close must still pass: a green at a commit
-        // that has not moved is still a green.
+        // Bead two, finished in the same commit, so HEAD has not moved. ONE verify run exists
+        // in total, and this close must still pass: a green at a commit that has not moved is
+        // still a green.
         l.record_claim("zz-2", "probe", &[], "t1")
             .map_err(|e| e.to_string())?;
         let second_free = passes("zz-2");
@@ -3648,7 +3658,7 @@ fn probe_close_with_proof_sequence() -> Probe {
             .unwrap_or(-1);
 
         // Bead three, with a commit: HEAD moved, so the gate demands a verify there.
-        g(&["commit", "-q", "--allow-empty", "-m", "b"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "b\n\nBead: zz-3\n"])?;
         l.record_claim("zz-3", "probe", &[], "t2")
             .map_err(|e| e.to_string())?;
         let refused_after_commit = !passes("zz-3");
@@ -4778,7 +4788,10 @@ fn probe_worker_close_runs_the_gate() -> Probe {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
         g(&["init", "-q", "-b", "main"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        // air-gcjp: the bead's work is a commit naming it, on a branch: one on main is landed.
+        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
+        g(&["checkout", "-q", "-b", "w"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a\n\nBead: zz-1\n"])?;
         let head = g(&["rev-parse", "HEAD"])?;
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_claim("zz-1", "w3", &[], "t0")
@@ -6748,6 +6761,7 @@ fn probe_install_merge() -> Probe {
 fn base_facts() -> GateFacts {
     GateFacts {
         worker: "probe".into(),
+        beads_without_commit: Vec::new(),
         refused_command: None,
         head: "0123456789abcdef".into(),
         green_at_head: true,
@@ -12744,7 +12758,16 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
         g(&["config", "user.name", "a"])?;
         std::fs::write(dir.join("f"), "x").map_err(|e| e.to_string())?;
         g(&["add", "-A"])?;
+        // air-gcjp: the bead's work is a commit naming it, on a branch: one on main is landed.
         g(&["commit", "-qm", "seed"])?;
+        g(&["checkout", "-q", "-b", "w"])?;
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "work\n\nBead: zz-1\n",
+        ])?;
         let head = g(&["rev-parse", "HEAD"])?;
 
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;

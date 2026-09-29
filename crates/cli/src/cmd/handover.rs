@@ -108,6 +108,16 @@ pub fn facts(
     // air-ahl: `Untracked` is a refusal like `Missing`, with its own sentence.
     let digest_untracked = digest == Some(Digest::Untracked);
     let digest_present = digest.map(|d| d == Digest::Tracked);
+    // air-gcjp: the beads being handed over that no commit names, on the branch or on main.
+    let beads_without_commit: Vec<String> = match bead {
+        Some(b) => vec![b.to_string()],
+        None => held_beads.clone(),
+    }
+    .into_iter()
+    .filter(|b| {
+        super::batch::bead_commits(repo, b).is_empty() && super::batch::in_main(repo, b).is_none()
+    })
+    .collect();
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
     // air-erii: read only when HEAD has no green, which is when a refusal can name them.
     let (red_at_head, precheck_missing) = if green_at_head {
@@ -125,6 +135,7 @@ pub fn facts(
     };
     Ok(GateFacts {
         worker: worker.to_string(),
+        beads_without_commit,
         // air-kcns: `air handover` IS the hand-over query, so there is no command to name and
         // the sentence keeps its old subject. The hook path sets this from what it matched.
         refused_command: None,

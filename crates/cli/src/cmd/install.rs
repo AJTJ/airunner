@@ -2847,6 +2847,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "close-needs-a-bead-commit",
+        since: "2026-09-28 (air-gcjp)",
+        headline: "`air close` and `air handover` refuse a bead with no commit carrying its \
+                   `Bead:` trailer on the branch or on main (check `bead-commit`), whatever the \
+                   head's green. A green head no longer closes a bead nothing names.",
+        silent_break: false,
+        action: "A bead that produces no code still needs a commit: record the result in a \
+                 document and commit it with the trailer.",
+    },
+    SurfaceChange {
         id: "precedent-before-change",
         since: "2026-09-28 (air-fd8p)",
         headline: "The installed `air-do-less` skill gains \"Precedent before change\": before \
@@ -3949,6 +3959,8 @@ mod tests {
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
         assert!(has("A close needs no message."));
+        // air-gcjp: no close without a commit naming the bead.
+        assert!(has("Every bead closes on a commit that names it"));
         // air-jcfb: no role waits on the question prompt, and every launcher denies it.
         assert!(has(
             "No role uses the question prompt (`AskUserQuestion`), and every launcher denies it."

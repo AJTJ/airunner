@@ -61,9 +61,9 @@ parsed.
 1. Find work:
 
 ```bash
-bd ready --json
-bd list --status=open --json
-bd list --status=in_progress --json
+bd ready -n 0 --json
+bd list --status=open -n 0 --json
+bd list --status=in_progress -n 0 --json
 ```
 
 2. Inspect before editing, and verify the bead's `file:line` citations still resolve:
@@ -85,8 +85,8 @@ echo "Why this exists and what needs to be done" \
 ```
 
 5. Close completed work with evidence in the reason. In a repo that runs Air, close with
-   `air close`, which runs the hand-over check before it calls bd; a raw `bd close` is checked
-   only when Air can read it from the command line.
+   `air close`, which runs the hand-over check before it calls bd; a worker's or the lane's raw
+   `bd close` is denied by its launcher.
 
 ```bash
 air close <id> --reason-file <proof>   # the proof: "make verify exit 0 at <sha>; acceptance met: ..."
@@ -181,7 +181,7 @@ auto-close or mutate beads unless the work is actually complete. **Do not use `b
 diff. Durable knowledge goes in `docs/` or a bead's own description and comments (this project
 also forbids Claude memory; `CLAUDE.md` Rules).
 
-## Known traps (bd 1.2.1)
+## Known traps (bd 1.2.x; re-check on 1.3.0)
 
 - **`bd close` on an already-closed bead prints success, exits 0, and stores nothing**: the
   first close's reason stands. Re-checked on bd 1.2.2, 2026-09-25 (`✓ Closed … second`, stored

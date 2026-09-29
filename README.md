@@ -105,8 +105,8 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Launchers.** `air coordinator`, `air worker` and `air lane` start sessions in their worktrees.
 - **Ledger.** One SQLite file with claims, verification runs, leases and landings, plus a daily
   event log.
-- **Hook.** `air hook` runs on every tool call. It keeps a worker's edits in its worktree and
-  refuses a close that has no passing run.
+- **Hook.** `air hook` records every tool call, warns when two workers edit one file, and
+  nudges an idle worker toward ready beads; `air close` refuses a close that has no passing run.
 - **Channel.** `air mcp` tells the coordinator when something needs attention.
 - **Merge queue.** `air record`, `air batch cut` and `air land`.
 - **Diagnostics.**
@@ -140,7 +140,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
   each shown failing without the check and passing with it
   ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
 - Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
-  coordinator, a lane and three workers work through nine scenarios on a copy of
+  coordinator, a lane and three workers work through eight scenarios on a copy of
   [examples/minimal](examples/minimal), from a fixed
   [request](scripts/trial/request.md). The coordinator writes a report of what happened,
   including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the

@@ -33,7 +33,7 @@ installed; on a branch it is a plan.
     strings $(which air) | grep -c "<a phrase from the change>"
 
 Zero means the fleet is not running your change, however green it is. `make verify` runs
-`air selftest` against *this tree's* build (see CLAUDE.md, Essentials), a
+`air selftest` against *this tree's* build (see CLAUDE.md, This repo's work flow), a
 different question from what `$(which air)` does.
 
 **A probe is evidence only if it has been seen failing**, with the rule it names neutralised and

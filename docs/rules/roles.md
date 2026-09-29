@@ -100,7 +100,10 @@ the harness refuses a long `--reason "…"`. `air capture --file` works the same
 
 Close with `air close`; closing through bd directly is denied to workers and the lane.
 `air close` runs the hand-over check before it closes, and refuses unless a recorded green exists
-at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Whose green it is does not matter. Where the repo
+at a commit that contains `main` and every commit carrying the bead's `Bead:` trailer. Every
+bead closes on a commit that names it, so a bead with no such commit, on your branch or on main,
+is refused whatever your head's green: commit the result, a document if nothing else, with the
+trailer. Whose green it is does not matter. Where the repo
 sets `"verify_key": "tree"`, a green at another commit with the identical tree also counts.
 `air handover` names whatever is missing and the command that fixes it, so run it before you
 close.
@@ -135,9 +138,9 @@ Air delivers these messages into your session through its channel, each once, ma
 from `air`:
 
 - `beads are ready: <ids>` arrives when new beads became claimable while you held no claim,
-  or when you join or your claim ends while beads are ready. If you still hold none, claim one with `air claim <id>`. The first claim wins, so a
-  refused claim means someone else took it; take another from `bd ready`, since the list in the
-  notice is as of when it was sent.
+  or when you join or your claim ends while beads are ready. If you still hold none, claim one with `air claim <id>`. The first claim wins, and a
+  refused claim names why: taken, blocked, unknown, owner, an epic, or closed. Take another from
+  `bd ready`, since the list in the notice is as of when it was sent.
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
   branch in it went green. Close each named bead now, with the lane's green as the proof.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
@@ -314,7 +317,8 @@ What Air does when it lands. A branch is landable when it has a recorded green a
 contains `main`. The beads a landing carries are the ones its commits name in a `Bead: <id>`
 trailer; a commit without one is attributed to nothing. `air land` moves main in the main
 checkout, wherever it runs, and refuses unless main is checked out there, the branch contains
-main, the branch head has a recorded green, and no verify is running anywhere in the fleet.
+main, the branch head has a recorded green, and no verify is running in the main checkout or
+the lane's tree.
 `--despite-inflight` lands anyway and records the runs it destroyed. It also names any process
 reading the main checkout before moving main. Air's landing does not re-verify: it builds the
 landing commit off main with `git commit-tree` and fast-forwards main onto it, so main holds
