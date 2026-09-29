@@ -13,6 +13,20 @@ missing notices, which are fixed or added below.
 
 ### Added
 
+- `make changelog` folds the `changelog.d/` fragments into `CHANGELOG.md` under
+  `[Unreleased]` and deletes them; `make release` refuses while any is left.
+- The `air-do-less` skill has a "Precedent before change" step: before any change, read the
+  solved-issues register and the lifecycle table and write a `## Precedent` section on the bead
+  (register entries, states touched, weight, the surgical change). `air-decomposition` says
+  the coordinator writes it at filing. This repo sets `lint.sections` in `.beads/config.yaml`
+  so `bd create --validate` refuses a task or bug without the section.
+- `crates/cli/src/cmd/lifecycle.rs`, a model test that drives the batch-ready rule, the cut's
+  refusal, the batch scan and the close gate through every order of commit, cut, verify, land,
+  close, merge and a move of main for two workers and a lane, and fails if any reachable state
+  can no longer land and close every bead. `docs/design.md` §6.8 has the lifecycle table it
+  checks.
+- `docs/solved-issues.md`: the register of every problem Air has hit and demonstrably
+  solved, with the fix and what would regress it (owner, 2026-09-28).
 
 - `air status` shows, per worker with a precheck in the last day, `precheck p50 Ns, wait after
   p50 Ns`: how long its prechecks ran and how long from a run's end to its next tool call.
@@ -57,6 +71,18 @@ missing notices, which are fixed or added below.
 
 ### Changed
 
+- the README, roles, adopting-air, the docs index, the trial request and the beads,
+  decomposition, do-less and project-diligence skills say what the 2026-09-28 round built: no
+  fence, eight trial scenarios, the lane's allowed loop, the claim refusals, `-n 0` on bd reads,
+  bd's Dolt server run by Air, and where the verify-lane landing waits.
+- `air close` refuses a bead that no commit names, on the branch or on main, even on a
+  green head, and names the fix: commit the result, a document if nothing else, with the
+  `Bead:` trailer. A green head was the one path by which a bead with no commit closed.
+- `docs/design.md` is rewritten for the end of the 2026-09-28 round, at under 600 lines:
+  it describes only what exists, opens §6 with the lifecycle table every flow follows, lists
+  today's standing rulings, and points to `docs/solved-issues.md` for what was removed and why.
+- this repo sets `verify_lane: true`: the lane verifies once per batch and workers run no
+  verify of their own (four parallel Rust verifies had put the owner's machine at load 40).
 - A bead writes its changelog line as a fragment, `changelog.d/<bead-id>.md`, instead of into
   this file, which every landing conflicted on. This is the last line written here directly.
 - `air land` closes an epic once bd reports every one of its children closed, and never an
@@ -151,6 +177,13 @@ missing notices, which are fixed or added below.
 
 ### Fixed
 
+- `air fleet up`, `air worker` and `air lane` started a second session in a worker's worktree
+  when its tmux session had another name (after `"project"` changed). A worker the ledger has a
+  live session for is now left running, with `<name>: running (session <id>)`.
+- Four statements in `docs/design.md`: `air land` is refused only by a verify in the main
+  checkout or the lane's tree; `air batch cut`'s other guards are named in the lifecycle table;
+  the lifecycle model names which decision functions it calls; and the timing budgets are
+  described as the code keeps them, each naming its measurement, unchanged pending air-1cdr.
 - Tests that waited a fixed ten seconds for a freshly written script or binary went red under
   fleet load, while macOS checked the new executable. The bd-server probe now runs with no
   real server, and the launch, init and MCP tests allow up to 60 or 120 seconds.
