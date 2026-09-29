@@ -483,7 +483,7 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         .collect();
     // air-ch9p: a batch of one has nothing to split.
     let then = if b.members.len() == 1 {
-        "its only member is batch-ready again after a new commit"
+        "its only member is batch-ready again after a new commit or a later green containing it"
     } else {
         "the lane splits by hand"
     };

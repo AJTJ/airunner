@@ -555,7 +555,8 @@ pub fn red_batch_line(batch: Option<&crate::cmd::batch::RedBatch>, worker: &str)
     };
     // air-ch9p: a batch of one has nothing to split.
     let then = if b.members.len() == 1 {
-        "you were its only member, so your branch is batch-ready again after a new commit"
+        "you were its only member, so your branch is batch-ready again after a new commit or a \
+         later green containing it"
     } else {
         "the lane splits by hand"
     };

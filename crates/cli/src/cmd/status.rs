@@ -590,8 +590,8 @@ pub struct BatchFacts {
     /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
     /// be batch-ready with nothing in it.
     pub ahead: bool,
-    /// A red batch was recorded at this exact head and took it as a member (0.4.6
-    /// trial D3).
+    /// A red batch took this exact head as a member and no later green contains it
+    /// ([`red_held`]; 0.4.6 trial D3, air-hyli, air-vdst).
     pub red_batch_at_head: bool,
     /// A cut dropped this exact head for a conflict and told its worker (0.4.9 trial).
     pub dropped_at_head: bool,
@@ -658,8 +658,8 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         return Err(not(
             "red-at-head",
             format!(
-                "{} at {short} went red as a batch at this head; it is batch-ready again after \
-                 a new commit",
+                "{} at {short} was in a batch that went red; it is batch-ready again after a new \
+                 commit, or once a later green contains it",
                 f.worker
             ),
         ));
@@ -764,14 +764,27 @@ fn in_flight_members(ledger: &Ledger) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// A red batch whose only member was `head` (air-hyli). A batch starts from main, so its
-/// commit is a merge and never the member's own sha: asking for a red AT the head, as this
-/// did, missed every such batch, and an adopter's lane merged the same red member into the next
-/// batch twice in a day. The head is ready again once its worker commits past it. In a larger
-/// batch the red may be another member's doing and is the lane's to split, as before.
-pub fn red_alone(reds: &[air_ledger::verify::VerifyRun], head: &str) -> bool {
+/// Is `head` held out by a red batch it was a member of (air-hyli, air-vdst)? Yes while some red
+/// batch recorded `head` as a member and no green recorded after that red contains `head`,
+/// whether the green came from a cut or a hand split. A batch's commit is a merge onto main,
+/// so membership is read from the recorded members, never from the batch sha.
+///
+/// air-hyli held a head out only when it was the red batch's only member. With two or more
+/// members Air cannot tell which is guilty and held nobody out, so after the lane split and
+/// landed the good branch, the broken one was offered again and verified red a second time
+/// (trial 2026-09-29; an adopter twice in a day). Now every member waits: the innocent one
+/// returns as soon as a green proves it, the guilty one when its worker commits past it.
+///
+/// `later_green(red, head)` answers whether a green recorded after `red` contains `head`; the
+/// caller asks the ledger and git, and the lifecycle model asks its own history.
+pub fn red_held(
+    reds: &[air_ledger::verify::VerifyRun],
+    head: &str,
+    later_green: &dyn Fn(&air_ledger::verify::VerifyRun, &str) -> bool,
+) -> bool {
     reds.iter()
-        .any(|r| matches!(r.members.as_slice(), [m] if m.sha == head))
+        .filter(|r| r.members.iter().any(|m| m.sha == head))
+        .any(|r| !later_green(r, head))
 }
 
 /// Every worker worktree through [`batch_ready_rule`]: git and the ledger only, no bd. The
@@ -853,7 +866,13 @@ pub fn batch_ready_for(
             .ok()
             .and_then(|n| n.trim().parse::<u64>().ok())
             .is_some_and(|n| n > 0);
-        let red_batch_at_head = red_alone(&red_batches, &head);
+        let red_batch_at_head = red_held(&red_batches, &head, &|r, h| {
+            ledger
+                .greens_since(Kind::Verify, &r.finished_at)
+                .unwrap_or_default()
+                .iter()
+                .any(|g| git::is_ancestor(repo, h, &g.sha).unwrap_or(false))
+        });
         let dropped_at_head = dropped.iter().any(|(w, h)| *w == worker && *h == head);
         let in_batch = running
             .iter()
@@ -3212,10 +3231,11 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
 mod tests {
     use super::*;
 
-    /// air-hyli: a one-member red at merge commit M with member C keeps C out of the batch;
-    /// a new commit past C is ready; a red with two members excludes neither.
+    /// air-hyli, air-vdst: every member of a red batch is held out until it moves or a green
+    /// recorded after the red contains it. A two-member red holds both; a later green carrying
+    /// A frees A and not B; B is free after a new commit. A one-member red holds its member.
     #[test]
-    fn a_one_member_red_batch_excludes_its_member_until_it_moves() {
+    fn a_red_batch_holds_its_members_until_they_move_or_a_later_green_carries_them() {
         let run = |sha: &str, members: &[&str]| air_ledger::verify::VerifyRun {
             id: sha.into(),
             worker: "lane".into(),
@@ -3235,16 +3255,25 @@ mod tests {
             members: members
                 .iter()
                 .map(|m| air_ledger::landings::Member {
-                    worker: "w3".into(),
+                    worker: "w".into(),
                     sha: (*m).into(),
                 })
                 .collect(),
             main_sha: None,
         };
-        let reds = [run("mmmm", &["cccc"]), run("nnnn", &["aaaa", "bbbb"])];
-        assert!(red_alone(&reds, "cccc"), "the red member is out");
-        assert!(!red_alone(&reds, "dddd"), "a commit past it is ready");
-        assert!(!red_alone(&reds, "aaaa") && !red_alone(&reds, "bbbb"));
+        let reds = [run("mmmm", &["aaaa", "bbbb"]), run("nnnn", &["cccc"])];
+        let none = |_: &air_ledger::verify::VerifyRun, _: &str| false;
+        assert!(red_held(&reds, "aaaa", &none) && red_held(&reds, "bbbb", &none));
+        assert!(
+            red_held(&reds, "cccc", &none),
+            "a lone red member is held as before"
+        );
+        // The split's green contains A: A is back, B is not.
+        let carries_a = |_: &air_ledger::verify::VerifyRun, h: &str| h == "aaaa";
+        assert!(!red_held(&reds, "aaaa", &carries_a));
+        assert!(red_held(&reds, "bbbb", &carries_a));
+        // B commits past its red head: the new head was in no red batch.
+        assert!(!red_held(&reds, "b2b2", &none));
     }
 
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds

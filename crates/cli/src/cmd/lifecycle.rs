@@ -16,7 +16,7 @@
 //! | Does `air batch cut` refuse the lane's head? | `batch_cut::land_first` |
 //! | Does a recorded green cover a bead? | `batch::cover` |
 //! | Does `air close` pass? | `air_hooks::handover_verdict` |
-//! | Is a one-member red holding a head out? | `status::red_alone` |
+//! | Is a red batch still holding a member out? | `status::red_held` |
 //!
 //! What the model supplies itself, because the commands read it from git: a head is the set of
 //! commits it contains, so "A contains B" is set inclusion, and a green stands for every head
@@ -40,7 +40,7 @@ mod tests {
 
     use crate::cmd::batch::{BeadCommit, Candidate, cover};
     use crate::cmd::batch_cut::land_first;
-    use crate::cmd::status::{BatchFacts, batch_ready_rule, red_alone};
+    use crate::cmd::status::{BatchFacts, batch_ready_rule, red_held};
 
     /// A head: the commits it contains, as bits. Ten commit ids at most, so a `u16` does it
     /// and a state hashes in a few words instead of walking trees.
@@ -125,6 +125,9 @@ mod tests {
         main: Set,
         green: bool,
         members: Vec<Set>,
+        /// Order of recording among the runs kept, so "a green recorded after this red" can be
+        /// asked (air-vdst). `canon` renumbers by rank, so it never grows.
+        seq: u8,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -208,7 +211,7 @@ mod tests {
             trigger: "model".into(),
             failing_step: None,
             started_at: "t".into(),
-            finished_at: "t".into(),
+            finished_at: format!("{:03}", r.seq),
             log_path: None,
             command: None,
             duration_ms: None,
@@ -278,7 +281,13 @@ mod tests {
                 vec![]
             },
             closed,
-            red_batch_at_head: red_alone(&reds, &sha(&w.head)),
+            // A green recorded after the red that contains this head frees it (air-vdst).
+            red_batch_at_head: red_held(&reds, &sha(&w.head), &|red, _| {
+                let after: u8 = red.finished_at.parse().unwrap_or(u8::MAX);
+                s.runs
+                    .values()
+                    .any(|g| g.green && g.seq > after && is_sub(&w.head, &g.head))
+            }),
             in_batch: s
                 .cut
                 .as_ref()
@@ -355,8 +364,8 @@ mod tests {
     /// Forget what no decision can read any more, so equal futures are one state. A run at the
     /// lane's head or at a worker's head is kept (the cut's refusal, `air land`, the gate's head
     /// check). Otherwise a green whose head is all in main covers only commits in main, which
-    /// the scan never asks about, and a red matters only while a worker's head is its lone
-    /// member (air-hyli).
+    /// the scan never asks about, and a red matters only while a worker's head is one of its
+    /// members (air-vdst).
     fn canon(mut s: State) -> State {
         let heads: Vec<Set> = s.w.iter().map(|w| w.head).collect();
         let (main, lane) = (s.main, s.lane);
@@ -368,9 +377,17 @@ mod tests {
             if r.green {
                 !is_sub(h, &main)
             } else {
-                matches!(r.members.as_slice(), [m] if heads.contains(m))
+                r.members.iter().any(|m| heads.contains(m))
             }
         });
+        // Renumber by rank, keeping the order, so equal histories are one state.
+        let mut order: Vec<(u8, Set)> = s.runs.iter().map(|(h, r)| (r.seq, *h)).collect();
+        order.sort();
+        for (rank, (_, h)) in order.into_iter().enumerate() {
+            if let Some(r) = s.runs.get_mut(&h) {
+                r.seq = u8::try_from(rank).unwrap_or(u8::MAX);
+            }
+        }
         s
     }
 
@@ -455,6 +472,7 @@ mod tests {
                     continue;
                 }
                 let mut t = s.clone();
+                let seq = s.runs.values().map(|r| r.seq + 1).max().unwrap_or(0);
                 t.runs.insert(
                     s.lane,
                     Run {
@@ -462,6 +480,7 @@ mod tests {
                         main: s.main,
                         green,
                         members: members.clone(),
+                        seq,
                     },
                 );
                 t.cut = None;

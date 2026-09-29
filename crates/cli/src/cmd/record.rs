@@ -297,7 +297,9 @@ fn after_batch(
     let first = if run.is_killed() {
         "killed: no verdict and nothing lands; `air batch cut` cuts again".to_string()
     } else if run.members.len() == 1 {
-        "red: nothing lands; its only member is batch-ready again after a new commit".to_string()
+        "red: nothing lands; its only member is batch-ready again after a new commit or a later \
+         green containing it"
+            .to_string()
     } else {
         "red: nothing lands on this batch; split it by its members, then cut again".to_string()
     };

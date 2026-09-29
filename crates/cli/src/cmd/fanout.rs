@@ -669,7 +669,7 @@ pub fn batch_result_notes(
                     format!(
                         "batch red at {} (exit {}); your {} ({list}) was its only member. \
                          Output: {output}. Nothing lands on it. Your branch is batch-ready \
-                         again once it has a new commit.",
+                         again once it has a new commit, or a later green contains it.",
                         short(&run.sha),
                         run.exit_code,
                         short(&m.sha),
@@ -678,7 +678,9 @@ pub fn batch_result_notes(
                     format!(
                         "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
                          Output: {output}. Nothing lands on it and the lane splits the batch. \
-                         If the failure is in your change, fix it with a new commit.",
+                         Your branch is out of the next batch until a later green contains your \
+                         commit (the split proves it) or you commit again; if the failure is in \
+                         your change, fix it with a new commit.",
                         short(&run.sha),
                         run.exit_code,
                         short(&m.sha),

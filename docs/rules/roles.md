@@ -145,7 +145,8 @@ from `air`:
 - `batch green at <sha> contains your <sha> (<beads>)` arrives when the lane's batch with your
   branch in it went green. Close each named bead now, with the lane's green as the proof.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
-  splits the batch. If the failure is in your change, fix it with a new commit.
+  splits the batch. Your branch stays out of the next batch until a later green contains your
+  commit or you commit again. If the failure is in your change, fix it with a new commit.
 - `main moved to <sha>: landed <beads>; files changed: <paths>` arrives each time main moves.
   Merge main only if those files touch your own work. When it also says `Your <sha> ... is in
   it`, your beads are on main; close any of them still open. It needs no reply.
