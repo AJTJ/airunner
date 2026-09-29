@@ -48,7 +48,9 @@ fleet spends its time on the work instead of on talking.
 - **Sessions.** Air starts the coordinator, the workers and the lane, each in its own git
   worktree and tmux session.
 - **Decomposition.** A skill, installed into every project, for breaking work into epics and
-  beads a worker can finish on its own.
+  beads a worker can finish on its own. It also defines the bead shape: every part a bead
+  carries and what enforces it
+  ([`.claude/skills/decomposition/SKILL.md`](.claude/skills/decomposition/SKILL.md#bead-shape)).
 - **Shared resources.** Leases for anything one agent can use at a time, such as a port or a
   simulator.
 - **Keeping the fleet moving.**
