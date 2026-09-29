@@ -7,12 +7,16 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
-The next release is 0.4.10. It is tagged once a live trial of it passes (see
-`docs/design.md` §9.1). 0.4.0 to 0.4.4 were never tagged, and 0.4.5 and 0.4.6 failed their trials, and 0.4.7 to 0.4.9 passed but were not put out: their trials found defects or
-missing notices, which are fixed or added below.
+## [0.4.11] - 2026-09-29
+
+The round on an adopter's 0.4.10 findings: 42 landings, live trial passed 8/8 on 2026-09-29
+(`.air/trial-report-2026-09-29.md`). 0.4.10 was never tagged; its notices ship here.
 
 ### Added
 
+- Two install notices the round's sweep found missing: the roles text and air-* skills
+  caught up with the round (air-4l5w), and `air bd-server up` checking its database before
+  the port (air-df53).
 - `make changelog` folds the `changelog.d/` fragments into `CHANGELOG.md` under
   `[Unreleased]` and deletes them; `make release` refuses while any is left.
 - The `air-do-less` skill has a "Precedent before change" step: before any change, read the
