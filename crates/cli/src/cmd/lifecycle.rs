@@ -6,6 +6,7 @@
 //! functions the commands call, through every interleaving of the events below for two workers
 //! and one lane, and asks one question of every state it reaches: can Air-permitted actions
 //! still get every bead landed and closed from here? A state from which they cannot is stuck.
+//! A cut may take any non-empty subset of the batch-ready branches, as a split does (air-5fo5).
 //!
 //! The decision functions it calls, and nothing else decides:
 //!
@@ -148,6 +149,8 @@ mod tests {
         MergeMain(usize),
         Close(usize),
         Cut,
+        /// A cut of some of the batch-ready branches (`--without`, `--only`).
+        Split,
         Verify(bool),
         Land,
         MainMoves,
@@ -412,11 +415,23 @@ mod tests {
             let in_main = is_sub(&s.lane, &s.main);
             let contains_main = is_sub(&s.main, &s.lane);
             let refused = land_first(in_main, contains_main, verdict_at(s, &s.lane));
-            let members: Vec<Set> = (0..2)
+            let ready: Vec<Set> = (0..2)
                 .filter(|i| batch_ready(s, rule, *i))
                 .map(|i| s.w[i].head)
                 .collect();
-            if !refused && !members.is_empty() {
+            // Every non-empty subset: the whole set, or a split by `--without`/`--only`
+            // (air-5fo5), which is an ordinary recorded cut.
+            let subsets = 1u32 << ready.len();
+            for mask in 1..subsets {
+                if refused {
+                    break;
+                }
+                let members: Vec<Set> = ready
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| mask & (1 << k) != 0)
+                    .map(|(_, h)| *h)
+                    .collect();
                 let mut t = s.clone();
                 let mut lane = s.main;
                 for m in &members {
@@ -424,7 +439,14 @@ mod tests {
                 }
                 t.lane = lane;
                 t.cut = Some(members);
-                out.push((Event::Cut, t));
+                out.push((
+                    if mask + 1 == subsets {
+                        Event::Cut
+                    } else {
+                        Event::Split
+                    },
+                    t,
+                ));
             }
         }
         if let Some(members) = &s.cut {

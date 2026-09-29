@@ -3023,6 +3023,106 @@ fn a_cut_stopped_by_an_index_lock_is_recorded_as_failed() {
     std::fs::remove_file(&lock).unwrap();
 }
 
+/// air-5fo5: a split after a red batch is an ordinary recorded cut. `--without` leaves named
+/// workers out and `--only` takes just the named ones; the members are recorded in batch_cuts
+/// like any cut, and leaving everyone out is an empty cut that exits 1.
+#[test]
+fn batch_cut_splits_with_without_and_only() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    let mut wts = vec![("alpha", alpha.clone())];
+    for name in ["beta", "gamma", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+        if name != "lane" {
+            wts.push((name, wt.canonicalize().unwrap()));
+        }
+    }
+    let lane = root.join("lane").canonicalize().unwrap();
+    let mut heads = std::collections::BTreeMap::new();
+    for (i, (name, wt)) in wts.iter().enumerate() {
+        let bead = format!("zz-{}", i + 1);
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", &bead]).0, 0, "{name}");
+        std::fs::write(wt.join(format!("{name}.txt")), "work\n").unwrap();
+        git(wt, &["add", &format!("{name}.txt")]);
+        git(wt, &["commit", "-q", "-m", &bead_trailer(&bead)]);
+        heads.insert(*name, git(wt, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    let members = |v: &serde_json::Value| -> Vec<String> {
+        let mut m: Vec<String> = v["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["worker"].as_str().unwrap().to_string())
+            .collect();
+        m.sort();
+        m
+    };
+    let cut = |args: &[&str]| -> (i32, serde_json::Value, String) {
+        let mut a = vec!["--json", "batch", "cut"];
+        a.extend_from_slice(args);
+        let (code, out, err) = air(&lane, &bd, &a);
+        (
+            code,
+            serde_json::from_str(&out).unwrap_or_default(),
+            format!("{out}{err}"),
+        )
+    };
+
+    let (code, v, text) = cut(&["--dry-run", "--without", "gamma"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    assert_eq!(v["left_out"], serde_json::json!(["gamma"]), "{v}");
+
+    let (code, v, text) = cut(&["--dry-run", "--only", "beta"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{v}");
+
+    // Everyone left out: an empty cut, which exits 1 as any memberless cut does.
+    let (code, _, text) = cut(&["--without", "alpha,beta,gamma"]);
+    assert_eq!(code, 1, "{text}");
+    let (_, out, _) = air(
+        &lane,
+        &bd,
+        &["batch", "cut", "--without", "alpha,beta,gamma"],
+    );
+    assert!(out.contains("nothing else is batch-ready"), "{out}");
+
+    // The split for real: recorded in batch_cuts like any cut.
+    let (code, v, text) = cut(&["--without", "gamma"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    let head = git(&lane, &["rev-parse", "HEAD"]);
+    let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT members FROM batch_cuts WHERE head=?1",
+            [&head],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        row.contains(&heads["alpha"]) && row.contains(&heads["beta"]),
+        "{row}"
+    );
+    assert!(!row.contains(&heads["gamma"]), "{row}");
+}
+
 #[test]
 fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (_tmp, main, alpha) = land_repo("true");
