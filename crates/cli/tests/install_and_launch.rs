@@ -112,6 +112,20 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
         serde_json::from_str(&std::fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
     assert_eq!(mcp["mcpServers"]["air"]["args"][0], "mcp");
     assert!(repo.join(".air/roles.md").exists());
+    // air-g9dx: the three shipped documents, byte-identical to this repository's.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (shipped, source) in [
+        ("design.md", "docs/design.md"),
+        ("solved-issues.md", "docs/solved-issues.md"),
+        ("adopting-air.md", "docs/rules/adopting-air.md"),
+    ] {
+        assert_eq!(
+            std::fs::read(repo.join(".air/docs").join(shipped)).unwrap(),
+            std::fs::read(root.join(source)).unwrap(),
+            "{shipped}"
+        );
+    }
+    assert!(repo.join(".claude/skills/air-defect/SKILL.md").exists());
     let skill =
         std::fs::read_to_string(repo.join(".claude/skills/air-decomposition/SKILL.md")).unwrap();
     assert!(

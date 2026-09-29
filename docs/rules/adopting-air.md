@@ -22,7 +22,8 @@ does the same by hand, and the coordinator's channel restarts it if it stops. A 
 already has `.beads/` keeps whatever mode it is in; `air doctor` and `air status` print it. It adds `.air/` to `.gitignore` and writes
 `.claude/air.json` with the directory name as `project`, `metis` set to whether Metis is
 installed, and deny patterns proposed from a scan of the repo. It also writes the hooks,
-`.mcp.json`, `.air/roles.md`, the `air-*` skills, a `.worktreeinclude`, and a `CLAUDE.md` stub.
+`.mcp.json`, `.air/roles.md`, `.air/docs/`, the `air-*` skills, a `.worktreeinclude`, and a
+`CLAUDE.md` stub.
 It creates each only when absent and never edits one, so re-running it is safe.
 
 `air init` prints the verify command it proposes. It uses the first of these it finds: a
@@ -38,8 +39,9 @@ stub names the command, and so does the last thing `air init --write` prints:
 
 In a repo that already has its own setup, run `air install` to read what it would do and `air
 install --write` to apply it. It merges `air hook` into every hook event in
-`.claude/settings.json`, adds the `air` server to `.mcp.json`, and writes `.air/roles.md` and
-the `air-*` skills. Add `.air/` to `.gitignore` yourself. Commit `.claude/settings.json`,
+`.claude/settings.json`, adds the `air` server to `.mcp.json`, and writes `.air/roles.md`, the
+`air-*` skills, and `.air/docs/` (Air's design doc, its register of solved issues, and this
+guide, as the binary was built with them; `air doctor` names a copy that differs). Add `.air/` to `.gitignore` yourself. Commit `.claude/settings.json`,
 `.mcp.json` and the `air-*` skills on main: every session runs in a worktree, which gets only
 committed files, and `air worker` and `air lane` refuse while they are uncommitted.
 

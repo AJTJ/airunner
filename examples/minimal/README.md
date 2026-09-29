@@ -35,8 +35,8 @@ pass before shipping, such as a linter or a build.
 
 Not in this folder, because they are generated per machine:
 
-- `.air/` holds the ledger, `roles.md`, session journals and, in `.air/dolt/`, the data of the
-  Dolt server bd uses. It is gitignored.
+- `.air/` holds the ledger, `roles.md`, Air's documents in `.air/docs/`, session journals and,
+  in `.air/dolt/`, the data of the Dolt server bd uses. It is gitignored.
 - `.beads/` is bd's configuration, created by `bd init` in server mode. The server's port is
   in `.beads/dolt-server.port`, which is not committed. Air starts the server when it is not
   running (`air bd-server up`, and before any session starts).

@@ -181,6 +181,7 @@ Every call, including the silent ones, writes one event line.
 | `.air/ledger.db`, `.air/events/` | The ledger and the event stream; git must ignore `.air`. |
 | `.air/logs/` | The kept tail (64 KiB) of every red or killed run; never pruned by Air. |
 | `.air/roles.md`, `.air/installed.json` | The role prose appended to every session's prompt; the version and notices installed. |
+| `.air/docs/` | `design.md`, `solved-issues.md` and `adopting-air.md` as the binary was built with them, written by `air install --write`; read on demand, never injected. `air doctor` names a copy that differs (air-g9dx). |
 | `.air/ready.json`, `.air/tasks/` | The cached ready list for the stop nudge; a worker's first task. |
 | `.air/journal/` | One session journal per file, from any worktree, unless `journal_dir` names a tracked one. Nothing reads it. |
 | `.air/digests/` | Digests the close gate reads when `"digests": true`. |

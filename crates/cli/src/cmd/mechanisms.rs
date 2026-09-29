@@ -82,6 +82,21 @@ pub struct Mechanism {
     pub removal: Removal,
 }
 
+/// Names of mechanisms deleted in the 2026-09-28 round, which the shipped documents and skills
+/// must mention only where they say it was deleted (air-g9dx; the list is air-6xo5's). A
+/// deletion that ships in a later round appends its name here.
+#[cfg(test)]
+pub const DELETED_NAMES: &[&str] = &[
+    "landed-not-closed",
+    "batch-held",
+    "suspicious",
+    "flaky-at-head",
+    "worktree fence",
+    "KEEP_LOGS",
+    "pid_alive",
+    "would-refuse",
+];
+
 /// Every mechanism Air ships that leaves a trace in the event log.
 ///
 /// Append when a mechanism is added; the audit reports a mechanism with `Removal::Unstated`
