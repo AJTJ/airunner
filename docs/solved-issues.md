@@ -272,6 +272,15 @@ and deletes it, refusing an unknown heading; `make release` refuses while a frag
 Do not: write a bead's line into `CHANGELOG.md`; two beads on one heading conflict at every
 landing.
 
+**Splitting a red batch was raw git, and Air's record of the split batch was a guess.**
+Seen: 2026-09-29 live trial: a batch of two went red; the lane split with `git reset` and `git merge`,
+and the green batch it made (637b9dce) had no `batch_cuts` row, so its members were inferred. An
+adopter's lane hand-built batches twice in a day.
+Fix: `air batch cut --without <worker>...` and `--only <worker>...` filter the batch-ready list before
+the existing path, so a split is a recorded cut with every refusal unchanged; nothing refuses a hand
+cut. Commit dc5d796 (air-5fo5); test `batch_cut_splits_with_without_and_only`.
+Do not: derive a batch's members from merge commits; do not require the flag.
+
 ## Sessions and liveness
 
 **A dead registration with a reused pid read as alive and got most of the ready notices.**
@@ -461,6 +470,18 @@ stamps. Commits 23b9cbe (air-zqmi), b6e158f (air-eiv).
 Seen: live on Claude Code 2.1.239, 2026-08-21.
 Fix: launch with `--dangerously-load-development-channels server:air`
 (`crates/cli/src/cmd/launch.rs:31`). Commit 73576a1.
+
+**Every fleet notice was produced only by the coordinator's channel poll, so a dead coordinator channel silenced the fleet.**
+Seen: 2026-09-28 22:16Z to 2026-09-29, this repo: the coordinator's channel was killed and did not
+reconnect; no batch-ready, beads-ready or queue-empty went out; workers idled 54 min beside a claimable
+bead and the lane beside batch-ready branches five times, each nudged by hand. The 2026-09-29 trial:
+a head made batch-ready by a precheck got no notice. An adopter's coordinator was down two hours.
+Fix: the commands that change the fact queue the notice after their write: `air record` (batch-ready
+to the lane), `air close`, `air claim` and `air release` (beads-ready, queue-empty); `air land` already
+queued main-moved; the poll stays as a sweeper and the delivery key dedupes. Commit 8d12cf2 (air-4lci);
+tests `a_precheck_that_makes_a_branch_batch_ready_tells_the_lane_with_no_poll`,
+`closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll`.
+Do not: make any notice depend on one session's poll being alive.
 
 ## Hooks
 
