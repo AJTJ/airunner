@@ -53,6 +53,9 @@ pub fn bd_check(repo: &Path) -> BdCheck {
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub bd: BdCheck,
+    /// Shipped documents in `.air/docs/` that are missing or differ from this binary's
+    /// (air-g9dx).
+    pub docs_drift: Vec<String>,
     /// Which binary this is (air-dwq5): version, the commit it was built from, and its surface
     /// version. `air doctor` is where somebody goes when a repo behaves unexpectedly, and "am I
     /// running the binary I think I am" was the one question it could not answer.
@@ -231,6 +234,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
             &crate::cmd::gc::referenced_days(ledger.conn()),
         ),
         install_lag: crate::cmd::install::lag(ledger.dir()),
+        docs_drift: crate::cmd::install::docs_drift(ledger.dir()),
         build_gap: build_gap(repo, env!("CARGO_PKG_VERSION")),
         pin: crate::cmd::install::pin_state(ledger.dir()),
         bd_server_up: crate::cmd::bd_server::is_up(&bd_listener),
@@ -286,6 +290,12 @@ pub fn run(repo: &Path, json: bool) -> i32 {
             _ => {}
         }
         // air-d61: the record says what this repo was told; the binary says what runs.
+        for f in &report.docs_drift {
+            s.push_str(&format!(
+                "{f}: missing or differs from this binary's copy; `air install --write` \
+                 rewrites it\n"
+            ));
+        }
         if let Some(l) = &report.install_lag {
             s.push_str(&format!("{}\n", crate::cmd::install::lag_line(l)));
         }

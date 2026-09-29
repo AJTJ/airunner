@@ -8,20 +8,20 @@ metadata:
 # Defect
 
 A defect is explained the same way every time, so the owner can read it without the context the
-writer has. Write seven parts, in this order. Each is a short paragraph in plain words
-(`plain-language` owns the voice). Define a term the reader may not have in one line, the first
-time it appears.
+writer has. Write seven parts, in this order. Each is a short paragraph in plain words. Define
+a term the reader may not have in one line, the first time it appears.
 
 ## The seven parts
 
 1. **What the parts do.** Only the parts of Air this defect touches, one line each.
 2. **What happened.** In order: who did what, and what was expected instead.
 3. **Why.** The rule or code that produced it, named by file, function or bead, in one sentence.
-4. **The model.** Which state or transition of the lifecycle table (`docs/design.md` §6) this is;
-   whether it is a stuck state, a loop that wastes work, or neither; and why the model test
-   (`crates/cli/src/cmd/lifecycle.rs`) did or did not flag it.
-5. **Precedent.** The entries in `docs/solved-issues.md` that touch the same mechanism, quoted by
-   title, with their "Do not" lines, and whether the fix reuses a rule that already exists.
+4. **The model.** Which state or transition of the lifecycle table (`.air/docs/design.md` §6) this
+   is; whether it is a stuck state, a loop that wastes work, or neither; and why the model test
+   (`crates/cli/src/cmd/lifecycle.rs` in Air's repository) did or did not flag it.
+5. **Precedent.** The entries in `.air/docs/solved-issues.md` that touch the same mechanism,
+   quoted by title, with their "Do not" lines, and whether the fix reuses a rule that already
+   exists.
 6. **Fix and cost.** The change in one sentence, what it must not regress, and the cost of leaving
    it, as a number with its source.
 7. **What the fix could break.** Walk the fix through the lifecycle table (every transition it
@@ -75,12 +75,12 @@ split never records a green carrying it: a hand split writes no batch_cuts row (
 So the fix must count any recorded green containing the member's sha, cut or not, and the model
 test gets the red-then-split ordering.
 
-## Why this skill stays in this repository
+## Where it reads
 
-`air install` does not ship it. Parts 4 and 5 read `docs/design.md` §6 and
-`docs/solved-issues.md`, which are this repository's record of Air and do not exist in an
-adopting repository. The coordinator's roles text, which does ship, names the seven parts in one
-sentence so an adopter's coordinator writes the same shape from its own records.
+`air install --write` writes `.air/docs/design.md` and `.air/docs/solved-issues.md` from the
+copies embedded in the binary, so parts 4 and 5 read the documents the running Air was built
+with (air-g9dx). In Air's own repository they are `docs/design.md` and `docs/solved-issues.md`,
+and `.air/docs/` holds the same text once installed.
 
 ## Provenance
 
