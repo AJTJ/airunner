@@ -60,6 +60,35 @@ Filing-time signals:
   lines is set until the ledger's estimate-vs-actual metric (measurement spec §2.7) produces one.
 - Set `--estimate <minutes>`; it is a guess the ledger correlates with actuals, never a gate.
 
+## Bead shape
+
+Every part a bead can carry, who reads it, and whether anything enforces it. Nothing here is new
+machinery; this section collects the conventions in one place so an adopter does not meet each
+one by tripping over it.
+
+| Part | What it holds | Who reads it | Enforced by |
+|---|---|---|---|
+| Title | One line naming the change. | Everyone, in `bd ready` and `air status`. | Nothing. |
+| `initiative: <CODE>` line | Where the bead came from, as a line in the description. | `air status`, which counts beads without one when `"metis": true`. | Nothing; it is a count. |
+| `## Precedent` | The solved issues the change touches, the states it touches, the incident's weight, and the change with what it must not regress. The skill `air-do-less`, "Precedent before change", has the parts. | The worker, before starting. | bd, where the repo requires it (below). |
+| `## Acceptance Criteria` | Observable conditions for done. A bug also needs `## Steps to Reproduce`, and an epic needs `## Success Criteria`. | The worker, and `air land`, which prints them beside each landed bead. | `bd create --validate`, for task, feature and bug. |
+| `## Context` | The skills to invoke and the files to read before starting. | The worker; `.air/roles.md` tells it to read this section first. | Nothing. |
+| Comments | Craft notes, and the coordinator's round note (what to journal, the changelog fragment). | The worker who claims it. | Nothing. |
+
+To make bd refuse a task or bug without a section when it is filed with `--validate`, add the
+section's name to `.beads/config.yaml`. bd adds these to its built-in sections and never relaxes
+them:
+
+```yaml
+lint:
+  sections:
+    task: "Precedent"
+    bug: "Precedent"
+```
+
+`bd lint` then flags open beads that lack it. `bd lint --help` also gives the equivalent
+`bd config set lint.sections.<type> "<Section>"`.
+
 ## The procedure (the coordinator files and decides; the reading may be delegated)
 
 Inputs: the feature paragraph; `main`; `bd list --type=epic`; `bd ready -n 0`; the capture
