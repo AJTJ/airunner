@@ -185,11 +185,10 @@ refusing while your tree has uncommitted changes or your head is a passing batch
 still land (a passing batch main has moved past is re-cut), and drops and names a branch that
 conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the repo's
 test-state reset if it has one, and `air record verify -- <verify command>`. A dropped branch is
-resolved by its worker, never by the lane. A red batch lands nothing. To split a red
-batch you may cut part of it: `air batch cut --without <worker>` or `--only <worker>`, which
-records the members like any cut. Run these and `air land`
-bare, with no pipe or redirect: your settings allow only the bare line, and one auto-mode
-classifier refusal can stop every later landing.
+resolved by its worker, never by the lane. A red batch lands nothing; you may split it with `air
+batch cut --without <worker>` or `--only <worker>`. Run these and `air land` bare, with no pipe
+or redirect: your settings allow only the bare line, and one auto-mode classifier refusal can
+stop every later landing.
 
 Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
 batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air
@@ -207,12 +206,12 @@ main lacks. `air status --json` gives the first fact each other branch lacks.
 
 A batch is a commit on the lane's branch that contains `main` and each member at the sha it
 merged. The green or red recorded there is the batch's. A red batch is reported by member in
-`air record`'s output and in `air status` until a newer batch replaces it, and `air handover`
-in a member's worktree names it. The close gate accepts a green at a verified commit that
-contains `main` and every commit carrying the bead's trailer, so a worker closes on the lane's
-green with no verify of its own. The lane lands its green batch with `air land --worker
-<lane>`, recording every bead the range names by trailer; a batch of only the coordinator's
-commits lands carrying no bead. `air land` is refused to workers and the coordinator.
+`air record`'s output and in `air status` until a newer batch replaces it, and `air handover` in
+a member's worktree names it. The close gate accepts a green at a verified commit that contains
+`main` and every commit carrying the bead's trailer, so a worker closes on the lane's green with
+no verify of its own. The lane lands its green batch with `air land --worker <lane>`, recording
+every bead the range names by trailer; a batch of only the coordinator's commits lands carrying
+no bead. `air land` is refused to workers and the coordinator.
 
 ## Coordinator
 
