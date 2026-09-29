@@ -11,6 +11,10 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GateFacts {
     pub worker: String,
+    /// The beads being handed over that no commit names: no `Bead:` trailer for them in
+    /// `main..HEAD` and none on main (air-gcjp). A bead always has a commit (owner, 2026-09-28:
+    /// decisions go in documents), so a green head is no longer enough to close one.
+    pub beads_without_commit: Vec<String>,
     pub head: String,
     /// `verify_runs` has a green `verify` row that stands for `head` under the repo's key
     /// (air-7wf): at the commit itself by any worker, or at its tree where the repo declares
@@ -161,6 +165,18 @@ pub struct Missing {
 
 pub fn handover_verdict(f: &GateFacts) -> Verdict {
     let mut missing = Vec::new();
+    // air-gcjp: the close judges the bead's commits, so a bead with none has nothing to judge.
+    // A green head used to close it anyway, the one path by which a bead with no commit closed.
+    for b in &f.beads_without_commit {
+        missing.push(Missing {
+            check: "bead-commit",
+            detail: format!("{b} has no commit carrying `Bead: {b}` on this branch or on main"),
+            fix: format!(
+                "commit the result, for example to a document, with the trailer `Bead: {b}`"
+            ),
+            flow_dependent: false,
+        });
+    }
     // air-80x.1: a verify lane's batch green counts when it contains main and every commit
     // of the bead. It is a second way to be green, never a way to be less than green.
     let green = f.green_at_head || f.batch_green.is_some();
@@ -585,6 +601,7 @@ mod tests {
     fn facts() -> GateFacts {
         GateFacts {
             worker: "backend-leaning".into(),
+            beads_without_commit: Vec::new(),
             refused_command: None,
             head: "f854145abcdef".into(),
             green_at_head: true,
@@ -611,6 +628,19 @@ mod tests {
             advisory: false,
             under_lane: false,
         }
+    }
+
+    /// air-gcjp: a bead no commit names does not close on a green head; the refusal names the
+    /// trailer. The same facts with a commit pass.
+    #[test]
+    fn a_bead_with_no_commit_is_refused_even_on_a_green_head() {
+        let mut none = facts();
+        none.beads_without_commit = vec!["zz-o5fi".into()];
+        let v = handover_verdict(&none);
+        assert!(!v.pass);
+        let m = v.missing.iter().find(|m| m.check == "bead-commit").unwrap();
+        assert!(m.fix.contains("`Bead: zz-o5fi`"), "{}", m.fix);
+        assert!(handover_verdict(&facts()).pass);
     }
 
     /// 0.4.8 trial: under a lane, a bead with no green is told only that it lacks one, not to

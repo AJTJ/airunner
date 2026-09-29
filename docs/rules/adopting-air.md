@@ -65,8 +65,9 @@ Each session can stop at start-up, and the launcher prints once which prompts to
   development".
 
 The "New MCP server found in this project: air" question no longer appears: every launch
-approves the `air` server in its own settings. The lane is allowed `air land` in its own
-settings too, so auto mode's classifier does not refuse its landings.
+approves the `air` server in its own settings. The lane's whole loop (`air batch cut`,
+`air record verify`, `air land`) is on its allow list, run bare, so auto mode's classifier does
+not refuse it.
 
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.

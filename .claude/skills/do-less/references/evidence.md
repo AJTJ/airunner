@@ -165,7 +165,7 @@ would only make the model free to decide.
 
 | Type | Example in Air | Ages | Evidence |
 |---|---|---|---|
-| Fact supply (a true thing the model cannot derive) | green at sha, who holds a file, pid liveness | Well; stays true as models improve, costs one line | F5, F6, F4 |
+| Fact supply (a true thing the model cannot derive) | green at sha, who holds a file, pid-and-start-time liveness | Well; stays true as models improve, costs one line | F5, F6, F4 |
 | Verification of an artifact | `air record` exit at HEAD, merged-tree verify | Well; the false-success rate is flat across capability | F9, F4, F5 |
 | Isolation (make the wrong action impossible) | worktrees, deny `git push`, leases | Well when it removes a recorded collision; badly when the deny encodes a policy the model could judge | F10 |
 | Measurement (count, show, never gate) | review wait, inbox depth | Well; decides every other removal condition | do-less §3; decisions 2026-08-18 item 5 |
@@ -184,7 +184,7 @@ measurement (F10). Classify by the taxonomy: a procedure, role script, ritual or
 to "measure instead"; a fact, verification or isolation is built in its smallest version.
 Write the removal condition in the same commit, next to the code, in one of three shapes.
 Evidence shape: "remove when one round of ledger data shows zero `<condition>` events" (every
-hook decision is recorded, `crates/cli/src/cmd/hook.rs:14-18`). Capability shape: "remove when
+hook decision is recorded, `crates/cli/src/cmd/hook.rs:17-20`). Capability shape: "remove when
 the model stops doing Y", tested as Anthropic tested sprint contracts, off for one round on the
 new model, compare the count (F4). Substitution shape: "remove when bd provides Z" or "when
 Claude Code provides Z". Stay advisory for a full round before any refusal; the advisory round
@@ -201,7 +201,7 @@ incident-backed drives and the denial paragraph. Decide on round-one data: the `
 deny and the capture/triage relay; the peer-on-file warning; `silent-with-claim`. Keep without
 a removal condition, because the failure they address is flat across capability: the
 hand-over gate's fact checks, `air record`'s integrity flags and backgrounded refusal, the
-`git push`, `git commit`-on-main and `bd sync` denies, leases, the event log, pid liveness,
+`git push`, `git commit`-on-main and `bd sync` denies, leases, the event log, pid-and-start-time liveness,
 env-by-flag. What has happened to each since is in `air audit`.
 
 

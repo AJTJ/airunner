@@ -77,7 +77,8 @@ Four instances in one day, 2026-08-29, all initially read as (1):
   one level up.
 - **`landed-not-closed`.** Never fired in eight days; listed among the dead. Kept on the argument
   that six landings is not a sample — case (2). It fired twice within the hour and both times
-  found a real defect in an acceptance clause.
+  found a real defect in an acceptance clause. (Deleted 2026-09-28, air-cizz, on its
+  false-positive rate: 7 of 8 wrong at an adopter, 6 of 9 wrong here; not on a zero.)
 - **`stuck`.** Offered as the counter-example, the zero that WAS evidence: a worker had wedged
   and it stayed silent. Checked twice, and it is neither (1) nor a broken sensor. Session state
   `stuck` is set only by the `PermissionRequest` hook (`cmd/hook.rs`), and
