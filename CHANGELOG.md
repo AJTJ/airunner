@@ -14,6 +14,9 @@ The round on an adopter's 0.4.10 findings: 42 landings, live trial passed 8/8 on
 
 ### Added
 
+- Two install notices the round's sweep found missing: the roles text and air-* skills
+  caught up with the round (air-4l5w), and `air bd-server up` checking its database before
+  the port (air-df53).
 - `make changelog` folds the `changelog.d/` fragments into `CHANGELOG.md` under
   `[Unreleased]` and deletes them; `make release` refuses while any is left.
 - The `air-do-less` skill has a "Precedent before change" step: before any change, read the
