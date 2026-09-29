@@ -216,9 +216,8 @@ And one level down, which caught four clauses in a single session of the adopter
 INSTRUMENT satisfy this instead of the code?** A clause the test harness, the fixture, or the
 probe can make true on its own is not a clause about the work.
 
-This is where `air land`'s unreadable-clause verdicts come from, and **the fix is at filing, not
-at landing**. Air discharges a clause only by lookup and reports the rest as unreadable; it
-cannot judge prose, and nothing downstream will.
+The fix is at filing, not at landing: `air land` prints each landed bead's acceptance text
+beside it and judges none of it, and nothing downstream will judge prose.
 
 **No mechanical check, deliberately.** The adopter attempted a prose regex for this and measured
 it at **80% false positives** on their own queue before dropping it; the distinction here is

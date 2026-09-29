@@ -60,7 +60,7 @@ fleet spends its time on the work instead of on talking.
   - Two workers editing the same file are warned.
   - `air status` shows when a session stopped, for example at an account limit, and what else is
     running in each worktree.
-  - Sessions set a recurring wake so they pick up again after a pause.
+  - The coordinator sets a recurring wake so it picks up again after a pause.
 
 Air supports Claude Code only, for now.
 

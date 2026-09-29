@@ -110,7 +110,7 @@ key is optional.
 | `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
 | `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix; `air init` writes the directory name |
 | `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
-| `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. An older string value counts as `true`. | absent: workers verify their own branch |
+| `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. A string value counts as absent; a lane session having run also counts as a lane. | absent: workers verify their own branch |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
 | `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
