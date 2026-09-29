@@ -24,8 +24,8 @@ understanding of historical precedents"). The section has four parts:
 
 - **Register.** The entries in `docs/solved-issues.md` that touch the same mechanism or state,
   quoted by title, and what each one's "Do not" line forbids.
-- **Lifecycle.** Which states and transitions of the lifecycle table (`docs/design.md` §6.8,
-  `crates/cli/src/cmd/lifecycle.rs`) the change touches, or "none: not a flow change".
+- **Lifecycle.** Which states and transitions of the lifecycle table (`docs/design.md` §6,
+  "The bead and branch lifecycle", and `crates/cli/src/cmd/lifecycle.rs`) the change touches, or "none: not a flow change".
 - **Weight.** Whether the incident is a recurring cost under normal operation or a one-off, with
   the count that says so. A count taken while a session was dead or out of tokens is named as
   such and is not the weight: the 417 pushes went mostly into a session that could not read

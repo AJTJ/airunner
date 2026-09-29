@@ -32,7 +32,7 @@ for r in rows:
     elif "refus" in dec or dec == "denied":
         refusals[f"{cmd} {dec}"] += 1
     elif cmd == "fanout" or dec in (
-        "batch-result", "batch-ready", "batch-held", "beads-ready", "main-moved",
+        "batch-result", "batch-ready", "beads-ready", "main-moved",
         "lease-free", "queue-empty", "capture",
     ):
         notices[dec or cmd] += 1

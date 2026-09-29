@@ -6,8 +6,8 @@ from memory: which commit passed verification, who is editing which file, who ho
 task, and who holds a shared resource. On every close it checks the gate: a bead does not close
 without a recorded green that contains main and every commit naming the bead.
 
-This document describes main at `4f708fe` on 2026-09-28: version 0.4.10 (the last release row),
-with 34 notices waiting for the next release. Every number below was re-derived from that tree
+This document describes main at `40bffd2` on 2026-09-28: version 0.4.11 (the last release row),
+with 2 notices waiting for the next release. Every number below was re-derived from that tree
 the same day. What was removed, and why, is in `docs/solved-issues.md` and `CHANGELOG.md`; this
 document describes only what exists.
 
@@ -53,9 +53,9 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
 | Crate | Lines | What it does |
 |---|---|---|
 | ledger | 3,968 | The SQLite schema (v26), one row type per table, and the event writer. No network, no beads. |
-| hooks | 1,313 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
+| hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
-| cli | 53,521 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, and the self-test (13,875 lines, 165 probes). |
+| cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, and the self-test (13,903 lines, 165 probes). |
 
 The ledger is one SQLite file in WAL mode under `.air` in the main checkout, shared by every
 worktree; a row stays until what it describes stops being true. The event stream gets one line
@@ -197,8 +197,8 @@ with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `metis
 `adopters`.
 
 The launchers set `AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_CHANNEL=1`,
-`BEADS_DOLT_AUTO_START=0`, and for workers and the lane `AIR_ENFORCE=1`, which makes the gate
-refuse rather than advise. `air worker worker-9 --print` shows a whole launch, including
+`BEADS_DOLT_AUTO_START=0`, and for workers and the lane `AIR_ENFORCE=1`, which makes the hook
+refuse a lease command rather than advise. `air worker worker-9 --print` shows a whole launch, including
 `--append-system-prompt-file .air/roles.md`, `--name ai_runner-worker-9`, the development
 channel and `--disallowed-tools`. Other variables move where Air finds its tools and change
 its timeouts (`AIR_BD_TIMEOUT_MS`).
@@ -316,7 +316,7 @@ sequenceDiagram
   participant H as air close
   participant F as ledger and git
   W->>H: air close <id>
-  H->>F: green? contains main? claimed or carried? digest where asked?
+  H->>F: a commit naming it? green? contains main? claimed or carried? digest where asked?
   alt every fact present
     H->>F: bd close, release the claim
     H-->>W: closed
@@ -332,8 +332,9 @@ recorded over (`batch::cover`, over every green since the bead's oldest commit),
 contains all those commits (`batch::in_main`); under a lane that is how a worker closes on the
 lane's green. A head main is ahead of is refused as behind main unless main contains it, the
 bead is covered, or, under a lane, no green is at the head yet. A refusal names a red recorded
-at the head with its kept output, a missing precheck, or a missing trailer. A bead no commit
-names passes on the head check alone, when a green stands at the worker's head.
+at the head with its kept output, a missing precheck, or a missing trailer. A bead that no
+commit names, on the branch or on main, is refused whatever the head's green, and the refusal
+names the fix: commit the result with its `Bead:` trailer.
 
 ### 6.3 Landing
 
@@ -470,7 +471,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 
 | Rule | Date | Carried by |
 |---|---|---|
-| Closing needs a green containing main and the bead's commits; a digest only where configured. | 2026-09-25 | the close gate, `AIR_ENFORCE=1` |
+| Closing needs a green containing main and the bead's commits; a digest only where configured. | 2026-09-25 | the close gate in `air close`, for workers and the lane |
 | A green is keyed by commit and counts for any worker; by tree only where declared. | 2026-09-05 | `verify_key` |
 | A backgrounded verify is refused; a dirty tree, a changed command and the counts at a commit with several runs are stated beside the exit. | 2026-09-28 | `air record` |
 | Landing is refused while a verify runs in the main checkout or the lane's tree, never for a worker's own; the override is recorded. | 2026-09-28 | `land::at_risk`, `air land --despite-inflight` |
@@ -549,9 +550,7 @@ One row per item; a row is deleted when its work lands.
 | Red-batch policy: drop the member the failing step names, else halve; one recorded re-run for a suspected flake. Owner ruling open. | 2026-09-14 | recommended: drop by step |
 | A verify whose tree changed between start and exit records a green for a tree that never existed; flag it like a dirty start. | 2026-09-14 | `cmd/record.rs` |
 | Does the coordinator keep `air close`? Recommended yes, counted: it recovers a gone worker's bead. Owner ruling open. | 2026-09-14 | `cmd/close.rs` |
-| `air close` passes a bead no commit names when a green stands at the worker's head. Owner ruling open. | 2026-09-28 | air-k52n comment |
 | `air gc` does not collect `.air/logs/`, which grows by up to 64 KiB per red run. | 2026-09-28 | air-06k7 |
-| The trial request still expects an edit outside the worktree to be refused, which nothing refuses now. | 2026-09-28 | `scripts/trial/request.md` |
 | The next trial shows both loop times under a minute plus the verify, and a fan-out and a fleet stop reaching exactly their sessions. | 2026-09-26 | air-1vri |
 | Audit every command and channel tool: purpose, incident, overlap, keep or drop; use an adopter's counts. | 2026-09-14 | |
 | List or remove the three lease tools the channel answers without listing. | 2026-09-25 | `cmd/mcp.rs` |

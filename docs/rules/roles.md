@@ -65,8 +65,9 @@ If the bead ends with a `## Context` section, invoke the skills it names and rea
 before you start.
 You close your own bead, with proof. There is no review step and no `awaiting_review`. Which of
 the two sequences below applies is set by `"verify_lane": true` in `.claude/air.json`: with it
-the lane sequence applies, and without it the other one does. An older value that is a
-worktree name counts as `true`. The lane itself is whichever session `air lane` started.
+the lane sequence applies, and without it the other one does. Any other value counts as
+absent, though a lane session having run also counts as a lane. The lane itself is whichever
+session `air lane` started.
 
 Without a lane:
 
@@ -168,7 +169,7 @@ You read beads and add comments with `bd comment`; every other change to a bead 
 `air` (`air claim`, `air close`, `air capture`), and bd's write commands are denied to you.
 Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
 changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
-`air coordinator`, leaving the worktree, and `AskUserQuestion`. You reach the owner through
+`air coordinator`, the worktree tools (`EnterWorktree`, `ExitWorktree`), and `AskUserQuestion`. You reach the owner through
 `air capture`. Work only in your worktree, never in the main checkout, and use your scratchpad
 for anything that is not part of the repo.
 

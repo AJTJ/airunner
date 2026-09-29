@@ -32,7 +32,7 @@ Index items are 1–3 lines; detail lives behind the link.
   captures and the round log, and are reviewed in one pass when there are no
   tasks left (owner, 2026-08-21).
 - **A human is always in the loop.** Core requirement, not a phase. Every agent session is a
-  terminal the owner can watch and type into (the workers and the coordinator); Air's
+  terminal the owner can watch and type into (the workers, the lane and the coordinator); Air's
   launchers start interactive sessions, never headless ones, and nothing Air builds may take the
   owner out of the loop or hide what an agent is doing. Introspection into live state
   (`air status`, the event stream) is part of the same requirement.
@@ -153,7 +153,7 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
 | `air mcp` | One stdio MCP server per session: Air's channel. It delivers Air's notices into every launched session (ready beads, batch results, fleet stop) and attention conditions to the coordinator, plus tools that invoke the CLI with `--json`. |
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (`.claude/worktrees/coordinator` for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
-| Hand-over gate | Closing a bead needs a recorded green at a commit containing `main`, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). A worker's or the lane's `air close` runs it; their launchers deny raw `bd close`. Never blocks a prompt or a WIP commit. |
+| Hand-over gate | Closing a bead needs a commit carrying its `Bead:` trailer, a recorded green at a commit containing `main` and every such commit, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). A worker's or the lane's `air close` runs it; their launchers deny raw `bd close`. Never blocks a prompt or a WIP commit. |
 | Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## This repo's work flow

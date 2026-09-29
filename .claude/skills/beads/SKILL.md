@@ -28,8 +28,8 @@ the DB schema (v53 to v65), so an unplanned `brew upgrade` will refuse to open a
 
 Consequences for agents:
 
-- Do not build a workflow on `bd heartbeat`, `bd reclaim`, `bd serve`, or lease fields
-  (`lease_expires_at`, `heartbeat_at`). Treat status + assignee as the cross-machine truth.
+- Do not build a workflow on `bd heartbeat`, `bd serve`, or lease fields
+  (`lease_expires_at`, `heartbeat_at`); `bd reclaim` is used only through `air reclaim`. Treat status + assignee as the cross-machine truth.
 - Do not upgrade or downgrade `bd` on your own. `bd` is pinned; changing it is an owner
   decision.
 - Full findings, sources, the ready and claim semantics, and the surface Air uses on the pinned
@@ -75,7 +75,8 @@ bd show <id> --json
 3. Claim with `air claim <id>` (raw `bd update --claim` is denied to workers; roles.md).
 
 4. Filing is the coordinator's (a worker captures; roles.md). File always with a description
-   and an acceptance line:
+   and an acceptance line (in this repo a task or bug filed with `--validate` also needs a
+   `## Precedent` section in its description):
 
 ```bash
 echo "Why this exists and what needs to be done" \

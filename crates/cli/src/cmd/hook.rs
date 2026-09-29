@@ -7,11 +7,11 @@
 //! - PreToolUse(Edit|Write): warn (additionalContext) if a peer is journaled on that file.
 //! - Closes are not read from Bash here (owner, 2026-09-26): workers and the lane close with
 //!   `air close`, which runs the hand-over gate itself, and their launchers deny bd's writes.
-//! - Stop / SubagentStop: advisory hand-over verdict as context ONLY when something is
-//!   missing; quiet on the ok path and for the coordinator. One block: a worker with no claim
-//!   while beads are ready is nudged once with the ids (air-09i; `stop_hook_active` is the
-//!   loop guard). The cache gates whether to speak; the list itself is confirmed against bd
-//!   at that moment, so the nudge never names a bead `air claim` would refuse (air-ouw).
+//! - Stop: no hand-over verdict (removed by air-wau8). One block: a worker with no claim, or
+//!   under a lane with every claim batch-ready, while beads are ready is nudged with the ids
+//!   (air-09i; `stop_hook_active` is the loop guard). SubagentStop changes nothing. The
+//!   cache gates whether to speak; the list itself is confirmed against bd at that moment, so
+//!   the nudge never names a bead `air claim` would refuse (air-ouw).
 //! - SessionStart / PostToolUse / PermissionRequest / SessionEnd: session state rows.
 //!
 //! Every invocation appends exactly one event line to `.air/events/` (`hook.<event>`), including
