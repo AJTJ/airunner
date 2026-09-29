@@ -29,6 +29,42 @@ use crate::cmd::emit;
 /// The roles document, embedded so installs are self-contained.
 pub const ROLES_MD: &str = include_str!("../../../../docs/rules/roles.md");
 
+/// The documents Air ships beside `roles.md`, written to `.air/docs/` by `air install --write`
+/// (air-g9dx, owner 2026-09-29): how Air works, what has gone wrong before and why, and how to
+/// adopt it. An adopter's coordinator wrote 557 lines of findings partly guessing at mechanisms
+/// it could not read, and the defect skill reads two of these. Embedded like `roles.md`, so the
+/// copy a repo holds is the one its binary was built with; nothing injects them into a
+/// session, they are read on demand. Removed when an adopter can read Air's repository itself.
+pub const DOCS: &[(&str, &str)] = &[
+    ("design.md", include_str!("../../../../docs/design.md")),
+    (
+        "solved-issues.md",
+        include_str!("../../../../docs/solved-issues.md"),
+    ),
+    (
+        "adopting-air.md",
+        include_str!("../../../../docs/rules/adopting-air.md"),
+    ),
+];
+
+/// The shipped documents that are missing from `air_dir`'s `docs/` or differ from this
+/// binary's copies, for `air doctor` (air-g9dx). Empty when `roles.md` is absent too, since
+/// then Air was never installed here.
+pub fn docs_drift(air_dir: &Path) -> Vec<String> {
+    if !air_dir.join("roles.md").exists() {
+        return Vec::new();
+    }
+    DOCS.iter()
+        .filter(|(name, text)| {
+            std::fs::read_to_string(air_dir.join("docs").join(name))
+                .ok()
+                .as_deref()
+                != Some(*text)
+        })
+        .map(|(name, _)| format!(".air/docs/{name}"))
+        .collect()
+}
+
 /// Appended to the COORDINATOR's role prose when Metis is attached (air-g5o), and to no other
 /// session.
 ///
@@ -83,6 +119,11 @@ pub const SKILLS: &[(&str, &str)] = &[
     (
         "air-decomposition",
         include_str!("../../../../.claude/skills/decomposition/SKILL.md"),
+    ),
+    // air-g9dx: shipped once `.air/docs/` carries the two documents it reads.
+    (
+        "air-defect",
+        include_str!("../../../../.claude/skills/defect/SKILL.md"),
     ),
     //
     // `phase-transitions` was installed too, until 2026-09-25 (air-vuwx): its bead state
@@ -2977,6 +3018,18 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "",
     },
+    SurfaceChange {
+        id: "docs-shipped",
+        since: "2026-09-29 (air-g9dx)",
+        headline: "`air install --write` (and `air init --write`) writes `.air/docs/design.md`, \
+                   `.air/docs/solved-issues.md` and `.air/docs/adopting-air.md` from the copies \
+                   in the binary, and installs the `air-defect` skill, which reads them. \
+                   `.air/roles.md` names the first two for every role. `air doctor` names a copy \
+                   that is missing or differs.",
+        silent_break: false,
+        action: "`air install --write` writes them; `.air/` is already gitignored, so nothing \
+                 new to commit except `.claude/skills/air-defect/`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3248,9 +3301,104 @@ pub fn release_check(cargo_version: &str, surface_len: usize) -> Result<(), Stri
     Ok(())
 }
 
+/// Pure: is the newest parity sweep newer than every change to code and roles (air-g9dx)?
+///
+/// `sweep` is the newest closed bead titled "Parity sweep" with the commit on main that names
+/// it; `later` is every non-merge commit after that one which changes `crates/` or `docs/rules/`
+/// and names a different bead, as (sha, subject). The docs ship in the binary now, so a release
+/// cut after a code change nobody swept ships prose about behaviour that is gone: the round of
+/// 2026-09-28 needed two sweeps (23 stale statements, then more). Removed after two releases in
+/// a row whose sweep found nothing stale.
+pub fn parity_verdict(
+    sweep: Option<(&str, &str)>,
+    later: &[(String, String)],
+) -> Result<(), String> {
+    const FIX: &str = "file a bead titled \"Parity sweep ...\" that brings the docs, skills, \
+                       roles and README to what the code does, and land it before the release";
+    let Some((bead, sha)) = sweep else {
+        return Err(format!(
+            "no closed parity sweep has a commit on main: {FIX}."
+        ));
+    };
+    match later.first() {
+        None => Ok(()),
+        Some((c, subject)) => Err(format!(
+            "the newest parity sweep, {bead} at {}, predates {} change(s) to crates/ or \
+             docs/rules/, the newest {} \"{subject}\": {FIX}.",
+            sha.get(..8).unwrap_or(sha),
+            later.len(),
+            c.get(..8).unwrap_or(c),
+        )),
+    }
+}
+
+/// The newest sweep as (bead, sha on main), and the later commits as (sha, subject).
+type ParityFacts = (Option<(String, String)>, Vec<(String, String)>);
+
+/// The facts [`parity_verdict`] reads, from bd and git.
+fn parity_facts(repo: &Path) -> Result<ParityFacts, String> {
+    use air_bd::WorkLedger;
+    let bd = super::claim::bd_for(repo);
+    let closed = bd
+        .by_status("closed")
+        .map_err(|e| format!("bd list closed: {e}"))?;
+    let behind = |sha: &str| -> usize {
+        crate::git::run(repo, &["rev-list", "--count", &format!("{sha}..main")])
+            .ok()
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or(usize::MAX)
+    };
+    let sweep = closed
+        .iter()
+        .filter(|i| i.title.to_lowercase().starts_with("parity sweep"))
+        .filter_map(|i| super::batch::in_main(repo, &i.id).map(|sha| (i.id.clone(), sha)))
+        .min_by_key(|(_, sha)| behind(sha));
+    let Some((bead, sha)) = &sweep else {
+        return Ok((None, Vec::new()));
+    };
+    let text = crate::git::run(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--format=%H%x1f%s%x1f%B%x1e",
+            &format!("{sha}..main"),
+            "--",
+            "crates",
+            "docs/rules",
+        ],
+    )
+    .map_err(|e| format!("git log: {e}"))?;
+    let later = text
+        .split('\u{1e}')
+        .filter_map(|rec| {
+            let mut it = rec.trim_start_matches('\n').splitn(3, '\u{1f}');
+            let c = it.next()?.trim().to_string();
+            let subject = it.next()?.to_string();
+            let body = it.next().unwrap_or("");
+            let names_sweep = super::attribution::trailer_ids(body)
+                .iter()
+                .any(|b| b == bead);
+            (!c.is_empty() && !names_sweep).then_some((c, subject))
+        })
+        .collect();
+    Ok((sweep, later))
+}
+
 /// `air release-check`: exit 2 with the row to append when the surface has outrun the
-/// releases. Run by `make release`, never by `make verify`.
-pub fn release_check_cmd() -> i32 {
+/// releases, or when the docs have not been swept since the last code change. Run by
+/// `make release`, never by `make verify`.
+pub fn release_check_cmd(repo: &Path) -> i32 {
+    let parity = parity_facts(repo).and_then(|(sweep, later)| {
+        parity_verdict(
+            sweep.as_ref().map(|(b, s)| (b.as_str(), s.as_str())),
+            &later,
+        )
+    });
+    if let Err(e) = parity {
+        eprintln!("release-check: {e}");
+        return 2;
+    }
     match release_check(env!("CARGO_PKG_VERSION"), SURFACE.len()) {
         Ok(()) => {
             println!(
@@ -3870,6 +4018,12 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
             std::fs::create_dir_all(&air_dir).map_err(|e| format!("{}: {e}", air_dir.display()))?;
             std::fs::write(air_dir.join("roles.md"), ROLES_MD)
                 .map_err(|e| format!("{}: {e}", air_dir.display()))?;
+            let docs = air_dir.join("docs");
+            std::fs::create_dir_all(&docs).map_err(|e| format!("{}: {e}", docs.display()))?;
+            for (name, text) in DOCS {
+                std::fs::write(docs.join(name), text)
+                    .map_err(|e| format!("{}: {e}", docs.display()))?;
+            }
             for (name, text) in SKILLS {
                 let dir = skills_dir.join(name);
                 std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -4070,6 +4224,10 @@ mod tests {
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
         assert!(has("A close needs no message."));
+        // air-g9dx: the shipped documents are named where every role reads.
+        assert!(has(
+            "How Air works is in `.air/docs/design.md`, and what has gone wrong before and why is in `.air/docs/solved-issues.md`"
+        ));
         // air-gcjp: no close without a commit naming the bead.
         assert!(has("Every bead closes on a commit that names it"));
         // air-jcfb: no role waits on the question prompt, and every launcher denies it.
@@ -4330,6 +4488,118 @@ mod tests {
         }
     }
 
+    /// air-g9dx: the release refuses a parity sweep older than the last change to code or
+    /// roles, and one that is missing, naming the fix; a sweep with nothing after it passes.
+    #[test]
+    fn release_refuses_a_parity_sweep_older_than_the_code() {
+        let later = vec![(
+            "25499223aa".to_string(),
+            "red batch: members stay out".to_string(),
+        )];
+        let e = parity_verdict(Some(("zz-sweep", "ec1965fbcc")), &later).unwrap_err();
+        assert!(e.contains("zz-sweep at ec1965fb"), "{e}");
+        assert!(e.contains("25499223"), "{e}");
+        assert!(e.contains("Parity sweep"), "{e}");
+        assert!(
+            parity_verdict(None, &[])
+                .unwrap_err()
+                .contains("Parity sweep")
+        );
+        assert!(parity_verdict(Some(("zz-sweep", "ec1965fbcc")), &[]).is_ok());
+    }
+
+    /// air-g9dx: every function the design doc's lifecycle table cites as `module::function`
+    /// exists, so a rename fails `make verify` instead of shipping a table that names nothing.
+    #[test]
+    fn every_function_the_lifecycle_table_cites_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let design = std::fs::read_to_string(root.join("docs/design.md")).unwrap();
+        let start = design.find("### The bead and branch lifecycle").unwrap();
+        let end = design[start..].find("### 6.1").map(|e| start + e).unwrap();
+        let table = &design[start..end];
+        let mut cited = 0;
+        for tok in table.split('`').skip(1).step_by(2) {
+            let Some((module, func)) = tok.split_once("::") else {
+                continue;
+            };
+            if !func.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            let files: Vec<std::path::PathBuf> = if module == "air_hooks" {
+                std::fs::read_dir(root.join("crates/hooks/src"))
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect()
+            } else {
+                vec![root.join("crates/cli/src/cmd").join(format!("{module}.rs"))]
+            };
+            let found = files.iter().any(|f| {
+                std::fs::read_to_string(f).is_ok_and(|t| t.contains(&format!("fn {func}(")))
+            });
+            assert!(
+                found,
+                "the lifecycle table cites `{tok}`, which is not a function"
+            );
+            cited += 1;
+        }
+        assert!(cited >= 10, "only {cited} citations read; the table moved?");
+    }
+
+    /// air-g9dx: a name `mechanisms::DELETED_NAMES` holds appears in the shipped documents and
+    /// skills only in a paragraph or list item that says it was deleted or removed. The
+    /// register (`solved-issues.md`) is left out: every entry there is history by design.
+    #[test]
+    fn deleted_names_appear_only_where_the_deletion_is_said() {
+        let texts: Vec<(&str, &str)> = DOCS
+            .iter()
+            .filter(|(n, _)| *n != "solved-issues.md")
+            .copied()
+            .chain(SKILLS.iter().copied())
+            .collect();
+        for (file, text) in texts {
+            let mut blocks: Vec<String> = Vec::new();
+            for line in text.lines() {
+                let t = line.trim_start();
+                if t.is_empty() || t.starts_with("- ") || t.starts_with("| ") {
+                    blocks.push(String::new());
+                }
+                if let Some(b) = blocks.last_mut() {
+                    b.push_str(line);
+                    b.push('\n');
+                } else {
+                    blocks.push(format!("{line}\n"));
+                }
+            }
+            for block in &blocks {
+                let lower = block.to_lowercase();
+                for name in crate::cmd::mechanisms::DELETED_NAMES {
+                    if lower.contains(&name.to_lowercase()) {
+                        assert!(
+                            ["delet", "remov", "no longer", "gone"]
+                                .iter()
+                                .any(|w| lower.contains(w)),
+                            "{file}: `{name}` outside a line saying it was deleted:\n{block}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// air-g9dx: this repository commits what `air install --write` writes for each shipped
+    /// skill, and a launcher refuses while that output is uncommitted, so the committed copy
+    /// must be the installer's output byte for byte.
+    #[test]
+    fn committed_skill_copies_are_what_install_writes() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for (name, text) in SKILLS {
+            let on_disk =
+                std::fs::read_to_string(root.join(".claude/skills").join(name).join("SKILL.md"))
+                    .unwrap();
+            assert_eq!(on_disk, skill_with_name(text, name), "{name}");
+        }
+    }
+
     #[test]
     fn skill_rename_touches_only_the_frontmatter_name() {
         let t = "---\nname: decomposition\ndescription: x\n---\n# Title\nname: not frontmatter\n";
@@ -4338,7 +4608,8 @@ mod tests {
         assert!(r.contains("name: not frontmatter"));
         // air-ha8: do-less ships with the mechanisms, because it is the discipline for
         // removing them. `beads` deliberately does not: see the SKILLS comment.
-        assert_eq!(SKILLS.len(), 2);
+        // air-g9dx: and `air-defect`, once the documents it reads ship in `.air/docs/`.
+        assert_eq!(SKILLS.len(), 3);
         assert_eq!(SKILLS[0].0, "air-do-less");
         assert!(SKILLS.iter().all(|(_, text)| text.contains("Provenance")));
     }

@@ -34,6 +34,9 @@ waiting on it hears no notices and does no work, and the owner is usually not wa
 pane. A question for the owner is a bead labelled `owner` (coordinator) or an `air capture`
 (worker, lane), with your recommendation, and you take other work while it waits.
 
+How Air works is in `.air/docs/design.md`, and what has gone wrong before and why is in
+`.air/docs/solved-issues.md`; read them before reporting a defect in Air.
+
 Keep a journal: one file per session in the main checkout's `.air/journal/`, or in the repo's
 `journal_dir` where `.claude/air.json` names one. Append a timestamp and a line as you go. It
 is for things nothing else carries: a bug you hit and how it showed, a wrong turn and what

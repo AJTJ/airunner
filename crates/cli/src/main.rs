@@ -727,7 +727,7 @@ fn main() -> ExitCode {
         Cmd::Audit { since } => cmd::audit::run(&repo, since.as_deref(), cli.json),
         Cmd::Gc { keep_days, apply } => cmd::gc::run(&repo, keep_days, apply, cli.json),
         Cmd::Doctor => cmd::doctor::run(&repo, cli.json),
-        Cmd::ReleaseCheck => cmd::install::release_check_cmd(),
+        Cmd::ReleaseCheck => cmd::install::release_check_cmd(&repo),
         Cmd::AdopterCheck => cmd::privacy::run(&repo, cli.json),
         Cmd::Selftest { prove } => {
             if prove {
