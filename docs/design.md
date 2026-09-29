@@ -265,11 +265,12 @@ stateDiagram-v2
 | State | Event | Next state | Decided by |
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
-| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not a lone red member, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
 | batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
-| in-batch | lane records red | batch-red: nothing lands; a lone member is held out | `status::red_alone` |
-| batch-red | a new commit | committed | `status::red_alone` no longer matches |
+| in-batch | lane records red | batch-red: nothing lands; every member is held out | `status::red_held` |
+| batch-red | a new commit | committed: the new head was in no red batch | `status::red_held` |
+| batch-red | a later green contains the head (the lane's split) | batch-ready again | `status::red_held` |
 | batch-green | `air close` | closed | `air_hooks::handover_verdict`, with `batch::cover` |
 | batch-green | `air land --worker lane` | landed | `land::check`: green at head, head contains main |
 | batch-green | main moves first | stale: cannot land, and the next cut resets past it | `batch_cut::land_first` |
@@ -279,9 +280,9 @@ stateDiagram-v2
 | any | fleet stop | unchanged: claim, cut and land refuse until resume | `fleet::stopped` |
 
 No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` calls five of
-these functions, `batch_ready_rule`, `red_alone`, `land_first`, `cover` and `handover_verdict`,
+these functions, `batch_ready_rule`, `red_held`, `land_first`, `cover` and `handover_verdict`,
 through every order of commit, merge, close, cut or split, verify, land and a move of main for
-two workers and a lane (168,311 states in 6 s). It models the rest itself: containment as set
+two workers and a lane (135,722 states in 5 s). It models the rest itself: containment as set
 inclusion in place of `in_main`, and a landing as `land::check`'s two conditions. It fails if any
 reachable state can no longer land and close every bead, and it fails on the code before the
 fixes of 2026-09-28.

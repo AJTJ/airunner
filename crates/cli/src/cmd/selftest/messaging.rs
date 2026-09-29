@@ -405,9 +405,12 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
                         .contains("batch-ready again once it has a new commit")
                     && !n.content.contains("splits")
             })
-            && red
-                .first()
-                .is_some_and(|n| n.content.contains("one of 4 members"))
+            && red.first().is_some_and(|n| {
+                n.content.contains("one of 4 members")
+                    // air-vdst: it says what lets the branch back in.
+                    && n.content.contains("until a later green contains your commit")
+                    && n.content.contains("or you commit again")
+            })
             && red.first().is_some_and(|n| {
                 n.kind == "batch-red"
                     && n.content.contains("exit 2")
