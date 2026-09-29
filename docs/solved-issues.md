@@ -797,6 +797,13 @@ states in 2.96 s, debug build); shown failing on main at d23ef60f, before air-tm
 Do not: add a transition, rule or notice from the model without an observed incident; a hole
 is answered first by removing the refusal that makes it (owner, 2026-09-28).
 
+**After a release emptied `[Unreleased]`, the round's first changelog fragment turned `make verify` red on every branch.**
+Seen: 2026-09-29, this repo, right after the 0.4.11 header was written: `this_repos_fragments_assemble`
+failed with "changelog: no ### Added heading under [Unreleased]" (worker-1's capture).
+Fix: the assembler adds a heading `[Unreleased]` lacks, in the standard order
+(`scripts/changelog-assemble.sh:70`). Commit 5972971 (with air-zese).
+Do not: make a fragment's fold depend on a heading a release may have removed.
+
 ## Performance and load
 
 **Five sessions polling every few seconds kept three or four `lsof` scans at 40-50% CPU each.**
