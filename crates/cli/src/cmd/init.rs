@@ -730,7 +730,7 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         return 1;
     }
     // Hooks, .mcp.json, roles, skills: the install step (refuses if `air` on PATH is not us).
-    let code = install::run(&dir, true, json, install::PinArg::Keep);
+    let code = install::run(&dir, true, json, install::PinArg::Keep, false);
     if code != 0 {
         return code;
     }

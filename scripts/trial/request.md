@@ -16,12 +16,9 @@ count (beads, landings, refusals, pushes) from `air status`, `air audit` or the 
 the source beside it; do not count from memory or the bead list. The summary must not
 contradict the list above it.
 
-## Setup, before filing any bead
-
-Make one commit with the config the scenarios need, and wait until the lane has landed it:
-
-- in `.claude/air.json`, `"precheck": true` and `"leases": {"serve": ["sh serve.sh"]}`;
-- in `CLAUDE.md`, one line naming the precheck: `sh -n greet.sh`.
+The copy's main already has the config the scenarios need: `"precheck": true` and the `serve`
+lease in `.claude/air.json`, and the precheck `sh -n greet.sh` named in `CLAUDE.md`. Start by
+filing beads.
 
 ## Scenarios
 

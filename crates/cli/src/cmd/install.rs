@@ -3030,6 +3030,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "`air install --write` writes them; `.air/` is already gitignored, so nothing \
                  new to commit except `.claude/skills/air-defect/`.",
     },
+    SurfaceChange {
+        id: "install-remove-stale",
+        since: "2026-09-29 (air-e07q)",
+        headline: "`air install --write --remove-stale` removes the hooks `air install` reports \
+                   as STALE HOOK (a `bd prime` entry) from `.claude/settings.json`; without the \
+                   flag nothing another tool wrote is removed, as before. Air's docs no longer \
+                   ask anyone to edit a config file by hand for something Air requires.",
+        silent_break: false,
+        action: "If `air install` reports a STALE HOOK, run `air install --write --remove-stale`.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -3773,7 +3783,8 @@ pub const BD_PRIME_WHY: &str = "`bd prime` injects a command reference telling a
 `bd update --claim` and `bd create`, both of which Air denies; agents get instructions that \
 contradict their deny list, and the failure looks like the agent being wrong. `air init` skips \
 it (`bd init --skip-agents --skip-hooks`); a repo that adopted Air with it in place keeps it, \
-because `air install` merges and never removes another tool's hook. Delete the entry.";
+because `air install` merges and never removes another tool's hook unless asked. Remove it with \
+`air install --write --remove-stale`.";
 
 /// Every hook command in `settings` that runs `bd prime`. Pure over the JSON, so the probe
 /// runs both directions without a repo. Only `bd prime` is stale today; a second stale
@@ -3810,6 +3821,44 @@ pub fn stale_hooks(settings: &Value) -> Vec<StaleHook> {
     out
 }
 
+/// `settings` without the hook entries [`stale_hooks`] names, and without any group or event
+/// left empty by that (air-e07q). Pure. `air install --write --remove-stale` applies it, so
+/// removing a hook that contradicts Air is Air's command rather than a hand edit of
+/// `.claude/settings.json`; without the flag nothing another tool wrote is removed.
+pub fn drop_stale(mut settings: Value) -> Value {
+    let stale: Vec<String> = stale_hooks(&settings)
+        .into_iter()
+        .map(|h| h.command)
+        .collect();
+    if stale.is_empty() {
+        return settings;
+    }
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return settings;
+    };
+    for groups in hooks.values_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            if let Some(list) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                list.retain(|h| {
+                    h.get("command")
+                        .and_then(Value::as_str)
+                        .is_none_or(|c| !stale.iter().any(|s| s == c))
+                });
+            }
+        }
+        groups.retain(|g| {
+            g.get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|l| !l.is_empty())
+        });
+    }
+    hooks.retain(|_, groups| groups.as_array().is_none_or(|g| !g.is_empty()));
+    settings
+}
+
 /// The stale-hook block of the install report; empty when there is nothing to say.
 pub fn render_stale(stale: &[StaleHook]) -> String {
     let mut s = String::new();
@@ -3827,7 +3876,7 @@ fn plan_settings_changed(before: &Value, after: &Value) -> bool {
     before != after
 }
 
-pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
+pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg, remove_stale: bool) -> i32 {
     let repo = match repo.canonicalize() {
         Ok(r) => r,
         Err(e) => {
@@ -3873,9 +3922,27 @@ pub fn run(repo: &Path, write: bool, json: bool, pin_arg: PinArg) -> i32 {
             return 1;
         }
     };
-    let after_settings = merge_hooks_with(before_settings.clone(), &hook_command(pin.as_deref()));
-    // What the merge leaves in place and should not (air-b5k). Read off the merged value so
-    // the report describes the file as it will be after `--write`.
+    let merged = merge_hooks_with(before_settings.clone(), &hook_command(pin.as_deref()));
+    // What the merge leaves in place and should not (air-b5k). With `--remove-stale` it goes
+    // (air-e07q), and each removal is said once; otherwise it is reported as before.
+    let removed = if remove_stale {
+        stale_hooks(&merged)
+    } else {
+        Vec::new()
+    };
+    let after_settings = if remove_stale {
+        drop_stale(merged)
+    } else {
+        merged
+    };
+    for h in &removed {
+        eprintln!(
+            "air install: {} the stale {} hook `{}`",
+            if write { "removed" } else { "would remove" },
+            h.event,
+            h.command
+        );
+    }
     let stale = stale_hooks(&after_settings);
     let before_mcp = match read_json(&mcp_path) {
         Ok(v) => v,
@@ -4449,6 +4516,29 @@ mod tests {
             {"type": "command", "command": "bd ready --json"}]}]}}));
         assert!(stale_hooks(&clean).is_empty());
         assert_eq!(render_stale(&[]), "");
+    }
+
+    /// air-e07q: `--remove-stale` takes out exactly the stale entries, drops what that
+    /// empties, and leaves Air's hooks and every other hook alone.
+    #[test]
+    fn drop_stale_removes_only_the_stale_hooks() {
+        let with = json!({"hooks": {
+            "SessionStart": [{"hooks": [
+                {"type": "command", "command": "bd prime --hook-json"}]}],
+            "Stop": [{"hooks": [
+                {"type": "command", "command": "bd ready --json"},
+                {"type": "command", "command": "/usr/local/bin/bd prime"}]}]
+        }, "permissions": {"allow": ["Bash(ls *)"]}});
+        let merged = merge_hooks(with);
+        let out = drop_stale(merged.clone());
+        assert!(stale_hooks(&out).is_empty(), "{out}");
+        // The other tool's non-stale hook and Air's own survive; permissions are untouched.
+        let text = out.to_string();
+        assert!(text.contains("bd ready --json"), "{out}");
+        assert!(text.contains("air hook"), "{out}");
+        assert_eq!(out["permissions"], merged["permissions"]);
+        // Nothing stale: unchanged.
+        assert_eq!(drop_stale(out.clone()), out);
     }
 
     #[test]
