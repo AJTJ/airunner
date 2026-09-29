@@ -339,7 +339,10 @@ epic `## Success Criteria` (`## Acceptance Criteria` is accepted); chore none. W
 create beads; they capture. Every capture is triaged into a bead or dropped with a reason.
 Before filing, ask what it changes tomorrow: if someone will edit a file because of it, it is a
 bead; if it only helps a reader understand, it belongs in a journal. A bead the owner must
-decide is labelled `owner` with the coordinator's recommendation in its description.
+decide is labelled `owner` with the coordinator's recommendation in its description. A capture
+triaged to a bead is written up in seven short parts: what the parts involved do, what happened,
+why, which lifecycle state it is, the precedent for the same mechanism, the fix and its cost,
+and what the fix could break.
 
 You file and prioritise beads, and workers pull them. Do not message a worker to hand it a bead
 unless the owner asks you to. To add a worker beyond the fleet, `air worker --tmux --task "<a
