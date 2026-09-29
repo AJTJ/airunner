@@ -3172,7 +3172,7 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     ("0.4.10", 40, 154),
     // 2026-09-29: the round on an adopter's 0.4.10 findings (42 landings); its live trial
     // passed 8/8.
-    ("0.4.11", 41, 193),
+    ("0.4.11", 41, 196),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
