@@ -145,7 +145,7 @@ Before filing, every answer is yes:
 - **Carries its precedent** (task and bug): a `## Precedent` section written at filing, from
   `docs/solved-issues.md` and the lifecycle table: the register entries it touches and what
   their "Do not" lines forbid, the states it touches, the weight of the incident, and the
-  surgical change with what it must not regress. The skill `do-less`, "Precedent before
+  surgical change with what it must not regress. The skill `air-do-less`, "Precedent before
   change", has the four parts. It is the coordinator's to write; a worker who finds it wrong
   captures rather than proceeds. Where the repo sets `lint.sections` in `.beads/config.yaml`,
   bd refuses a task or bug without it under `--validate` (air-fd8p).
