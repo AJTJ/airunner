@@ -92,6 +92,9 @@ Optionally, the repo also provides:
 - `"leases"` in `.claude/air.json` for commands that need a shared resource;
 - a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
   copies into each new worktree.
+- bead sections bd must see before it files a bead, under `lint: sections:` in
+  `.beads/config.yaml`. The installed `air-decomposition` skill's "Bead shape" section lists
+  every part of a bead, who reads it, and the setting.
 
 The repo's `CLAUDE.md` holds its domain rules, its verify and precheck commands, its worktree
 setup and its shared resources. It does not restate the protocol in `.air/roles.md`.
