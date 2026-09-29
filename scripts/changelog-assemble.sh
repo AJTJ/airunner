@@ -67,7 +67,26 @@ awk -v list="$list" '
             add[h] = (h in add) ? add[h] "\n" entry : entry
         }
     }
-    /^## / { unreleased = ($0 ~ /^## \[Unreleased\]/) }
+    # A heading [Unreleased] lacks is added at the end of that section, in the standard order.
+    # A release leaves [Unreleased] empty, and the first fragment of the next round then refused
+    # every branch (air-zese, 2026-09-29).
+    function flush(   i, h) {
+        split("Added Changed Removed Fixed", order, " ")
+        for (i = 1; i <= 4; i++) {
+            h = order[i]
+            if ((h in add) && !(h in done)) {
+                print "### " h
+                print ""
+                print add[h]
+                print ""
+                done[h] = 1
+            }
+        }
+    }
+    /^## / {
+        if (unreleased) { flush() }
+        unreleased = ($0 ~ /^## \[Unreleased\]/)
+    }
     {
         print
         if (unreleased && $0 ~ /^### / ) {
