@@ -806,14 +806,19 @@ pub fn paths_line(paths: &[String]) -> String {
     }
 }
 
-/// The text one session reads. Everyone gets the fact; a worker also reads when it merges
-/// main, and a member reads that its beads are in and may be closed, so a member gets one
-/// notice rather than this and a second "landed" one. Asks for no reply.
+/// The text one session reads. Everyone gets the fact, and a member also reads that its beads
+/// are in and may be closed, so a member gets one notice rather than this and a second "landed"
+/// one. Asks for no reply.
+///
+/// No command for merging (air-fehk). Workers read "`git merge main` brings these into your
+/// branch" as an instruction and merged mid-batch, moving the head off the sha the lane was
+/// testing: once in the 2026-09-29 trial, once at an adopter, each a lost batch cycle. Whether
+/// to merge is the worker's call from the files listed (owner, 2026-09-29: "let the AI decide
+/// what is right to do"); roles.md says when.
 pub fn main_moved_text(
     merge: &str,
     beads: &[String],
     paths: &[String],
-    to_coordinator: bool,
     member: Option<(&str, &[String])>,
 ) -> String {
     let mut t = format!(
@@ -837,10 +842,6 @@ pub fn main_moved_text(
                 mine.join(" ")
             }
         ));
-    }
-    if !to_coordinator {
-        // air-ch9p: a fact and its command; whether to merge is the worker's call.
-        t.push_str(" `git merge main` brings these into your branch.");
     }
     t.push_str(" No reply needed.");
     t
@@ -891,7 +892,6 @@ pub fn main_moved(
             merge,
             beads,
             &paths,
-            matches!(super::hook::role_for(w), "coordinator" | "owner"),
             member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
         );
         let queued = ledger
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn main_moved_text_truncates_paths_and_asks_for_no_reply() {
         let paths: Vec<String> = (0..12).map(|i| format!("f{i}")).collect();
-        let t = main_moved_text("abcdef0123", &names(&["b-1"]), &paths, true, None);
+        let t = main_moved_text("abcdef0123", &names(&["b-1"]), &paths, None);
         assert!(
             t.starts_with("main moved to abcdef01: landed b-1; files changed: f0,"),
             "{t}"
@@ -1212,16 +1212,14 @@ mod tests {
             "abcdef0123",
             &mine,
             &paths[..1],
-            false,
             Some(("0011223344", &mine)),
         );
         assert!(
             w.contains("files changed: f0. Your 00112233 (b-1) is in it"),
             "{w}"
         );
-        assert!(
-            w.contains("`git merge main` brings these into your branch."),
-            "{w}"
-        );
+        // air-fehk: the fact only; whether to merge is the worker's call.
+        assert!(!w.contains("git merge main"), "{w}");
+        assert!(w.ends_with("No reply needed."), "{w}");
     }
 }
