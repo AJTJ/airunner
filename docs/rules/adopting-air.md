@@ -46,8 +46,8 @@ guide, as the binary was built with them; `air doctor` names a copy that differs
 committed files, and `air worker` and `air lane` refuse while they are uncommitted.
 
 Air does not install bd's agent setup, because `bd prime` tells agents to run commands Air
-denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, delete that
-entry from `.claude/settings.json`.
+denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, run
+`air install --write --remove-stale` to remove it.
 
 Then commit, record the first green and start the fleet:
 

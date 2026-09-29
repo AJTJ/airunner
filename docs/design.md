@@ -523,9 +523,11 @@ contains no network code.
 ### 9.1 The live trial
 
 Every release is tried on a real fleet before it is tagged. `make trial` builds the binary,
-adopts a scratch copy of `examples/minimal` with it pinned and `"verify_lane": true`, and copies
-`scripts/trial/request.md` in. The coordinator, started with `.air/bin/air coordinator --fleet`,
-reads the request, which sets up every scenario. When every bead is closed it writes
+adopts a scratch copy of `examples/minimal` with it pinned, and commits the scenarios' config
+(`"verify_lane": true`, `"precheck": true`, the `serve` lease and the precheck line in
+`CLAUDE.md`) so no session has to edit a config file. It copies `scripts/trial/request.md` in.
+The coordinator, started with `.air/bin/air coordinator --fleet`, reads the request and files
+the scenarios' beads. When every bead is closed it writes
 `.air/trial-report.md`, and an observer checks it against the events, git and beads and adds
 the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
 not fixed during the trial. The release is tagged only if every scenario ends as expected.

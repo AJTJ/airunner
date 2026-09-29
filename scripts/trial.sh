@@ -51,14 +51,35 @@ PATH="$bin:$PATH" "$bin/air" init --write >/dev/null
 # The fleet always starts a lane, and every scenario in §9.1 but the happy path assumes the
 # with-lane sequence, which `"verify_lane": true` selects (air-h91g: the 0.4.0 trial ran
 # without it, workers verified their own branches, and eight of ten scenarios never started).
-# Keys a scenario sets itself, such as `precheck`, are left to the scenario.
+#
+# The scenarios' own config is set here too, not left to the trial's coordinator (air-e07q):
+# the second trial of 2026-09-29 stalled because that session's Claude Code refused to edit
+# `.claude/air.json`, and the first trial's, given the same request, did not. The precheck and
+# the `serve` lease, and the CLAUDE.md line naming the precheck, are in the adopt commit.
 cfg=.claude/air.json
 [ "$(head -n 1 "$cfg")" = "{" ] || { echo "trial: $cfg does not start with {"; exit 1; }
-awk 'NR == 1 { print; print "  \"verify_lane\": true,"; next } { print }' "$cfg" >"$cfg.new"
+awk 'NR == 1 {
+    print
+    print "  \"verify_lane\": true,"
+    print "  \"precheck\": true,"
+    print "  \"leases\": {\"serve\": [\"sh serve.sh\"]},"
+    next
+} { print }' "$cfg" >"$cfg.new"
 mv "$cfg.new" "$cfg"
-grep -q '"verify_lane": true' "$cfg" || { echo "trial: $cfg has no verify_lane"; exit 1; }
+for key in '"verify_lane": true' '"precheck": true' '"serve": \["sh serve.sh"\]'; do
+    grep -q "$key" "$cfg" || { echo "trial: $cfg lacks $key"; exit 1; }
+done
+awk '/^- \*\*Precheck\*\*/ {
+    print "- **Precheck** is `sh -n greet.sh`, recorded as `air record precheck -- sh -n greet.sh`."
+    skip = 1
+    next
+}
+skip && /^  / { next }
+{ skip = 0; print }' CLAUDE.md >CLAUDE.md.new
+mv CLAUDE.md.new CLAUDE.md
+grep -q 'sh -n greet.sh' CLAUDE.md || { echo "trial: CLAUDE.md does not name the precheck"; exit 1; }
 git add -A
-git commit -qm "Adopt Air, pinned to the candidate, with the verification lane"
+git commit -qm "Adopt Air, pinned to the candidate, with the verification lane and the trial's config"
 
 # The scenario request is fixed, so nobody rewrites it per run. .air is ignored by git.
 cp "$here/scripts/trial/request.md" .air/trial-request.md

@@ -1963,7 +1963,11 @@ fn install_reports_a_stale_bd_prime_hook() {
         "{out}"
     );
     assert!(out.contains("do: `bd prime` injects"), "{out}");
-    assert!(out.contains("Delete the entry"), "{out}");
+    // air-e07q: the fix is a command, not a hand edit.
+    assert!(
+        out.contains("`air install --write --remove-stale`"),
+        "{out}"
+    );
 
     std::fs::write(repo.join(".claude/settings.json"), "{}").unwrap();
     let (code, out, err) = air(&repo, &bd, &["install"]);

@@ -63,6 +63,46 @@ fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, Stri
     )
 }
 
+/// air-e07q: removing a hook that contradicts Air is a command, not a hand edit. Without the
+/// flag the `bd prime` hook stays and is reported; with it the hook is gone and nothing else is.
+#[test]
+fn install_remove_stale_takes_out_the_bd_prime_hook() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/settings.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bd prime --hook-json"}]}]},"permissions":{"allow":["Bash(ls *)"]}}"#,
+    )
+    .unwrap();
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_air")).parent().unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin_dir.to_string_lossy());
+    let settings = || std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
+
+    let (code, out, err) = air(&repo, Some(&path), &["install", "--write"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(settings().contains("bd prime --hook-json"));
+    assert!(out.contains("STALE HOOK"), "{out}");
+
+    let (code, out, err) = air(
+        &repo,
+        Some(&path),
+        &["install", "--write", "--remove-stale"],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        err.contains("removed the stale SessionStart hook `bd prime --hook-json`"),
+        "{err}"
+    );
+    let after = settings();
+    assert!(!after.contains("bd prime"), "{after}");
+    assert!(
+        after.contains("air hook") && after.contains("Bash(ls *)"),
+        "{after}"
+    );
+    assert!(!out.contains("STALE HOOK"), "{out}");
+}
+
 #[test]
 fn install_dry_run_then_refuses_then_writes_idempotently() {
     let dir = scratch_repo();

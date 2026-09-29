@@ -331,6 +331,11 @@ enum Cmd {
         /// Remove the pin: hooks and the channel go back to the `air` on PATH.
         #[arg(long)]
         unpin: bool,
+        /// Also remove the hooks `air install` reports as STALE HOOK (a `bd prime` entry), so
+        /// nobody has to edit `.claude/settings.json` by hand. Without it nothing another tool
+        /// wrote is removed.
+        #[arg(long)]
+        remove_stale: bool,
     },
     /// Start an interactive worker session: Air creates `.claude/worktrees/<name>` (filling it
     /// from `.worktreeinclude`), then runs claude IN it with role prose, deny list, env. No
@@ -650,7 +655,12 @@ fn main() -> ExitCode {
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
-        Cmd::Install { write, pin, unpin } => cmd::install::run(
+        Cmd::Install {
+            write,
+            pin,
+            unpin,
+            remove_stale,
+        } => cmd::install::run(
             &repo,
             write,
             cli.json,
@@ -659,6 +669,7 @@ fn main() -> ExitCode {
                 (_, true) => cmd::install::PinArg::Unpin,
                 _ => cmd::install::PinArg::Keep,
             },
+            remove_stale,
         ),
         Cmd::Worker {
             name, remove: true, ..
