@@ -84,6 +84,12 @@ enum BatchOp {
         /// Read the set and run the pre-check only; merges nothing and needs no clean tree.
         #[arg(long)]
         dry_run: bool,
+        /// Leave these workers' branches out of this cut (a split after a red batch).
+        #[arg(long, value_delimiter = ',', num_args = 1.., conflicts_with = "only")]
+        without: Vec<String>,
+        /// Cut only these workers' branches (a split after a red batch).
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        only: Vec<String>,
     },
 }
 
@@ -560,8 +566,13 @@ fn main() -> ExitCode {
     }
     let code = match cmd {
         Cmd::Batch {
-            op: BatchOp::Cut { dry_run },
-        } => cmd::batch_cut::run(&repo, dry_run, cli.json),
+            op:
+                BatchOp::Cut {
+                    dry_run,
+                    without,
+                    only,
+                },
+        } => cmd::batch_cut::run(&repo, dry_run, &without, &only, cli.json),
         // air-4lci: the command that changed the fact queues the notices about it, so they do
         // not wait on the coordinator's channel poll.
         Cmd::Record { kind, command } => {
