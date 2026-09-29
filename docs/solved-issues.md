@@ -344,6 +344,9 @@ subject's age starts at 0; the Stop nudge fingerprints the ready set; the landin
 fingerprints the pid set (`readers.rs:480`). Commit 5da51a6 (air-8goe); tests
 `two_subjects_of_one_kind_on_one_worker_push_once_each`, `a_new_subject_starts_at_zero_minutes`.
 Do not: key a push by (worker, kind).
+Weight: the 417 pushes went mostly into a session that could not read them (dead or out of
+tokens), so they are not the cost; the defect was the keying, and its weight is the two beads on
+one worker (air-fd8p).
 
 **A worker that joined, or finished its claim, while beads were already ready was never told.**
 Seen: 2026-09-28 (air-oerm); the notice went out only when the set changed.

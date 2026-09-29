@@ -1320,6 +1320,14 @@ fn launch_role(
         log_install_refusal(repo, &who, &refusal, print);
         return Err(refusal);
     }
+    // air-4n5t: a worker the ledger has a live session for is running, whatever its tmux
+    // session is called. Twice on 2026-09-28 a change of `"project"` renamed the sessions and
+    // `air fleet up`, finding no session of the new name, started a second claude in each
+    // worker's worktree. Liveness is the ledger's, by pid and start time (air-sai7).
+    if !print && let Some(id) = running_session(repo, name) {
+        println!("{name}: running (session {id})");
+        return Ok(0);
+    }
     let roles = roles_file(repo, !print).map_err(|e| format!("{who}: {e}"))?;
     // The worktree is Air's to create and fill (air-fdz); claude starts inside it (air-8gj).
     if !print {
@@ -1350,6 +1358,33 @@ fn launch_role(
     let detached =
         force_detached || launch_mode(std::io::stdin().is_terminal(), true) == Launch::Detached;
     spawn_tmux(repo, &wt, name, &env, &argv, detached, print)
+}
+
+/// The session id of a live session the ledger has for `name`, if any (air-4n5t).
+fn running_session(repo: &Path, name: &str) -> Option<String> {
+    let (ledger, _) = super::open(repo).ok()?;
+    let mut st = ledger
+        .conn()
+        .prepare("SELECT session_id, pid, pid_started FROM sessions WHERE worker=?1")
+        .ok()?;
+    let rows: Vec<(String, Option<i64>, Option<String>)> = st
+        .query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .ok()?
+        .filter_map(Result::ok)
+        .collect();
+    live_session(&rows, super::lease::liveness)
+}
+
+/// Pure over `(session_id, pid, pid_started)` rows: the first whose process is still the one
+/// that registered. `Unknown` is not alive, so a row with no start time never holds a launch
+/// back and a dead worker is relaunched as before.
+pub fn live_session(
+    rows: &[(String, Option<i64>, Option<String>)],
+    alive: impl Fn(Option<i64>, Option<&str>) -> super::lease::Liveness,
+) -> Option<String> {
+    rows.iter()
+        .find(|(_, pid, started)| alive(*pid, started.as_deref()) == super::lease::Liveness::Alive)
+        .map(|(id, _, _)| id.clone())
 }
 
 /// `fleet` is the answer given on the command line (`--fleet` / `--no-fleet`); `None` asks on
@@ -1455,6 +1490,42 @@ mod tests {
     }
 
     /// air-eeuf: `up` only when every launch started; a failed one is named with why.
+    /// air-4n5t: a live session in the ledger means running, whatever the tmux session is
+    /// called; a dead one does not, so that worker is relaunched as before.
+    #[test]
+    fn a_worker_with_a_live_ledger_session_is_running() {
+        use crate::cmd::lease::judge;
+        let rows = vec![
+            (
+                "dead-1".to_string(),
+                Some(11),
+                Some("Mon Sep 28 10:00:00 2026".to_string()),
+            ),
+            (
+                "live-1".to_string(),
+                Some(22),
+                Some("Mon Sep 28 11:00:00 2026".to_string()),
+            ),
+        ];
+        let ps = |pid: i64| -> crate::cmd::lease::Probe {
+            Ok((pid == 22).then(|| ("S".to_string(), "Mon Sep 28 11:00:00 2026".to_string())))
+        };
+        let alive = |p: Option<i64>, s: Option<&str>| judge(p, s, ps);
+        assert_eq!(live_session(&rows, alive).as_deref(), Some("live-1"));
+        // Only the dead one: relaunched.
+        assert_eq!(live_session(&rows[..1], alive), None);
+        // A pid reused by another process (other start time) is not ours.
+        let reused = vec![(
+            "x".to_string(),
+            Some(22),
+            Some("Sun Sep 27 09:00:00 2026".to_string()),
+        )];
+        assert_eq!(live_session(&reused, alive), None);
+        // No start time recorded: unknown, never alive.
+        let unknown = vec![("y".to_string(), Some(22), None)];
+        assert_eq!(live_session(&unknown, |p, s| judge(p, s, ps)), None);
+    }
+
     #[test]
     fn fleet_up_names_each_launch_that_failed() {
         let (t, line) = fleet_outcome(&[]);

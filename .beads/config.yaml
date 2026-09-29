@@ -68,3 +68,14 @@
 # Air starts this project's Dolt server (air bd-server up); bd must not start its own,
 # which would serve an empty database from .beads/dolt on the same port (2026-09-26).
 dolt.auto-start: false
+
+# air-fd8p (owner, 2026-09-28: "a surgical fix that's well thought out with an understanding of
+# historical precedents"): a task or bug needs a `## Precedent` section, written at filing from
+# docs/solved-issues.md and the lifecycle table (skill do-less, "Precedent before change"). Added
+# to bd's built-in sections, never replacing them. Chores need none; a label cannot exempt a
+# bead, so an `owner` task writes "Precedent: none, an owner question". Removed when a round's
+# beads all carry the section without this rule refusing any.
+lint:
+  sections:
+    task: "Precedent"
+    bug: "Precedent"

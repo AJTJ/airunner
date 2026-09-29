@@ -2856,6 +2856,30 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "A bead that produces no code still needs a commit: record the result in a \
                  document and commit it with the trailer.",
     },
+    SurfaceChange {
+        id: "precedent-before-change",
+        since: "2026-09-28 (air-fd8p)",
+        headline: "The installed `air-do-less` skill gains \"Precedent before change\": before \
+                   a change, read what was already solved and write a `## Precedent` section on \
+                   the bead (register entries touched, lifecycle states touched, the incident's \
+                   weight, the surgical change and what it must not regress). \
+                   `air-decomposition` says the coordinator writes it at filing.",
+        silent_break: false,
+        action: "Optional: to have `bd create --validate` refuse a task or bug without the \
+                 section, set `lint: sections: task: \"Precedent\"` (and `bug`) in \
+                 `.beads/config.yaml`.",
+    },
+    SurfaceChange {
+        id: "running-from-the-ledger",
+        since: "2026-09-28 (air-4n5t)",
+        headline: "`air fleet up`, `air worker` and `air lane` leave a worker running when the \
+                   ledger has a live session for it (pid and start time), whatever its tmux \
+                   session is called, and print `<name>: running (session <id>)`. A change of \
+                   `\"project\"` renamed the sessions and a second claude started in each \
+                   worktree.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

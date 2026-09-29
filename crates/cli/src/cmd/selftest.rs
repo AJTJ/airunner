@@ -74,7 +74,11 @@ fn air_command(exe: &Path, cwd: &Path) -> Command {
         .env_remove("BEADS_ACTOR")
         .env_remove("AIR_PROJECT")
         .env_remove("AIR_ENFORCE")
-        .env_remove("AIR_CHANNEL");
+        .env_remove("AIR_CHANNEL")
+        // The harness's own pid: a hook records it as the session's process, so a probe's
+        // synthetic hook would register a live session belonging to whoever runs the suite,
+        // and `air worker` then reads that worker as running (air-4n5t).
+        .env_remove("CLAUDE_PID");
     c
 }
 

@@ -1021,6 +1021,51 @@ fn fleet_up_starts_the_lane_and_workers_once() {
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(calls(), "", "{out}");
 
+    // air-4n5t: the tmux sessions were renamed (a new "project"), so none of these names is
+    // listed, but the ledger has a live session for worker-1: it is running, and only the lane
+    // and worker-2 start. The live process is this test's own, with its real start time.
+    std::fs::write(bin.join("sessions"), "").unwrap();
+    let me = std::process::id();
+    let lstart = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &me.to_string()])
+        .output()
+        .unwrap();
+    let lstart = String::from_utf8_lossy(&lstart.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let conn = rusqlite::Connection::open(repo.join(".air/ledger.db")).unwrap();
+    let register = |pid: i64, started: &str| {
+        conn.execute("DELETE FROM sessions", []).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (session_id, worker, state, changed_at, started_at, role, pid, \
+             pid_started, project) VALUES ('live-1', 'worker-1', 'running', 't', 't', 'worker', \
+             ?1, ?2, 'zz')",
+            rusqlite::params![pid, started],
+        )
+        .unwrap();
+    };
+    register(i64::from(me), &lstart);
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("worker-1: running (session live-1)"), "{out}");
+    let c = calls();
+    assert!(!c.contains("-s zz-worker-1 "), "{c}");
+    assert!(
+        c.contains("-s zz-worker-2 ") && c.contains("-s zz-lane "),
+        "{c}"
+    );
+
+    // The same row once its process is gone: worker-1 is relaunched as before.
+    let gone = std::process::Command::new("true").spawn().unwrap();
+    let gone_pid = i64::from(gone.id());
+    let _ = { gone }.wait();
+    register(gone_pid, &lstart);
+    std::fs::remove_file(bin.join("calls")).unwrap();
+    let (code, out, err) = run(&["fleet", "up"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(calls().contains("-s zz-worker-1 "), "{out}");
+
     // The coordinator: no terminal and no flag means no fleet; --fleet starts it first.
     let (code, out, _) = run(&["coordinator", "--print"]);
     assert_eq!(code, 0);
