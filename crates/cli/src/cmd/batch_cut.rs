@@ -177,6 +177,8 @@ pub struct Cut {
     pub next: Option<String>,
     /// Why each branch that is not a member was left out (air-k81s), from the batch-ready rule.
     pub held: Vec<String>,
+    /// Batch-ready workers this cut left out by `--without` or `--only` (air-5fo5).
+    pub left_out: Vec<String>,
 }
 
 fn short(s: &str) -> &str {
@@ -251,8 +253,18 @@ pub fn render(c: &Cut) -> String {
             short(r)
         ));
     }
+    if !c.left_out.is_empty() {
+        out.push_str(&format!(
+            "  left out by --without or --only: {}\n",
+            c.left_out.join(", ")
+        ));
+    }
     if c.members.is_empty() && c.dropped.is_empty() {
-        out.push_str("  nothing is batch-ready\n");
+        out.push_str(if c.left_out.is_empty() {
+            "  nothing is batch-ready\n"
+        } else {
+            "  nothing else is batch-ready\n"
+        });
         for h in &c.held {
             out.push_str(&format!("  held: {h}\n"));
         }
@@ -487,7 +499,21 @@ pub fn failure_reason(
     format!("{err} [{lock}: {held}]")
 }
 
-pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
+/// Which batch-ready branches this cut takes (air-5fo5): all of them, all but `without`, or only
+/// `only`, and the workers left out, so a split after a red batch is an ordinary recorded cut
+/// rather than a hand merge Air has to guess the members of. Pure.
+pub fn select(
+    ready: Vec<BatchReady>,
+    without: &[String],
+    only: &[String],
+) -> (Vec<BatchReady>, Vec<String>) {
+    let (kept, out): (Vec<_>, Vec<_>) = ready.into_iter().partition(|b| {
+        !without.contains(&b.worker) && (only.is_empty() || only.contains(&b.worker))
+    });
+    (kept, out.into_iter().map(|b| b.worker).collect())
+}
+
+pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json: bool) -> i32 {
     let (ledger, lane) = match super::open(repo) {
         Ok(x) => x,
         Err(e) => {
@@ -589,13 +615,15 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
     for e in &errors {
         eprintln!("air batch cut: {e}");
     }
+    let ready: Vec<BatchReady> = ready.into_iter().filter(|b| b.worker != lane).collect();
+    let (ready, left_out) = select(ready, without, only);
     let mut cands = Vec::new();
     for BatchReady {
         worker,
         head,
         beads,
         ..
-    } in ready.into_iter().filter(|b| b.worker != lane)
+    } in ready
     {
         let ready_at = git::run(repo, &["log", "-1", "--format=%ct", &head])
             .ok()
@@ -637,6 +665,7 @@ pub fn run(repo: &Path, dry_run: bool, json: bool) -> i32 {
             .map(|n| n.detail.clone())
             .collect(),
         stale_over,
+        left_out,
         ..Default::default()
     };
     if dry_run {

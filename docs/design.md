@@ -110,7 +110,7 @@ Any session may run these.
 | air holdings | Who has edits in which files, across worktrees. A recorded edit ends once its file is clean in the holder's worktree and unchanged on its branch against main. |
 | air lease | Takes, releases or reports a named shared resource. `air lease needs "<cmd>"` says which lease a command needs under `leases` in `.claude/air.json`. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, and whether the install is out of date. Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
-| air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
+| air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. `--without <worker>...` or `--only <worker>...` takes part of the set, so a split after a red batch is a recorded cut. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
 | air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, and beads' mode. |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
 | air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its p50, p90, p99 and maximum beside the budget. Facts, not verdicts. |
@@ -280,8 +280,8 @@ stateDiagram-v2
 
 No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` calls five of
 these functions, `batch_ready_rule`, `red_alone`, `land_first`, `cover` and `handover_verdict`,
-through every order of commit, merge, close, cut, verify, land and a move of main for two
-workers and a lane (86,895 states in 3 s). It models the rest itself: containment as set
+through every order of commit, merge, close, cut or split, verify, land and a move of main for
+two workers and a lane (168,311 states in 6 s). It models the rest itself: containment as set
 inclusion in place of `in_main`, and a landing as `land::check`'s two conditions. It fails if any
 reachable state can no longer land and close every bead, and it fails on the code before the
 fixes of 2026-09-28.

@@ -185,7 +185,9 @@ refusing while your tree has uncommitted changes or your head is a passing batch
 still land (a passing batch main has moved past is re-cut), and drops and names a branch that
 conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the repo's
 test-state reset if it has one, and `air record verify -- <verify command>`. A dropped branch is
-resolved by its worker, never by the lane. A red batch lands nothing. Run these and `air land`
+resolved by its worker, never by the lane. A red batch lands nothing. To split a red
+batch you may cut part of it: `air batch cut --without <worker>` or `--only <worker>`, which
+records the members like any cut. Run these and `air land`
 bare, with no pipe or redirect: your settings allow only the bare line, and one auto-mode
 classifier refusal can stop every later landing.
 
