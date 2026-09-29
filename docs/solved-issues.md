@@ -281,6 +281,17 @@ the existing path, so a split is a recorded cut with every refusal unchanged; no
 cut. Commit dc5d796 (air-5fo5); test `batch_cut_splits_with_without_and_only`.
 Do not: derive a batch's members from merge commits; do not require the flag.
 
+**After a batch of several branches went red, every member was offered again, the red commit included.**
+Seen: 2026-09-29 live trial: batch 686abd40 (two members) red; the lane split and landed the good
+member; the next-cut list held the red member's same commit 8c47747, which was cut and went red
+again (0af0065c). An adopter's lane hit it twice in a day.
+Fix: `red_held` replaces `red_alone` (`crates/cli/src/cmd/status.rs`): a head is held while a red
+batch recorded it as a member and no green recorded after that red contains it, so a split's green,
+by cut or by hand, frees the good member and the red one waits for a commit. Commit 2549922
+(air-vdst); test `a_red_batch_holds_its_members_until_they_move_or_a_later_green_carries_them`;
+the model test covers the ordering.
+Do not: offer a member of a red batch again before it moves or a green carries it.
+
 ## Sessions and liveness
 
 **A dead registration with a reused pid read as alive and got most of the ready notices.**
