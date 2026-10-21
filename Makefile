@@ -66,4 +66,4 @@ release:
 	$(MAKE) adoption-check
 	@v=$$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2); \
 	git tag -a "v$$v" -m "air v$$v"; \
-	echo "tagged v$$v — now: cargo install --path crates/cli"
+	echo "tagged v$$v — now: git push origin v$$v (CI builds the binaries and the GitHub Release)"

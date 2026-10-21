@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 [[bin]]
@@ -30,3 +31,7 @@ signal-hook = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true }
+
+[package.metadata.dist]
+# publish = false keeps air off crates.io; this still builds release binaries for it.
+dist = true

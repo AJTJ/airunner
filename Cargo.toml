@@ -7,7 +7,7 @@ version = "0.4.11"
 edition = "2024"
 rust-version = "1.97"
 license = "Apache-2.0"
-repository = "https://github.com/ajtj/ai_runner"
+repository = "https://github.com/AJTJ/airunner"
 publish = false
 
 [workspace.dependencies]
@@ -65,3 +65,8 @@ debug = 0
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
