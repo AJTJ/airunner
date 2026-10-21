@@ -76,13 +76,17 @@ Air supports Claude Code only, for now.
 
 ## How to install it
 
-Needs git, Rust, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
+Needs git, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
 
 ```sh
-cargo install --path crates/cli     # from a checkout of this repository
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AJTJ/airunner/releases/latest/download/air-installer.sh | sh
 cd /path/to/your/repo
 air init --write
 ```
+
+The installer puts a prebuilt `air` (macOS or Linux) in `~/.cargo/bin`. The binaries are also
+on the [releases page](https://github.com/AJTJ/airunner/releases), and `cargo install --path
+crates/cli` builds one from a checkout.
 
 `air init` finds your check (a Makefile `verify` or `test` target, `cargo test`, or `npm test`)
 and prints the next steps: commit, run `air record verify --` with that check, and run `air

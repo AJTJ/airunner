@@ -7,6 +7,58 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-10-21
+
+### Added
+
+- Release binaries. Pushing a version tag builds `air` for macOS (Apple Silicon and Intel)
+  and Linux (x86_64 and arm64) with cargo-dist, and attaches them to a GitHub Release with a
+  shell installer, so installing Air no longer needs Rust or a checkout.
+- `air batch cut --without <worker>...` and `--only <worker>...`, so the lane splits a red
+  batch with a recorded cut instead of merging by hand; leaving everyone out exits 1.
+- The decomposition skill (installed as `air-decomposition`) has a "Bead shape" section: every
+  part of a bead, who reads it, what enforces it, and the `.beads/config.yaml` setting that makes
+  bd require a section. The README and adopting-air link it.
+- `air install --write` writes Air's design doc, its register of solved issues and the
+  adoption guide to `.air/docs/` from the binary, ships the `air-defect` skill that reads them,
+  and `air doctor` names a copy that differs. `air release-check` refuses a release whose
+  newest parity sweep predates the last change to `crates/` or `docs/rules/`.
+- A `defect` skill for this repository: a defect, finding, red, refusal or capture is
+  explained in seven parts (what the parts do, what happened, why, the lifecycle state, precedent,
+  fix and cost, what the fix could break), with a worked example. CLAUDE.md makes it the rule, and
+  the coordinator's roles text asks the same shape for a capture triaged to a bead.
+
+### Changed
+
+- Docs are at parity with 0.4.11: README, CLAUDE.md, design.md, roles.md, adopting-air.md,
+  the skills and the trial count script no longer describe removed behaviour.
+- The live trial's request says every count in its report comes from `air status`,
+  `air audit` or the ledger, with the source named, and that the summary must not contradict
+  the friction list.
+- `make trial` commits the scenarios' config (precheck, the `serve` lease, the precheck line in
+  `CLAUDE.md`), so the trial request has no setup step and no session edits a config file.
+  `air install --write --remove-stale` removes a hook `air install` reports as STALE HOOK instead
+  of asking for `.claude/settings.json` to be edited by hand.
+- The `main moved` notice no longer tells a worker `git merge main` brings the landing into
+  its branch. Workers read it as an instruction and merged mid-batch, losing a batch cycle; the
+  notice states what landed and which files changed, and the worker decides.
+- The repository's history was rewritten to drop the `Claude-Session:` line from 604 commit
+  messages, so every commit hash and tag before 0.4.12 changed. A clone made earlier needs a
+  fresh clone or `git fetch && git reset --hard origin/main`.
+
+### Fixed
+
+- Every notice to workers and the lane (beads ready, batch-ready, the queue empty) was
+  produced only by the coordinator's channel poll, so nobody was told anything while that
+  session was stopped. `air record`, `air claim`, `air release` and `air close` now queue them
+  after their write; the poll still runs as a sweeper, and each notice is sent once.
+- After a red batch with several members, Air offered every member for the next batch again,
+  so the branch that broke it was verified red a second time; every member now waits until it
+  has a new commit or a later green contains it.
+- `make changelog` refused every fragment after a release, because the release leaves
+  `[Unreleased]` with no headings; a missing heading is now added under `[Unreleased]` in the
+  standard order.
+
 ## [0.4.11] - 2026-09-29
 
 The round on an adopter's 0.4.10 findings: 42 landings, live trial passed 8/8 on 2026-09-29
