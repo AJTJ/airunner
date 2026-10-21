@@ -9,6 +9,9 @@ been told about, including releases before this file started.
 
 ## [0.4.12] - 2026-10-21
 
+Live trial passed 8/8 on 2026-10-21 (`.air/trial-report-2026-10-21.md`): 11 beads, 7
+landings, one red as planned. The first release with prebuilt binaries.
+
 ### Added
 
 - Release binaries. Pushing a version tag builds `air` for macOS (Apple Silicon and Intel)
