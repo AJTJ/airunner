@@ -129,7 +129,7 @@ the launchers and `air fleet`; Air refuses `air land` to every launched role but
 | air worker, air lane, air coordinator | Start a session (or `--print` its command). `air coordinator` first asks whether to start the fleet. `air worker` refuses while install's output is uncommitted. |
 | air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. |
 | air fleet stop, air fleet resume | Coordinator and owner only. Stop records who and why and tells every session; while it holds, `air claim`, `air batch cut` and `air land` refuse, the ready fan-out and the stop nudge are silent, and `air status` leads with it. Nothing is killed. |
-| air install | Adds the hooks and the channel server to the settings, writes `.air/roles.md` and the `air-*` skills, prints every notice the repository has not had, and writes only with `--write`. It refuses a downgrade, an unignored `.air`, or a different `air` on the path; `--pin` copies the binary to `.air/bin/air`. |
+| air install | Adds the hooks and the channel server to the settings, writes `.air/roles.md`, `.air/docs/` and the `air-*` skills, prints every notice the repository has not had, and writes only with `--write`. It refuses a downgrade, an unignored `.air`, or a different `air` on the path; `--pin` copies the binary to `.air/bin/air`. |
 | air init | Sets up a new repository: git, beads in server mode on a free port, the ignore file, `.claude/air.json`, a verify command it finds or a failing placeholder, then install. |
 
 Claude Code starts `air mcp` and `air hook`. The Makefile runs the hidden `release-check` and
@@ -254,6 +254,7 @@ stateDiagram-v2
   in_batch --> batch_green: lane records green
   in_batch --> batch_red: lane records red
   batch_red --> committed: a new commit
+  batch_red --> batch_ready: a later green contains it
   batch_green --> closed: air close
   batch_green --> landed: air land
   closed --> landed: air land

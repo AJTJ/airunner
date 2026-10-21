@@ -180,9 +180,9 @@ Do not: let a lane's own commits survive a cut.
 Seen: an adopter, twice in one day on 0.4.10; the lane reset and hand-built the batch. The 0.4.6
 trial (D3) had already excluded a red recorded at the head itself, which a batch built on main
 never is.
-Fix: a one-member red excludes its member until it commits past that head
-(`crates/cli/src/cmd/status.rs:764` `red_alone`). Commit c226d19 (air-hyli); test
-`a_one_member_red_batch_excludes_its_member_until_it_moves`.
+Fix: a one-member red excluded its member until it committed past that head (`red_alone`).
+Commit c226d19 (air-hyli). Superseded by `red_held` (air-vdst, below), whose test keeps a lone
+red member held.
 Do not: decide "red at head" from the batch commit's sha alone.
 
 **A batch of one sent its member no result.**
@@ -820,7 +820,7 @@ landing race (air-5ynn); the owner: "we don't know what the effects of our decis
 to be".
 Fix: `docs/design.md` §6 opens with the states x events table, every row citing the function
 it was read from; `crates/cli/src/cmd/lifecycle.rs` drives those same functions
-(`batch_ready_rule`, `land_first`, `cover`, `handover_verdict`, `red_alone`) through every
+(`batch_ready_rule`, `land_first`, `cover`, `handover_verdict`, `red_held`) through every
 interleaving of commit, cut, verify, land, close, merge and a move of main for two workers and
 a lane, and fails on any reachable state that cannot still land and close every bead. Commit
 9963e31 (air-k52n); test `every_reachable_state_can_still_land_and_close_every_bead` (86,895

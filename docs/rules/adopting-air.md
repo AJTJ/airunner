@@ -146,8 +146,9 @@ once per round, so notices arrive in batches.
    diff against `.air/installed.json`, each change with what to do. Changes marked `!!` alter
    behaviour without an error; do those first.
 4. `air install --write`. It merges into `.claude/settings.json` and `.mcp.json`, and
-   overwrites `.air/roles.md`, `.claude/skills/air-*/SKILL.md` and `.air/installed.json`. It
-   removes each `air-*` skill directory Air once installed and no longer ships, naming it. It
+   overwrites `.air/roles.md`, `.air/docs/`, `.claude/skills/air-*/SKILL.md` and
+   `.air/installed.json`. It removes each `air-*` skill directory Air once installed and no
+   longer ships, naming it. It
    never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/`, a skill whose name
    does not start with `air-`, or any other file. It refuses to write when the `air` on `PATH`
    is not the binary being run, because the hooks call `air` through `PATH`.
