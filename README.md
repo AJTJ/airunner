@@ -6,12 +6,22 @@ Multi-agent accountability and verification system. Lighter than air.
 
 ## Philosophy
 
-Do less. Most agentic systems try to do too much. The models knows how to do the work and they keep
-getting better at doing it. Our goals are practical: transform objectives into tasks, create a merge queue, spin up multiple sessions to work, and help keep the fleet of sessions running.
+Do less. 
+
+Most agentic systems try to do too much and end up interfering with a constantly evolving AI.
+
+The models knows how to do the work and they keep getting better at doing it.
+
+Our goals are practical: 
+- Offer a framework for transforming objectives into tasks that are as isolated as possible to facilitate concurrent work.
+- Offer the user one agent (the coordinator) as a less cluttered interface for development.
+- Ease spinning up multiple harnesses (a fleet) with specific roles
+- Offer a merge queue following simple git principles to avoid merge conflicts, and facilitate continued development
+- Help keep the fleet running through limit resets, interruptions, crashes etc
 
 ## The roles
 
-A fleet is three kinds of sessions. Each is a full Claude Code harness (support for other harnesses incoming), and each has one job.
+A fleet is three kinds of sessions. Each session is a full Claude Code harness (support for other harnesses incoming), and each has one job.
 
 - **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it free of implementation work means it is always available to you.
 - **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because the returns from more parallel harnesses falls off quickly beyond that.
