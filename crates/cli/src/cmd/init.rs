@@ -583,7 +583,8 @@ pub fn run(dir: &Path, prefix: Option<&str>, write: bool, json: bool) -> i32 {
         eprintln!(
             "air init: gate failed. {}{}{}",
             if !bd_present {
-                "Install bd: `brew install beads && brew pin beads` (pinned 1.3.0). "
+                "Install bd 1.3.0 from https://github.com/gastownhall/beads/releases/tag/v1.3.0 \
+                 (Homebrew only has the latest). "
             } else {
                 ""
             },

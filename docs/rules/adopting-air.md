@@ -6,9 +6,12 @@ into the repo and gives every session at start. This file does not restate it.
 
 ## Install
 
-You need git 2.38 or later, tmux, Claude Code, bd 1.3.0 (`brew install beads && brew pin
-beads`), and, for a new repo, Dolt (`brew install dolt`). Build Air from its checkout with `cargo install --path crates/cli` and check that
-`which air` is that binary. Then run `air doctor`: it compares bd against the pinned version,
+You need git 2.38 or later, tmux, Claude Code, bd 1.3.0, and, for a new repo, Dolt 2.3.5. Homebrew only has the
+latest of each, so install these versions from their releases: for bd, the archive for your
+platform from https://github.com/gastownhall/beads/releases/tag/v1.3.0, with `bd` put on your
+PATH; for Dolt, `curl -L https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh |
+sudo bash`. Build Air from its checkout with `cargo install --path crates/cli` and check that
+`which air` is that binary. Then run `air doctor`: it compares bd, and Dolt when bd runs in server mode, against the pinned versions,
 checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.
 
 In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs

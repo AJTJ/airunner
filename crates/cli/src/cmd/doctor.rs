@@ -13,6 +13,45 @@ use crate::cmd::{emit, open};
 /// owner ruling 2026-09-26, when Homebrew stable became 1.3.0).
 pub const BD_PINNED: &str = "1.3.0";
 
+/// The Dolt release Air is run against when bd is in server mode: there the `dolt` binary,
+/// not bd, reads and writes the bead data, so upgrading Dolt moves the store's engine without
+/// bd moving. Pinned to the version in use on 2026-10-22 (owner ruling that day).
+pub const DOLT_PINNED: &str = "2.3.5";
+
+/// The installed `dolt` against the pin. Reported, never refused: Air has no recorded failure
+/// from a Dolt version, only bd 1.2.1's from a schema change.
+#[derive(Debug, Serialize)]
+pub struct DoltCheck {
+    pub version: Option<String>,
+    pub pinned: &'static str,
+    pub version_ok: bool,
+}
+
+/// `dolt version`'s first line is `dolt version X.Y.Z`; a later line may name a newer release,
+/// so only the first is read.
+pub fn dolt_check() -> DoltCheck {
+    let version = crate::cmd::bd_server::bins()
+        .ok()
+        .and_then(|b| {
+            std::process::Command::new(b.dolt)
+                .arg("version")
+                .output()
+                .ok()
+        })
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("dolt version "))
+                .map(|v| v.trim().to_string())
+        });
+    DoltCheck {
+        version_ok: version.as_deref() == Some(DOLT_PINNED),
+        version,
+        pinned: DOLT_PINNED,
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct BdCheck {
     pub version: Option<String>,
@@ -53,6 +92,8 @@ pub fn bd_check(repo: &Path) -> BdCheck {
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub bd: BdCheck,
+    /// Only when bd runs in server mode; an embedded project never runs `dolt`.
+    pub dolt: Option<DoltCheck>,
     /// Shipped documents in `.air/docs/` that are missing or differ from this binary's
     /// (air-g9dx).
     pub docs_drift: Vec<String>,
@@ -220,6 +261,7 @@ pub fn run(repo: &Path, json: bool) -> i32 {
     let bd_listener = crate::cmd::bd_server::view(&bd_main, &bd_mode);
     let report = Report {
         bd: bd_check(repo),
+        dolt: matches!(bd_mode, crate::cmd::bd_server::Mode::Server { .. }).then(dolt_check),
         air: crate::cmd::install::version_json(),
         air_dir: ledger.dir().display().to_string(),
         worker,
@@ -275,9 +317,24 @@ pub fn run(repo: &Path, json: bool) -> i32 {
             if b.version_ok {
                 "ok"
             } else {
-                "MISMATCH; brew upgrade beads && brew pin beads"
+                "MISMATCH; install it from https://github.com/gastownhall/beads/releases/tag/v1.3.0"
             }
         ));
+        if let Some(d) = &report.dolt {
+            s.push_str(&format!(
+                "dolt: {} (pinned {}): {}\n",
+                d.version.as_deref().unwrap_or("not found"),
+                d.pinned,
+                if d.version_ok {
+                    "ok".to_string()
+                } else {
+                    format!(
+                        "MISMATCH; `curl -L https://github.com/dolthub/dolt/releases/download/v{}/install.sh | sudo bash`",
+                        d.pinned
+                    )
+                }
+            ));
+        }
         s.push_str(&format!(
             "{}\n",
             crate::cmd::bd_server::line(&report.bd_mode, &report.bd_listener)

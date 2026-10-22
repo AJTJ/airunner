@@ -274,7 +274,7 @@ fn which(name: &str) -> Option<PathBuf> {
 
 pub fn bins() -> Result<Bins, String> {
     Ok(Bins {
-        dolt: which("dolt").ok_or("dolt is not on PATH (`brew install dolt`)")?,
+        dolt: which("dolt").ok_or("dolt is not on PATH (install 2.3.5: `curl -L https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh | sudo bash`)")?,
     })
 }
 

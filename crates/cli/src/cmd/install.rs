@@ -3040,6 +3040,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         silent_break: false,
         action: "If `air install` reports a STALE HOOK, run `air install --write --remove-stale`.",
     },
+    SurfaceChange {
+        id: "dolt-pin",
+        since: "2026-10-22 (owner ruling)",
+        headline: "Dolt is pinned at 2.3.5 for projects whose bd runs in server mode; `air \
+                   doctor` reports a mismatch and refuses nothing.",
+        silent_break: false,
+        action: "In a server-mode project, install Dolt 2.3.5 from its release: `curl -L \
+                 https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh | sudo bash`. \
+                 Homebrew only has the latest Dolt and bd.",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

@@ -111,7 +111,7 @@ Any session may run these.
 | air lease | Takes, releases or reports a named shared resource. `air lease needs "<cmd>"` says which lease a command needs under `leases` in `.claude/air.json`. |
 | air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, and whether the install is out of date. Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
 | air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. `--without <worker>...` or `--only <worker>...` takes part of the set, so a split after a red batch is a recorded cut. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
-| air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, and beads' mode. |
+| air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, beads' mode, and in server mode whether Dolt is the pinned version (2.3.5; reported, never refused). |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
 | air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its p50, p90, p99 and maximum beside the budget. Facts, not verdicts. |
 | air selftest | A red and a green probe for every check (165); `--prove` runs each probe's declared mutation. |
@@ -500,6 +500,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 | Proof is a command's output, a `file:line` or a test; what only the owner can do becomes a successor bead. | 2026-08-22 | roles.md |
 | Landing attributes beads by `Bead:` trailers; workers pull work and nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
 | beads is the task store, pinned at 1.3.0; Air wraps it and never watches it; beads are created with `--validate`. | 2026-09-26 | `air doctor` |
+| Dolt is pinned at 2.3.5, the version in use, for projects whose beads run in server mode; `air doctor` reports a mismatch and refuses nothing. | 2026-10-22 | `air doctor` |
 | One release row per round; changelog entries are one fragment per bead. | 2026-09-28 | `air release-check`, `changelog.d/` |
 | Apache 2.0; adopters are cited as "an adopter", names in `private/`. | 2026-09-06 | `air adopter-check` |
 | Do less and measure before enforcing; a probe counts once seen failing; a zero is evidence only if the subject occurred; no Claude memory; one design doc. | 2026-09-25 | CLAUDE.md, `do-less`, `project-diligence` |
