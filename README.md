@@ -96,7 +96,9 @@ Air supports Claude Code only, for now.
 
 ## How to install it
 
-Needs git, tmux, Claude Code and [beads](https://github.com/gastownhall/beads) (`bd` 1.3.0).
+Needs git, tmux, Claude Code, [beads](https://github.com/gastownhall/beads/releases/tag/v1.3.0)
+(`bd` 1.3.0) and, for a new project, [Dolt](https://github.com/dolthub/dolt/releases/tag/v2.3.5)
+2.3.5. Homebrew only has the latest of each, so install these versions from their releases.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AJTJ/airunner/releases/latest/download/air-installer.sh | sh
@@ -148,7 +150,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Diagnostics.**
   - `air status` shows the whole fleet on one screen.
   - `air audit` shows how often each rule fired, so rules that never fire can be removed.
-  - `air doctor` checks the install and the pinned beads version.
+  - `air doctor` checks the install and the pinned bd and Dolt versions.
   - `air selftest` proves every check can fail and pass.
 
 ## Upcoming
