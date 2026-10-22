@@ -10,22 +10,42 @@ Do less.
 
 Most agentic systems try to do too much and end up interfering with a constantly evolving AI.
 
-The models knows how to do the work and they keep getting better at doing it.
+The models know how to do the work and they keep getting better at it.
 
 Our goals are practical: 
 - Offer a framework for transforming objectives into tasks that are as isolated as possible to facilitate concurrent work.
 - Offer the user one agent (the coordinator) as a less cluttered interface for development.
-- Ease spinning up multiple harnesses (a fleet) with specific roles
-- Offer a merge queue following simple git principles to avoid merge conflicts, and facilitate continued development
-- Help keep the fleet running through limit resets, interruptions, crashes etc
+- Ease spinning up multiple harnesses (a fleet) each with a specific role.
+- Offer a merge queue following simple git principles to avoid merge conflicts, and facilitate continued development.
+- Help keep the fleet running through limit resets, interruptions, crashes etc...
 
 ## The roles
 
 A fleet is three kinds of sessions. Each session is a full Claude Code harness (support for other harnesses incoming), and each has one job.
 
-- **Coordinator** (`air coordinator`). The session you talk to. It turns what you want into beads, sets priorities, and starts the other sessions. It does not write the code. Keeping it free of implementation work means it is always available to you.
-- **Workers** (`air worker`). Each takes one bead at a time, does it in its own git worktree, and closes it with proof. Separate worktrees mean workers never edit each other's files. The default amount of workers is three, because the returns from more parallel harnesses falls off quickly beyond that.
-- **Verification lane** (`air lane`). It merges finished branches into a batch, runs your tests suite/validation checks... once for the whole batch, and lands the batch on `main`. It is the only session that moves `main`. Checking once per batch costs far less than once per branch, and a single owner of `main` means `main` only ever moves to a commit that passed.
+- **Coordinator** (`air coordinator`)
+  - The coordinator is intended to be the session you talk to. It does not write code itself and remains uncluttered and free to talk to you.
+  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits large work into small beads, and sets their priority.
+  - Through the coordinator you can start and pause the workers and the verification lane.
+  - Air tells the coordinator when a worker is stuck or has gone away, and when work is ready to land.
+  - When a worker is blocked, the worker sends the coordinator a note. The coordinator turns the note into a bead or drops it.
+  - It asks you only about decisions that are yours to make. It files each question as a bead for you to answer.
+  - It checks in every five minutes, so it carries on after a pause or an account limit.
+- **Workers** (`air worker`)
+  - A worker works on one bead at a time through its own git worktree, so workers never edit each other's files.
+  - There are three workers by default. Practically, adding more than three offers little gains on a regular machine.
+  - Air reports to workers when a bead is ready to be claimed. The first worker to claim it gets it.
+  - Every commit names its bead, so Air knows what each branch contains.
+  - A worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures full system integrity.
+  - Air tells a worker when its work passes, fails or lands, and when it clashes with another worker's work. Only on a pass will the worker close its bead.
+  - Air warns a worker when another worker is editing the same file.
+- **Verification lane** (`air lane`)
+  - The lane is the only session that changes `main`.
+  - Air tells the lane whenever a worker's branch is ready.
+  - The lane merges every ready branch into one batch and runs your tests once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
+  - If the tests pass, the lane puts the batch on `main`. So `main` only ever holds work that passed.
+  - If the tests fail, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
+  - When a branch clashes with another, the lane leaves it out and Air tells its worker.
 
 ## How it works
 
