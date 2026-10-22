@@ -7,6 +7,14 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-10-22
+
+### Added
+
+- `air doctor` compares Dolt against a pinned 2.3.5 when bd runs in server mode, and reports
+  a mismatch without refusing. Air's install advice for bd and Dolt now points at their GitHub
+  releases for the pinned versions, since Homebrew only has the latest.
+
 ## [0.4.12] - 2026-10-21
 
 Live trial passed 8/8 on 2026-10-21 (`.air/trial-report-2026-10-21.md`): 11 beads, 7

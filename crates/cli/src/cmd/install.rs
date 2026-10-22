@@ -3291,6 +3291,8 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-10-21: notices from the commands, red batches hold every member, .air/docs
     // shipped, batch cut --without/--only; first release with binaries.
     ("0.4.12", 42, 202),
+    // 2026-10-22: Dolt pinned at 2.3.5 in `air doctor`; bd and Dolt install from their releases.
+    ("0.4.13", 43, 203),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
