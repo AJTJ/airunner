@@ -25,7 +25,7 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
 
 - **Coordinator** (`air coordinator`)
   - The coordinator is intended to be the session you talk to. It does not write code itself and remains uncluttered and free to talk to you.
-  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits large work into small beads, and sets their priority.
+  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits large work into small beads with the [decomposition skill](.claude/skills/decomposition/SKILL.md), and sets their priority.
   - Through the coordinator you can start and pause the workers and the verification lane.
   - Air tells the coordinator when a worker is stuck or has gone away, and when work is ready to land.
   - When a worker is blocked, the worker sends the coordinator a note. The coordinator turns the note into a bead or drops it.
@@ -39,12 +39,14 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
   - A worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures full system integrity.
   - Air tells a worker when its work passes, fails or lands, and when it clashes with another worker's work. Only on a pass will the worker close its bead.
   - Air warns a worker when another worker is editing the same file.
+  - A worker takes a lease on anything only one agent can use at a time, such as a port or a simulator.
 - **Verification lane** (`air lane`)
   - The lane is the only session that changes `main`.
   - Air tells the lane whenever a worker's branch is ready.
-  - The lane merges every ready branch into one batch and runs your tests once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
-  - If the tests pass, the lane puts the batch on `main`. So `main` only ever holds work that passed.
-  - If the tests fail, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
+  - Your project defines the check: one command that exits 0 when the project is good, such as `make verify`.
+  - The lane merges every ready branch into one batch and runs the check once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
+  - If the check passes, the lane puts the batch on `main`. So `main` only ever holds work that passed.
+  - If the check fails, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
   - When a branch clashes with another, the lane leaves it out and Air tells its worker.
 
 ## How it works
@@ -60,39 +62,11 @@ flowchart LR
     M -- "batch green: air close" --> W
 ```
 
-Air sends the messages on the arrows; nobody polls and nobody relays. The lane is the only
-thing that moves main.
+Air sends the messages on the arrows; nobody polls and nobody relays.
 
 The sessions can also message each other directly, and sometimes that is the right way to
 coordinate. Air's aim is to make it rarely necessary: when the facts arrive on their own, the
 fleet spends its time on the work instead of on talking.
-
-## What Air is
-
-- **A merge queue.** Workers finish branches, and a verification lane merges them into one batch
-  and lands it on `main`.
-  - Your project defines the check: one command that exits 0 when the project is good, usually
-    your tests. For example `make verify`.
-  - The lane runs it once per batch, and Air records which commit passed.
-  - A bead closes only on a passing run.
-- **Sessions.** Air starts the coordinator, the workers and the lane, each in its own git
-  worktree and tmux session.
-- **Decomposition.** A skill, installed into every project, for breaking work into epics and
-  beads a worker can finish on its own. It also defines the bead shape: every part a bead
-  carries and what enforces it
-  ([`.claude/skills/decomposition/SKILL.md`](.claude/skills/decomposition/SKILL.md#bead-shape)).
-- **Shared resources.** Leases for anything one agent can use at a time, such as a port or a
-  simulator.
-- **Keeping the fleet moving.**
-  - The coordinator is told when a worker goes idle, silent or away while holding a bead, when a
-    branch is ready to land, and when a lease is held by a session that has died.
-  - A worker with nothing claimed is offered the beads that are ready.
-  - Two workers editing the same file are warned.
-  - `air status` shows when a session stopped, for example at an account limit, and what else is
-    running in each worktree.
-  - The coordinator sets a recurring wake so it picks up again after a pause.
-
-Air supports Claude Code only, for now.
 
 ## How to install it
 
@@ -132,7 +106,6 @@ tell the coordinator what to build; it runs everything from there.
 
 You rarely need these, but they are there:
 
-- `air status`: the whole fleet on one screen.
 - `air fleet stop` and `air fleet resume`.
 - `tmux attach -t <project>-worker-1`: watch or type into any session.
 
