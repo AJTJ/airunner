@@ -9,6 +9,11 @@ been told about, including releases before this file started.
 
 ## [0.4.13] - 2026-10-22
 
+Live trial on 2026-10-22 (`.air/trial-report-2026-10-22.md`): 11 beads, 7 landings, one red as
+planned. Six of eight scenarios passed on the first try; conflict passed on a re-filed pair, and
+lease passed with the refused worker giving up its bead as the refusal told it to. Released on
+the owner's go.
+
 ### Added
 
 - `air doctor` compares Dolt against a pinned 2.3.5 when bd runs in server mode, and reports
