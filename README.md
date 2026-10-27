@@ -14,9 +14,9 @@ The models know how to do the work and they keep getting better at it.
 
 Our goals are practical: 
 - Offer a framework for transforming objectives into tasks that are as isolated as possible to facilitate concurrent work.
-- Offer the user one agent (the coordinator) as a less cluttered interface for development.
-- Ease spinning up multiple harnesses (a fleet) each with a specific role.
-- Offer a merge queue following simple git principles to avoid merge conflicts, and facilitate continued development.
+- Provide the user one harness (the coordinator) as a less cluttered interface for development.
+- Ease the process of spinning up multiple harnesses (a fleet) to do get the tasks done.
+- Design a simple merge queue, following git principles to avoid merge conflicts, and facilitate continued development.
 - Help keep the fleet running through limit resets, interruptions, crashes etc...
 
 ## The roles
@@ -24,30 +24,33 @@ Our goals are practical:
 A fleet is three kinds of sessions. Each session is a full Claude Code harness (support for other harnesses incoming), and each has one job.
 
 - **Coordinator** (`air coordinator`)
-  - The coordinator is intended to be the session you talk to. It does not write code itself and remains uncluttered and free to talk to you.
-  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits large work into small beads with the [decomposition skill](.claude/skills/decomposition/SKILL.md), and sets their priority.
-  - Through the coordinator you can start and pause the workers and the verification lane.
-  - Air tells the coordinator when a worker is stuck or has gone away, and when work is ready to land.
-  - When a worker is blocked, the worker sends the coordinator a note. The coordinator turns the note into a bead or drops it.
-  - It asks you only about decisions that are yours to make. It files each question as a bead for you to answer.
-  - It checks in every five minutes, so it carries on after a pause or an account limit.
+  - The coordinator is intended to be your interface. It does not write code itself and intends to remain uncluttered and free to talk to you.
+  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits largeer work into smaller beads with the [decomposition skill](.claude/skills/decomposition/SKILL.md), and sets their priority.
+  - Through the coordinator you can control the fleet by starting and pauseing the workers and the verification lane.
+  - Air informs the coordinator when a worker is stuck or has gone away, and when work is ready to land.
+  - When a worker is blocked or uncertain, it sends the coordinator a note to its inbox.
+  - If a decision requires your input, the coordinator files "owner" beads for you to go through. The workers do NOT pick these beads up.
+  - There is an intermittent check-in clock every five minutes (by default), so it carries on after a pause or when hitting an account limit etc...
 - **Workers** (`air worker`)
   - A worker works on one bead at a time through its own git worktree, so workers never edit each other's files.
-  - There are three workers by default. Practically, adding more than three offers little gains on a regular machine.
+  - There are three workers by default. Practically, adding more than three offers little benefit on a regular machine.
   - Air reports to workers when a bead is ready to be claimed. The first worker to claim it gets it.
   - Every commit names its bead, so Air knows what each branch contains.
-  - A worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures full system integrity.
-  - Air tells a worker when its work passes, fails or lands, and when it clashes with another worker's work. Only on a pass will the worker close its bead.
-  - Air warns a worker when another worker is editing the same file.
-  - A worker takes a lease on anything only one agent can use at a time, such as a port or a simulator.
+  - Generally, a worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures a fell test run and verification of system integrity through the `verify` process.
+  - Air tells a worker when its work passes, fails or lands, and when it clashes with another worker's work. Only on a pass will the worker close its own bead.
+  - Air warns a worker when another worker is editing the same file to reduce conflicts.
+  - A lease system exists to share system resources (such as a port or simulator). A worker takes a lease on anything when it needs it.
 - **Verification lane** (`air lane`)
+  - The lane does no work itself. It exists simply to merge every ready branch into one batch and run the verification check once for the whole batch. With growing test suites, this costs far less time than having each worker test its own branch.
+  - If the verification check passes, the lane puts the batch on `main`. So `main` only ever holds work that passes.
+  - If the check fails, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
+  - When a branch clashes with another, the lane leaves it out and Air tells its worker.
   - The lane is the only session that changes `main`.
   - Air tells the lane whenever a worker's branch is ready.
   - Your project defines the check: one command that exits 0 when the project is good, such as `make verify`.
-  - The lane merges every ready branch into one batch and runs the check once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
-  - If the check passes, the lane puts the batch on `main`. So `main` only ever holds work that passed.
-  - If the check fails, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
-  - When a branch clashes with another, the lane leaves it out and Air tells its worker.
+  
+## Features
+  
 
 ## How it works
 
