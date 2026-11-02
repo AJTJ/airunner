@@ -75,8 +75,14 @@ The launchers make `.claude/worktrees/<name>` on branch `worktree-<name>`, copy 
 environment, in the tmux session `<project>-<name>`, which is also the name `SendMessage`
 addresses. The project is `project` in `.claude/air.json`, else the beads prefix, else the
 directory name. A tmux name taken in another directory is refused; in the same one it attaches.
-Claude Code still asks two start-up questions Air cannot answer (folder trust, and the
-development-channels warning), and the coordinator launcher names both.
+Every launcher pre-answers the start-up prompts Claude Code documents an answer for:
+`--add-dir <main checkout>` (every worktree session reads `.air/` there), `--permission-mode
+auto`, and `skipAutoPermissionPrompt` and `enabledMcpjsonServers` on `--settings`, never in the
+project file, which an untrusted folder ignores. Before starting any session a launcher reads
+`projects["<main checkout>"].hasTrustDialogAccepted` in `~/.claude.json` (`CLAUDE_CONFIG_DIR` when
+set) and refuses, with the fix, when it is not `true`; Air never writes that key (air-z41). The
+development-channels warning has no documented skip and is still answered by hand. A session
+found on any other prompt is reported, not answered.
 
 ### 3.1 Roles and permissions
 
@@ -545,6 +551,7 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 | Behind main | A branch still waiting when another batch lands | It stays ready and lands without its worker merging main |
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
 | Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
+| Start-up prompts | A fresh fleet, `air fleet up` on a trusted checkout | Every session registers in `air status` and no pane is on a prompt (air-z41) |
 
 ## 10. TODO
 

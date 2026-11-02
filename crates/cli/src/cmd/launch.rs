@@ -464,14 +464,80 @@ pub const MCP_SERVERS: &[&str] = &["air"];
 /// Every session warns about development channels since air-1vri: the Air channel is how each
 /// session receives the messages Air addresses to it, so the lane and the workers load it too.
 pub fn startup_prompts_note(main: &Path) -> String {
+    // Folder trust is checked before launch (air-z41), so a session never starts on it.
     format!(
-        "If Claude Code has not been trusted in {} yet, each session asks \"Is this a project \
-         you created or one you trust?\": answer Yes; the default exits. One accept covers \
-         every worktree; running `claude` there once first avoids the question. Each session \
-         also warns about loading development channels (the Air channel, which is how Air's \
-         messages reach it): choose \"I am using this for local development\"; Exit quits.",
+        "Each session warns about loading development channels (the Air channel, which is how \
+         Air's messages reach it): choose \"I am using this for local development\"; Exit quits. \
+         Folder trust in {} was checked before launch; the other start-up prompts are \
+         pre-answered.",
         main.display()
     )
+}
+
+/// Flags that pre-answer start-up prompts (air-z41): `--add-dir <main checkout>` so the read of
+/// `.air/` every worktree session makes outside its working directory does not prompt, and
+/// `--permission-mode auto` stated rather than inherited. `skipAutoPermissionPrompt` is on the
+/// `--settings` blob. Removal: when Claude Code stops prompting for these, or the fleet leaves
+/// auto mode.
+pub fn prompt_flags(main: &Path) -> Vec<String> {
+    vec![
+        "--add-dir".into(),
+        main.display().to_string(),
+        "--permission-mode".into(),
+        "auto".into(),
+    ]
+}
+
+/// Put [`prompt_flags`] before `--disallowed-tools`, whose values run to the next flag.
+fn insert_prompt_flags(argv: &mut Vec<String>, main: &Path) {
+    let at = argv
+        .iter()
+        .position(|a| a == "--disallowed-tools")
+        .unwrap_or(argv.len());
+    argv.splice(at..at, prompt_flags(main));
+}
+
+/// Where Claude Code keeps `projects["<path>"].hasTrustDialogAccepted`: `.claude.json` under
+/// `CLAUDE_CONFIG_DIR` when set, else the home directory.
+fn claude_json_path() -> Option<std::path::PathBuf> {
+    if let Some(d) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(std::path::PathBuf::from(d).join(".claude.json"));
+    }
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude.json"))
+}
+
+/// Pure: whether `claude_json` records the folder-trust dialog as accepted for `main`, under the
+/// path as given or its canonical form.
+pub fn trust_accepted(claude_json: &str, main: &Path) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(claude_json) else {
+        return false;
+    };
+    let accepted = |p: &Path| {
+        v.get("projects")
+            .and_then(|m| m.get(p.display().to_string()))
+            .and_then(|e| e.get("hasTrustDialogAccepted"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    };
+    accepted(main) || main.canonicalize().is_ok_and(|c| accepted(&c))
+}
+
+/// The refusal when the main checkout is not trusted, else None. Air never writes the key: the
+/// dialog is the owner's consent. Before this, five sessions started at once each stopped on the
+/// dialog (air-z41, an adopter 2026-10-28 to 2026-10-30).
+fn trust_refusal(main: &Path, who: &str) -> Option<String> {
+    let text = claude_json_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    if trust_accepted(&text, main) {
+        return None;
+    }
+    Some(format!(
+        "{who}: refused: Claude Code has not been trusted in {m} (`hasTrustDialogAccepted` is \
+         absent for it in ~/.claude.json), so every session would stop on the folder-trust \
+         dialog. Run `claude` once in {m}, answer Yes, then launch again.",
+        m = main.display()
+    ))
 }
 
 /// The flag that attaches the Air channel. A local `.mcp.json` server is not on Claude Code's
@@ -494,6 +560,10 @@ fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
         "enabledMcpjsonServers".into(),
         serde_json::json!(MCP_SERVERS),
     );
+    // air-z41: the first-run auto-mode calibration dialog sat on the lane for over an hour at an
+    // adopter (2026-10-28 to 2026-10-30). Documented on `--settings` (Claude Code 2.1.308; the
+    // adopter's research, 2026-10-30), so it is not left to the project file.
+    blob.insert("skipAutoPermissionPrompt".into(), serde_json::json!(true));
     if !allow.is_empty() {
         blob.insert("permissions".into(), serde_json::json!({ "allow": allow }));
     }
@@ -665,6 +735,8 @@ fn worker_argv_for(
         worker_argv(name, &project, roles, &[])
     };
     merge_settings(&mut base, &theirs);
+    let main = super::worktree::main_checkout(repo);
+    insert_prompt_flags(&mut base, &main);
     // The pinned binary by absolute path, which is how the lane ran it in the trial (air-8cdh).
     let pin = super::install::pin_path(&super::worktree::main_checkout(repo).join(".air"));
     if role == "lane" && pin.is_file() {
@@ -722,6 +794,7 @@ fn coordinator_argv_for(
     let (extra, theirs) = split_settings(extra)?;
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
+    insert_prompt_flags(&mut base, &super::worktree::main_checkout(repo));
     base.extend(repo_deny(repo, "coordinator_deny"));
     base.extend(extra);
     Ok(base)
@@ -1187,6 +1260,12 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
         log_install_refusal(repo, "air fleet up", &refusal, print);
         return 1;
     }
+    if !print
+        && let Some(refusal) = trust_refusal(&super::worktree::main_checkout(repo), "air fleet up")
+    {
+        eprintln!("{refusal}");
+        return 1;
+    }
     if note && !print {
         let main = super::worktree::main_checkout(repo);
         eprintln!("air fleet up: {}", startup_prompts_note(&main));
@@ -1320,6 +1399,9 @@ fn launch_role(
         log_install_refusal(repo, &who, &refusal, print);
         return Err(refusal);
     }
+    if !print && let Some(refusal) = trust_refusal(&super::worktree::main_checkout(repo), &who) {
+        return Err(refusal);
+    }
     // air-4n5t: a worker the ledger has a live session for is running, whatever its tmux
     // session is called. Twice on 2026-09-28 a change of `"project"` renamed the sessions and
     // `air fleet up`, finding no session of the new name, started a second claude in each
@@ -1391,6 +1473,13 @@ pub fn live_session(
 /// the terminal, and with no terminal the answer is no, so a script never starts a fleet by
 /// accident (owner, 2026-09-25, air-jc2p.5).
 pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<bool>) -> i32 {
+    if !print
+        && let Some(refusal) =
+            trust_refusal(&super::worktree::main_checkout(repo), "air coordinator")
+    {
+        eprintln!("{refusal}");
+        return 1;
+    }
     let start_fleet =
         fleet.unwrap_or_else(|| std::io::stdin().is_terminal() && ask_fleet(fleet_workers(repo)));
     // Said once for every session about to start (air-oe9k), before the launch below replaces
@@ -1637,9 +1726,24 @@ mod tests {
     #[test]
     fn the_startup_note_names_each_remaining_prompt_and_its_answer() {
         let note = startup_prompts_note(Path::new("/m"));
-        assert!(note.contains("trust") && note.contains("Yes") && note.contains("/m"));
+        assert!(note.contains("trust") && note.contains("/m"));
         assert!(note.contains("development channels"));
         assert!(note.contains("I am using this for local development"));
+    }
+
+    /// air-z41: trust is read from `projects[<path>].hasTrustDialogAccepted`, and only `true`
+    /// counts.
+    #[test]
+    fn trust_is_accepted_only_when_the_key_is_true_for_the_main_checkout() {
+        let main = Path::new("/r/main");
+        let t = r#"{"projects":{"/r/main":{"hasTrustDialogAccepted":true}}}"#;
+        let f = r#"{"projects":{"/r/main":{"hasTrustDialogAccepted":false}}}"#;
+        let other = r#"{"projects":{"/r/other":{"hasTrustDialogAccepted":true}}}"#;
+        assert!(trust_accepted(t, main));
+        assert!(!trust_accepted(f, main));
+        assert!(!trust_accepted(other, main));
+        assert!(!trust_accepted("not json", main));
+        assert!(!trust_accepted("", main));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated

@@ -42,6 +42,28 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
+/// A `CLAUDE_CONFIG_DIR` whose `.claude.json` records folder trust for `repo` (air-z41): the
+/// launchers refuse to start a session in a repo Claude Code has not been trusted in. Air never
+/// writes this file; the test does.
+fn trusted_config(repo: &Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let projects: serde_json::Map<String, serde_json::Value> = [repo.to_path_buf()]
+        .iter()
+        .map(|p| {
+            (
+                p.display().to_string(),
+                serde_json::json!({"hasTrustDialogAccepted": true}),
+            )
+        })
+        .collect();
+    std::fs::write(
+        dir.path().join(".claude.json"),
+        serde_json::json!({ "projects": projects }).to_string(),
+    )
+    .unwrap();
+    dir
+}
+
 /// None of the tests using `air()` are about bd; a missing binary fails in microseconds where
 /// a real `bd` in a non-beads directory cost 0.25 to 0.5 s per call (air-4vu, 2026-08-22).
 /// Tests that need a bd (doctor, init) build their own fake and set `AIR_BD_BIN` themselves.
@@ -800,6 +822,7 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
         .arg(&repo)
         .args(["worker", "w", "--task", "hello there"])
         .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
         .env("AIR_CLAUDE_BIN", &stub)
         .env("AIR_TMUX_SOCKET", &socket)
         .stdin(std::process::Stdio::null())
@@ -989,6 +1012,7 @@ fn fleet_up_starts_the_lane_and_workers_once() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    let trust = trusted_config(&repo);
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
@@ -996,6 +1020,7 @@ fn fleet_up_starts_the_lane_and_workers_once() {
             .args(args)
             .current_dir(&repo)
             .env("PATH", &path)
+            .env("CLAUDE_CONFIG_DIR", trust.path())
             .env("AIR_BD_BIN", "/nonexistent/bd")
             .env_remove("AIR_TMUX_SOCKET")
             .stdin(std::process::Stdio::null())
@@ -1237,6 +1262,7 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
         .arg(&repo)
         .args(["worker", "w"])
         .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
         .env("PATH", &path)
         .env("AIR_BD_BIN", "/nonexistent/bd")
         .env("AIR_CLAUDE_BIN", stub_dir.join("claude"))
@@ -1326,4 +1352,55 @@ fn a_pinned_repo_hands_every_air_to_its_pin() {
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .collect::<String>();
     assert!(events.contains("\"decision\":\"delegated\""), "{events}");
+}
+
+/// air-z41: a launch reads the printed command line for the flags that pre-answer start-up
+/// prompts, and refuses before starting anything when the main checkout is not trusted.
+#[test]
+fn launchers_pre_answer_prompts_and_refuse_without_folder_trust() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    for args in [
+        &["worker", "w", "--print"][..],
+        &["lane", "--print"],
+        &["coordinator", "--print"],
+    ] {
+        let (code, out, err) = air(&repo, None, args);
+        assert_eq!(code, 0, "{err}");
+        let add = format!("--add-dir {}", repo.display());
+        assert!(out.contains(&add), "{args:?}: {out}");
+        assert!(out.contains("--permission-mode auto"), "{args:?}: {out}");
+        assert!(out.contains("skipAutoPermissionPrompt"), "{args:?}: {out}");
+    }
+    let (_, out, _) = air(&repo, None, &["fleet", "up", "--print"]);
+    assert_eq!(out.matches("--permission-mode auto").count(), 4, "{out}");
+
+    // Trust absent: every launcher refuses, names the key and the fix, and starts nothing.
+    let empty = tempfile::tempdir().unwrap();
+    std::fs::write(empty.path().join(".claude.json"), r#"{"projects":{}}"#).unwrap();
+    for args in [
+        &["worker", "w"][..],
+        &["lane"],
+        &["coordinator", "--no-fleet"],
+        &["fleet", "up"],
+    ] {
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .current_dir(&repo)
+            .env("CLAUDE_CONFIG_DIR", empty.path())
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env("AIR_CLAUDE_BIN", "/nonexistent/claude")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {err}");
+        assert!(
+            err.contains("hasTrustDialogAccepted") && err.contains("Run `claude` once"),
+            "{args:?}: {err}"
+        );
+        assert!(!repo.join(".claude/worktrees").exists(), "{args:?}");
+    }
 }
