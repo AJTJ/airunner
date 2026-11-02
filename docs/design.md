@@ -404,7 +404,7 @@ is repeated unchanged.
 
 Every notice states what is observed and, where one exists, the command that acts on it.
 `air status` prints two loop times for the last 24 hours, batch-ready to its verify and batch
-green to close. The coordinator's 5-minute heartbeat is the backstop for a missed push.
+green to close. Where the repo sets `heartbeat_minutes`, the coordinator's heartbeat is the backstop for a missed push.
 
 ### 6.6 Session states
 
