@@ -267,7 +267,7 @@ stateDiagram-v2
 | State | Event | Next state | Decided by |
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
-| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
 | batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
 | in-batch | lane records red | batch-red: nothing lands; every member is held out | `status::red_held` |

@@ -3050,6 +3050,14 @@ pub const SURFACE: &[SurfaceChange] = &[
                  https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh | sudo bash`. \
                  Homebrew only has the latest Dolt and bd.",
     },
+    SurfaceChange {
+        id: "green-branch-batch-ready",
+        since: "2026-11-02 (air-757)",
+        headline: "A worker branch that is green at a head containing `main` is batch-ready, so \
+                   the lane cuts it; it no longer waits for a landing nothing under a lane makes.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.

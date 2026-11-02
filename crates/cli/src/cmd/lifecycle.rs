@@ -272,8 +272,6 @@ mod tests {
         let f = BatchFacts {
             worker: format!("w{i}"),
             head: sha(&w.head),
-            contains_main: is_sub(&s.main, &w.head),
-            green_at_head: verdict_at(s, &w.head) == Some(Verdict::Green),
             carried,
             held: if open(rule, w.bead) {
                 vec![bead_name(i)]
