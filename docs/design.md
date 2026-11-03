@@ -75,8 +75,14 @@ The launchers make `.claude/worktrees/<name>` on branch `worktree-<name>`, copy 
 environment, in the tmux session `<project>-<name>`, which is also the name `SendMessage`
 addresses. The project is `project` in `.claude/air.json`, else the beads prefix, else the
 directory name. A tmux name taken in another directory is refused; in the same one it attaches.
-Claude Code still asks two start-up questions Air cannot answer (folder trust, and the
-development-channels warning), and the coordinator launcher names both.
+Every launcher pre-answers the start-up prompts Claude Code documents an answer for:
+`--add-dir <main checkout>` (every worktree session reads `.air/` there), `--permission-mode
+auto`, and `skipAutoPermissionPrompt` and `enabledMcpjsonServers` on `--settings`, never in the
+project file, which an untrusted folder ignores. Before starting any session a launcher reads
+`projects["<main checkout>"].hasTrustDialogAccepted` in `~/.claude.json` (`CLAUDE_CONFIG_DIR` when
+set) and refuses, with the fix, when it is not `true`; Air never writes that key (air-z41). The
+development-channels warning has no documented skip and is still answered by hand. A session
+found on any other prompt is reported, not answered.
 
 ### 3.1 Roles and permissions
 
@@ -549,6 +555,7 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 | Behind main | A branch still waiting when another batch lands | It stays ready and lands without its worker merging main |
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
 | Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
+| Start-up prompts | A fresh fleet, `air fleet up` on a trusted checkout | Every session registers in `air status` and no pane is on a prompt (air-z41) |
 
 ## 10. TODO
 
@@ -591,6 +598,7 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 | The channel delivers Air's messages to every launched session. | A channel is the documented push into a running, even idle, session; events during a turn are queued for the next. A Stop hook with asyncRewake needs a waiting process per stop. The cost is one development-channels confirmation per session. | https://code.claude.com/docs/en/channels-reference.md, https://code.claude.com/docs/en/hooks.md (2026-09-26, Claude Code 2.1.283) |
 | The lane is a merge queue: batch, one verify at a time, fast-forward onto a verified tree, a conflict back to its author, no speculation, no rebase. | Every merge queue with a slow verify batches and splits on red; on one machine the verify is the CPU, and a rebase gives every commit a new sha. | bors-ng README, https://zuul-ci.org/docs/zuul/latest/gating.html, GitHub merge queue docs (2026-09-14) |
 | `git merge-tree --write-tree` for the conflict check; git 2.38 or later. | It merges without touching the index or the working tree. | https://git-scm.com/docs/git-merge-tree (2026-09-14) |
+| The remote runner's push over a command prefix (`kubectl exec`) is git's `ext::` remote helper, `git -c protocol.ext.allow=always push 'ext::<prefix> %S <path>'`, not a bundle piped through the prefix. | One exec per push with git's own negotiation; a bundle needs a second exec for the far tip, a temp file on the target (`git fetch /dev/stdin` fails), and a special case for nothing to send. Equal cost on a local stand-in, 0.13 s to 0.15 s cold for 100 commits (Apple M5, 2026-11-02, air-opq.2). | `git help remote-ext` (git 2.54.0, 2026-11-02); the measurement on air-opq.2 |
 | A few sessions: three workers, a lane, a coordinator. | Returns thin beyond three or four agents; subscription usage pools across sessions. | https://arxiv.org/abs/2512.08296 (2026-08-18); https://code.claude.com/docs/en/costs.md (2026-08-17) |
 | The close gate is an external recorded check, not the agent's report. | Models still claim success they did not achieve; an anti-cheating prompt lowers the rate and leaves it high (Opus 4.5, 55% to 35%). | https://assets.anthropic.com/m/64823ba7485345a7/Claude-Opus-4-5-System-Card.pdf (2026-08-18) |
 | Facts and refusals over procedure prose, each mechanism with a removal condition. | Context files do not raise task success and cost over 20% more; harness pieces encoding what a model cannot do get removed on the next model. | https://arxiv.org/abs/2602.11988, https://www.anthropic.com/engineering/harness-design-long-running-apps (2026-08-21); `.claude/skills/do-less/references/evidence.md` |
