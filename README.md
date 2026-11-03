@@ -41,7 +41,7 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
   - Air warns a worker when another worker is editing the same file.
   - A worker takes a lease on anything only one agent can use at a time, such as a port or a simulator.
 - **Verification lane** (`air lane`)
-  - The lane is the only session that changes `main`.
+  - The lane is the only session that changes `main` (or the branch `base_branch` in `.claude/air.json` names; `main` below means that branch).
   - Air tells the lane whenever a worker's branch is ready.
   - Your project defines the check: one command that exits 0 when the project is good, such as `make verify`.
   - The lane merges every ready branch into one batch and runs the check once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
@@ -158,7 +158,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
   each shown failing without the check and passing with it
   ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
 - Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
-  coordinator, a lane and three workers work through nine scenarios on a copy of
+  coordinator, a lane and three workers work through ten scenarios on a copy of
   [examples/minimal](examples/minimal), from a fixed
   [request](scripts/trial/request.md). The coordinator writes a report of what happened,
   including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the
