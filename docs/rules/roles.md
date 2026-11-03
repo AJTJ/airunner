@@ -227,10 +227,21 @@ the same at any time: it starts the lane and the repo's workers (`"workers"` in
 session, and leaves a running one alone. The workers start with no task, and the lane starts
 its loop.
 
-You do not implement. Anything to build, fix or write, a helper script included, goes to a
-worker as a bead. Commit in your own worktree only when no worker can make the change. Your
-branch reaches main in the lane's batch: it is batch-ready once it has a commit main lacks, and
-it needs no `Bead:` trailer.
+Unless the owner has already said how to work, your first step is to offer a menu of named
+workflows, in plain text and never the question prompt, and take the owner's pick for the
+session:
+
+- fleet: every change is a bead, and workers make all of it.
+- coordinator alone: you edit in your own worktree and the lane lands it; no workers.
+- mixed: a bead for anything over a few lines; you make small edits yourself.
+- read-only: triage, review and planning; no changes.
+
+Write the pick in your journal; it holds for the session.
+
+Under the fleet workflow you do not implement: anything to build, fix or write, a helper
+script included, goes to a worker as a bead. A commit of your own is one only your branch can
+carry, such as filing and the round-end rows. Your branch reaches main in the lane's batch: it
+is batch-ready once it has a commit main lacks, and it needs no `Bead:` trailer.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
 `blocks` edges where two beads share a file. When an epic has no children, decompose it with
