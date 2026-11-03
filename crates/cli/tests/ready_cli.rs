@@ -95,3 +95,20 @@ fn the_coordinator_offers_its_head_and_a_worker_is_refused() {
     assert_eq!(code, 0);
     assert!(out.contains("coordinator_autobatch"), "{out}");
 }
+
+/// air-ujq: `Ready` was inserted between `Land`'s doc comment and `Land {`, so `air land
+/// --help` lost its description and `air ready --help` showed the landing's. Each command
+/// shows its own.
+#[test]
+fn land_and_ready_each_show_their_own_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let (code, land, err) = air(repo, None, &["land", "--help"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(land.contains("land a green branch"), "{land}");
+    assert!(!land.contains("Offer this branch's head"), "{land}");
+    let (code, ready, err) = air(repo, None, &["ready", "--help"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(ready.contains("Offer this branch's head"), "{ready}");
+    assert!(!ready.contains("land a green branch"), "{ready}");
+}

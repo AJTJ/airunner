@@ -286,6 +286,12 @@ enum Cmd {
         #[arg(long)]
         reason_file: Option<PathBuf>,
     },
+    /// Offer this branch's head to the lane (coordinator only; air-m8u). With
+    /// `"coordinator_autobatch"` absent or false in `.claude/air.json`, the coordinator's branch
+    /// is batch-ready only at a head offered this way; a later commit needs a new offer. With
+    /// it true every commit main lacks is batch-ready and this only records the offer. Refused
+    /// to workers and the lane.
+    Ready,
     /// The lane: land a green branch on main. The one allowed path onto main; it pushes
     /// nothing. Refused to workers and the coordinator; the owner's own shell may land too.
     ///
@@ -323,12 +329,6 @@ enum Cmd {
     /// by `air status` (air-ayp) — as a lookup that did not answer, never as a contradiction
     /// and never by itself as a wrong close: six of nine such firings were clauses that held
     /// (air-k6uh).
-    /// Offer this branch's head to the lane (coordinator only; air-m8u). With
-    /// `"coordinator_autobatch"` absent or false in `.claude/air.json`, the coordinator's branch
-    /// is batch-ready only at a head offered this way; a later commit needs a new offer. With
-    /// it true every commit main lacks is batch-ready and this only records the offer. Refused
-    /// to workers and the lane.
-    Ready,
     Land {
         bead: Vec<String>,
         /// Land this worker's branch (`worktree-<name>`), whatever beads it carries. The
