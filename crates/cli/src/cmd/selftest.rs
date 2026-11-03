@@ -82,6 +82,25 @@ fn air_command(exe: &Path, cwd: &Path) -> Command {
     c
 }
 
+/// A `CLAUDE_CONFIG_DIR` whose `.claude.json` records folder trust for `repo` (air-z41): the
+/// launchers refuse a repo Claude Code has not been trusted in, read from
+/// `projects[<path>].hasTrustDialogAccepted` there. A probe that launches a role trusts its own
+/// scratch repo this way; the owner's file is never read.
+fn trusted_config(repo: &Path) -> Result<std::path::PathBuf, String> {
+    let config = repo.join("claude-config");
+    std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
+    let repo = repo.canonicalize().map_err(|e| e.to_string())?;
+    std::fs::write(
+        config.join(".claude.json"),
+        serde_json::json!({
+            "projects": { repo.display().to_string(): { "hasTrustDialogAccepted": true } }
+        })
+        .to_string(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(config)
+}
+
 /// How many raw `air` spawns a probe file holds beside the helper: lines building a
 /// `Command::new` on the current executable. Pure over the text so the probe can show a
 /// violation as well as the absence of one.
@@ -7443,10 +7462,12 @@ fn probe_worker_task_prompt() -> Probe {
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
         }
+        let config = trusted_config(&dir)?;
         let socket = format!("air-selftest-{}", new_id());
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
+            .env("CLAUDE_CONFIG_DIR", &config)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
             .args(["worker", "w", "--task", task])
@@ -7638,8 +7659,10 @@ fn probe_env_reaches_the_hook() -> Probe {
         let socket = format!("air-selftest-{}", new_id());
         // Scrubbed by `air_command`, so the stub can only have the identity variables if the
         // launcher delivered them.
+        let config = trusted_config(&dir)?;
         let out = air_command(&exe, &dir)
             .env("AIR_CLAUDE_BIN", &stub)
+            .env("CLAUDE_CONFIG_DIR", &config)
             .env("AIR_TMUX_SOCKET", &socket)
             .env_remove("AIR_TMUX_MODE")
             .args(["worker", "w", "--task", "hi", "--", "--settings", theirs])
