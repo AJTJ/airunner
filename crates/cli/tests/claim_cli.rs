@@ -3286,6 +3286,107 @@ fn batch_cut_splits_with_without_and_only() {
     assert!(!row.contains(&heads["gamma"]), "{row}");
 }
 
+/// air-jk2: after a red batch of several members, `--only` and `--without` choose among the
+/// red batch's members at their red-held heads, so the innocent one is split back in without
+/// a content-free commit. A bare cut still offers no red member (air-vdst), and the guilty
+/// member a split leaves out stays held.
+#[test]
+fn batch_cut_splits_a_red_batch_by_its_members() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    for name in ["beta", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+    }
+    let beta = root.join("beta").canonicalize().unwrap();
+    let lane = root.join("lane").canonicalize().unwrap();
+    let mut heads = std::collections::BTreeMap::new();
+    for (name, wt, bead) in [("alpha", &alpha, "zz-1"), ("beta", &beta, "zz-2")] {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0, "{name}");
+        std::fs::write(wt.join(format!("{name}.txt")), "work\n").unwrap();
+        git(wt, &["add", &format!("{name}.txt")]);
+        git(wt, &["commit", "-q", "-m", &bead_trailer(bead)]);
+        heads.insert(name, git(wt, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    let members = |v: &serde_json::Value| -> Vec<String> {
+        let mut m: Vec<String> = v["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["worker"].as_str().unwrap().to_string())
+            .collect();
+        m.sort();
+        m
+    };
+    let cut = |args: &[&str]| -> (i32, serde_json::Value, String) {
+        let mut a = vec!["--json", "batch", "cut"];
+        a.extend_from_slice(args);
+        let (code, out, err) = air(&lane, &bd, &a);
+        (
+            code,
+            serde_json::from_str(&out).unwrap_or_default(),
+            format!("{out}{err}"),
+        )
+    };
+
+    // The batch of both goes red.
+    let (code, v, text) = cut(&[]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "false"]).0, 1);
+
+    // air-vdst, unchanged: a bare cut offers neither member.
+    let (code, v, text) = cut(&["--dry-run"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(members(&v).is_empty(), "{v}");
+    let held = v["held"].to_string();
+    assert!(held.contains("alpha") && held.contains("beta"), "{v}");
+
+    // The split takes the named member at its red-held head and names the other as left out.
+    let (code, v, text) = cut(&["--dry-run", "--only", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha"], "{v}");
+    assert_eq!(v["left_out"], serde_json::json!(["beta"]), "{v}");
+    assert!(!v["held"].to_string().contains("alpha"), "{v}");
+    let (code, v, text) = cut(&["--dry-run", "--without", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{v}");
+
+    // For real: a recorded cut of main plus alpha at the sha the red took.
+    let (code, v, text) = cut(&["--only", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha"], "{v}");
+    assert_eq!(v["members"][0]["head"], heads["alpha"], "{v}");
+    let head = git(&lane, &["rev-parse", "HEAD"]);
+    let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT members FROM batch_cuts WHERE head=?1",
+            [&head],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        row.contains(&heads["alpha"]) && !row.contains(&heads["beta"]),
+        "{row}"
+    );
+}
+
 #[test]
 fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (_tmp, main, alpha) = land_repo("true");

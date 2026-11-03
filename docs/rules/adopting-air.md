@@ -106,6 +106,29 @@ Optionally, the repo also provides:
 The repo's `CLAUDE.md` holds its domain rules, its verify and precheck commands, its worktree
 setup and its shared resources. It does not restate the protocol in `.air/roles.md`.
 
+## A file every branch appends to
+
+Air cannot know which of a repo's files every bead touches. A running log that each bead and
+coordinator note prepends to is the usual one: every branch changes the same spot, so the lane
+drops a batch on a conflict that is only two entries side by side. At an adopter two batches in
+ten minutes were dropped on one such file (2026-10-30).
+
+For a file that is append-only and nothing else, add one line to `.gitattributes`:
+
+    log.md merge=union
+
+Git then keeps the lines from both sides instead of writing conflict markers. The cost is
+order: entries from one batch can land in either order, and git's own documentation says to
+verify the result. Do not use it for a file whose lines edit each other, a list or a count,
+where both sides changing the same item merges cleanly and is wrong.
+
+Not chosen: a stitch script that rebuilds the file after each merge, or per-session journals
+that never share a file. Both cost more than one line and the second changes what the file is.
+Air adds nothing for this; it is the repo's `.gitattributes`.
+
+Source: https://git-scm.com/docs/gitattributes, "Built-in merge drivers", `union` (accessed
+2026-11-02).
+
 ## Configure: `.claude/air.json`
 
 This file is tracked, read from the main checkout, and never written by `air install`. Every

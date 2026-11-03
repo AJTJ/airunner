@@ -748,10 +748,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
         "roles.md must not promise a landing verify that no longer runs (air-odv)"
     );
     // air-arq: the coordinator's failsafe when the channel is quiet.
-    assert!(
-        roles.contains("A 5-minute heartbeat runs for the whole round."),
-        "{roles}"
-    );
+    assert!(roles.contains("The heartbeat is opt-in."), "{roles}");
     assert!(
         proj.join(".claude/skills/air-decomposition/SKILL.md")
             .exists()

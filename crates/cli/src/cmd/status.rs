@@ -253,6 +253,9 @@ pub struct Snapshot {
     pub install_lag: Option<super::install::InstallLag>,
     /// The fleet-wide stop, while one is set (air-1vri.1).
     pub fleet_stop: Option<air_ledger::fleet::FleetStop>,
+    /// `heartbeat_minutes` from `.claude/air.json`: the interval the coordinator's heartbeat
+    /// is expected at (air-8wy). None, and no line, when the repo does not ask for one.
+    pub heartbeat_minutes: Option<u64>,
     /// How bd reaches its data here and, in server mode, whether the port answered.
     pub bd_mode: Option<super::bd_server::Mode>,
     pub bd_server_up: bool,
@@ -561,6 +564,11 @@ pub struct NotBatchReady {
     /// `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
+    /// For a `red-at-head` head only: what the branch is batch-ready as once the red is set
+    /// aside, so a split (`air batch cut --only` or `--without`) can take it by name (air-jk2).
+    /// None for every other check, and for a red-held head that lacks something else too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_split: Option<Box<BatchReady>>,
 }
 
 /// The facts the batch-ready rule reads, one worktree's worth.
@@ -616,6 +624,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         head: f.head.clone(),
         check,
         detail,
+        if_split: None,
     };
     // The coordinator's branch (air-jc2p.1, owner 2026-09-14: its changes reach main through
     // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
@@ -879,7 +888,18 @@ pub fn batch_ready_for(
         };
         match batch_ready_rule(&facts) {
             Ok(b) => ready.push(b),
-            Err(n) => not.push(n),
+            Err(mut n) => {
+                // air-jk2: a split names a red-held member on purpose, so say what it would be
+                // batch-ready as with the red set aside. Every other fact still has to hold.
+                if n.check == "red-at-head" {
+                    let facts = BatchFacts {
+                        red_batch_at_head: false,
+                        ..facts
+                    };
+                    n.if_split = batch_ready_rule(&facts).ok().map(Box::new);
+                }
+                not.push(n);
+            }
         }
     }
     (ready, not, errors)
@@ -2464,6 +2484,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
         fleet_stop: ledger.fleet_stop().ok().flatten(),
+        heartbeat_minutes: super::handover::heartbeat_minutes(repo),
         bd_mode: Some(bd_mode.clone()),
         bd_server_up: super::bd_server::is_up(&bd_listener),
         bd_listener,
@@ -2770,6 +2791,11 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
         out.push_str(&format!(
             "FLEET STOPPED: {}; `air fleet resume` ends it\n",
             f.line()
+        ));
+    }
+    if let Some(n) = s.heartbeat_minutes {
+        out.push_str(&format!(
+            "heartbeat: expected every {n} min (`heartbeat_minutes`); `CronList` shows whether the coordinator has it\n"
         ));
     }
     if let Some(m) = &s.bd_mode {
@@ -3212,6 +3238,19 @@ mod tests {
     /// air-hyli, air-vdst: every member of a red batch is held out until it moves or a green
     /// recorded after the red contains it. A two-member red holds both; a later green carrying
     /// A frees A and not B; B is free after a new commit. A one-member red holds its member.
+    #[test]
+    fn heartbeat_line_only_when_the_key_is_set() {
+        let on = render(
+            &Snapshot {
+                heartbeat_minutes: Some(5),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(on.contains("heartbeat: expected every 5 min"), "{on}");
+        assert!(!render(&Snapshot::default(), &[]).contains("heartbeat"));
+    }
+
     #[test]
     fn a_red_batch_holds_its_members_until_they_move_or_a_later_green_carries_them() {
         let run = |sha: &str, members: &[&str]| air_ledger::verify::VerifyRun {

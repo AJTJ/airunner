@@ -2,13 +2,14 @@
 name: decomposition
 description: Use when asked to "break down this feature", "decompose this epic", "create beads from an epic", "how to size beads", "when to decompose", "vertical slices", "task granularity", "cut the next wave", or when an epic is about to be opened for claiming and needs children. Guides breaking a feature into epics and epics into claimable beads, in Air's vocabulary, using Metis's decomposition reasoning plus the agile splitting rules behind it (INVEST, story splitting, walking skeleton).
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Work Decomposition
 
 Breaking a feature into epics and an epic into claimable beads that workers pull. The reasoning is Metis's (its decomposition skill, Flight Levels as Kanban) plus
-the agile sources it draws on; the vocabulary, the checks, and the `bd` commands are Air's.
+the agile sources it draws on, and four rules from Kairos (Metis's successor as a server); the
+vocabulary, the checks, and the `bd` commands are Air's.
 Where the text says "epic" or "bead", Metis says "initiative" or "task". Sources are listed
 under "Additional resources".
 
@@ -152,6 +153,17 @@ recorded; otherwise two workers meet in one file. The cut by **disjoint file set
 effective mechanism the adopter measured (86% of files touched by one branch; 7 files ever
 conflicted across 63 merges; an adopter's retrospective of its overnight fleet run of 2026-08-15).
 
+**A wide refactor is the exception: expand, then contract** (Kairos
+`plugin/skills/workflow/decompose/SKILL.md:79-81`, accessed 2026-11-02). One mechanical change
+whose blast radius is the whole tree (a rename, a retyped shared symbol) breaks every call site
+at once, so no vertical slice of it lands green and no disjoint file set exists. Cut it as three
+kinds of bead. One *expand* bead adds the new form beside the old, so nothing breaks. *Migrate*
+beads move the call sites over in batches sized by blast radius (per crate, per directory),
+each blocked by the expand and each green on its own because the old form still exists. One
+*contract* bead deletes the old form, blocked by every migrate bead. When even the batches
+cannot stay green alone, the refactor is one bead: Air lands only a green head, and a branch
+cut mid-sequence is red.
+
 ### 4. Write each child (INVEST + the four triage requirements)
 
 Before filing, every answer is yes:
@@ -190,6 +202,11 @@ Before filing, every answer is yes:
   of an adopter's children had prose that respected a boundary and acceptances that both required
   the same edit (an adopter's bead dedup audit of 2026-08-17). "Only the acceptance decides when a bead
   closes."
+- **Names checked** (Kairos `plugin/skills/workflow/decompose/SKILL.md:24`, accessed
+  2026-11-02): every symbol, file, crate, flag and command the bead names was looked up in the
+  code before filing, not carried over from the plan. A name the code does not have goes into
+  no bead: write "Stale: `<name>` is not in the code" on the epic and settle it before cutting.
+  A bead the description names as a blocker is open, and its scope really blocks this one.
 - **Citations** (`file:line`) open and match now.
 - Description and acceptance agree; a contradiction goes to the coordinator (`air capture`), who files it as a bead labelled `owner` when the decision is the owner's; never a guess.
 - `owner` / `human` / `runtime` labels applied at filing; `air claim` refuses an `owner` bead
@@ -289,10 +306,41 @@ Air's triage does not check it.
 
 File the skeleton plus the children that can start once it lands (3 to 6 beads for three
 workers). Everything else is a line under "Later" or a capture. Metis: "Do NOT create large
-numbers of tasks without human review"; Patton: "mile wide, inch deep". Re-run 2-4 when the
+numbers of tasks without human review"; Patton: "mile wide, inch deep". Re-run 2-6 when the
 frontier thins.
 
-### 6. Re-cut on evidence (judgement; Air only flags)
+A bead that does not exist yet is named by its full title in quotes, marked "not yet filed":
+under "Later", in a delegated agent's file, and in a message to the owner. Never "bead 2",
+"phase 2", "T1", or an id guessed ahead of `bd create`. A number is for one message's answers
+and dies with that message; once `bd create` returns the id, the id is the only name (Kairos
+`plugin/skills/meta/kairos-vocabulary/SKILL.md:26-34` and
+`plugin/skills/workflow/decompose/SKILL.md:34-36,63`, accessed 2026-11-02).
+
+### 6. Review the wave as a set (Kairos)
+
+With the wave drafted and before `bd create`, read the children together, not one at a time.
+Most questions about one bead are facts to look up; the decisions sit at the boundaries between
+beads (Kairos `plugin/skills/workflow/grill-decomposition/SKILL.md:12-14,27-45`, accessed
+2026-11-02). Four passes, each answer written into the draft at once:
+
+1. **Slice boundaries**: is each child a slice that proves something alone, or a layer that
+   proves nothing until its siblings land? A layer is merged or re-split.
+2. **Order and risk**: the child that removes the most doubt goes first. Each `blocks` edge is
+   real, not an artefact of the cut; a missing edge (B reads a table A adds) is added;
+   children that can run in parallel carry none.
+3. **Acceptance a worker can show**: every clause settles by a command and its output inside
+   the worktree. One that needs a person moves onto the epic as an `owner` item naming the
+   child, so the wave does not stop on it (the two questions of step 4, asked across the set).
+4. **Scope leaks**: name each child doing what "Out of scope" rules out, and each term of
+   "Done when" that no child covers.
+
+A question the review cannot settle inside a child is a design gap: stop, write it on the
+epic, and tighten `--design` before filing. The review sits before filing because an Air bead
+is claimable the moment it exists; Kairos reviews after creation, where a task waits in a
+column until pulled. A child already claimed is re-cut by the rules in step 7, not edited
+under its worker.
+
+### 7. Re-cut on evidence (judgement; Air only flags)
 
 - A spike closes → cut its dependents now, from the finding.
 - A landed sibling already satisfies a child's acceptance → close it with the evidence (six of
@@ -360,6 +408,11 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   https://www.jpattonassociates.com/wp-content/uploads/2015/03/story_mapping.pdf); "the
   Developers who will be doing the work are responsible for the sizing" (Scrum Guide 2020,
   https://scrumguides.org/scrum-guide.html). Metis paths are at metis `6745810`.
+- Kairos (https://github.com/colliery-io/kairos, `39906d0`, accessed 2026-11-02): the name
+  check (`plugin/skills/workflow/decompose/SKILL.md:24`), expand-contract (the same file, lines
+  79-81), the quoted title for work not yet created
+  (`plugin/skills/meta/kairos-vocabulary/SKILL.md:26-34`), and the review of a set
+  (`plugin/skills/workflow/grill-decomposition/SKILL.md`).
 ## Provenance
 
 - Source: `metis/plugins/metis/skills/decomposition/SKILL.md` and
@@ -386,3 +439,14 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   holds the fleet protocol since the owner's ruling of that day. Per-worker queues and
   assignments are gone (workers pull; naming a bead reserves nothing), and so is a `next`
   subcommand that was planned and never built.
+- Adaptations (v1.3.0, 2026-11-02, air-cga): four rules from Kairos
+  (`kairos/plugin/skills/workflow/decompose/SKILL.md`,
+  `kairos/plugin/skills/workflow/grill-decomposition/SKILL.md`,
+  `kairos/plugin/skills/meta/kairos-vocabulary/SKILL.md`; kairos `39906d0`, accessed
+  2026-11-02), each read in Kairos's own repository rather than taken from the adopter's
+  summary that pointed at them: the name check before filing (step 4), expand-contract for a
+  wide refactor (step 3), the quoted full title for a bead not yet filed (step 5), and the
+  review of a wave as a set (step 6). Kairos's task, initiative, short code and Ralph loop
+  became bead, epic, id and the fleet; its manual check on the initiative became an `owner`
+  item on the epic; its review after creation became a review before `bd create`, because an
+  Air bead is claimable the moment it exists.

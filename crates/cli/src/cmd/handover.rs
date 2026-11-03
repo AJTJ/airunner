@@ -253,6 +253,15 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// `heartbeat_minutes` from `.claude/air.json`: the coordinator's heartbeat interval, set only
+/// by a repo whose owner wants one (air-8wy). Absent, `0` and a non-number mean no heartbeat.
+pub fn heartbeat_minutes(repo: &Path) -> Option<u64> {
+    air_json(repo)?
+        .get("heartbeat_minutes")?
+        .as_u64()
+        .filter(|n| *n > 0)
+}
+
 /// Where the close gate looks for a digest, and whether git has to track it there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DigestAt {

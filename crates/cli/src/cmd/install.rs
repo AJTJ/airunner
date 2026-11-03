@@ -3071,6 +3071,38 @@ pub const SURFACE: &[SurfaceChange] = &[
                  Linux-only commands should run elsewhere. `air run --help` has the detail.",
     },
     SurfaceChange {
+        id: "air-run-recorded",
+        since: "2026-11-03 (air-opq.3)",
+        headline: "Every `air run` is a row in the ledger's `runs` table (schema v27): session, \
+                   commit, tree, command, exit, times, output size, target, and the machine it \
+                   ran on (hostname, `AIR_IMAGE`, arch, nproc, CPU). `air run --json` prints \
+                   the row. Not a verify: no green comes from it.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "heartbeat-opt-in",
+        since: "2026-11-02 (air-8wy)",
+        headline: "The coordinator's 5-minute heartbeat is opt-in: `.air/roles.md` and the \
+                   SessionStart context tell it to create one only where `.claude/air.json` \
+                   sets `heartbeat_minutes`, and `air status` names the interval.",
+        silent_break: true,
+        action: "If you want the heartbeat that used to start by default, add \
+                 `\"heartbeat_minutes\": 5` to `.claude/air.json`. Without it a limited \
+                 coordinator session is not woken by a timer; `air status` still shows \
+                 `STOPPED at <t>`.",
+    },
+    SurfaceChange {
+        id: "split-takes-red-members",
+        since: "2026-11-03 (air-jk2)",
+        headline: "`air batch cut --only` and `--without` choose among the batch-ready branches \
+                   and the newest red batch's members at their red-held heads, so a red batch \
+                   can be split without a new commit from the innocent member. A bare cut still \
+                   offers no red member.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
         id: "launch-no-startup-prompts",
         since: "2026-11-02 (air-z41)",
         headline: "`air worker`, `air lane`, `air coordinator` and `air fleet up` pre-answer the \

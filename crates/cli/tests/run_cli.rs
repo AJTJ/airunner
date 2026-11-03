@@ -13,7 +13,7 @@ mod run {
 
         use crate::common;
 
-        fn git(dir: &Path, args: &[&str]) -> String {
+        pub fn git(dir: &Path, args: &[&str]) -> String {
             let out = common::command("git")
                 .arg("-C")
                 .arg(dir)
@@ -32,7 +32,7 @@ mod run {
             String::from_utf8_lossy(&out.stdout).trim().to_string()
         }
 
-        fn scratch_repo() -> tempfile::TempDir {
+        pub fn scratch_repo() -> tempfile::TempDir {
             let dir = tempfile::tempdir().unwrap();
             git(dir.path(), &["init", "-q", "-b", "main"]);
             std::fs::write(dir.path().join("note"), "first\n").unwrap();
@@ -44,7 +44,7 @@ mod run {
         /// A stand-in `ssh`: appends its argv to `$AIR_TEST_SSH_LOG`, drops the options and
         /// the host, and runs the command locally. git's own push goes through it too, as
         /// `ssh [-o …] host "git-receive-pack '<path>'"`.
-        fn fake_ssh() -> PathBuf {
+        pub fn fake_ssh() -> PathBuf {
             static DIR: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
                 std::sync::OnceLock::new();
             DIR.get_or_init(|| {
@@ -81,15 +81,31 @@ exec sh -c "$*"
 
         /// `air --repo <repo> run -- <command>` with the stand-in first on PATH and git's own
         /// ssh overrides cleared, so `ssh` is what PATH says.
-        fn air_run(repo: &Path, command: &[&str]) -> (i32, String, String) {
+        pub fn air_run(repo: &Path, command: &[&str]) -> (i32, String, String) {
+            air_run_with(repo, command, &[], false)
+        }
+
+        /// [`air_run`] with extra environment and the global `--json`.
+        pub fn air_run_with(
+            repo: &Path,
+            command: &[&str],
+            env: &[(&str, &str)],
+            json: bool,
+        ) -> (i32, String, String) {
             let path = format!(
                 "{}:{}",
                 fake_ssh().display(),
                 std::env::var("PATH").unwrap_or_default()
             );
-            let out = common::command(env!("CARGO_BIN_EXE_air"))
-                .arg("--repo")
-                .arg(repo)
+            let mut cmd = common::command(env!("CARGO_BIN_EXE_air"));
+            cmd.arg("--repo").arg(repo);
+            if json {
+                cmd.arg("--json");
+            }
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            let out = cmd
                 .arg("run")
                 .arg("--")
                 .args(command)
@@ -109,8 +125,24 @@ exec sh -c "$*"
             )
         }
 
-        fn ssh_log(repo: &Path) -> String {
+        pub fn ssh_log(repo: &Path) -> String {
             std::fs::read_to_string(repo.join("ssh.log")).unwrap_or_default()
+        }
+
+        /// `.claude/air.json` with an ssh target for `main` at `<repo>/target`.
+        pub fn ssh_target(repo: &Path) -> PathBuf {
+            let target = repo.join("target");
+            std::fs::create_dir_all(repo.join(".claude")).unwrap();
+            std::fs::write(
+                repo.join(".claude/air.json"),
+                serde_json::json!({"targets": {"main": {
+                    "kind": "ssh", "host": "box", "user": "me",
+                    "path": target.display().to_string(),
+                }}})
+                .to_string(),
+            )
+            .unwrap();
+            target
         }
 
         #[test]
@@ -137,17 +169,7 @@ exec sh -c "$*"
         #[test]
         fn ssh_target_initialises_once_pushes_checks_out_and_runs_there() {
             let repo = scratch_repo();
-            let target = repo.path().join("target");
-            std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
-            std::fs::write(
-                repo.path().join(".claude/air.json"),
-                serde_json::json!({"targets": {"main": {
-                    "kind": "ssh", "host": "box", "user": "me",
-                    "path": target.display().to_string(),
-                }}})
-                .to_string(),
-            )
-            .unwrap();
+            let target = ssh_target(repo.path());
             let sha = git(repo.path(), &["rev-parse", "HEAD"]);
 
             let (code, out, err) = air_run(
@@ -224,6 +246,80 @@ exec sh -c "$*"
             assert_eq!(code, 2);
             assert!(err.contains("targets.main.kind"), "{err}");
             assert_eq!(ssh_log(repo.path()), "", "nothing ran");
+        }
+    }
+
+    /// Every run is one row in `runs`, with the machine the probe read there (air-opq.3).
+    pub mod record {
+        use super::skeleton::{air_run_with, git, scratch_repo, ssh_target};
+
+        /// The command's own output comes first, then the row.
+        fn split(stdout: &str) -> (String, air_ledger::runs::Run) {
+            let at = stdout.find('{').unwrap();
+            let (out, json) = stdout.split_at(at);
+            (out.to_string(), serde_json::from_str(json).unwrap())
+        }
+
+        #[test]
+        fn a_run_through_the_target_records_commit_command_exit_and_machine() {
+            let repo = scratch_repo();
+            let target = ssh_target(repo.path());
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            let tree = git(repo.path(), &["rev-parse", "HEAD^{tree}"]);
+            let (code, out, _) = air_run_with(
+                repo.path(),
+                &["sh", "-c", "echo hi; exit 3"],
+                &[("AIR_IMAGE", "dev:1")],
+                true,
+            );
+            assert_eq!(code, 3);
+            let (printed, row) = split(&out);
+            assert_eq!(printed, "hi\n");
+            assert_eq!(row.session, "main");
+            assert_eq!(row.sha, sha);
+            assert_eq!(row.tree.as_deref(), Some(tree.as_str()));
+            assert_eq!(row.command, "sh -c echo hi; exit 3");
+            assert_eq!(row.exit_code, 3);
+            assert_eq!(row.output_bytes, 3);
+            assert_eq!(row.target, format!("me@box:{}", target.display()));
+            assert!(!row.started_at.is_empty() && !row.finished_at.is_empty());
+            let m = &row.machine;
+            assert!(!m.hostname.is_empty(), "hostname: {m:?}");
+            assert_eq!(
+                m.image.as_deref(),
+                Some("dev:1"),
+                "the stand-in reports this machine"
+            );
+            assert!(!m.arch.is_empty(), "arch: {m:?}");
+            assert!(m.nproc > 0, "nproc: {m:?}");
+            assert!(!m.cpu.is_empty(), "cpu: {m:?}");
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(
+                ledger.runs_of("main").unwrap(),
+                vec![row],
+                "the printed row is the stored one"
+            );
+        }
+
+        #[test]
+        fn a_local_run_records_this_machine_as_local() {
+            let repo = scratch_repo();
+            let (code, out, err) = air_run_with(repo.path(), &["sh", "-c", "exit 5"], &[], true);
+            assert_eq!(code, 5);
+            assert_eq!(err, "", "nothing added");
+            let (printed, row) = split(&out);
+            assert_eq!(printed, "");
+            assert_eq!(row.target, "local");
+            assert_eq!(row.exit_code, 5);
+            assert_eq!(row.output_bytes, 0);
+            assert!(!row.machine.hostname.is_empty());
+            assert!(row.machine.nproc > 0);
+            assert_eq!(
+                row.machine.image, None,
+                "no image unless the machine names one"
+            );
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(ledger.runs_of("main").unwrap().len(), 1);
         }
     }
 }
