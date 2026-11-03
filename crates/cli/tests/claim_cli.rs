@@ -3089,12 +3089,24 @@ fn killing_air_record_mid_run_leaves_an_interrupted_run() {
         .spawn()
         .unwrap();
     // The in-flight row is written just before the check starts: once it is there, the
-    // handlers are installed and the check is running.
+    // handlers are installed and the check is running. air-6y5: one connection and a short
+    // sleep per poll, with a 60 s deadline. The loop used to open a connection per iteration
+    // and spin, and in a lane batch on a loaded machine the row took over 20 s to appear
+    // (one red verify, 2026-11-03). An idle tree still passes in about 2 s.
     let db = main.join(".air/ledger.db");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    // `air record` makes `.air/` itself, so the file is there only once it has started.
+    let mut conn: Option<rusqlite::Connection> = None;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
-        let n: i64 = rusqlite::Connection::open(&db)
-            .and_then(|c| c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0)))
+        if conn.is_none() {
+            conn = rusqlite::Connection::open(&db).ok();
+        }
+        let n: i64 = conn
+            .as_ref()
+            .and_then(|c| {
+                c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0))
+                    .ok()
+            })
             .unwrap_or(0);
         if n > 0 {
             break;
@@ -3103,7 +3115,7 @@ fn killing_air_record_mid_run_leaves_an_interrupted_run() {
             std::time::Instant::now() < deadline,
             "the run never started"
         );
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let killed = common::command("kill")
         .args(["-TERM", &child.id().to_string()])

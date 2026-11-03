@@ -572,7 +572,7 @@ One row per item; a row is deleted when its work lands.
 |---|---|---|
 | Describe the fleet everywhere as three workers, a lane and the coordinator; CLAUDE.md still says "the workers and the coordinator". | 2026-09-14 | air-rr98 |
 | Record the failing step on a red run; `failing_step` is written only for an interrupted run. | 2026-09-14 | `cmd/record.rs` |
-| Red-batch policy: drop the member the failing step names, else halve; one recorded re-run for a suspected flake. Owner ruling open. | 2026-09-14 | recommended: drop by step |
+| Red-batch policy: drop the member the failing step names, else halve; one recorded re-run for a suspected flake. Owner ruling open. First datum: 2026-11-03, batch 71079154 red on a test's 20 s wall-clock wait under load, the member re-entered with an empty commit, one verify wasted (air-6y5). | 2026-09-14 | recommended: drop by step |
 | A verify whose tree changed between start and exit records a green for a tree that never existed; flag it like a dirty start. | 2026-09-14 | `cmd/record.rs` |
 | Does the coordinator keep `air close`? Recommended yes, counted: it recovers a gone worker's bead. Owner ruling open. | 2026-09-14 | `cmd/close.rs` |
 | `air gc` does not collect `.air/logs/`, which grows by up to 64 KiB per red run. | 2026-09-28 | air-06k7 |
