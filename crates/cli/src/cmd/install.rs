@@ -3051,6 +3051,26 @@ pub const SURFACE: &[SurfaceChange] = &[
                  Homebrew only has the latest Dolt and bd.",
     },
     SurfaceChange {
+        id: "green-branch-batch-ready",
+        since: "2026-11-02 (air-757)",
+        headline: "A worker branch that is green at a head containing `main` is batch-ready, so \
+                   the lane cuts it; it no longer waits for a landing nothing under a lane makes.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
+        id: "air-run-ssh-target",
+        since: "2026-11-02 (air-opq.1)",
+        headline: "`air run -- <command>` runs a command on the session's target from \
+                   `\"targets\"` in `.claude/air.json` (kind `ssh`: push HEAD to \
+                   `refs/air/<session>` there, check it out, run, stream the output back), and \
+                   locally with nothing added when the session has none.",
+        silent_break: false,
+        action: "Optional: add `\"targets\": {\"<session>\": {\"kind\": \"ssh\", \"host\": …, \
+                 \"user\": …, \"path\": \"~/air/<project>\"}}` for sessions whose heavy or \
+                 Linux-only commands should run elsewhere. `air run --help` has the detail.",
+    },
+    SurfaceChange {
         id: "heartbeat-opt-in",
         since: "2026-11-02 (air-8wy)",
         headline: "The coordinator's 5-minute heartbeat is opt-in: `.air/roles.md` and the \

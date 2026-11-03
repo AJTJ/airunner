@@ -35,6 +35,7 @@ pub mod privacy;
 pub mod readers;
 pub mod ready_cache;
 pub mod record;
+pub mod run;
 pub mod runlog;
 pub mod selftest;
 pub mod status;

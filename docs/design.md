@@ -55,7 +55,7 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
 | ledger | 3,968 | The SQLite schema (v26), one row type per table, and the event writer. No network, no beads. |
 | hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
-| cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, and the self-test (13,903 lines, 165 probes). |
+| cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (13,903 lines, 165 probes). |
 
 The ledger is one SQLite file in WAL mode under `.air` in the main checkout, shared by every
 worktree; a row stays until what it describes stops being true. The event stream gets one line
@@ -102,6 +102,7 @@ Any session may run these.
 | Command | What it does |
 |---|---|
 | air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step. |
+| air run | Runs a command on the calling session's target, or here when `targets` in `.claude/air.json` names none for it, with the same exit code and nothing added. With an `ssh` target it initialises a repository at the target's path once, pushes HEAD to `refs/air/<session>` there (forced; the ref is the session's own, and no remote in `.git/config` is touched), checks that commit out detached, and runs the command in that directory over ssh with the output streamed back. `ssh` is resolved on `PATH`. It records nothing yet and brings no files back. |
 | air handover | Says what the close gate would decide for this worktree now, each missing fact with its fix, and on a pass the `air close` that would go through. |
 | air close | Closes beads in one beads process and releases their claims. For a worker or the lane it runs the close gate on each bead first, whatever `AIR_ENFORCE` says, and closes nothing if one fails. It refuses an id with whitespace, and names an id beads does not have. |
 | air claim | The only claim path: the ledger first, then beads, then the ledger row. It refuses while the fleet is stopped, and refuses a bead that is held, `owner`-labelled, an epic, closed, assigned elsewhere, or blocked by an open `blocks` dependency, naming the reason. A beads timeout is followed by a re-read, never a second claim. |
@@ -194,8 +195,9 @@ Every call, including the silent ones, writes one event line.
 `.claude/air.json` holds the repository's settings: `project`; `worker_deny` and
 `coordinator_deny`; `leases`; `verify_lane` (true here: the lane batches and workers run no
 verify of their own); `precheck`; `verify_key` (`tree` here, so a green stands for any commit
-with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `metis`; and
-`adopters`.
+with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `metis`; `adopters`; and `targets`, one
+remote target per session for `air run` (`{"worker-1": {"kind": "ssh", "host": …, "user": …,
+"path": …}}`; absent, every session runs locally).
 
 The launchers set `AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_CHANNEL=1`,
 `BEADS_DOLT_AUTO_START=0`, and for workers and the lane `AIR_ENFORCE=1`, which makes the hook
@@ -267,7 +269,7 @@ stateDiagram-v2
 | State | Event | Next state | Decided by |
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
-| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
 | batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
 | in-batch | lane records red | batch-red: nothing lands; every member is held out | `status::red_held` |

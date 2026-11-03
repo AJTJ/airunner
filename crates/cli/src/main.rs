@@ -153,6 +153,21 @@ enum Cmd {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Run a command on this session's target, or here when it has none.
+    ///
+    /// `"targets"` in `.claude/air.json` names one target per session:
+    /// `{"targets": {"worker-1": {"kind": "ssh", "host": "box", "user": "me",
+    /// "path": "~/air/proj"}}}`. With no entry for this session the command runs in this
+    /// worktree with the same exit code and nothing added. With an `ssh` entry Air initialises a
+    /// repository at `path` on the host once, pushes HEAD to `refs/air/<session>` there (the
+    /// session's own ref, forced), checks that commit out detached, and runs the command in
+    /// `path` over ssh, output streamed back, exit code passed through. The push goes to the
+    /// target only, never to a remote in `.git/config`.
+    Run {
+        /// The command to run (after `--`).
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
     /// The one gate: is this worktree ready to hand over? (advisory unless --enforce)
     Handover {
         /// Bead id being handed over (checked against the ledger's claims).
@@ -585,6 +600,7 @@ fn main() -> ExitCode {
             cmd::fanout::after_change(&repo, false);
             code
         }
+        Cmd::Run { command } => cmd::run::run(&repo, &command),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }

@@ -1976,7 +1976,7 @@ fn install_reports_a_stale_bd_prime_hook() {
 }
 
 /// air-80x.3, end to end: alpha claims ad-1, commits with the trailer, merges main: batch-ready.
-/// A green at its head: gone, reason `green-at-head`. main moves past it: batch-ready again.
+/// A green at its head: still batch-ready (air-757). main moves past it: batch-ready still.
 #[test]
 fn status_lists_batch_ready_branches_as_a_fact() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -2006,22 +2006,15 @@ fn status_lists_batch_ready_branches_as_a_fact() {
         "{text}"
     );
 
-    // Green at the head: landable on its own, so not for a batch.
+    // Green at the head: landable on its own, and still batch-ready, so a worker's stray
+    // verify cannot leave it closed and unlanded under a lane (air-757).
     assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
     let s = read(&out);
-    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{out}");
-    assert!(
-        s["not_batch_ready"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n["worker"] == "alpha" && n["check"] == "green-at-head"),
-        "{out}"
-    );
+    assert_eq!(s["batch_ready"][0]["worker"], "alpha", "{out}");
+    assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
 
-    // main moves: the green branch is no longer landable, and it is batch-ready again without
-    // re-merging, because the lane merges main forward at the cut (an adopter's fleet protocol, 2026-09-25).
+    // main moves: it is batch-ready without re-merging, because the lane merges main forward at the cut (an adopter's fleet protocol, 2026-09-25).
     std::fs::write(main.join("README"), "b\n").unwrap();
     git(&main, &["commit", "-q", "-am", "docs: readme"]);
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
@@ -2032,8 +2025,7 @@ fn status_lists_batch_ready_branches_as_a_fact() {
 
 /// Precheck (2026-09-25), end to end: where `.claude/air.json` declares `"precheck": true`, a branch is
 /// batch-ready only once `air record precheck` is green at its head, and that green is never a
-/// verify green: the branch contains main, so a verify green would make it landable and take it
-/// out of the batch (`green-at-head`), and the close gate would stop naming the missing verify.
+/// verify green: the branch contains main, so a verify green would make it landable, and the close gate would stop naming the missing verify.
 #[test]
 fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
     let (_tmp, main, alpha) = land_repo("true");
