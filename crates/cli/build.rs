@@ -41,6 +41,8 @@ fn main() {
         .unwrap_or_default();
     println!("cargo::rustc-env=AIR_SKILL_NAMES={}", skills.join(","));
 
+    surface_fold();
+
     // An explicit override wins, for a packager that builds outside a checkout.
     if let Ok(v) = std::env::var("AIR_BUILD")
         && !v.trim().is_empty()
@@ -67,4 +69,56 @@ fn main() {
         None => "unknown".to_string(),
     };
     println!("cargo::rustc-env=AIR_BUILD={build}");
+}
+
+/// Fold `surface.d/NNNN-<id>.rs`, one `SurfaceChange { … }` expression per file, into
+/// `$OUT_DIR/surface.rs` as an array of `include!`s in filename order (air-38q). Every bead that
+/// changed the surface used to append at the end of one array in `install.rs`, so two beads in a
+/// round conflicted at the same line: four lane drops and one bad hand resolution in one
+/// session, 2026-11-03. Same fix as `changelog.d/` (air-be6d), run at build time because the
+/// surface is compiled in. Each fragment is included by its own path, so a malformed one is a
+/// rustc error naming that file. Fails the build, naming the directory, when it is missing or
+/// holds no fragment: an empty surface would install silently as "nothing to tell you".
+fn surface_fold() {
+    // A build script fails by saying why and exiting; cargo prints the message under
+    // "error: failed to run custom build command".
+    fn fail(why: &str) -> ! {
+        eprintln!("{why}");
+        std::process::exit(1)
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("surface.d");
+    println!("cargo::rerun-if-changed={}", dir.display());
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(d) => d,
+        Err(e) => fail(&format!("surface.d: {}: {e}", dir.display())),
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        fail(&format!(
+            "surface.d: {} holds no *.rs fragment; see its README.md",
+            dir.display()
+        ));
+    }
+    let mut out = String::from("&[\n");
+    for f in &files {
+        println!("cargo::rerun-if-changed={}", f.display());
+        // Doubled backslashes for a Windows path inside a string literal; a no-op elsewhere.
+        out.push_str(&format!(
+            "    include!(\"{}\"),\n",
+            f.display().to_string().replace('\\', "\\\\")
+        ));
+    }
+    out.push(']');
+    let Ok(out_dir) = std::env::var("OUT_DIR") else {
+        fail("OUT_DIR is unset; this runs under cargo");
+    };
+    let target = std::path::Path::new(&out_dir).join("surface.rs");
+    if let Err(e) = std::fs::write(&target, out) {
+        fail(&format!("{}: {e}", target.display()));
+    }
 }

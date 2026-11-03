@@ -48,7 +48,10 @@ Index items are 1–3 lines; detail lives behind the link.
   Added, Changed, Removed and Fixed, written as the round's work lands. A bead writes its line
   as a fragment, `changelog.d/<bead-id>.md`, never into `CHANGELOG.md` itself: every bead
   editing one heading conflicted every landing (air-be6d). `make changelog` folds them in at
-  round end; `changelog.d/README.md` has the format.
+  round end; `changelog.d/README.md` has the format. **A surface notice is a file too**,
+  `crates/cli/surface.d/<ordinal>-<id>.rs`, folded into `install::SURFACE` by `build.rs` at
+  every build, never an entry appended to the array (air-38q: four lane drops in one session,
+  all two beads appending at the same line); `crates/cli/surface.d/README.md` has the format.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
   as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,

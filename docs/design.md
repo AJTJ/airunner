@@ -527,7 +527,10 @@ screen to watch. Worktrees isolate branches, not the machine: a repository with 
 gives each worktree its own `CARGO_TARGET_DIR` and a share of `CARGO_BUILD_JOBS`.
 
 `make verify` checks formatting, runs clippy, the tests, the adopter check, and the self-test on
-the binary it built. A release appends a row to `install::RELEASES`, sets `Cargo.toml`'s
+the binary it built. A change to what an adopting repo sees adds one notice file,
+`crates/cli/surface.d/<ordinal>-<id>.rs`, which `build.rs` folds into `install::SURFACE` in
+filename order (air-38q); `air install` prints the notices a repo has not seen. A release
+appends a row to `install::RELEASES`, sets `Cargo.toml`'s
 version, and `make release` refuses a dirty tree, a branch other than main or leftover changelog
 fragments, then runs `air release-check`, `make verify` and `make adoption-check` (which adopts
 a copy of `examples/minimal`) and tags. Air writes three tracked files in a repository and
