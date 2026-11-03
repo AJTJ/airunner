@@ -17,6 +17,10 @@ red came from a worker amending a commit after the cut. No Air refusal was worke
 
 ### Added
 
+- `base_branch` in `.claude/air.json`: the branch the fleet lands onto, `main` by
+  default. Every gate, cut, landing, notice and refusal reads it where it used to say `main`,
+  and names it; the session named `main` keeps its name. `air status` prints it when set and
+  `--json` carries it. A selftest scenario runs a fleet whose only branch is `trunk` (air-h7l).
 - On a Mac the launchers run the session under `caffeinate -i`, so an hour-long command no
   longer idle-sleeps the machine (three hours lost at an adopter on 2026-10-29); the assertion
   ends with the session. `air status` prints `idle sleep: <n> min` when `pmset -g` reports
