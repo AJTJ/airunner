@@ -7,7 +7,7 @@
 //!
 //! **The check is per bead, not per HEAD** (owner, 2026-09-05). A worker keeps committing after
 //! the batch is cut, so "the batch contains HEAD" would refuse a bead the batch fully covered.
-//! The fact that closes a bead: every commit in [`BRANCH_RANGE`] whose `Bead:` trailer names it
+//! The fact that closes a bead: every commit in [`branch_range`] whose `Bead:` trailer names it
 //! is an ancestor of a verified commit C, and C contains **the main it was recorded over**.
 //! Recorded by any worker: the lane is not the author.
 //!
@@ -33,7 +33,7 @@ use serde::Serialize;
 
 use crate::git;
 
-/// One commit in [`BRANCH_RANGE`] that carries the bead's trailer.
+/// One commit in [`branch_range`] that carries the bead's trailer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeadCommit {
     pub sha: String,
@@ -71,7 +71,7 @@ pub struct Scanned {
     pub with_main: usize,
     /// Of those, the ones containing at least one commit of the bead.
     pub touching: usize,
-    /// The bead's commits in [`BRANCH_RANGE`].
+    /// The bead's commits in [`branch_range`].
     pub commits: usize,
 }
 
@@ -144,14 +144,22 @@ pub fn cover(candidates: &[Candidate], commits: &[BeadCommit]) -> Batch {
 /// evidence, because nothing reaches main without the landing gate's green. What was wrong
 /// was reading an EMPTY result as "this bead has no commits" when it also means "every commit
 /// of this bead is already in main"; [`for_bead`] now tells the two apart.
-pub const BRANCH_RANGE: &str = "main..HEAD";
+///
+/// air-h7l: `<base>..HEAD`, where the base is `main` unless `.claude/air.json` sets
+/// `base_branch`; a function, since the name is read from the repo.
+pub fn branch_range(repo: &Path) -> String {
+    format!("{}..HEAD", super::handover::base_branch(repo))
+}
 
-/// The commits of `bead` in [`BRANCH_RANGE`], newest first, by their `Bead:` trailer only.
+/// The commits of `bead` in [`branch_range`], newest first, by their `Bead:` trailer only.
 /// Empty when the bead has no commit here, which includes the case where it has landed —
 /// [`for_bead`] is what distinguishes them, never this.
 pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
-    let text =
-        git::run(repo, &["log", "--format=%H%x1f%s%x1f%B%x1e", BRANCH_RANGE]).unwrap_or_default();
+    let text = git::run(
+        repo,
+        &["log", "--format=%H%x1f%s%x1f%B%x1e", &branch_range(repo)],
+    )
+    .unwrap_or_default();
     text.split('\u{1e}')
         .filter_map(|rec| {
             let mut it = rec.trim_start_matches('\n').splitn(3, '\u{1f}');
@@ -192,7 +200,7 @@ fn greens_for(
 
 /// The newest commit on main whose `Bead:` trailer names `bead`, if any (air-5ynn).
 ///
-/// **When a bead has no commit in [`BRANCH_RANGE`] and main has one naming it, every commit of
+/// **When a bead has no commit in [`branch_range`] and main has one naming it, every commit of
 /// the bead is in main, and the close passes.** Main moves only through a landing, and `air
 /// land` refuses a branch without a recorded green at a head containing main, so being in main
 /// is the proof by itself. (The owner landing by hand is the owner's call.)
@@ -211,7 +219,7 @@ pub fn in_main(repo: &Path, bead: &str) -> Option<String> {
             "--format=%H%x1f%B%x1e",
             "-F",
             &format!("--grep={bead}"),
-            "main",
+            &super::handover::base_branch(repo),
         ],
     )
     .ok()?;
@@ -231,7 +239,7 @@ fn landed_by(ledger: &Ledger, repo: &Path, bead: &str) -> Option<(String, String
         let merge = l.merge_commit.clone()?;
         (l.landed()
             && l.beads.iter().any(|b| b == bead)
-            && git::is_ancestor(repo, &merge, "main").unwrap_or(false))
+            && git::is_ancestor(repo, &merge, &super::handover::base_branch(repo)).unwrap_or(false))
         .then_some((merge, l.worker))
     })
 }
@@ -261,7 +269,10 @@ pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, Strin
             // green that contained main when it ran goes on containing it; main moving is a
             // fact about main. Rows written before v19 have no `main_sha` and fall back to
             // the old question, which is the only answer available for them.
-            let against = g.main_sha.clone().unwrap_or_else(|| "main".to_string());
+            let against = g
+                .main_sha
+                .clone()
+                .unwrap_or_else(|| super::handover::base_branch(repo));
             let contains_main = git::is_ancestor(repo, &against, &g.sha).unwrap_or(false);
             let contains = if contains_main {
                 commits
@@ -376,7 +387,8 @@ pub fn members_of(
     for (path, _) in git::worktrees(repo).unwrap_or_default() {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // Every branch but the lane's own and the main checkout: the coordinator's branch is
-        // a batch member like a worker's (air-jc2p.1).
+        // a batch member like a worker's (air-jc2p.1). `main` here is the SESSION name of the
+        // primary checkout, not the base branch (air-h7l).
         if worker == own || worker == "main" {
             continue;
         }
@@ -518,10 +530,10 @@ pub struct Described {
 /// Pure over the counts, so a probe drives every branch without a ledger or a repo. The order
 /// is narrowest-cause-first: a bead with no commits here is not a verify problem at all, and a
 /// scan with no greens to look at is not a coverage problem.
-pub fn why_absent(bead: &str, s: &Scanned) -> String {
+pub fn why_absent(bead: &str, base: &str, s: &Scanned) -> String {
     if s.commits == 0 {
         return format!(
-            "no commit in `{BRANCH_RANGE}` carries a `Bead: {bead}` trailer, and no landing \
+            "no commit in `{base}..HEAD` carries a `Bead: {bead}` trailer, and no landing \
              carries it either, so there is nothing for a green to cover"
         );
     }
@@ -534,20 +546,20 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
     }
     if s.with_main == 0 {
         return format!(
-            "{} recorded green(s) checked, and none contains the main it was recorded over, so \
+            "{} recorded green(s) checked, and none contains the {base} it was recorded over, so \
              none can stand for {bead}",
             s.candidates
         );
     }
     if s.touching == 0 {
         return format!(
-            "{} green(s) contain main, and none contains any of the {} commit(s) of {bead}: \
+            "{} green(s) contain {base}, and none contains any of the {} commit(s) of {bead}: \
              every one was recorded before this work",
             s.with_main, s.commits
         );
     }
     format!(
-        "{} green(s) contain main and touch {bead}, none covering all {} of its commit(s)",
+        "{} green(s) contain {base} and touch {bead}, none covering all {} of its commit(s)",
         s.with_main, s.commits
     )
 }
@@ -558,7 +570,7 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
 /// Each states what must become TRUE rather than which command makes it so (air-155w): under a
 /// lane the worker runs no verify, and a fix naming one is followed successfully by the wrong
 /// worker.
-pub fn fix_absent(bead: &str, s: &Scanned) -> String {
+pub fn fix_absent(bead: &str, base: &str, s: &Scanned) -> String {
     if s.commits == 0 {
         // The green stays the subject: with no lane, a green at this head is the fix, and a
         // probe caught the version that named only the trailer. air-ch9p: under a lane it is
@@ -570,14 +582,16 @@ pub fn fix_absent(bead: &str, s: &Scanned) -> String {
         );
     }
     if s.candidates == 0 {
-        return "a green containing main and your commits; none is recorded since your oldest \
-                commit, and `air handover` names what your flow needs to produce one"
-            .to_string();
+        return format!(
+            "a green containing {base} and your commits; none is recorded since your oldest \
+             commit, and `air handover` names what your flow needs to produce one"
+        );
     }
     if s.with_main == 0 {
-        return "a green whose run contained main; where a lane runs, that is the next batch \
-                that merges main before it verifies"
-            .to_string();
+        return format!(
+            "a green whose run contained {base}; where a lane runs, that is the next batch \
+             that merges {base} before it verifies"
+        );
     }
     "a green recorded at or after your commits: the ones on record are all older, so where a \
      lane runs it is the next batch rather than this one"
@@ -585,6 +599,7 @@ pub fn fix_absent(bead: &str, s: &Scanned) -> String {
 }
 
 pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
+    let base = super::handover::base_branch(repo);
     let mut covered: Vec<String> = Vec::new();
     let mut out = Described::default();
     for bead in beads {
@@ -593,12 +608,12 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             // air-9ij: nothing of this bead is outstanding, so there is no green to look for.
             covered.push(match m.landing {
                 Some((merge, worker)) => format!(
-                    "every commit of {bead} is already in main, landed at {} (branch by \
-                     {worker}), which required a green containing main",
+                    "every commit of {bead} is already in {base}, landed at {} (branch by \
+                     {worker}), which required a green containing {base}",
                     short(&merge)
                 ),
                 None => format!(
-                    "every commit of {bead} is already in main (newest {})",
+                    "every commit of {bead} is already in {base} (newest {})",
                     short(&m.newest)
                 ),
             });
@@ -620,8 +635,8 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             }
             (None, None) => {
                 // air-hgi9: the state that used to be silent. The counts say which it is.
-                out.absent = Some(why_absent(bead, &b.scanned));
-                out.absent_fix = Some(fix_absent(bead, &b.scanned));
+                out.absent = Some(why_absent(bead, &base, &b.scanned));
+                out.absent_fix = Some(fix_absent(bead, &base, &b.scanned));
                 return out;
             }
         }

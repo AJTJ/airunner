@@ -362,6 +362,7 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         batch_dropped(
             &l,
             "lane",
+            "main",
             &crate::cmd::batch_cut::Dropped {
                 worker: "w3".into(),
                 head: "d4d4d4d4".into(),

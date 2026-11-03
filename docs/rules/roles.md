@@ -1,10 +1,12 @@
 # Roles: worker, lane and coordinator
 
 You read this at session start. It is the fleet's whole protocol: how work moves from a claim
-to main, for every role. The repo's CLAUDE.md holds only what is the repo's own: its domain
-rules, its verify and precheck commands, its worktree setup and its shared resources. When Air
-refuses something, the refusal names the rule and the command that fixes it. Silence from Air
-is not a denial.
+to main, for every role. `main` here is the base branch: `main` unless the repo's
+`.claude/air.json` sets `base_branch`, and then that branch wherever this file, a refusal or a
+notice says main (`trunk moved to`, `contains trunk`). The repo's CLAUDE.md holds only what is
+the repo's own: its domain rules, its verify and precheck commands, its worktree setup and its
+shared resources. When Air refuses something, the refusal names the rule and the command that
+fixes it. Silence from Air is not a denial.
 
 ## Every role
 
@@ -154,8 +156,8 @@ from `air`:
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
   splits the batch. Your branch stays out of the next batch until a later green contains your
   commit or you commit again. If the failure is in your change, fix it with a new commit.
-- `main moved to <sha>: landed <beads>; files changed: <paths>` arrives each time main moves.
-  Merge main only if those files touch your own work. When it also says `Your <sha> ... is in
+- `main moved to <sha>: landed <beads>; files changed: <paths>` (the base branch's name where
+  one is set) arrives each time main moves. Merge main only if those files touch your own work. When it also says `Your <sha> ... is in
   it`, your beads are on main; close any of them still open. It needs no reply.
 - `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
   branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
@@ -184,9 +186,9 @@ for anything that is not part of the repo.
 ### Verification lane
 
 A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has the
-worker deny list minus `air land`, and the Stop hook offers it no ready beads. While it batches
-it holds no bead, and between batches none either: `air batch cut` resets the lane's branch to
-main before it merges, so work of the lane's own does not survive a cut.
+worker deny list minus `air land`, and the Stop hook offers it no ready beads. It holds no bead,
+batching or between batches: `air batch cut` resets the lane's branch to main (or the base
+branch) before it merges, so work of the lane's own does not survive a cut.
 
 The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
 merges every batch-ready branch at the sha `air status` lists, never a sha from a message,
@@ -244,8 +246,8 @@ Write the pick in your journal; it holds for the session.
 
 Under the fleet workflow you do not implement: anything to build, fix or write, a helper
 script included, goes to a worker as a bead. A commit of your own is one only your branch can
-carry, such as filing and the round-end rows. Your branch reaches main in the lane's batch and
-needs no `Bead:` trailer. It is batch-ready once it has a commit main lacks and you have run
+carry, such as filing and the round-end rows. Your branch reaches main (the base branch where
+one is set) in the lane's batch and needs no `Bead:` trailer. It is batch-ready once it has a commit main lacks and you have run
 `air ready` at that head; a later commit needs a new `air ready`, so a note you are still
 writing costs the lane nothing. Where `.claude/air.json` sets `"coordinator_autobatch": true`,
 every commit main lacks is batch-ready without it. `air status --json` says `not-offered` for
@@ -303,7 +305,7 @@ without a claim the beads already ready. The `idle-without-claim`
 condition still names a worker that stays idle after that. Air also tells the lane each
 branch that becomes batch-ready, and tells each member its batch's result or its drop.
 When main moves, Air tells you and every worker `main moved to <sha>: landed <beads>; files
-changed: <paths>`. It needs no reply; continue whatever waited on the landing, such as filing
+changed: <paths>`, named after the base branch where one is set. It needs no reply; continue whatever waited on the landing, such as filing
 the next wave.
 Air also sends you two notices that ask you to act:
 
@@ -350,7 +352,8 @@ Landing is the lane's, not a worker's or the coordinator's. The lane lands its g
 own shell may still land. With no lane running, start one with `air fleet up`.
 
 What Air does when it lands. A branch is landable when it has a recorded green at a head that
-contains `main`. The beads a landing carries are the ones its commits name in a `Bead: <id>`
+contains `main` (the base branch where one is set; landing that onto the real main is the
+owner's merge, outside Air). The beads a landing carries are the ones its commits name in a `Bead: <id>`
 trailer; a commit without one is attributed to nothing. `air land` moves main in the main
 checkout, wherever it runs, and refuses unless main is checked out there, the branch contains
 main, the branch head has a recorded green, and no verify is running in the main checkout or

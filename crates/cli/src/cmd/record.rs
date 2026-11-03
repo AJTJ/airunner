@@ -51,7 +51,8 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool, local: bool)
     // tree about to be checked was built over this main and not over whatever main is when
     // somebody asks later. That is what makes "the green contains main" a recorded fact
     // instead of one that expires the next time anyone writes to main.
-    let main_sha = git::run(repo, &["rev-parse", "main"]).ok();
+    // air-h7l: the base branch, `main` unless `base_branch` is set; the column keeps its name.
+    let main_sha = git::base_tip(repo).ok();
     // D2 (0.4.6 trial): the members `air batch cut` recorded at this head come first. A batch
     // of one fast-forwards, so its merge commits name nobody and the member heard nothing.
     let members = match ledger.batch_cut_members(&head, &worker) {

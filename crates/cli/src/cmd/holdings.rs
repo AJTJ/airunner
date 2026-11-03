@@ -104,10 +104,13 @@ fn live(wts: &[(std::path::PathBuf, Option<String>)]) -> Live {
                 .unwrap_or_default()
         });
         let dirty = git::dirty_files(path).map_err(|e| format!("{}: {e}", path.display()));
+        // `main` is the SESSION name of the primary checkout, which has no branch of its own
+        // to compare; the range for the others is against the base branch (air-h7l).
         let committed = if name == "main" {
             Ok(Vec::new())
         } else {
-            git::changed_since(path, "main").map_err(|e| format!("{}: {e}", path.display()))
+            git::changed_since(path, &super::handover::base_branch(path))
+                .map_err(|e| format!("{}: {e}", path.display()))
         };
         out.insert(name, dirty.and_then(|d| committed.map(|c| (d, c))));
     }
