@@ -25,9 +25,16 @@
 //!
 //! Recorded failure: an adopter's workers ran Linux-only and heavy commands on the Mac slowly
 //! or not at all, or reached a pod by hand outside Air, so no record said which machine a
-//! number came from (adopter, 2026-10-29/30; epic air-opq). No result paths come back yet.
-//! Removed when the harness or the repo's own tooling runs a command on a named remote and
-//! records the machine and the commit.
+//! number came from (adopter, 2026-10-29/30; epic air-opq). Removed when the harness or the
+//! repo's own tooling runs a command on a named remote and records the machine and the commit.
+//!
+//! `--pull <glob>` (repeatable) brings declared result paths back (air-opq.4): after the
+//! command exits, the paths under the target's checkout that match come back as one tar
+//! stream over the same ssh and are unpacked into the calling worktree at the same relative
+//! paths, overwriting. One stream rather than a copy per path, because a per-path copy is not
+//! incremental and drops ownership and permissions (an adopter's survey of `kubectl cp`).
+//! Nothing comes back without `--pull`, a path outside the checkout is never listed, and a glob
+//! that matches nothing is reported and is not an error. The row names what came back.
 
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
@@ -81,7 +88,7 @@ pub fn target_for(cfg: &serde_json::Value, session: &str) -> Result<Option<Targe
     }))
 }
 
-pub fn run(repo: &Path, command: &[String], json: bool) -> i32 {
+pub fn run(repo: &Path, command: &[String], pull: &[String], json: bool) -> i32 {
     let Some((prog, rest)) = command.split_first() else {
         eprintln!("air run: no command given, e.g. `air run -- make test`");
         return 2;
@@ -117,7 +124,10 @@ pub fn run(repo: &Path, command: &[String], json: bool) -> i32 {
         output_bytes: 0,
         target: "local".into(),
         machine: Machine::default(),
+        pulled: vec![],
+        pulled_bytes: 0,
     };
+    let mut pulled = pull::Pulled::default();
     let (exit, bytes) = match target {
         Ok(None) => {
             row.machine = probe(Command::new("sh").arg("-c").arg(PROBE));
@@ -127,7 +137,9 @@ pub fn run(repo: &Path, command: &[String], json: bool) -> i32 {
             row.target = format!("{}:{}", t.dest(), t.path);
             row.machine = probe(Command::new("ssh").arg(t.dest()).arg(PROBE));
             let sha = row.sha.clone();
-            timed(&mut row, || remote(repo, &session, &sha, &t, command))
+            timed(&mut row, || {
+                remote(repo, &session, &sha, &t, command, pull, &mut pulled)
+            })
         }
         Err(why) => {
             eprintln!("air run: .claude/air.json: {why}");
@@ -136,6 +148,8 @@ pub fn run(repo: &Path, command: &[String], json: bool) -> i32 {
     };
     row.exit_code = exit;
     row.output_bytes = bytes;
+    row.pulled = pulled.paths;
+    row.pulled_bytes = pulled.bytes;
     if let Err(e) = ledger.record_run(&row) {
         eprintln!("air run: ledger: {e}");
     }
@@ -198,7 +212,15 @@ fn local(repo: &Path, prog: &str, args: &[String]) -> (i32, i64) {
     }
 }
 
-fn remote(repo: &Path, session: &str, sha: &str, t: &Target, command: &[String]) -> (i32, i64) {
+fn remote(
+    repo: &Path,
+    session: &str,
+    sha: &str,
+    t: &Target,
+    command: &[String],
+    pull: &[String],
+    pulled: &mut pull::Pulled,
+) -> (i32, i64) {
     let dest = t.dest();
     let path = sh_quote(&t.path);
     let short = sha.get(..8).unwrap_or(sha);
@@ -231,12 +253,219 @@ fn remote(repo: &Path, session: &str, sha: &str, t: &Target, command: &[String])
         .join(" ");
     // Through the same pump as `air record`, so the output streams as it arrives and is
     // counted.
-    let args = vec![dest, format!("cd {path} && {cmd}")];
+    let args = vec![dest.clone(), format!("cd {path} && {cmd}")];
     match super::record::run_tee("ssh", &args, repo) {
-        Ok((code, bytes, _)) => (code, bytes),
+        Ok((code, bytes, _)) => {
+            // After the command, whatever its exit: a failed benchmark's partial results are
+            // still the results asked for.
+            if !pull.is_empty() {
+                *pulled = pull::fetch(repo, &dest, &path, pull);
+            }
+            (code, bytes)
+        }
         Err(e) => {
             eprintln!("air run: ssh: {e}");
             (127, 0)
+        }
+    }
+}
+
+/// `--pull`: declared result paths back from the target as one tar stream (air-opq.4).
+pub mod pull {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    use super::sh_quote;
+
+    /// What came back: the paths, relative to the worktree, and the bytes under them there.
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    pub struct Pulled {
+        pub paths: Vec<String>,
+        pub bytes: i64,
+    }
+
+    /// Expands each glob in the target's checkout and prints one line per match, `+<path>`,
+    /// or `-<glob>` for a glob with no match. Runs as `sh -c '<script>' air <globs…>`, so the
+    /// globs arrive as arguments and expand by the shell's own rules, never as code. A match
+    /// outside the checkout (absolute, or with a `..` component) is dropped here, and the
+    /// local `tar` refuses such a member as a second guard.
+    const LIST: &str = r#"for g in "$@"; do
+  n=0
+  for p in $g; do
+    [ -e "$p" ] || continue
+    case "$p" in /*|..|../*|*/..|*/../*) continue ;; esac
+    printf '+%s
+' "$p"
+    n=1
+  done
+  [ "$n" = 1 ] || printf -- '-%s
+' "$g"
+done"#;
+
+    /// Parse the list script's output: the paths matched, and the globs that matched nothing.
+    pub fn parse_list(out: &str) -> (Vec<String>, Vec<String>) {
+        let mut paths = Vec::new();
+        let mut unmatched = Vec::new();
+        for line in out.lines() {
+            if let Some(p) = line.strip_prefix('+') {
+                if !p.is_empty() && !paths.iter().any(|q| q == p) {
+                    paths.push(p.to_string());
+                }
+            } else if let Some(g) = line.strip_prefix('-') {
+                unmatched.push(g.to_string());
+            }
+        }
+        (paths, unmatched)
+    }
+
+    /// List, then stream: `ssh <dest> "cd <path> && sh -c LIST air <globs>"`, and when
+    /// anything matched, `ssh <dest> "cd <path> && tar -cf - -- <paths>"` piped into
+    /// `tar -xf - -C <repo>`. Reports each glob that matched nothing and one line for what
+    /// came back; a transport failure is reported and leaves the run's exit code alone.
+    pub fn fetch(repo: &Path, dest: &str, path: &str, globs: &[String]) -> Pulled {
+        let args = globs
+            .iter()
+            .map(|g| sh_quote(g))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let list = format!("cd {path} && sh -c {} air {args}", sh_quote(LIST));
+        let out = Command::new("ssh")
+            .arg(dest)
+            .arg(list)
+            .stdin(Stdio::null())
+            .output();
+        let out = match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            Ok(o) => {
+                eprintln!(
+                    "air run: --pull: listing on the target failed (exit {}); nothing pulled",
+                    o.status.code().unwrap_or(1)
+                );
+                return Pulled::default();
+            }
+            Err(e) => {
+                eprintln!("air run: --pull: ssh: {e}; nothing pulled");
+                return Pulled::default();
+            }
+        };
+        let (paths, unmatched) = parse_list(&out);
+        for g in &unmatched {
+            eprintln!("air run: --pull {g}: matched nothing on the target");
+        }
+        if paths.is_empty() {
+            return Pulled::default();
+        }
+        let quoted = paths
+            .iter()
+            .map(|p| sh_quote(p))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut send = match Command::new("ssh")
+            .arg(dest)
+            .arg(format!("cd {path} && tar -cf - -- {quoted}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("air run: --pull: ssh: {e}; nothing pulled");
+                return Pulled::default();
+            }
+        };
+        let Some(stream) = send.stdout.take() else {
+            eprintln!("air run: --pull: no stream from the target; nothing pulled");
+            return Pulled::default();
+        };
+        let unpack = Command::new("tar")
+            .arg("-xf")
+            .arg("-")
+            .arg("-C")
+            .arg(repo)
+            .stdin(Stdio::from(stream))
+            .status();
+        let sent = send.wait().map(|s| s.success()).unwrap_or(false);
+        match unpack {
+            Ok(s) if s.success() && sent => {}
+            Ok(s) => {
+                eprintln!(
+                    "air run: --pull: the tar stream failed (target {}, unpack exit {}); the \
+                     worktree may hold part of it",
+                    if sent { "ok" } else { "failed" },
+                    s.code().unwrap_or(1)
+                );
+                return Pulled::default();
+            }
+            Err(e) => {
+                eprintln!("air run: --pull: tar: {e}; nothing pulled");
+                return Pulled::default();
+            }
+        }
+        let bytes = paths.iter().map(|p| size_of(&repo.join(p))).sum();
+        eprintln!("air run: pulled {} ({bytes} bytes)", paths.join(", "));
+        Pulled { paths, bytes }
+    }
+
+    /// Bytes of a file, or of every file under a directory; 0 for what cannot be read.
+    pub fn size_of(p: &Path) -> i64 {
+        let Ok(meta) = std::fs::symlink_metadata(p) else {
+            return 0;
+        };
+        if meta.is_dir() {
+            std::fs::read_dir(p)
+                .map(|d| d.flatten().map(|e| size_of(&e.path())).sum())
+                .unwrap_or(0)
+        } else {
+            i64::try_from(meta.len()).unwrap_or(i64::MAX)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #![allow(clippy::unwrap_used)]
+        use super::*;
+
+        #[test]
+        fn list_output_splits_matches_from_misses_and_dedups() {
+            let (paths, missed) =
+                parse_list("+results/a.txt\n-nothing/*\n+results/a.txt\n+out\n\n");
+            assert_eq!(paths, vec!["results/a.txt", "out"]);
+            assert_eq!(missed, vec!["nothing/*"]);
+        }
+
+        #[test]
+        fn the_list_script_drops_paths_outside_the_checkout() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join("results")).unwrap();
+            std::fs::write(dir.path().join("results/a.txt"), "x").unwrap();
+            std::fs::write(dir.path().join("top"), "y").unwrap();
+            let out = Command::new("sh")
+                .current_dir(dir.path())
+                .args([
+                    "-c",
+                    LIST,
+                    "air",
+                    "results/*",
+                    "../*",
+                    "/etc/passwd",
+                    "top",
+                    "none/*",
+                ])
+                .output()
+                .unwrap();
+            let (paths, missed) = parse_list(&String::from_utf8_lossy(&out.stdout));
+            assert_eq!(paths, vec!["results/a.txt", "top"]);
+            assert_eq!(missed, vec!["../*", "/etc/passwd", "none/*"]);
+        }
+
+        #[test]
+        fn size_of_sums_a_directory() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join("d/e")).unwrap();
+            std::fs::write(dir.path().join("d/a"), "12345").unwrap();
+            std::fs::write(dir.path().join("d/e/b"), "12").unwrap();
+            assert_eq!(size_of(&dir.path().join("d")), 7);
+            assert_eq!(size_of(&dir.path().join("missing")), 0);
         }
     }
 }

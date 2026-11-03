@@ -165,7 +165,17 @@ enum Cmd {
     /// session's own ref, forced), checks that commit out detached, and runs the command in
     /// `path` over ssh, output streamed back, exit code passed through. The push goes to the
     /// target only, never to a remote in `.git/config`.
+    ///
+    /// `--pull <glob>` (repeatable) brings declared result paths back: after the command exits,
+    /// the paths under the target's checkout that match come back as one tar stream over the
+    /// same ssh and are unpacked into this worktree at the same relative paths, overwriting.
+    /// Nothing comes back without `--pull`; a glob that matches nothing is reported and is not
+    /// an error. The run's row names the pulled paths and their byte total.
     Run {
+        /// A glob, relative to the target's checkout, whose matches come back after the run
+        /// (e.g. `--pull 'results/*.json'`); repeat for more.
+        #[arg(long = "pull", value_name = "GLOB")]
+        pull: Vec<String>,
         /// The command to run (after `--`).
         #[arg(last = true, required = true)]
         command: Vec<String>,
@@ -602,7 +612,7 @@ fn main() -> ExitCode {
             cmd::fanout::after_change(&repo, false);
             code
         }
-        Cmd::Run { command } => cmd::run::run(&repo, &command, cli.json),
+        Cmd::Run { pull, command } => cmd::run::run(&repo, &command, &pull, cli.json),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }
