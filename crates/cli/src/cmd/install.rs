@@ -3103,6 +3103,17 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "",
     },
     SurfaceChange {
+        id: "coordinator-workflow-menu",
+        since: "2026-11-03 (air-wvx)",
+        headline: "`.air/roles.md`: unless the owner has said how to work, the coordinator's \
+                   first step is to offer four named workflows in plain text (fleet, \
+                   coordinator alone, mixed, read-only) and take the pick for the session. \
+                   \"Commit in your own worktree only when no worker can make the change\" is \
+                   gone; a commit of the coordinator's own is one only its branch can carry.",
+        silent_break: false,
+        action: "",
+    },
+    SurfaceChange {
         id: "air-run-pull",
         since: "2026-11-03 (air-opq.4)",
         headline: "`air run --pull <glob>` (repeatable) brings declared result paths back from \
@@ -4351,6 +4362,11 @@ mod tests {
         // given any. Both halves, because dropping either reverses the rule (air-7q5).
         assert!(has("Once you have work, finishing a bead is not a stop."));
         assert!(has("Starting a session is not being given work."));
+        // air-wvx: the coordinator offers named workflows and takes the owner's pick; a worker
+        // can always make a file change, so "only when no worker can" named no real case.
+        assert!(has("offer a menu of named workflows"));
+        assert!(has("Write the pick in your journal"));
+        assert!(!has("only when no worker can make the change"));
         // 2026-09-26: SendMessage is for what Air does not already carry (air-uzh2, air-1vri).
         assert!(has("reach one worker with `SendMessage`"));
         // The heartbeat is the failsafe, and roles.md promises no `stuck` condition (air-12k).
