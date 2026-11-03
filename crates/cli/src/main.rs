@@ -105,6 +105,11 @@ enum FleetOp {
         /// Print each launch instead of running it; writes nothing.
         #[arg(long)]
         print: bool,
+        /// Model for every session of this launch, over `model` and `lane_model` in
+        /// `.claude/air.json` (air-ap1). Omitted, each launcher reads the file; with no key
+        /// there either, the session inherits the harness's model.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Stop all work (coordinator and owner only): `air claim`, `air batch cut` and `air land`
     /// refuse, naming the stop, until `air fleet resume`. Every session is told through its
@@ -394,8 +399,9 @@ enum Cmd {
         /// Initial task for the worker, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
-        /// Model to launch on, e.g. `claude-opus-5`. Omitted, the session inherits whatever the
-        /// harness gives it, and the ledger records what it actually got (air-air).
+        /// Model to launch on, e.g. `claude-opus-5`. Omitted, `model` in `.claude/air.json`
+        /// applies (air-ap1); with no key either the session inherits whatever the harness
+        /// gives it, and the ledger records what it actually got (air-air).
         #[arg(long)]
         model: Option<String>,
         /// Print the command instead of running it.
@@ -417,7 +423,8 @@ enum Cmd {
         /// Initial task, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
-        /// Model to launch on; inherited when omitted.
+        /// Model to launch on; omitted, `lane_model` then `model` in `.claude/air.json`
+        /// (air-ap1), else inherited.
         #[arg(long)]
         model: Option<String>,
         /// Print the command instead of running it.
@@ -434,7 +441,8 @@ enum Cmd {
     /// Before it starts, it asks on the terminal whether to start the fleet (`air fleet up`).
     /// `--fleet` or `--no-fleet` answers in advance; with no terminal the answer is no.
     Coordinator {
-        /// Model to launch on (air-air); inherited when omitted.
+        /// Model to launch on (air-air); omitted, `model` in `.claude/air.json` (air-ap1),
+        /// else inherited.
         #[arg(long)]
         model: Option<String>,
         /// Start the lane and the workers too, without asking.
@@ -762,8 +770,8 @@ fn main() -> ExitCode {
             },
         ),
         Cmd::Fleet {
-            op: FleetOp::Up { print },
-        } => cmd::launch::fleet_up(&repo, print),
+            op: FleetOp::Up { print, model },
+        } => cmd::launch::fleet_up(&repo, print, model.as_deref()),
         Cmd::Fleet {
             op: FleetOp::Stop { reason },
         } => cmd::fleet::stop(&repo, reason.as_deref(), cli.json),

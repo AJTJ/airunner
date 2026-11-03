@@ -1035,6 +1035,44 @@ fn fleet_up_starts_the_lane_and_workers_once() {
     let (code, out, err) = run(&["fleet", "up", "--print"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(out.lines().count(), 3, "{out}");
+    assert!(!out.contains("--model"), "no key, no flag: {out}");
+
+    // air-ap1: `--model` on `fleet up` reaches every session; the file's `model` and
+    // `lane_model` apply when the command line gives none.
+    let (code, out, err) = run(&["fleet", "up", "--print", "--model", "mx"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out.lines().filter(|l| l.contains("--model mx")).count(),
+        3,
+        "{out}"
+    );
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"workers": 2, "model": "mf", "lane_model": "ml"}"#,
+    )
+    .unwrap();
+    let (code, out, err) = run(&["fleet", "up", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    let lane_line = out.lines().find(|l| l.contains("-s zz-lane ")).unwrap();
+    assert!(lane_line.contains("--model ml"), "{lane_line}");
+    for s in ["zz-worker-1", "zz-worker-2"] {
+        let l = out
+            .lines()
+            .find(|l| l.contains(&format!("-s {s} ")))
+            .unwrap();
+        assert!(l.contains("--model mf"), "{l}");
+    }
+    let (_, out, _) = run(&["fleet", "up", "--print", "--model", "mx"]);
+    assert_eq!(
+        out.lines().filter(|l| l.contains("--model mx")).count(),
+        3,
+        "the command line wins over the file: {out}"
+    );
+    assert!(
+        !out.contains("--model mf") && !out.contains("--model ml"),
+        "{out}"
+    );
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 2}"#).unwrap();
     for s in ["zz-lane", "zz-worker-1", "zz-worker-2"] {
         assert!(
             out.contains(&format!("new-session -d -s {s} ")),
