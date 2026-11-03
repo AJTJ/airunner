@@ -84,10 +84,12 @@ enum BatchOp {
         /// Read the set and run the pre-check only; merges nothing and needs no clean tree.
         #[arg(long)]
         dry_run: bool,
-        /// Leave these workers' branches out of this cut (a split after a red batch).
+        /// Leave these workers' branches out of this cut: a split after a red batch, which
+        /// may take the red batch's members at their red-held heads.
         #[arg(long, value_delimiter = ',', num_args = 1.., conflicts_with = "only")]
         without: Vec<String>,
-        /// Cut only these workers' branches (a split after a red batch).
+        /// Cut only these workers' branches: a split after a red batch, which may take the red
+        /// batch's members at their red-held heads.
         #[arg(long, value_delimiter = ',', num_args = 1..)]
         only: Vec<String>,
     },

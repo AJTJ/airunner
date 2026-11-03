@@ -303,6 +303,21 @@ by cut or by hand, frees the good member and the red one waits for a commit. Com
 the model test covers the ordering.
 Do not: offer a member of a red batch again before it moves or a green carries it.
 
+**A red batch could not be split: its members were already out of the set the split chose from.**
+Seen: 2026-11-03, this repo: batch a2bb0ea8 (worker-1, worker-2) went red on worker-2's merge
+resolution; the lane ran `air batch cut --only worker-1` and was refused, "nothing to merge ...
+held: worker-1 ... was in a batch that went red". `select` (air-5fo5) filtered the batch-ready
+list, and `red_held` (air-vdst) had already taken every member out of it; the two landed the same
+day and were never run together. The innocent worker made a content-free commit to get back in.
+Fix: a split (`--only` or `--without` given) chooses among the batch-ready branches plus the
+members of the newest standing red batch at their red-held heads (`red_held_members` in
+`crates/cli/src/cmd/batch_cut.rs`, from `NotBatchReady.if_split`, which `status::batch_ready_for`
+fills for a `red-at-head` head by asking the rule again with the red set aside). A bare cut sees
+none of them. Commit: air-jk2; test `batch_cut_splits_a_red_batch_by_its_members`; SURFACE
+`split-takes-red-members`.
+Do not: let a bare `air batch cut` offer a red member; do not let a split take a head the red
+did not record.
+
 ## Sessions and liveness
 
 **A dead registration with a reused pid read as alive and got most of the ready notices.**

@@ -58,7 +58,7 @@ use serde::Serialize;
 use air_ledger::Ledger;
 use air_ledger::verify::{Kind, Verdict};
 
-use super::status::{self, BatchReady};
+use super::status::{self, BatchReady, NotBatchReady};
 use super::worktree::{GIT_BUDGET, git_status};
 use crate::git;
 
@@ -499,18 +499,48 @@ pub fn failure_reason(
     format!("{err} [{lock}: {held}]")
 }
 
-/// Which batch-ready branches this cut takes (air-5fo5): all of them, all but `without`, or only
-/// `only`, and the workers left out, so a split after a red batch is an ordinary recorded cut
-/// rather than a hand merge Air has to guess the members of. Pure.
+/// Which branches this cut takes (air-5fo5): all of the batch-ready ones, all but `without`,
+/// or only `only`, and the workers left out, so a split after a red batch is an ordinary
+/// recorded cut rather than a hand merge Air has to guess the members of. Pure.
+///
+/// air-jk2: a split (`without` or `only` given) chooses among the batch-ready branches AND
+/// `red_held`, the members of the newest standing red batch at their red-held heads. That is
+/// what a split is for: the red took every member out of the batch-ready set (air-vdst), and
+/// the lane names by hand which of them to verify apart. A bare cut never sees `red_held`.
 pub fn select(
     ready: Vec<BatchReady>,
+    red_held: Vec<BatchReady>,
     without: &[String],
     only: &[String],
 ) -> (Vec<BatchReady>, Vec<String>) {
-    let (kept, out): (Vec<_>, Vec<_>) = ready.into_iter().partition(|b| {
+    let split = !without.is_empty() || !only.is_empty();
+    let candidates = ready
+        .into_iter()
+        .chain(if split { red_held } else { vec![] });
+    let (kept, out): (Vec<_>, Vec<_>) = candidates.partition(|b| {
         !without.contains(&b.worker) && (only.is_empty() || only.contains(&b.worker))
     });
     (kept, out.into_iter().map(|b| b.worker).collect())
+}
+
+/// The members of the newest standing red batch that are still at the head the red took, as
+/// the batch-ready rule would list them with the red set aside (air-jk2).
+fn red_held_members(ledger: &air_ledger::Ledger, not_ready: &[NotBatchReady]) -> Vec<BatchReady> {
+    let newest = ledger
+        .latest_red_batch(air_ledger::verify::Kind::Verify)
+        .ok()
+        .flatten()
+        .map(|r| r.members)
+        .unwrap_or_default();
+    not_ready
+        .iter()
+        .filter(|n| {
+            newest
+                .iter()
+                .any(|m| m.worker == n.worker && m.sha == n.head)
+        })
+        .filter_map(|n| n.if_split.as_deref().cloned())
+        .collect()
 }
 
 pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json: bool) -> i32 {
@@ -616,7 +646,9 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
         eprintln!("air batch cut: {e}");
     }
     let ready: Vec<BatchReady> = ready.into_iter().filter(|b| b.worker != lane).collect();
-    let (ready, left_out) = select(ready, without, only);
+    let red_held = red_held_members(&ledger, &not_ready);
+    let (ready, left_out) = select(ready, red_held, without, only);
+    let taken: Vec<String> = ready.iter().map(|b| b.worker.clone()).collect();
     let mut cands = Vec::new();
     for BatchReady {
         worker,
@@ -661,7 +693,7 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
         reset_from,
         held: not_ready
             .iter()
-            .filter(|n| n.worker != lane)
+            .filter(|n| n.worker != lane && !taken.contains(&n.worker))
             .map(|n| n.detail.clone())
             .collect(),
         stale_over,

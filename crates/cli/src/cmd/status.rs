@@ -564,6 +564,11 @@ pub struct NotBatchReady {
     /// `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
+    /// For a `red-at-head` head only: what the branch is batch-ready as once the red is set
+    /// aside, so a split (`air batch cut --only` or `--without`) can take it by name (air-jk2).
+    /// None for every other check, and for a red-held head that lacks something else too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_split: Option<Box<BatchReady>>,
 }
 
 /// The facts the batch-ready rule reads, one worktree's worth.
@@ -619,6 +624,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         head: f.head.clone(),
         check,
         detail,
+        if_split: None,
     };
     // The coordinator's branch (air-jc2p.1, owner 2026-09-14: its changes reach main through
     // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
@@ -882,7 +888,18 @@ pub fn batch_ready_for(
         };
         match batch_ready_rule(&facts) {
             Ok(b) => ready.push(b),
-            Err(n) => not.push(n),
+            Err(mut n) => {
+                // air-jk2: a split names a red-held member on purpose, so say what it would be
+                // batch-ready as with the red set aside. Every other fact still has to hold.
+                if n.check == "red-at-head" {
+                    let facts = BatchFacts {
+                        red_batch_at_head: false,
+                        ..facts
+                    };
+                    n.if_split = batch_ready_rule(&facts).ok().map(Box::new);
+                }
+                not.push(n);
+            }
         }
     }
     (ready, not, errors)
