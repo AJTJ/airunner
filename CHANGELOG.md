@@ -7,6 +7,96 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-11-03
+
+Live trial on 2026-11-03 (`.air/trial-report-2026-11-03.md`): 11 beads, 8 landings, one red as
+planned. Six of eight scenarios passed on the first try. Landing by role was not shown at Air's
+layer: the auto-mode classifier denied the coordinator's `air land` before Air could refuse it.
+Precheck held, but the worker ran `air handover` itself instead of waiting to be told. One extra
+red came from a worker amending a commit after the cut. No Air refusal was worked around.
+
+### Added
+
+- On a Mac the launchers run the session under `caffeinate -i`, so an hour-long command no
+  longer idle-sleeps the machine (three hours lost at an adopter on 2026-10-29); the assertion
+  ends with the session. `air status` prints `idle sleep: <n> min` when `pmset -g` reports
+  under ten minutes.
+- `docs/research/coordinator-notices.md`: whether the coordinator's no-reply notices (main
+  moved, batch result, session join) should go to a feed pane instead of its chat; the one-day
+  ledger count, and the recommendation to log every channel push first and build nothing yet.
+- `model` and `lane_model` in `.claude/air.json`: every launcher passes `--model` from them
+  when the command line gives none, `air fleet up --model <m>` overrides for one launch, and
+  `air status` marks a session whose transcript names another model.
+- `docs/rules/adopting-air.md` names the fix for a file every branch appends to:
+  `merge=union` in `.gitattributes`, for append-only files only.
+- `air run -- <command>` runs a command on the calling session's target from `"targets"` in
+  `.claude/air.json` (kind `ssh`: push HEAD to `refs/air/<session>` on the host, check it out, run
+  there, stream the output back, pass the exit code through), and locally with nothing added
+  when the session has no target.
+- every `air run` is recorded in the ledger's `runs` table with the machine it ran on
+  (hostname, `AIR_IMAGE` if the target sets one, arch, nproc, CPU model), beside the session,
+  commit, tree, command, exit, times, output size and target; `air run --json` prints the row.
+- `air run --pull <glob>` (repeatable): after the command exits, the matching paths under the
+  target's checkout come back as one tar stream over the same ssh and are unpacked into the
+  worktree, overwriting; the run's row names the pulled paths and their byte total.
+- `air record` runs the check on the session's target when `targets` names one, on the
+  pushed HEAD, and records it at the local HEAD as before with the machine stamped on the row;
+  a dirty tree is refused and `--local` runs it here. Every recorded run now carries the machine
+  it ran on.
+- `air coordinator` allows `Bash(tmux send-keys *)` on its own `--settings`, so the
+  start-up prompt answer the coordinator types after the owner's yes (air-d73) is no longer
+  refused by auto mode's classifier; three refusals in two days of the live trial. Workers
+  and the lane get no such rule.
+- `docs/research/base-branch.md`: what merge queues and trunk-based development do about a
+  base other than main, the count of `main` literals by sense, and the recommendation to
+  document git's answer (a local `main` tracking any branch) and build no mechanism.
+
+### Changed
+
+- Surface notices are one file each under `crates/cli/surface.d/<ordinal>-<id>.rs`, folded
+  into `install::SURFACE` by `build.rs`, so two beads adding a notice never conflict at the same
+  line. A missing or empty directory fails the build; a malformed fragment is a rustc error
+  naming the file.
+- The coordinator's heartbeat is opt-in. `.air/roles.md` and the SessionStart context tell
+  it to create one only where `.claude/air.json` sets `heartbeat_minutes`, and `air status`
+  prints the expected interval when the key is set.
+- The decomposition skill (installed as `air-decomposition`) carries four rules from Kairos,
+  each cited into its repository: check every name a plan cites against the code before filing,
+  cut a wide refactor as expand then contract, name a bead not yet filed by its full quoted
+  title, and review a wave as a set before filing it.
+- after a launch the coordinator reads each new pane and, if a start-up prompt is
+  waiting, asks the owner once and on a yes answers it through tmux; the one exception to
+  "do not type into panes". Folder trust stays the owner's. The design doc no longer says Air
+  cannot answer the start-up prompts.
+- The coordinator's branch is batch-ready only at a head it offered with `air ready` (new,
+  coordinator only), unless `.claude/air.json` sets `coordinator_autobatch` true; `air status
+  --json` says `not-offered` until then. Every coordinator commit used to cost the lane a cut.
+- The remote runner's push over a command prefix (`kubectl exec`) is decided: git's `ext::`
+  remote helper, not a bundle piped through the prefix; one row in the design doc's technology
+  decisions carries the measurement.
+- the coordinator's first step, unless the owner has said how to work, is to offer four
+  named workflows in plain text (fleet, coordinator alone, mixed, read-only) and take the pick
+  for the session; "commit in your own worktree only when no worker can make the change" is
+  replaced by the one real case, a commit only the coordinator's branch can carry.
+- `air worker`, `air lane`, `air coordinator` and `air fleet up` pre-answer the start-up
+  prompts Claude Code documents an answer for (`--add-dir <main checkout>`, `--permission-mode
+  auto`, `skipAutoPermissionPrompt`) and refuse to launch, naming the fix, when the main checkout
+  has no `hasTrustDialogAccepted` in `~/.claude.json`. Air never writes that key.
+
+### Fixed
+
+- the `air record` kill test polls with one connection and a short sleep, with a 60 s
+  deadline, so a loaded lane does not red the batch on a test's wall clock.
+- A worker branch that is green at a head containing `main` is batch-ready under a lane, so
+  the lane cuts it instead of leaving it closed and unlanded.
+- `air batch cut --only` and `--without` could not split a red batch: its members were
+  already held out of the set the split chose from. A split now chooses among the batch-ready
+  branches and the newest red batch's members at their red-held heads.
+- the three batch_cut tests reach their assertion when a cut fails and print the command's
+  stderr in the red, so a git error behind an empty member set names itself.
+- `air land --help` had no description and `air ready --help` showed the landing's: the
+  `Ready` variant had been inserted under `Land`'s doc comment (air-m8u). Each shows its own.
+
 ## [0.4.13] - 2026-10-22
 
 Live trial on 2026-10-22 (`.air/trial-report-2026-10-22.md`): 11 beads, 7 landings, one red as
