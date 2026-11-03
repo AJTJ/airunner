@@ -171,7 +171,7 @@ and `air handover`. When a peer holds a file you open, Air warns you once per se
 
 You read beads and add comments with `bd comment`; every other change to a bead goes through
 `air` (`air claim`, `air close`, `air capture`), and bd's write commands are denied to you.
-Denied to a worker in every permission mode: `air land`, `git push`, every bd command that
+Denied to a worker in every permission mode: `air land`, `air ready`, `git push`, every bd command that
 changes a bead or the store, a nested `claude`, `air worker`, `air lane`, `air fleet`,
 `air coordinator`, the worktree tools (`EnterWorktree`, `ExitWorktree`), and `AskUserQuestion`. You reach the owner through
 `air capture`. Work only in your worktree, never in the main checkout, and use your scratchpad
@@ -205,8 +205,8 @@ record` end with your next step: the branches batch-ready now and `next: air bat
 A branch is batch-ready when its commits carry a `Bead:` trailer for a bead its worker holds or
 that is closed (a green at its head does not take it out), and, where `.claude/air.json` sets
 `"precheck": true`, it has a green `air record precheck` at its head. Being behind `main` does
-not take it out. The coordinator's branch needs no bead, only a commit main lacks. `air status
---json` gives the first fact each other branch lacks.
+not take it out. The coordinator's branch needs no bead, only a commit main lacks, offered with
+`air ready`. `air status --json` names what each other branch lacks.
 
 A batch is a commit on the lane's branch that contains `main` and each member at the sha it
 merged. The green or red recorded there is the batch's. A red batch is reported by member in
@@ -240,8 +240,12 @@ Write the pick in your journal; it holds for the session.
 
 Under the fleet workflow you do not implement: anything to build, fix or write, a helper
 script included, goes to a worker as a bead. A commit of your own is one only your branch can
-carry, such as filing and the round-end rows. Your branch reaches main in the lane's batch: it
-is batch-ready once it has a commit main lacks, and it needs no `Bead:` trailer.
+carry, such as filing and the round-end rows. Your branch reaches main in the lane's batch and
+needs no `Bead:` trailer. It is batch-ready once it has a commit main lacks and you have run
+`air ready` at that head; a later commit needs a new `air ready`, so a note you are still
+writing costs the lane nothing. Where `.claude/air.json` sets `"coordinator_autobatch": true`,
+every commit main lacks is batch-ready without it. `air status --json` says `not-offered` for
+a head waiting on one.
 
 While workers are online, keep the ready list full of claimable beads, set priority, and add
 `blocks` edges where two beads share a file. When an epic has no children, decompose it with
