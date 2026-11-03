@@ -569,7 +569,7 @@ pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
     /// `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
-    /// `no-precheck` | `nothing-ahead` (the coordinator)
+    /// `no-precheck` | `nothing-ahead` | `not-offered` (the coordinator)
     pub check: &'static str,
     pub detail: String,
     /// For a `red-at-head` head only: what the branch is batch-ready as once the red is set
@@ -602,6 +602,12 @@ pub struct BatchFacts {
     /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
     /// be batch-ready with nothing in it.
     pub ahead: bool,
+    /// `"coordinator_autobatch": true` in `.claude/air.json` (air-m8u): the coordinator's
+    /// branch is batch-ready on any commit main lacks. False, the default, needs an offer.
+    pub autobatch: bool,
+    /// The coordinator ran `air ready` at exactly this head (`offers` row). Read only for the
+    /// coordinator.
+    pub offered_at_head: bool,
     /// A red batch took this exact head as a member and no later green contains it
     /// ([`red_held`]; 0.4.6 trial D3, air-hyli, air-vdst).
     pub red_batch_at_head: bool,
@@ -642,6 +648,19 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         return Err(not(
             "nothing-ahead",
             format!("{} at {short}: no commit that main lacks", f.worker),
+        ));
+    }
+    // air-m8u: with `coordinator_autobatch` off, a coordinator head is batch-ready only once
+    // offered. Each coordinator commit at an adopter cost the lane a cut, a verify and two
+    // notices while a note was still being written.
+    if f.coordinator && !f.autobatch && !f.offered_at_head {
+        return Err(not(
+            "not-offered",
+            format!(
+                "{} at {short}: not offered to the lane; run `air ready` at this head, or set \
+                 \"coordinator_autobatch\": true in .claude/air.json",
+                f.worker
+            ),
         ));
     }
     // air-ch9p: a head inside a batch being verified now is in that batch, not waiting for
@@ -830,6 +849,7 @@ pub fn batch_ready_for(
         .map(|c| c.bead)
         .collect();
     let precheck_required = precheck_declared(repo);
+    let autobatch = super::handover::coordinator_autobatch(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // The main checkout is main; the lane's branch is the batch, not a member. The
@@ -875,6 +895,7 @@ pub fn batch_ready_for(
             .iter()
             .find(|(_, members)| members.contains(&head))
             .map(|(b, _)| b.clone());
+        let offered_at_head = coordinator && ledger.offered(&worker, &head).unwrap_or(false);
         let facts = BatchFacts {
             red_batch_at_head,
             dropped_at_head,
@@ -883,6 +904,8 @@ pub fn batch_ready_for(
             precheck_green_at_head,
             coordinator,
             ahead,
+            autobatch,
+            offered_at_head,
             carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
                 .declared,
             held: claims
@@ -3426,6 +3449,66 @@ mod tests {
         assert!(red_held(&reds, "bbbb", &carries_a));
         // B commits past its red head: the new head was in no red batch.
         assert!(!red_held(&reds, "b2b2", &none));
+    }
+
+    /// air-m8u: with the key absent or false a coordinator head is `not-offered` until `air
+    /// ready` ran at it, then batch-ready; a later commit is a new head and needs a new offer;
+    /// with the key true the rule before the key holds, offer or none.
+    #[test]
+    fn a_coordinator_head_needs_an_offer_unless_autobatch() {
+        let base = BatchFacts {
+            worker: "coordinator".into(),
+            head: "c0c0c0c0c0c0c0c0".into(),
+            coordinator: true,
+            ahead: true,
+            ..Default::default()
+        };
+        let n = batch_ready_rule(&base).unwrap_err();
+        assert_eq!(n.check, "not-offered");
+        assert!(
+            n.detail.contains("air ready") && n.detail.contains("coordinator_autobatch"),
+            "{}",
+            n.detail
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                offered_at_head: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                autobatch: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                autobatch: true,
+                offered_at_head: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        // Nothing ahead is the first lack, offer or none.
+        let n = batch_ready_rule(&BatchFacts {
+            ahead: false,
+            offered_at_head: true,
+            ..base.clone()
+        })
+        .unwrap_err();
+        assert_eq!(n.check, "nothing-ahead");
+        // A worker is never asked for an offer.
+        let w = BatchFacts {
+            worker: "w1".into(),
+            head: "2d2ea33dd9cc3571".into(),
+            carried: vec!["zz-1".into()],
+            held: vec!["zz-1".into()],
+            ..Default::default()
+        };
+        assert!(batch_ready_rule(&w).is_ok());
     }
 
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds

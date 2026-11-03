@@ -6432,9 +6432,11 @@ fn probe_status_warns_of_a_session_in_the_main_checkout() -> Probe {
 /// adopter's coordinator invalidated four workers' landability with one prose commit on
 /// 2026-09-06).
 ///
-/// Red: the coordinator's branch with a commit main lacks is batch-ready with no claimed bead.
-/// Green: with nothing ahead it is absent as `nothing-ahead`; and a worker's branch naming no
-/// claimed bead is still absent as `no-claimed-bead`, so nothing else about the rule changed.
+/// Red: the coordinator's branch with a commit main lacks, offered with `air ready` (air-m8u),
+/// is batch-ready with no claimed bead. Green: with nothing ahead it is absent as
+/// `nothing-ahead`; unoffered, with `coordinator_autobatch` off, as `not-offered`, and with it
+/// on it is batch-ready unoffered; and a worker's branch naming no claimed bead is still absent
+/// as `no-claimed-bead`, so nothing else about the rule changed.
 fn probe_coordinator_branch_is_batch_ready_without_a_bead() -> Probe {
     use crate::cmd::status::{BatchFacts, batch_ready_rule};
 
@@ -6443,12 +6445,22 @@ fn probe_coordinator_branch_is_batch_ready_without_a_bead() -> Probe {
         head: "c0ffee1234567890".into(),
         coordinator: true,
         ahead: true,
+        offered_at_head: true,
         ..Default::default()
     };
     let red_fires =
         batch_ready_rule(&coord).is_ok_and(|b| b.worker == "coordinator" && b.beads.is_empty());
     let idle = batch_ready_rule(&BatchFacts {
         ahead: false,
+        ..coord.clone()
+    });
+    let unoffered = batch_ready_rule(&BatchFacts {
+        offered_at_head: false,
+        ..coord.clone()
+    });
+    let autobatch = batch_ready_rule(&BatchFacts {
+        offered_at_head: false,
+        autobatch: true,
         ..coord.clone()
     });
     let worker = batch_ready_rule(&BatchFacts {
@@ -6460,6 +6472,8 @@ fn probe_coordinator_branch_is_batch_ready_without_a_bead() -> Probe {
         name: "status: the coordinator's branch is batch-ready with no claimed bead once it has a commit main lacks; a worker's still needs one",
         red_fires,
         green_passes: idle.is_err_and(|n| n.check == "nothing-ahead")
+            && unoffered.is_err_and(|n| n.check == "not-offered")
+            && autobatch.is_ok()
             && worker.is_err_and(|n| n.check == "no-claimed-bead"),
     }
 }

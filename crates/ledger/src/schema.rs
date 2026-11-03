@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 29;
+pub const CURRENT_VERSION: i64 = 30;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -428,6 +428,18 @@ ALTER TABLE verify_runs ADD COLUMN nproc INTEGER;
 ALTER TABLE verify_runs ADD COLUMN cpu TEXT;
 "#;
 
+/// v30 (2026-11-03, air-m8u): the heads the coordinator offered to the lane with `air ready`.
+/// With `coordinator_autobatch` absent or false its branch is batch-ready only at an offered
+/// head; each coordinator commit at an adopter had cost the lane a cut and a verify.
+const V30: &str = r#"
+CREATE TABLE IF NOT EXISTS offers (
+  worker  TEXT NOT NULL,
+  sha     TEXT NOT NULL,
+  at      TEXT NOT NULL,
+  PRIMARY KEY (worker, sha)
+);
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -443,7 +455,7 @@ ALTER TABLE verify_runs ADD COLUMN cpu TEXT;
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25, V26, V27, V28, V29,
+    V22, V23, V24, V25, V26, V27, V28, V29, V30,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.

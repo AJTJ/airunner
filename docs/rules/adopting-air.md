@@ -142,6 +142,7 @@ key is optional.
 | `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
 | `model` | The model every launcher (`air worker`, `air lane`, `air coordinator`, `air fleet up`) passes as `--model` when the command line gives none. `air status` marks a session whose transcript names another model. | absent: the session inherits the harness's model |
 | `lane_model` | The lane's model, over `model`. | absent: the lane takes `model` |
+| `coordinator_autobatch` | `true`: every coordinator commit main lacks is batch-ready, so the lane cuts after each one. Absent or `false`, the coordinator's branch is batch-ready only at a head it offered with `air ready`. | `false` |
 | `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. A string value counts as absent; a lane session having run also counts as a lane. | absent: workers verify their own branch |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
