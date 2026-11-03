@@ -3137,6 +3137,16 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "If a launch is refused for folder trust, run `claude` once in the main \
                  checkout and answer Yes. Restart running sessions to pick up the flags.",
     },
+    SurfaceChange {
+        id: "coordinator-answers-startup-prompts",
+        since: "2026-11-03 (air-d73)",
+        headline: "`.air/roles.md`: after a launch the coordinator reads each new pane with \
+                   `tmux capture-pane`; if a start-up prompt is waiting it asks the owner once \
+                   and, on a yes, answers it with `tmux send-keys`. The only exception to \
+                   \"do not type into panes\"; never the folder-trust dialog.",
+        silent_break: false,
+        action: "",
+    },
 ];
 
 /// The commit this binary was built from (`build.rs`), `unknown` outside a checkout.
@@ -4381,6 +4391,10 @@ mod tests {
         assert!(has("offer a menu of named workflows"));
         assert!(has("Write the pick in your journal"));
         assert!(!has("only when no worker can make the change"));
+        // air-d73: the coordinator may answer a launched session's start-up prompt through
+        // tmux, after asking the owner once; folder trust stays the owner's.
+        assert!(has("Shall I accept these on your behalf?"));
+        assert!(has("never the folder-trust dialog"));
         // 2026-09-26: SendMessage is for what Air does not already carry (air-uzh2, air-1vri).
         assert!(has("reach one worker with `SendMessage`"));
         // The heartbeat is the failsafe, and roles.md promises no `stuck` condition (air-12k).

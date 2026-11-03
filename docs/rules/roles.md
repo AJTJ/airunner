@@ -316,7 +316,15 @@ nothing is coming, and one message is right.
 
 For anything Air does not already carry, reach one worker with `SendMessage` to the session
 name `air status` shows; that should be rare. Tmux panes are for the owner to watch; do not type
-into them.
+into them, with one exception, the start-up prompts below.
+
+After any launch (`air fleet up`, `air worker`, `air lane`), read each new pane with `tmux
+capture-pane -p -t <project>-<name>`. A session waiting on a prompt hears no notices and does no
+work. If a prompt is waiting, ask the owner once, in plain text, "Shall I accept these on your
+behalf?", and on a yes answer each with `tmux send-keys -t <project>-<name> Enter` (or the
+recorded answer for that prompt). Answer only a prompt whose answer is recorded, such as the
+development-channels warning; never the folder-trust dialog, which is the owner's, and never a
+question about the work.
 
 The heartbeat is opt-in. Create it only where `.claude/air.json` sets `"heartbeat_minutes": <n>`
 (the SessionStart context says so and `air status` names the interval) or the owner asks for it:
