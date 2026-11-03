@@ -557,7 +557,7 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
+    /// `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
     /// `no-precheck` | `nothing-ahead` (the coordinator)
     pub check: &'static str,
     pub detail: String,
@@ -568,10 +568,6 @@ pub struct NotBatchReady {
 pub struct BatchFacts {
     pub worker: String,
     pub head: String,
-    /// `git merge-base --is-ancestor main <head>`. With `green_at_head`, landable on its own.
-    pub contains_main: bool,
-    /// `green::at(head)` holds. Landable, and so not for a batch, only while it contains main.
-    pub green_at_head: bool,
     /// Beads declared by `Bead:` trailers in `main..head`.
     pub carried: Vec<String>,
     /// Beads this worker holds an open claim on.
@@ -600,8 +596,9 @@ pub struct BatchFacts {
     pub in_batch: Option<String>,
 }
 
-/// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
-/// head that contains main) and whose commits name a bead the worker holds. In that order, so
+/// THE batch-ready rule, pure (air-80x.3): a branch whose commits name a bead the worker holds
+/// or that is closed. A branch already green at a head that contains main is batch-ready too
+/// (air-757): under a lane nothing lands it alone, and it sat closed and unlanded. In that order, so
 /// the reason a branch is absent is the first fact it lacks. Nothing here is a judgement: each
 /// fact is a git or ledger lookup the lane could make itself.
 ///
@@ -624,20 +621,10 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
     // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
     // nothing lands it alone, so there is no landable-alone exit; what it must have is a commit
     // main lacks. Removed with the lane, when the coordinator would land its own branch again.
-    if f.coordinator {
-        if !f.ahead {
-            return Err(not(
-                "nothing-ahead",
-                format!("{} at {short}: no commit that main lacks", f.worker),
-            ));
-        }
-    } else if f.contains_main && f.green_at_head {
+    if f.coordinator && !f.ahead {
         return Err(not(
-            "green-at-head",
-            format!(
-                "{} at {short} is already green with main merged: landable on its own, nothing to batch",
-                f.worker
-            ),
+            "nothing-ahead",
+            format!("{} at {short}: no commit that main lacks", f.worker),
         ));
     }
     // air-ch9p: a head inside a batch being verified now is in that batch, not waiting for
@@ -842,13 +829,6 @@ pub fn batch_ready_for(
                 continue;
             }
         };
-        let green_at_head = match super::green::at(ledger, &path, &head, Kind::Verify) {
-            Ok(e) => e.holds(),
-            Err(e) => {
-                errors.push(format!("{worker}: green lookup: {e}"));
-                continue;
-            }
-        };
         // Its own kind, so a precheck green never stands for a verify green nor the reverse.
         let precheck_green_at_head = precheck_required
             && match super::green::at(ledger, &path, &head, Kind::Precheck) {
@@ -886,8 +866,6 @@ pub fn batch_ready_for(
             precheck_green_at_head,
             coordinator,
             ahead,
-            contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
-            green_at_head,
             carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
                 .declared,
             held: claims

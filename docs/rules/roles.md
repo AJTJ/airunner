@@ -202,8 +202,8 @@ because Air tells them. On `fleet stop`, let a verify already running finish; it
 Then cut and land nothing: `air batch cut` and `air land` refuse until `fleet resumed`, and
 then you cut the next batch.
 
-A branch is batch-ready when it is not already landable on its own (green at a head that
-contains `main`), its commits carry a `Bead:` trailer for a bead its worker holds or that is closed, and, where
+A branch is batch-ready when its commits carry a `Bead:` trailer for a bead its worker holds or
+that is closed (a green at its head does not take it out), and, where
 `.claude/air.json` sets `"precheck": true`, it has a green `air record precheck` at its head.
 Being behind `main` does not take it out. The coordinator's branch needs no bead, only a commit
 main lacks. `air status --json` gives the first fact each other branch lacks.
