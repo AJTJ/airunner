@@ -260,6 +260,17 @@ lane`. Commit cba816b (air-voeb); test `a_closed_bead_not_on_main_is_batch_ready
 SURFACE `closed-bead-batch-ready`.
 Do not: require a held claim for a branch whose commits name a closed, unlanded bead.
 
+**Under a lane, a worker's own green took its branch out of the batch, and nothing landed it.**
+Seen: an adopter, 2026-10-28: a worker ran `air record verify` anyway, its branch became landable
+(green at a head containing main), `batch_ready_rule` exited on `green-at-head`, the lane got no
+notice, and `air land` is refused to workers and the coordinator under a lane. The bead sat closed
+and unlanded until the coordinator told the lane to land it by hand.
+Fix: the `green-at-head` exit is gone from `batch_ready_rule` (`crates/cli/src/cmd/status.rs`), so
+a green worker branch is batched like any other. A landed head, a head in a running batch, and a
+red or dropped head still leave the set, so nothing is cut twice. Commit: air-757; test
+`status_lists_batch_ready_branches_as_a_fact`; SURFACE `green-branch-batch-ready`.
+Do not: take a worker branch out of the batch for being green.
+
 **Every bead's `CHANGELOG.md` line conflicted with every other branch's: nine lane drops in one day.**
 Seen: 2026-09-28, this repo; each drop cost the worker a merge, a resolve and a re-verify, and
 the lane a re-cut.

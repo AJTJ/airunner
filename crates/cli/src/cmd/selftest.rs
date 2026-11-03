@@ -6301,25 +6301,23 @@ fn probe_install_reports_a_stale_bd_prime_hook() -> Probe {
 
 /// air-80x.3: the verify lane needs one fact, which branches to merge into the next batch,
 /// and it lived in messages; in the adopter's 2026-08-29 round the batch never formed. The rule
-/// is two lookups: not already landable (green at a head containing main), and a `Bead:`
-/// trailer names a bead the worker holds. Being behind main is NOT a reason to be absent
+/// is one lookup: a `Bead:` trailer names a bead the worker holds (a branch already green at a
+/// head containing main is batch-ready too, air-757). Being behind main is NOT a reason to be absent
 /// (an adopter's fleet protocol, 2026-09-25): the lane merges main forward at the cut.
 ///
 /// Red: a branch that committed a claimed bead is listed, on the status line with its beads,
 /// and still listed once main has moved past it, green or not. Green: the same branch landable
-/// on its own is absent; a branch naming only an unclaimed bead is absent; and every absence
+/// on its own is still listed; a branch naming only an unclaimed bead is absent; and every absence
 /// carries the first fact it lacks.
 ///
-/// The mutation that made it red, seen: `batch_ready_rule` dropping the `green_at_head` arm,
-/// which lists a landable branch for a batch it does not need.
+/// The mutation that made it red, seen: `batch_ready_rule` restoring the `green_at_head` exit,
+/// which leaves a landable worker branch unbatched and unlanded under a lane (air-757).
 fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
     use crate::cmd::status::{BatchFacts, Snapshot, batch_ready_rule, render_for_probe};
 
     let base = BatchFacts {
         worker: "alpha".into(),
         head: "abcdef1234567890".into(),
-        contains_main: true,
-        green_at_head: false,
         carried: vec!["zz-1".into(), "zz-9".into()],
         held: vec!["zz-1".into()],
         precheck_required: false,
@@ -6336,32 +6334,21 @@ fn probe_batch_ready_is_a_fact_with_three_parts() -> Probe {
         .is_ok_and(|b| b.worker == "alpha" && b.beads == ["zz-1"])
         && line.contains("batch-ready: alpha at abcdef12 (zz-1)\n")
         && batch_ready_rule(&BatchFacts {
-            contains_main: false,
-            ..base.clone()
-        })
-        .is_ok()
-        && batch_ready_rule(&BatchFacts {
-            contains_main: false,
-            green_at_head: true,
+            head: "1234567890abcdef".into(),
             ..base.clone()
         })
         .is_ok();
 
-    let green = batch_ready_rule(&BatchFacts {
-        green_at_head: true,
-        ..base.clone()
-    });
     let unclaimed = batch_ready_rule(&BatchFacts {
         held: vec![],
         ..base.clone()
     });
-    let green_passes = green.as_ref().is_err_and(|n| n.check == "green-at-head")
-        && unclaimed
-            .as_ref()
-            .is_err_and(|n| n.check == "no-claimed-bead" && n.detail.contains("zz-1 zz-9"))
+    let green_passes = unclaimed
+        .as_ref()
+        .is_err_and(|n| n.check == "no-claimed-bead" && n.detail.contains("zz-1 zz-9"))
         && !render_for_probe(&Snapshot::default()).contains("batch-ready");
     Probe {
-        name: "status: batch-ready is two facts (not landable on its own, a claimed bead named); a branch behind main stays listed, a landable one is absent with its reason",
+        name: "status: batch-ready is one fact (a claimed bead named); a branch behind main or green at its head stays listed",
         red_fires,
         green_passes,
     }
@@ -6475,8 +6462,6 @@ fn probe_batch_ready_wants_a_precheck_where_declared() -> Probe {
     let base = BatchFacts {
         worker: "alpha".into(),
         head: "abcdef1234567890".into(),
-        contains_main: true,
-        green_at_head: false,
         carried: vec!["zz-1".into()],
         held: vec!["zz-1".into()],
         precheck_required: true,

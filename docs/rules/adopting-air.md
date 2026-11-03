@@ -95,6 +95,8 @@ Optionally, the repo also provides:
 - a precheck command, which workers run under a lane with `air record precheck -- <cmd>`;
 - a test-state reset the lane runs after a cut;
 - `"leases"` in `.claude/air.json` for commands that need a shared resource;
+- `"targets"` in `.claude/air.json`, a machine per session that `air run -- <command>` pushes
+  the session's branch to and runs the command on, for work the local machine cannot do;
 - a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
   copies into each new worktree.
 - bead sections bd must see before it files a bead, under `lint: sections:` in
@@ -119,6 +121,7 @@ key is optional.
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
 | `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
+| `targets` | `{"<session>": {"kind": "ssh", "host": "<h>", "user": "<u>", "path": "~/air/<project>"}}`, one per session (`worker-1`, `lane`, …). `air run -- <cmd>` from that session pushes HEAD to `refs/air/<session>` in a repository it initialises at `path` on the host, checks it out, and runs the command there over ssh; the exit code and output come back. A session with no entry runs the command locally. The push never goes to the project's remote. | none: every session runs locally |
 | `digests` | `true`: the close gate needs a digest naming the bead in the main checkout's `.air/digests/`. | `false` |
 | `digest_dir` | A repo path: the close gate needs a digest naming the bead there, tracked by git. Wins over `digests`. | none |
 | `journal_dir` | A repo path for session journals, tracked in the repo instead of `.air/journal/`. | none |
