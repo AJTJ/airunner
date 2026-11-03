@@ -3226,13 +3226,17 @@ fn batch_cut_splits_with_without_and_only() {
         heads.insert(*name, git(wt, &["rev-parse", "HEAD"]));
     }
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    // air-lij: no unwrap here, so a cut that failed (empty JSON) reaches the assertion and its
+    // message, which carries the command's stderr.
     let members = |v: &serde_json::Value| -> Vec<String> {
         let mut m: Vec<String> = v["members"]
             .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["worker"].as_str().unwrap().to_string())
-            .collect();
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["worker"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
         m.sort();
         m
     };
@@ -3249,12 +3253,12 @@ fn batch_cut_splits_with_without_and_only() {
 
     let (code, v, text) = cut(&["--dry-run", "--without", "gamma"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
-    assert_eq!(v["left_out"], serde_json::json!(["gamma"]), "{v}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
+    assert_eq!(v["left_out"], serde_json::json!(["gamma"]), "{text}");
 
     let (code, v, text) = cut(&["--dry-run", "--only", "beta"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["beta"], "{v}");
+    assert_eq!(members(&v), ["beta"], "{text}");
 
     // Everyone left out: an empty cut, which exits 1 as any memberless cut does.
     let (code, _, text) = cut(&["--without", "alpha,beta,gamma"]);
@@ -3269,7 +3273,7 @@ fn batch_cut_splits_with_without_and_only() {
     // The split for real: recorded in batch_cuts like any cut.
     let (code, v, text) = cut(&["--without", "gamma"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
     let head = git(&lane, &["rev-parse", "HEAD"]);
     let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
         .unwrap()
@@ -3323,13 +3327,17 @@ fn batch_cut_splits_a_red_batch_by_its_members() {
         heads.insert(name, git(wt, &["rev-parse", "HEAD"]));
     }
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    // air-lij: no unwrap here, so a cut that failed (empty JSON) reaches the assertion and its
+    // message, which carries the command's stderr.
     let members = |v: &serde_json::Value| -> Vec<String> {
         let mut m: Vec<String> = v["members"]
             .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["worker"].as_str().unwrap().to_string())
-            .collect();
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["worker"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
         m.sort();
         m
     };
@@ -3347,31 +3355,31 @@ fn batch_cut_splits_a_red_batch_by_its_members() {
     // The batch of both goes red.
     let (code, v, text) = cut(&[]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
     assert_eq!(air(&lane, &bd, &["record", "verify", "--", "false"]).0, 1);
 
     // air-vdst, unchanged: a bare cut offers neither member.
     let (code, v, text) = cut(&["--dry-run"]);
     assert_eq!(code, 0, "{text}");
-    assert!(members(&v).is_empty(), "{v}");
+    assert!(members(&v).is_empty(), "{text}");
     let held = v["held"].to_string();
-    assert!(held.contains("alpha") && held.contains("beta"), "{v}");
+    assert!(held.contains("alpha") && held.contains("beta"), "{text}");
 
     // The split takes the named member at its red-held head and names the other as left out.
     let (code, v, text) = cut(&["--dry-run", "--only", "alpha"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha"], "{v}");
-    assert_eq!(v["left_out"], serde_json::json!(["beta"]), "{v}");
-    assert!(!v["held"].to_string().contains("alpha"), "{v}");
+    assert_eq!(members(&v), ["alpha"], "{text}");
+    assert_eq!(v["left_out"], serde_json::json!(["beta"]), "{text}");
+    assert!(!v["held"].to_string().contains("alpha"), "{text}");
     let (code, v, text) = cut(&["--dry-run", "--without", "alpha"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["beta"], "{v}");
+    assert_eq!(members(&v), ["beta"], "{text}");
 
     // For real: a recorded cut of main plus alpha at the sha the red took.
     let (code, v, text) = cut(&["--only", "alpha"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha"], "{v}");
-    assert_eq!(v["members"][0]["head"], heads["alpha"], "{v}");
+    assert_eq!(members(&v), ["alpha"], "{text}");
+    assert_eq!(v["members"][0]["head"], heads["alpha"], "{text}");
     let head = git(&lane, &["rev-parse", "HEAD"]);
     let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
         .unwrap()
@@ -3476,34 +3484,33 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     assert!(out.contains("refused in the main checkout"), "{out}");
 
     let lane_before = git(&lane, &["rev-parse", "HEAD"]);
-    let check_drops = |v: &serde_json::Value| {
-        let d = v["dropped"].as_array().unwrap();
-        assert_eq!(d.len(), 2, "{v}");
+    // air-lij: the command's stderr rides along, so a git error behind an empty set is named.
+    let check_drops = |v: &serde_json::Value, err: &str| {
+        let d = v["dropped"].as_array().cloned().unwrap_or_default();
+        assert_eq!(d.len(), 2, "{v}\n{err}");
         assert!(
             d.iter().any(|d| d["worker"] == "beta"
                 && d["against"] == "gamma"
                 && d["against_sha"] == heads["gamma"].as_str()
                 && d["paths"] == serde_json::json!(["shared.txt"])),
-            "{v}"
+            "{v}\n{err}"
         );
         assert!(
             d.iter().any(|d| d["worker"] == "delta"
                 && d["against"] == "main"
                 && d["paths"] == serde_json::json!(["m.txt"])),
-            "{v}"
+            "{v}\n{err}"
         );
         let kept: Vec<&str> = v["members"]
             .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["worker"].as_str().unwrap())
-            .collect();
-        assert_eq!(kept, ["gamma", "alpha"], "oldest ready first: {v}");
+            .map(|a| a.iter().filter_map(|m| m["worker"].as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(kept, ["gamma", "alpha"], "oldest ready first: {v}\n{err}");
     };
 
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
     assert_eq!(code, 0, "{out}{err}");
-    check_drops(&serde_json::from_str(&out).unwrap());
+    check_drops(&serde_json::from_str(&out).unwrap(), &err);
     assert_eq!(
         git(&lane, &["rev-parse", "HEAD"]),
         lane_before,
@@ -3513,9 +3520,9 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
     assert_eq!(code, 0, "{out}{err}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    check_drops(&v);
+    check_drops(&v, &err);
     let head = git(&lane, &["rev-parse", "HEAD"]);
-    assert_eq!(v["head"], head.as_str(), "{v}");
+    assert_eq!(v["head"], head.as_str(), "{v}\n{err}");
     assert!(
         v["next"]
             .as_str()
