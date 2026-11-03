@@ -1,6 +1,6 @@
 # Live trial request
 
-This is the release trial from Air's design doc, section 9.1. Set up the nine scenarios below,
+This is the release trial from Air's design doc, section 9.1. Set up the ten scenarios below,
 file the beads they need, and let the fleet work through the ordinary protocol in
 `.air/roles.md`. Do not direct workers beyond what a bead says. Nothing here is a real product
 change. The verify is `make verify`; the fleet is the lane and worker-1 to worker-3.
@@ -35,3 +35,4 @@ Unless a bead says otherwise, workers run the precheck before handing over.
 | Landing by role | You, the coordinator, run `air land` once | It is refused; only the lane lands |
 | Precheck | One bead, not one of the conflict pair, whose worker is asked to hand over without running the precheck, then to run it when the lane says it is missing | The branch is not cut until `air record precheck` passes |
 | Start-up prompts | Nothing to file: the fleet that started with you is the set-up. Read each pane once (`tmux capture-pane -p -t <session>`) and put in the report what each was waiting on | Every session shows in `air status` and no pane waits on a prompt, after at most the one answer `.air/roles.md` lets you give |
+| Base branch | Last, once everything above has landed: ask the owner to rename the copy's `main` to `trunk` (`git branch -m main trunk` in the main checkout) and set `"base_branch": "trunk"` in `.claude/air.json`, then file one bead that adds a line to `README.md` | The cut, the green, the close and the landing name and move `trunk` (`trunk moved to` in the notice); `air status` prints `base branch: trunk`; the main checkout is still the owner's session, not a worker's |
