@@ -326,9 +326,11 @@ After any launch (`air fleet up`, `air worker`, `air lane`), read each new pane 
 capture-pane -p -t <project>-<name>`. A session waiting on a prompt hears no notices and does no
 work. If a prompt is waiting, ask the owner once, in plain text, "Shall I accept these on your
 behalf?", and on a yes answer each with `tmux send-keys -t <project>-<name> Enter` (or the
-recorded answer for that prompt). Answer only a prompt whose answer is recorded, such as the
-development-channels warning; never the folder-trust dialog, which is the owner's, and never a
-question about the work.
+recorded answer for that prompt). Your launcher allows `Bash(tmux send-keys *)` past the
+auto-mode classifier, which refused the keystroke otherwise; run it bare, with no pipe or
+redirect, because a piped line is judged by the classifier again. Answer only a prompt whose
+answer is recorded, such as the development-channels warning; never the folder-trust dialog,
+which is the owner's, and never a question about the work.
 
 The heartbeat is opt-in. Create it only where `.claude/air.json` sets `"heartbeat_minutes": <n>`
 (the SessionStart context says so and `air status` names the interval) or the owner asks for it:

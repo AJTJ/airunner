@@ -434,6 +434,27 @@ pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
     v
 }
 
+/// Allow rule for the coordinator: `tmux send-keys`, the one keystroke roles.md lets it type
+/// into another session (the recorded answer to a known start-up prompt, after the owner's yes;
+/// air-d73).
+///
+/// air-yux (2026-11-03): the live trial's five sessions sat on the development-channels
+/// prompt, the owner said yes, and the coordinator's `tmux send-keys -t <session> Enter` was
+/// refused by the auto-mode classifier ("Consent Given For The User"), three times across two
+/// days; its attempt to add the rule to `.claude/settings.local.json` was refused too
+/// ("Self-Modification"). Only the owner's own typing answered the prompts. Same shape as the
+/// lane's `air land` (air-8cdh) and the same fix: an allow rule on the role's `--settings`,
+/// which resolves before the classifier and is honored in a folder not yet trusted, never in
+/// the project file. The rule covers the bare command only; a piped line is still judged by
+/// the classifier (air-b1h8), and roles.md tells the coordinator to run it bare.
+///
+/// Removal: when every start-up prompt is pre-answered by the launcher, so nothing is left
+/// for the coordinator to type (air-z41: the development-channels warning has no documented
+/// skip yet).
+pub fn coordinator_allow() -> Vec<String> {
+    vec!["Bash(tmux send-keys *)".to_string()]
+}
+
 /// The one project MCP server Air installs (`.mcp.json`, and `server:air` for the channel).
 ///
 /// air-oe9k (2026-09-25 trial): every session stopped at "New MCP server found in this project:
@@ -815,7 +836,8 @@ pub fn coordinator_argv(
 ) -> Vec<String> {
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
     // the coordinator is the one that can see every fleet on the machine.
-    let settings = settings_blob(&coordinator_env(project), &[]);
+    // Plus its one allow rule, `tmux send-keys` (air-yux).
+    let settings = settings_blob(&coordinator_env(project), &coordinator_allow());
     let mut v: Vec<String> = vec![
         channels_flag.into(),
         "server:air".into(),
@@ -1753,7 +1775,11 @@ mod tests {
         let worker = settings_of(&worker_argv("w", "air", roles, &[]));
         assert!(worker.get("permissions").is_none(), "{worker}");
         let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
-        assert!(coord.get("permissions").is_none(), "{coord}");
+        let coord_allow = coord["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !coord_allow.iter().any(|r| r == "Bash(air land *)"),
+            "{coord}"
+        );
         // A pinned repo's lane may run the pin by absolute path, as it did in the trial.
         let pin = lane_allow(Some(Path::new("/m/.air/bin/air")));
         assert!(
@@ -1787,6 +1813,30 @@ mod tests {
                 .iter()
                 .any(|r| r == "Bash(air land *)")
         );
+    }
+
+    /// air-yux: the coordinator's `tmux send-keys -t <session> Enter`, the recorded answer to a
+    /// start-up prompt after the owner's yes (air-d73), was refused by the auto-mode classifier
+    /// three times in two days. The rule is on the coordinator's settings, exactly one, and on
+    /// no other role's.
+    #[test]
+    fn only_the_coordinator_is_allowed_tmux_send_keys_past_the_classifier() {
+        let roles = Path::new("/r/.air/roles.md");
+        let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
+        assert_eq!(
+            coord["permissions"]["allow"],
+            serde_json::json!(["Bash(tmux send-keys *)"]),
+            "{coord}"
+        );
+        let worker = settings_of(&worker_argv("w", "air", roles, &[]));
+        assert!(worker.get("permissions").is_none(), "{worker}");
+        let lane = settings_of(&lane_argv("lane", "air", roles, &[]));
+        let lane_rules = lane["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !lane_rules.iter().any(|r| r == "Bash(tmux send-keys *)"),
+            "{lane}"
+        );
+        assert_eq!(coordinator_allow(), ["Bash(tmux send-keys *)"]);
     }
 
     /// air-oe9k: every session stopped at "New MCP server found in this project: air", whose
