@@ -130,7 +130,7 @@ Index items are 1–3 lines; detail lives behind the link.
 
 | Read when | Document |
 |---|---|
-| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans or research directory; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
+| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans directory, and `docs/research/` holds only the sourced output of research beads, each cited from a §11 row, 2026-11-03; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
 | Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
 | Every problem Air has hit and demonstrably solved, with the fix and what would regress it; read before changing a mechanism (only landed fixes with a recorded incident; nothing planned) | [`docs/solved-issues.md`](docs/solved-issues.md) |
 | Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | the target shape and its open rulings are `docs/design.md` §10 |

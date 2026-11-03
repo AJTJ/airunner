@@ -1,6 +1,6 @@
 # Live trial request
 
-This is the release trial from Air's design doc, section 9.1. Set up the eight scenarios below,
+This is the release trial from Air's design doc, section 9.1. Set up the nine scenarios below,
 file the beads they need, and let the fleet work through the ordinary protocol in
 `.air/roles.md`. Do not direct workers beyond what a bead says. Nothing here is a real product
 change. The verify is `make verify`; the fleet is the lane and worker-1 to worker-3.
@@ -34,3 +34,4 @@ Unless a bead says otherwise, workers run the precheck before handing over.
 | Behind main | Nothing extra: this happens when one branch waits while another batch lands | The waiting branch lands without its worker merging main |
 | Landing by role | You, the coordinator, run `air land` once | It is refused; only the lane lands |
 | Precheck | One bead, not one of the conflict pair, whose worker is asked to hand over without running the precheck, then to run it when the lane says it is missing | The branch is not cut until `air record precheck` passes |
+| Start-up prompts | Nothing to file: the fleet that started with you is the set-up. Read each pane once (`tmux capture-pane -p -t <session>`) and put in the report what each was waiting on | Every session shows in `air status` and no pane waits on a prompt, after at most the one answer `.air/roles.md` lets you give |

@@ -128,6 +128,10 @@ it. Two conflicts merge cleanly as text and are still wrong: both sides adding t
 and both sides changing the same count or list. Check a merge by `git ls-files -u` being empty
 and no conflict markers remaining, not by reading command output.
 
+Where `targets` in `.claude/air.json` names a machine for your session, `air run -- <command>`
+runs the command there at your HEAD, `--pull <glob>` brings result files back, and `air record`
+runs its check there the same way; with no entry both run here.
+
 A close needs no message. The proof is on the bead, and `air status` and the channel tell the
 coordinator what is batch-ready and landable. Message the coordinator only when you are
 blocked, need a decision, or find work outside your bead, and then use `air capture`.

@@ -60,19 +60,21 @@ Then commit, record the first green and start the fleet:
 A yes starts the verification lane and the workers, each in its own worktree and tmux session,
 the same as `air fleet up`. `air lane` and `air worker` start one session by hand.
 
-Each session can stop at start-up, and the launcher prints once which prompts to expect:
+Before it starts a session, a launcher reads whether Claude Code has been trusted in the main
+checkout (`projects["<main checkout>"].hasTrustDialogAccepted` in `~/.claude.json`) and refuses,
+naming the key and the fix, when it has not. The fix is to run `claude` once in the main
+checkout and answer yes to "Is this a project you created or one you trust?"; one yes covers
+every worktree, and Air never writes that key. Each launch then pre-answers the prompts Claude
+Code documents an answer for: `--add-dir <main checkout>`, `--permission-mode auto`, and
+`skipAutoPermissionPrompt` and `enabledMcpjsonServers` on its `--settings`, so the "New MCP
+server found in this project: air" question does not appear.
 
-- "Is this a project you created or one you trust?" until Claude Code has been trusted in the
-  main checkout. Answer yes; the default exits. One yes covers every worktree, so running
-  `claude` once in the main checkout before the first fleet avoids it.
-- "Loading development channels", on every session, because each loads the Air channel, a
-  local server, which is how Air's messages reach it. Choose "I am using this for local
-  development".
-
-The "New MCP server found in this project: air" question no longer appears: every launch
-approves the `air` server in its own settings. The lane's whole loop (`air batch cut`,
-`air record verify`, `air land`) is on its allow list, run bare, so auto mode's classifier does
-not refuse it.
+One prompt remains, "Loading development channels", on every session, because each loads the
+Air channel, a local server, and Claude Code documents no skip for it. Choose "I am using this
+for local development", or let the coordinator do it: after a launch it reads each pane, asks
+you once whether to accept on your behalf, and on a yes answers with `tmux send-keys`, which its
+launcher allows. The lane's whole loop (`air batch cut`, `air record verify`, `air land`) is on
+its allow list, run bare, so auto mode's classifier does not refuse it.
 
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.
@@ -97,6 +99,7 @@ Optionally, the repo also provides:
 - `"leases"` in `.claude/air.json` for commands that need a shared resource;
 - `"targets"` in `.claude/air.json`, a machine per session that `air run -- <command>` pushes
   the session's branch to and runs the command on, for work the local machine cannot do;
+  `air record` runs the check there the same way;
 - a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
   copies into each new worktree.
 - bead sections bd must see before it files a bead, under `lint: sections:` in
@@ -142,12 +145,13 @@ key is optional.
 | `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
 | `model` | The model every launcher (`air worker`, `air lane`, `air coordinator`, `air fleet up`) passes as `--model` when the command line gives none. `air status` marks a session whose transcript names another model. | absent: the session inherits the harness's model |
 | `lane_model` | The lane's model, over `model`. | absent: the lane takes `model` |
+| `heartbeat_minutes` | `<n>`: the coordinator creates a heartbeat every n minutes (run `air status`, continue owed work, else say nothing), which is what brings it back after an account limit. `air status` prints the interval. | absent: no heartbeat; `air status` still prints `STOPPED at <t>` |
 | `coordinator_autobatch` | `true`: every coordinator commit main lacks is batch-ready, so the lane cuts after each one. Absent or `false`, the coordinator's branch is batch-ready only at a head it offered with `air ready`. | `false` |
 | `verify_lane` | `true`: workers run no verify of their own and close on the lane's batch green (the with-lane sequence in `.air/roles.md`). It does not name the lane; the lane is the session `air lane` started. A string value counts as absent; a lane session having run also counts as a lane. | absent: workers verify their own branch |
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
 | `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
-| `targets` | `{"<session>": {"kind": "ssh", "host": "<h>", "user": "<u>", "path": "~/air/<project>"}}`, one per session (`worker-1`, `lane`, …). `air run -- <cmd>` from that session pushes HEAD to `refs/air/<session>` in a repository it initialises at `path` on the host, checks it out, and runs the command there over ssh; the exit code and output come back. A session with no entry runs the command locally. The push never goes to the project's remote. | none: every session runs locally |
+| `targets` | `{"<session>": {"kind": "ssh", "host": "<h>", "user": "<u>", "path": "~/air/<project>"}}`, one per session (`worker-1`, `lane`, …). `air run -- <cmd>` from that session pushes HEAD to `refs/air/<session>` in a repository it initialises at `path` on the host, checks it out, and runs the command there over ssh; the exit code and output come back. A session with no entry runs the command locally. The push never goes to the project's remote. `air record` through a target runs the check there on the pushed HEAD and records the result at the local HEAD; a dirty tree is refused, since the target holds only commits, and `--local` runs it here. `air run --pull <glob>` brings the matching result paths back into the worktree. Every run, local or not, is one row in the ledger's `runs` table with the machine it ran on, and `--json` prints it (air-opq.3, air-opq.4, air-opq.5). | none: every session runs locally |
 | `digests` | `true`: the close gate needs a digest naming the bead in the main checkout's `.air/digests/`. | `false` |
 | `digest_dir` | A repo path: the close gate needs a digest naming the bead there, tracked by git. Wins over `digests`. | none |
 | `journal_dir` | A repo path for session journals, tracked in the repo instead of `.air/journal/`. | none |
@@ -165,6 +169,11 @@ To add environment variables to a worker, pass inline JSON: `air worker <name> -
 `permissions.allow` are combined, and Air's four env values win. A `--settings
 <file>` there is refused. `AIR_BD_TIMEOUT_MS` replaces Air's whole bd budget with one flat
 figure; leave it unset unless a bd call times out.
+
+On a Mac each launcher runs the session as the child of `caffeinate -i`, so the machine does
+not idle-sleep under an hour-long command and may once the session ends. `AIR_CAFFEINATE_BIN`
+names another binary, and an empty value turns the wrapper off. `air status` prints the
+idle-sleep setting when `pmset -g` reports under ten minutes (air-1ye).
 
 ## Upgrading an existing installation
 

@@ -30,7 +30,7 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
   - Air tells the coordinator when a worker is stuck or has gone away, and when work is ready to land.
   - When a worker is blocked, the worker sends the coordinator a note. The coordinator turns the note into a bead or drops it.
   - It asks you only about decisions that are yours to make. It files each question as a bead for you to answer.
-  - It checks in every five minutes, so it carries on after a pause or an account limit.
+  - Where `.claude/air.json` sets `heartbeat_minutes`, it checks in on that interval, so it carries on after a pause or an account limit.
 - **Workers** (`air worker`)
   - A worker works on one bead at a time through its own git worktree, so workers never edit each other's files.
   - There are three workers by default. Practically, adding more than three offers little gains on a regular machine.
@@ -100,9 +100,11 @@ air coordinator
 ```
 
 Say yes to starting the fleet. Air creates the worktrees, starts the beads server and opens a
-tmux session per role. Each new session asks two things once: whether you trust the folder, and
-whether to load the Air channel ("I am using this for local development"). Accept both. Then
-tell the coordinator what to build; it runs everything from there.
+tmux session per role. The launcher refuses, naming the fix, until Claude Code has been
+trusted in the main checkout once, and it pre-answers the prompts Claude Code documents an
+answer for. One prompt is left on each new session, whether to load the Air channel ("I am
+using this for local development"); the coordinator offers to answer it for you, or you accept
+it in each pane. Then tell the coordinator what to build; it runs everything from there.
 
 You rarely need these, but they are there:
 
@@ -119,7 +121,11 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Hook.** `air hook` records every tool call, warns when two workers edit one file, and
   nudges an idle worker toward ready beads; `air close` refuses a close that has no passing run.
 - **Channel.** `air mcp` tells the coordinator when something needs attention.
-- **Merge queue.** `air record`, `air batch cut` and `air land`.
+- **Merge queue.** `air record`, `air batch cut` and `air land`; `air ready` offers the
+  coordinator's own branch to the lane.
+- **Remote runner.** `air run -- <command>` runs a command on the machine `targets` in
+  `.claude/air.json` names for the session, pushing the branch there first; `air record` runs
+  the check there the same way, and `--pull` brings result files back.
 - **Diagnostics.**
   - `air status` shows the whole fleet on one screen.
   - `air audit` shows how often each rule fired, so rules that never fire can be removed.
@@ -129,7 +135,8 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 ## Upcoming
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
-- Fleets spread across several machines, with every agent still working through Air.
+- Sessions on other machines. Today a session's commands and checks can run elsewhere, through
+  `air run` and `air record` on an ssh target, while every session is still local.
 
 ## Inspired by
 
@@ -151,7 +158,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
   each shown failing without the check and passing with it
   ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
 - Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
-  coordinator, a lane and three workers work through eight scenarios on a copy of
+  coordinator, a lane and three workers work through nine scenarios on a copy of
   [examples/minimal](examples/minimal), from a fixed
   [request](scripts/trial/request.md). The coordinator writes a report of what happened,
   including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the
