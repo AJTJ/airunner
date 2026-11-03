@@ -179,43 +179,43 @@ for anything that is not part of the repo.
 
 ### Verification lane
 
-A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has
-the worker deny list minus `air land`, and the Stop hook offers it no ready beads. While it
-batches it holds no bead, and between batches none either: `air batch cut` resets the lane's
-branch to main before it merges, so work of the lane's own does not survive a cut.
+A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has the
+worker deny list minus `air land`, and the Stop hook offers it no ready beads. While it batches
+it holds no bead, and between batches none either: `air batch cut` resets the lane's branch to
+main before it merges, so work of the lane's own does not survive a cut.
 
 The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
 merges every batch-ready branch at the sha `air status` lists, never a sha from a message,
-refusing while your tree has uncommitted changes or your head is a passing batch that could
-still land (a passing batch main has moved past is re-cut), and drops and names a branch that
-conflicts with main or with an earlier member. `--dry-run` merges nothing. Then run the repo's
-test-state reset if it has one, and `air record verify -- <verify command>`. A dropped branch is
-resolved by its worker, never by the lane. A red batch lands nothing; you may split it with
-`--without` or `--only`. Run these and `air land` bare, with no pipe or redirect: your settings
-allow only the bare line, and one auto-mode classifier refusal can stop every later landing.
+refusing while your tree is dirty or your head is a passing batch that could still land (one
+main moved past is re-cut), and drops and names a branch that conflicts with main or an earlier
+member. `--dry-run` merges nothing. Then run the test-state reset, if any, and `air record
+verify -- <verify command>`. A target for your session in `.claude/air.json` runs it there on
+the pushed batch commit, the green recorded at your head; `--local` runs it here. Its worker
+resolves a dropped branch, not the lane. A red batch lands nothing; split it with `--without` or
+`--only`. Run these and `air land` bare, with no pipe or redirect: only the bare line is
+allowed, and one classifier refusal can stop later landings.
 
 Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
 batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air
 record` end with your next step: the branches batch-ready now and `next: air batch cut`, or
-`nothing is batch-ready`. You need not tell members a result or a dropped worker its conflict,
-because Air tells them. On `fleet stop`, let a verify already running finish; it is recorded.
-Then cut and land nothing: `air batch cut` and `air land` refuse until `fleet resumed`, and
-then you cut the next batch.
+`nothing is batch-ready`. Air tells members their result and a dropped worker its conflict. On
+`fleet stop`, let a verify already running finish; it is recorded. Then cut and land nothing:
+`air batch cut` and `air land` refuse until `fleet resumed`, and then you cut the next batch.
 
 A branch is batch-ready when its commits carry a `Bead:` trailer for a bead its worker holds or
-that is closed (a green at its head does not take it out), and, where
-`.claude/air.json` sets `"precheck": true`, it has a green `air record precheck` at its head.
-Being behind `main` does not take it out. The coordinator's branch needs no bead, only a commit
-main lacks. `air status --json` gives the first fact each other branch lacks.
+that is closed (a green at its head does not take it out), and, where `.claude/air.json` sets
+`"precheck": true`, it has a green `air record precheck` at its head. Being behind `main` does
+not take it out. The coordinator's branch needs no bead, only a commit main lacks. `air status
+--json` gives the first fact each other branch lacks.
 
 A batch is a commit on the lane's branch that contains `main` and each member at the sha it
 merged. The green or red recorded there is the batch's. A red batch is reported by member in
-`air record`'s output and in `air status` until a newer batch replaces it, and `air handover`
-in a member's worktree names it. The close gate accepts a green at a verified commit that
-contains `main` and every commit carrying the bead's trailer, so a worker closes on the lane's
-green with no verify of its own. The lane lands its green batch with `air land --worker
-<lane>`, recording every bead the range names by trailer; a batch of only the coordinator's
-commits lands carrying no bead. `air land` is refused to workers and the coordinator.
+`air record`'s output and in `air status` until a newer batch replaces it, and `air handover` in
+a member's worktree names it. The close gate accepts a green at a verified commit that contains
+`main` and every commit carrying the bead's trailer, so a worker closes on the lane's green with
+no verify of its own. The lane lands its green batch with `air land --worker <lane>`, recording
+every bead the range names by trailer; a batch of only the coordinator's commits lands carrying
+no bead. `air land` is refused to workers and the coordinator.
 
 ## Coordinator
 
