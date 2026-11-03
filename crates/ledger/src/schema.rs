@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 27;
+pub const CURRENT_VERSION: i64 = 28;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -410,6 +410,13 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_session ON runs(session, started_at);
 "#;
 
+/// v28 (2026-11-03, air-opq.4): what `air run --pull` brought back: the paths as a JSON array
+/// and their byte total. NULL and 0 on rows from before, and on every run without `--pull`.
+const V28: &str = r#"
+ALTER TABLE runs ADD COLUMN pulled TEXT;
+ALTER TABLE runs ADD COLUMN pulled_bytes INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -425,7 +432,7 @@ CREATE INDEX IF NOT EXISTS runs_session ON runs(session, started_at);
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25, V26, V27,
+    V22, V23, V24, V25, V26, V27, V28,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.

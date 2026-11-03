@@ -43,14 +43,22 @@ pub struct Run {
     /// `local`, or the ssh target as `<user@host>:<path>`.
     pub target: String,
     pub machine: Machine,
+    /// The paths `--pull` brought back into the worktree, relative to it (air-opq.4). Empty
+    /// without `--pull`, and on every local run.
+    #[serde(default)]
+    pub pulled: Vec<String>,
+    /// The bytes of the files under those paths, as they are in the worktree after the pull.
+    #[serde(default)]
+    pub pulled_bytes: i64,
 }
 
 impl Ledger {
     pub fn record_run(&self, run: &Run) -> Result<()> {
         self.conn().execute(
             "INSERT INTO runs (id, session, sha, tree, command, exit_code, started_at, \
-             finished_at, duration_ms, output_bytes, target, hostname, image, arch, nproc, cpu) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+             finished_at, duration_ms, output_bytes, target, hostname, image, arch, nproc, cpu, \
+             pulled, pulled_bytes) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 run.id,
                 run.session,
@@ -68,6 +76,8 @@ impl Ledger {
                 run.machine.arch,
                 run.machine.nproc,
                 run.machine.cpu,
+                serde_json::to_string(&run.pulled).unwrap_or_else(|_| "[]".into()),
+                run.pulled_bytes,
             ],
         )?;
         Ok(())
@@ -77,8 +87,8 @@ impl Ledger {
     pub fn runs_of(&self, session: &str) -> Result<Vec<Run>> {
         let mut st = self.conn().prepare(
             "SELECT id, session, sha, tree, command, exit_code, started_at, finished_at, \
-             duration_ms, output_bytes, target, hostname, image, arch, nproc, cpu \
-             FROM runs WHERE session = ?1 ORDER BY started_at, id",
+             duration_ms, output_bytes, target, hostname, image, arch, nproc, cpu, pulled, \
+             pulled_bytes FROM runs WHERE session = ?1 ORDER BY started_at, id",
         )?;
         let rows = st.query_map(params![session], |r| {
             Ok(Run {
@@ -100,6 +110,11 @@ impl Ledger {
                     nproc: r.get(14)?,
                     cpu: r.get(15)?,
                 },
+                pulled: r
+                    .get::<_, Option<String>>(16)?
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default(),
+                pulled_bytes: r.get(17)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -131,6 +146,8 @@ mod tests {
                 nproc: 16,
                 cpu: "AMD EPYC".into(),
             },
+            pulled: vec![],
+            pulled_bytes: 0,
         }
     }
 
@@ -146,6 +163,16 @@ mod tests {
         assert_eq!(l.runs_of("worker-1").unwrap(), vec![earlier, later]);
         assert_eq!(l.runs_of("lane").unwrap(), vec![other]);
         assert!(l.runs_of("worker-2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn pulled_paths_and_bytes_round_trip() {
+        let l = Ledger::open_in_memory().unwrap();
+        let mut r = run("worker-1", "2026-11-03T10:00:00Z", 0);
+        r.pulled = vec!["results/a.txt".into(), "results/dir".into()];
+        r.pulled_bytes = 1234;
+        l.record_run(&r).unwrap();
+        assert_eq!(l.runs_of("worker-1").unwrap(), vec![r]);
     }
 
     #[test]
