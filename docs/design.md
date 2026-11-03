@@ -52,7 +52,7 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 3,968 | The SQLite schema (v27), one row type per table, and the event writer. No network, no beads. |
+| ledger | 3,968 | The SQLite schema (v29), one row type per table, and the event writer. No network, no beads. |
 | hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
 | cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (13,903 lines, 165 probes). |
@@ -84,7 +84,9 @@ set) and refuses, with the fix, when it is not `true`; Air never writes that key
 development-channels warning has no documented skip, so it, and any other prompt a session is
 found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
 session with `tmux send-keys` once the owner has said yes to that (air-d73). Folder trust is
-never answered by anyone but the owner.
+never answered by anyone but the owner. On a Mac the session runs as the child of `caffeinate
+-i`, so the machine does not idle-sleep under a long command and may once the fleet is idle;
+`air status` prints an idle-sleep setting under ten minutes (air-1ye).
 
 ### 3.1 Roles and permissions
 
@@ -109,7 +111,7 @@ Any session may run these.
 
 | Command | What it does |
 |---|---|
-| air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step. |
+| air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command, and stamps the machine it ran on. With a target for the session in `targets` the check runs there on the pushed HEAD (`air run`'s push and checkout) and is recorded at the local HEAD as usual; a dirty tree is refused, since the target holds only commits, and `--local` runs it here. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step. |
 | air run | Runs a command on the calling session's target, or here when `targets` in `.claude/air.json` names none for it, with the same exit code and nothing added. With an `ssh` target it initialises a repository at the target's path once, pushes HEAD to `refs/air/<session>` there (forced; the ref is the session's own, and no remote in `.git/config` is touched), checks that commit out detached, and runs the command in that directory over ssh with the output streamed back. `ssh` is resolved on `PATH`. Every run, local or not, is one row in `runs` with the machine it ran on, and `--json` prints it after the command's output. `--pull <glob>` (repeatable) brings declared result paths back after the command exits, whatever its exit: the matches under the target's checkout come back as one tar stream over the same ssh and are unpacked into the worktree at the same relative paths, overwriting; nothing comes back without it, a path outside the checkout is never listed, and a glob matching nothing is reported, not an error. |
 | air handover | Says what the close gate would decide for this worktree now, each missing fact with its fix, and on a pass the `air close` that would go through. |
 | air close | Closes beads in one beads process and releases their claims. For a worker or the lane it runs the close gate on each bead first, whatever `AIR_ENFORCE` says, and closes nothing if one fails. It refuses an id with whitespace, and names an id beads does not have. |
@@ -232,7 +234,7 @@ erDiagram
 
 | Table | Holds | Written by |
 |---|---|---|
-| verify_runs | One row per recorded check: commit, tree, exit, command, duration, dirty flag, kept log, the main it ran over, batch members. | record, land |
+| verify_runs | One row per recorded check: commit, tree, exit, command, duration, dirty flag, kept log, the main it ran over, batch members, and the machine it ran on (v29; null before). | record, land |
 | verify_inflight | The check running now and its process. | record |
 | runs | One row per `air run`: session, commit, tree, command, exit, times, output size, the target (`local` or `user@host:path`), and the machine as the probe read it there (hostname, image, arch, nproc, CPU), and what `--pull` brought back (the paths and their byte total). Not a verify: no green query reads it. | run |
 | batch_cuts | The members a cut merged, keyed by lane and head. | batch cut |

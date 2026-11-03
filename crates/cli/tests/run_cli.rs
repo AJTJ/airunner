@@ -141,6 +141,33 @@ exec sh -c "$*"
             std::fs::read_to_string(repo.join("ssh.log")).unwrap_or_default()
         }
 
+        /// Any `air` subcommand from `repo`, with the stand-in ssh on PATH as [`air_run_args`].
+        pub fn air_cmd(repo: &Path, args: &[&str]) -> (i32, String, String) {
+            let path = format!(
+                "{}:{}",
+                fake_ssh().display(),
+                std::env::var("PATH").unwrap_or_default()
+            );
+            let out = common::command(env!("CARGO_BIN_EXE_air"))
+                .arg("--repo")
+                .arg(repo)
+                .args(args)
+                .env("PATH", path)
+                .env("AIR_TEST_SSH_LOG", repo.join("ssh.log"))
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_SSH")
+                .env_remove("GIT_SSH_COMMAND")
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            (
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stdout).to_string(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            )
+        }
+
         /// `.claude/air.json` with an ssh target for `main` at `<repo>/target`.
         pub fn ssh_target(repo: &Path) -> PathBuf {
             let target = repo.join("target");
@@ -464,6 +491,113 @@ exec sh -c "$*"
             );
             let (_, row) = split(&out);
             assert!(row.pulled.is_empty());
+        }
+    }
+
+    /// `air record` through the runner (air-opq.5): the check runs on the target, the green is
+    /// recorded at the local head with the machine beside it, and the close gate reads it as
+    /// any other green. A dirty tree is refused; `--local` is the old path.
+    pub mod verify {
+        use air_ledger::verify::Kind;
+
+        use super::skeleton::{air_cmd, git, scratch_repo, ssh_log, ssh_target};
+
+        #[test]
+        fn a_verify_with_a_target_runs_there_and_is_green_at_the_local_head() {
+            let repo = scratch_repo();
+            let target = ssh_target(repo.path());
+            // Tracked, as an adopter's is: an untracked config would itself be dirt.
+            git(repo.path(), &["add", ".claude/air.json"]);
+            git(repo.path(), &["commit", "-q", "-m", "config"]);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            let (code, out, err) = air_cmd(
+                repo.path(),
+                &[
+                    "record",
+                    "verify",
+                    "--",
+                    "sh",
+                    "-c",
+                    "git rev-parse HEAD; test -f note",
+                ],
+            );
+            assert_eq!(code, 0, "{out}{err}");
+            assert!(out.contains(&sha), "ran at the pushed commit: {out}");
+            assert!(out.contains("recorded green verify"), "{out}");
+            assert!(
+                err.contains("on me@box"),
+                "the flag names the target: {err}"
+            );
+            let log = ssh_log(repo.path());
+            assert!(
+                log.contains(&format!("git checkout -q --detach {sha}")),
+                "{log}"
+            );
+            assert!(
+                log.contains(&format!("cd {} && sh -c", target.display())),
+                "the check ran in the target's path: {log}"
+            );
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(ledger.runs_at(&sha, Kind::Verify).unwrap(), (1, 0));
+            let run = ledger
+                .latest_run_any("main", Kind::Verify)
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.sha, sha, "recorded at the local head");
+            assert_eq!(
+                run.tree.as_deref(),
+                Some(git(repo.path(), &["rev-parse", "HEAD^{tree}"]).as_str())
+            );
+            assert_eq!(
+                run.command.as_deref(),
+                Some("sh -c git rev-parse HEAD; test -f note")
+            );
+            assert!(!run.dirty);
+            let m = ledger.machine_of(&run.id).unwrap().unwrap();
+            assert!(
+                !m.hostname.is_empty() && !m.arch.is_empty() && m.nproc > 0,
+                "{m:?}"
+            );
+            // The gate reads it: handover no longer wants a green at HEAD.
+            let (_, out, err) = air_cmd(repo.path(), &["handover"]);
+            assert!(
+                !format!("{out}{err}").contains("no green verify recorded at HEAD"),
+                "{out}{err}"
+            );
+        }
+
+        #[test]
+        fn a_dirty_tree_with_a_target_is_refused_and_local_runs_here() {
+            let repo = scratch_repo();
+            ssh_target(repo.path());
+            git(repo.path(), &["add", ".claude/air.json"]);
+            git(repo.path(), &["commit", "-q", "-m", "config"]);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            std::fs::write(repo.path().join("note"), "edited\n").unwrap();
+            let (code, out, err) = air_cmd(repo.path(), &["record", "verify", "--", "true"]);
+            assert_eq!(code, 2, "{out}{err}");
+            assert!(err.contains("note") && err.contains("--local"), "{err}");
+            assert_eq!(ssh_log(repo.path()), "", "nothing was pushed");
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(
+                ledger.runs_at(&sha, Kind::Verify).unwrap(),
+                (0, 0),
+                "nothing recorded"
+            );
+
+            let (code, out, err) =
+                air_cmd(repo.path(), &["record", "verify", "--local", "--", "true"]);
+            assert_eq!(code, 0, "{out}{err}");
+            assert_eq!(ssh_log(repo.path()), "", "--local touches no target");
+            assert!(!err.contains("on me@box"), "{err}");
+            assert_eq!(ledger.runs_at(&sha, Kind::Verify).unwrap(), (1, 0));
+            let run = ledger
+                .latest_run_any("main", Kind::Verify)
+                .unwrap()
+                .unwrap();
+            assert!(run.dirty, "the local path records a dirty tree as before");
+            let m = ledger.machine_of(&run.id).unwrap().unwrap();
+            assert!(!m.hostname.is_empty(), "{m:?}");
         }
     }
 }

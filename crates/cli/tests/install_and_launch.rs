@@ -73,6 +73,9 @@ fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, Stri
         .arg(repo)
         .args(args)
         .env("AIR_BD_BIN", "/nonexistent/bd")
+        // air-1ye: on a Mac the launchers wrap claude in `caffeinate -i`; the print tests here
+        // read the claude line itself, and the wrapper has its own test.
+        .env("AIR_CAFFEINATE_BIN", "")
         .current_dir(repo);
     if let Some(p) = path_env {
         c.env("PATH", p);
@@ -1018,6 +1021,7 @@ fn fleet_up_starts_the_lane_and_workers_once() {
             .current_dir(&repo)
             .env("PATH", &path)
             .env("CLAUDE_CONFIG_DIR", trust.path())
+            .env("AIR_CAFFEINATE_BIN", "")
             .env("AIR_BD_BIN", "/nonexistent/bd")
             .env_remove("AIR_TMUX_SOCKET")
             .stdin(std::process::Stdio::null())
@@ -1437,5 +1441,122 @@ fn launchers_pre_answer_prompts_and_refuse_without_folder_trust() {
             "{args:?}: {err}"
         );
         assert!(!repo.join(".claude/worktrees").exists(), "{args:?}");
+    }
+}
+
+/// air-1ye: on a Mac the launched session is `caffeinate -i`'s child, so the machine does not
+/// idle-sleep under an hour-long command, and the assertion ends with the session: nothing is
+/// left running after it. Covered on the real binary, which is why this is macOS only.
+#[cfg(target_os = "macos")]
+#[test]
+fn launcher_holds_the_mac_awake_with_caffeinate_until_the_session_exits() {
+    if common::command("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed; detached launch cannot be exercised");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let stub = repo.join("claude-stub.sh");
+    // The stub records its parent's command line, which is what holds the assertion.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nps -o command= -p $PPID > \"$d/parent.tmp\"\nmv \"$d/parent.tmp\" \"$d/parent.txt\"\nexec sleep 30\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let socket = format!("air-test-caf-{}", std::process::id());
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "w", "--task", "hello"])
+        .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
+        .env("AIR_CLAUDE_BIN", &stub)
+        .env("AIR_TMUX_SOCKET", &socket)
+        .env_remove("AIR_CAFFEINATE_BIN")
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parent_path = repo.join("parent.txt");
+    let mut parent = String::new();
+    let waited = std::time::Instant::now();
+    while waited.elapsed() < std::time::Duration::from_secs(60) {
+        if let Ok(s) = std::fs::read_to_string(&parent_path)
+            && !s.is_empty()
+        {
+            parent = s;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    common::command("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .output()
+        .unwrap();
+    assert!(
+        parent.contains("caffeinate -i") && parent.contains("claude-stub.sh"),
+        "the session's parent is not caffeinate: {parent:?}"
+    );
+    // Gone with the session: no caffeinate naming this stub survives the kill.
+    let pattern = format!("caffeinate -i {}", stub.display());
+    let gone = std::time::Instant::now();
+    let mut left = String::new();
+    while gone.elapsed() < std::time::Duration::from_secs(10) {
+        let o = common::command("pgrep")
+            .args(["-f", &pattern])
+            .output()
+            .unwrap();
+        left = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if left.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(left.is_empty(), "caffeinate left behind: pids {left}");
+}
+
+/// air-1ye: `air status` prints the Mac's idle-sleep setting when it is under ten minutes and
+/// nothing otherwise, read from whatever `pmset` is on PATH, so a fake one drives both cases.
+#[test]
+fn status_names_a_short_idle_sleep_from_pmset_and_nothing_otherwise() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    for (minutes, expect) in [("1", true), ("30", false), ("0", false)] {
+        let fake = tempfile::tempdir().unwrap();
+        let pmset = fake.path().join("pmset");
+        std::fs::write(
+            &pmset,
+            format!(
+                "#!/bin/sh\nprintf 'System-wide power settings:\\nCurrently in use:\\n disksleep            10\\n sleep                {minutes} (sleep prevented by x)\\n displaysleep         10\\n'\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&pmset, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            fake.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let (code, out, err) = air(&repo, Some(&path), &["status"]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out.contains(&format!("idle sleep: {minutes} min")),
+            expect,
+            "pmset sleep {minutes}: {out}"
+        );
     }
 }
