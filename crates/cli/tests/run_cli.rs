@@ -92,6 +92,17 @@ exec sh -c "$*"
             env: &[(&str, &str)],
             json: bool,
         ) -> (i32, String, String) {
+            air_run_args(repo, &[], command, env, json)
+        }
+
+        /// [`air_run_with`] with `run`'s own arguments (`--pull …`) before the `--`.
+        pub fn air_run_args(
+            repo: &Path,
+            run_args: &[&str],
+            command: &[&str],
+            env: &[(&str, &str)],
+            json: bool,
+        ) -> (i32, String, String) {
             let path = format!(
                 "{}:{}",
                 fake_ssh().display(),
@@ -107,6 +118,7 @@ exec sh -c "$*"
             }
             let out = cmd
                 .arg("run")
+                .args(run_args)
                 .arg("--")
                 .args(command)
                 .env("PATH", path)
@@ -254,7 +266,7 @@ exec sh -c "$*"
         use super::skeleton::{air_run_with, git, scratch_repo, ssh_target};
 
         /// The command's own output comes first, then the row.
-        fn split(stdout: &str) -> (String, air_ledger::runs::Run) {
+        pub fn split(stdout: &str) -> (String, air_ledger::runs::Run) {
             let at = stdout.find('{').unwrap();
             let (out, json) = stdout.split_at(at);
             (out.to_string(), serde_json::from_str(json).unwrap())
@@ -320,6 +332,138 @@ exec sh -c "$*"
             );
             let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
             assert_eq!(ledger.runs_of("main").unwrap().len(), 1);
+        }
+    }
+
+    /// `--pull`: declared result paths come back as one tar stream and are recorded
+    /// (air-opq.4).
+    pub mod pull {
+        use super::record::split;
+        use super::skeleton::{air_run_args, scratch_repo, ssh_log, ssh_target};
+
+        const WRITE: &str = "mkdir -p results other; printf hello > results/a.txt; \
+                             printf nope > results/b.log; printf x > other/c.txt; exit 3";
+
+        #[test]
+        fn declared_paths_come_back_overwriting_and_the_record_names_them() {
+            let repo = scratch_repo();
+            let target = ssh_target(repo.path());
+            std::fs::create_dir_all(repo.path().join("results")).unwrap();
+            std::fs::write(repo.path().join("results/a.txt"), "old\n").unwrap();
+
+            let (code, out, err) = air_run_args(
+                repo.path(),
+                &["--pull", "results/*.txt", "--pull", "nothing/*"],
+                &["sh", "-c", WRITE],
+                &[],
+                true,
+            );
+            assert_eq!(code, 3, "the command's exit, not the pull's\n{err}");
+            assert_eq!(
+                std::fs::read_to_string(repo.path().join("results/a.txt")).unwrap(),
+                "hello",
+                "pulled back with the same content, overwriting"
+            );
+            assert!(
+                !repo.path().join("results/b.log").exists(),
+                "a path the glob does not name stays on the target"
+            );
+            assert!(
+                !repo.path().join("other").exists(),
+                "nothing undeclared comes back"
+            );
+            assert_eq!(
+                std::fs::read_to_string(target.join("results/b.log")).unwrap(),
+                "nope",
+                "the target keeps what it wrote"
+            );
+            assert!(
+                err.contains("--pull nothing/*: matched nothing"),
+                "a glob with no match is reported: {err}"
+            );
+            assert!(
+                err.contains("pulled results/a.txt (5 bytes)"),
+                "one line says what came back: {err}"
+            );
+            let (_, row) = split(&out);
+            assert_eq!(row.pulled, vec!["results/a.txt".to_string()]);
+            assert_eq!(row.pulled_bytes, 5);
+            assert_eq!(row.exit_code, 3);
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            let stored = ledger.runs_of("main").unwrap();
+            assert_eq!(stored.len(), 1);
+            assert_eq!(
+                stored[0].pulled, row.pulled,
+                "the stored row names the path"
+            );
+            assert_eq!(stored[0].pulled_bytes, 5);
+            let log = ssh_log(repo.path());
+            assert!(
+                log.contains("tar -cf - -- results/a.txt"),
+                "one tar stream over the same transport: {log}"
+            );
+        }
+
+        #[test]
+        fn a_directory_glob_pulls_the_directory_and_sums_its_bytes() {
+            let repo = scratch_repo();
+            ssh_target(repo.path());
+            let (code, out, _) = air_run_args(
+                repo.path(),
+                &["--pull", "results"],
+                &[
+                    "sh",
+                    "-c",
+                    "mkdir -p results/sub; printf ab > results/x; printf cde > results/sub/y",
+                ],
+                &[],
+                true,
+            );
+            assert_eq!(code, 0);
+            assert_eq!(
+                std::fs::read_to_string(repo.path().join("results/sub/y")).unwrap(),
+                "cde"
+            );
+            let (_, row) = split(&out);
+            assert_eq!(row.pulled, vec!["results".to_string()]);
+            assert_eq!(row.pulled_bytes, 5);
+        }
+
+        #[test]
+        fn nothing_comes_back_without_pull() {
+            let repo = scratch_repo();
+            ssh_target(repo.path());
+            let (code, out, err) = air_run_args(repo.path(), &[], &["sh", "-c", WRITE], &[], true);
+            assert_eq!(code, 3);
+            assert!(!repo.path().join("results").exists(), "{err}");
+            assert!(!err.contains("pulled"), "{err}");
+            let (_, row) = split(&out);
+            assert!(row.pulled.is_empty());
+            assert_eq!(row.pulled_bytes, 0);
+            assert!(
+                !ssh_log(repo.path()).contains("tar "),
+                "no stream without --pull"
+            );
+        }
+
+        #[test]
+        fn a_local_run_pulls_nothing_because_the_files_are_here() {
+            let repo = scratch_repo();
+            let (code, out, err) = air_run_args(
+                repo.path(),
+                &["--pull", "results/*"],
+                &["sh", "-c", "mkdir -p results; printf hi > results/a"],
+                &[],
+                true,
+            );
+            assert_eq!(code, 0);
+            assert_eq!(err, "", "nothing added to a local run");
+            assert_eq!(
+                std::fs::read_to_string(repo.path().join("results/a")).unwrap(),
+                "hi"
+            );
+            let (_, row) = split(&out);
+            assert!(row.pulled.is_empty());
         }
     }
 }
