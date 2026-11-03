@@ -34,14 +34,17 @@ pub fn facts(
         .map_err(|e| e.to_string())?
         .map(|r| r.sha)
         .filter(|s| *s != head);
-    let main_is_ancestor = git::is_ancestor(repo, "main", "HEAD").unwrap_or(false);
+    // air-h7l: the base branch (`main` unless `base_branch` is set) is what "main" means in
+    // every fact below; the field names keep the word.
+    let base = base_branch(repo);
+    let main_is_ancestor = git::is_ancestor(repo, &base, "HEAD").unwrap_or(false);
     // air-5wq: the main this answer is true of, so a later refusal reads as main having moved
     // rather than as a contradiction. air-4up: when it is not an ancestor, the landing that
     // moved it, so the first refusal names the external cause instead of the third.
-    let main_sha = git::run(repo, &["rev-parse", "main"]).unwrap_or_default();
+    let main_sha = git::run(repo, &["rev-parse", &base]).unwrap_or_default();
     // D1 (0.4.6 trial): a branch main already contains is not behind in any way a merge would
     // fix. Asked only when main is ahead, so the common path spawns nothing more.
-    let work_in_main = !main_is_ancestor && git::is_ancestor(repo, "HEAD", "main").unwrap_or(false);
+    let work_in_main = !main_is_ancestor && git::is_ancestor(repo, "HEAD", &base).unwrap_or(false);
     let main_moved = if main_is_ancestor {
         None
     } else {
@@ -53,7 +56,8 @@ pub fn facts(
     // needs bd to narrow it and bd is never called on a hook path.
     let carried_beads: Vec<String> = {
         let mut v =
-            super::attribution::attributed_in_range(repo, super::batch::BRANCH_RANGE).declared;
+            super::attribution::attributed_in_range(repo, &super::batch::branch_range(repo))
+                .declared;
         v.dedup();
         v
     };
@@ -135,6 +139,7 @@ pub fn facts(
     };
     Ok(GateFacts {
         worker: worker.to_string(),
+        base,
         beads_without_commit,
         // air-kcns: `air handover` IS the hand-over query, so there is no command to name and
         // the sentence keeps its old subject. The hook path sets this from what it matched.
@@ -251,6 +256,22 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     let air_dir = air_ledger::paths::air_dir_for(repo).ok()?;
     let path = air_dir.parent()?.join(".claude/air.json");
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// `base_branch` from `.claude/air.json` (air-h7l): the branch the fleet lands onto, which every
+/// gate, cut and landing reads where it used to say `main`. Absent, empty or not a string:
+/// `main`. It is the BRANCH only: the session named `main` (the primary checkout, mapped to the
+/// owner role) keeps its name whatever this says.
+pub fn base_branch(repo: &Path) -> String {
+    air_json(repo)
+        .and_then(|j| {
+            j.get("base_branch")?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "main".to_string())
 }
 
 /// `coordinator_autobatch` from `.claude/air.json` (air-m8u): `true` makes every coordinator

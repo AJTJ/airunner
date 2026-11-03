@@ -207,7 +207,9 @@ Every call, including the silent ones, writes one event line.
 | `.worktreeinclude` | Ignored files copied into new worktrees. |
 | `changelog.d/<bead>.md` | One changelog fragment per bead; `make changelog` folds them into `CHANGELOG.md`. |
 
-`.claude/air.json` holds the repository's settings: `project`; `worker_deny` and
+`.claude/air.json` holds the repository's settings: `project`; `base_branch` (the branch the
+fleet lands onto, `main` by default; every gate, cut, landing and notice reads it where it says
+main, and the session named `main` keeps its name); `worker_deny` and
 `coordinator_deny`; `leases`; `verify_lane` (true here: the lane batches and workers run no
 verify of their own); `precheck`; `verify_key` (`tree` here, so a green stands for any commit
 with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `model` and `lane_model` (what every
@@ -304,6 +306,9 @@ stateDiagram-v2
 | claimed | `air release` | open again | `claim::release` |
 | any | fleet stop | unchanged: claim, cut and land refuse until resume | `fleet::stopped` |
 
+`main` in the table and the diagram is the base branch, `main` unless `.claude/air.json` sets
+`base_branch` (air-h7l); `handover::base_branch` is the one reader of the key.
+
 No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` calls five of
 these functions, `batch_ready_rule`, `red_held`, `land_first`, `cover` and `handover_verdict`,
 through every order of commit, merge, close, cut or split, verify, land and a move of main for
@@ -380,8 +385,9 @@ sequenceDiagram
   A-->>C: landed beads with their acceptance, the next cut
 ```
 
-Main moves only by fast-forward onto a commit whose tree has a green, so nothing is re-verified
-or rolled back. The landing records the beads its commits name by trailer; a range naming none
+Main, meaning the base branch (`base_branch`, `main` by default), which the main checkout must
+have checked out, moves only by fast-forward onto a commit whose tree has a green, so nothing
+is re-verified or rolled back. The landing records the beads its commits name by trailer; a range naming none
 lands only if every commit is a journal entry or the coordinator's. The row is written after
 main moves, and the notice after the row. Epics whose children are all closed are closed. The
 worker closes its own bead, before or after. `--despite-inflight` lands over a running verify
@@ -572,6 +578,7 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
 | Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
 | Start-up prompts | A fresh fleet, `air fleet up` on a trusted checkout | Every session registers in `air status` and no pane is on a prompt (air-z41) |
+| Base branch | `"base_branch": "trunk"` on a copy with no `main` branch, one bead | The cut, the green, the close and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
 
 ## 10. TODO
 

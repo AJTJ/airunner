@@ -11,6 +11,10 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GateFacts {
     pub worker: String,
+    /// The base branch the fleet lands onto (air-h7l): `main` unless `.claude/air.json` sets
+    /// `base_branch`. Every "main" below means this branch; the field names keep the word.
+    /// Empty reads as `main`, so a fixture that names none is unchanged.
+    pub base: String,
     /// The beads being handed over that no commit names: no `Bead:` trailer for them in
     /// `main..HEAD` and none on main (air-gcjp). A bead always has a commit (owner, 2026-09-28:
     /// decisions go in documents), so a green head is no longer enough to close one.
@@ -163,14 +167,26 @@ pub struct Missing {
     pub flow_dependent: bool,
 }
 
+impl GateFacts {
+    /// The base branch's name for a message: `main` when none was recorded.
+    pub fn base(&self) -> &str {
+        if self.base.is_empty() {
+            "main"
+        } else {
+            &self.base
+        }
+    }
+}
+
 pub fn handover_verdict(f: &GateFacts) -> Verdict {
+    let base = f.base();
     let mut missing = Vec::new();
     // air-gcjp: the close judges the bead's commits, so a bead with none has nothing to judge.
     // A green head used to close it anyway, the one path by which a bead with no commit closed.
     for b in &f.beads_without_commit {
         missing.push(Missing {
             check: "bead-commit",
-            detail: format!("{b} has no commit carrying `Bead: {b}` on this branch or on main"),
+            detail: format!("{b} has no commit carrying `Bead: {b}` on this branch or on {base}"),
             fix: format!(
                 "commit the result, for example to a document, with the trailer `Bead: {b}`"
             ),
@@ -284,11 +300,11 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         let at_main = if f.main_sha.is_empty() {
             String::new()
         } else {
-            format!("; main is at {}", short(&f.main_sha))
+            format!("; {base} is at {}", short(&f.main_sha))
         };
         let detail = if let Some(m) = f.main_moved.as_ref() {
             format!(
-                "main is not an ancestor of HEAD {}: your branch is behind main, which moved \
+                "{base} is not an ancestor of HEAD {}: your branch is behind {base}, which moved \
                  {} to {} (landing from {}){at_main}",
                 short(&f.head),
                 ago(m.ago_secs),
@@ -297,7 +313,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             )
         } else {
             format!(
-                "main is not an ancestor of HEAD {}{at_main}",
+                "{base} is not an ancestor of HEAD {}{at_main}",
                 short(&f.head)
             )
         };
@@ -308,8 +324,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             // report says so — and recording a green is the one clause a lane forbids. So the
             // merge stays a command and the green becomes a condition: whose job it is to
             // produce one is the repo's flow to say, not this line's.
-            fix: "git merge main, then a green at the new head (your own, or your lane's)"
-                .to_string(),
+            fix: format!(
+                "git merge {base}, then a green at the new head (your own, or your lane's)"
+            ),
             // Merging moves the head off the sha a lane cut its batch at.
             flow_dependent: true,
         });
@@ -327,7 +344,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         let (detail, fix) = match beads.as_slice() {
             [bead] => (
                 format!(
-                    "{bead} is neither claimed by {} nor named by a `Bead:` trailer in main..HEAD",
+                    "{bead} is neither claimed by {} nor named by a `Bead:` trailer in {base}..HEAD",
                     f.worker
                 ),
                 // air-ch9p: no `--amend`, which moves a head a lane may already have cut.
@@ -342,7 +359,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             ),
             many => (
                 format!(
-                    "none of {} is claimed by {} or named by a `Bead:` trailer in main..HEAD",
+                    "none of {} is claimed by {} or named by a `Bead:` trailer in {base}..HEAD",
                     many.join(", "),
                     f.worker
                 ),
@@ -432,7 +449,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             // over.
             let order_note = if f.green_at_head {
                 format!(
-                    "\nthen commit it and merge main BEFORE the green is taken: committing the \
+                    "\nthen commit it and merge {base} BEFORE the green is taken: committing the \
                  digest moves HEAD off {}, where the green is recorded, and the next check \
                  would refuse for a green that is no longer at HEAD. Whoever your flow has \
                  record that green (you, or your lane) must do it last",
@@ -469,9 +486,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             .map(|b| format!("; {b}"))
             .unwrap_or_default();
         let main = if f.main_is_ancestor || f.main_sha.is_empty() {
-            containing_main(&f.main_sha)
+            containing_main(base, &f.main_sha)
         } else {
-            format!(", main at {}", short(&f.main_sha))
+            format!(", {base} at {}", short(&f.main_sha))
         };
         format!(
             "handover ok: {} at {}{main}{batch}",
@@ -544,11 +561,11 @@ fn beads_to_name(f: &GateFacts) -> Vec<String> {
 }
 
 /// ", containing main <sha>", or nothing when main's sha could not be read.
-fn containing_main(main_sha: &str) -> String {
+fn containing_main(base: &str, main_sha: &str) -> String {
     if main_sha.is_empty() {
         String::new()
     } else {
-        format!(", containing main {}", short(main_sha))
+        format!(", containing {base} {}", short(main_sha))
     }
 }
 
@@ -601,6 +618,7 @@ mod tests {
     fn facts() -> GateFacts {
         GateFacts {
             worker: "backend-leaning".into(),
+            base: String::new(),
             beads_without_commit: Vec::new(),
             refused_command: None,
             head: "f854145abcdef".into(),

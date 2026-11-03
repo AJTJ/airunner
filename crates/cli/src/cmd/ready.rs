@@ -67,8 +67,9 @@ pub fn run(repo: &Path, json: bool) -> i32 {
         );
     } else if autobatch {
         println!(
-            "offered {worker} at {short}; `coordinator_autobatch` is true, so every commit main \
-             lacks is batch-ready already"
+            "offered {worker} at {short}; `coordinator_autobatch` is true, so every commit {} \
+             lacks is batch-ready already",
+            super::handover::base_branch(repo)
         );
     } else {
         println!("offered {worker} at {short} to the lane; a later commit needs a new `air ready`");

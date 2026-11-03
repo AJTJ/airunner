@@ -767,6 +767,7 @@ pub fn main_moved_recipients(
 ) -> Vec<String> {
     let mut v: Vec<String> = worktrees
         .iter()
+        // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
         .filter(|n| n.as_str() != "main" && !lanes.contains(n))
         .filter(|n| role == "owner" || n.as_str() != me)
         .cloned()
@@ -818,13 +819,14 @@ pub fn paths_line(paths: &[String]) -> String {
 /// to merge is the worker's call from the files listed (owner, 2026-09-29: "let the AI decide
 /// what is right to do"); roles.md says when.
 pub fn main_moved_text(
+    base: &str,
     merge: &str,
     beads: &[String],
     paths: &[String],
     member: Option<(&str, &[String])>,
 ) -> String {
     let mut t = format!(
-        "main moved to {}: landed {}; files changed: {}.",
+        "{base} moved to {}: landed {}; files changed: {}.",
         short(merge),
         if beads.is_empty() {
             "no declared bead".to_string()
@@ -884,6 +886,7 @@ pub fn main_moved(
     let to = main_moved_recipients(&names, &lane_names(ledger), me, role);
     let at = super::now();
     let subject = beads.join(" ");
+    let base = super::handover::base_branch(repo);
     let mut told = Vec::new();
     for w in &to {
         let member = members.iter().find(|(m, _)| &m.worker == w);
@@ -891,6 +894,7 @@ pub fn main_moved(
             .map(|(m, tip)| beads_between(repo, tip, &m.sha))
             .unwrap_or_default();
         let text = main_moved_text(
+            &base,
             merge,
             beads,
             &paths,
@@ -919,7 +923,7 @@ pub fn main_moved(
         super::decisions::FANOUT_MAIN_MOVED,
         &json!({"merge": merge, "beads": beads, "paths": paths.len(), "to": told}),
         &format!(
-            "main moved to {}; told {} session(s)",
+            "{base} moved to {}; told {} session(s)",
             short(merge),
             told.len()
         ),
@@ -980,7 +984,7 @@ pub fn after_delivery(ledger: &Ledger, me: &str, d: &air_ledger::deliveries::Del
 }
 
 /// After `air batch cut` dropped a branch: tell its worker at once.
-pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped) {
+pub fn batch_dropped(ledger: &Ledger, lane: &str, base: &str, d: &super::batch_cut::Dropped) {
     let note = MemberNote {
         to: d.worker.clone(),
         kind: "batch-dropped",
@@ -993,7 +997,7 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
             d.against,
             short(&d.against_sha),
             d.paths.join(", "),
-            super::batch_cut::drop_advice(d)
+            super::batch_cut::drop_advice(d, base)
         ),
     };
     queue_notes(
@@ -1201,7 +1205,7 @@ mod tests {
     #[test]
     fn main_moved_text_truncates_paths_and_asks_for_no_reply() {
         let paths: Vec<String> = (0..12).map(|i| format!("f{i}")).collect();
-        let t = main_moved_text("abcdef0123", &names(&["b-1"]), &paths, None);
+        let t = main_moved_text("main", "abcdef0123", &names(&["b-1"]), &paths, None);
         assert!(
             t.starts_with("main moved to abcdef01: landed b-1; files changed: f0,"),
             "{t}"
@@ -1211,6 +1215,7 @@ mod tests {
         assert!(t.ends_with("No reply needed."), "{t}");
         let mine = names(&["b-1"]);
         let w = main_moved_text(
+            "main",
             "abcdef0123",
             &mine,
             &paths[..1],

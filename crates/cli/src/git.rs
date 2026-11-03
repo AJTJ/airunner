@@ -177,8 +177,10 @@ pub fn head(cwd: &Path) -> Result<String> {
 /// A branch ref reads identically from every worktree, so this asserts nothing about where a
 /// future `air land` will run — which is why `Site` is still deliberately not built in
 /// `status::select`.
-pub fn main_tip(cwd: &Path) -> Result<String> {
-    run(cwd, &["rev-parse", "main"])
+///
+/// air-h7l: the ref is the base branch, `main` unless `.claude/air.json` sets `base_branch`.
+pub fn base_tip(cwd: &Path) -> Result<String> {
+    run(cwd, &["rev-parse", &crate::cmd::handover::base_branch(cwd)])
 }
 
 pub fn toplevel(cwd: &Path) -> Result<PathBuf> {

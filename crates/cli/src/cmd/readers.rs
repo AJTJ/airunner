@@ -397,6 +397,7 @@ pub fn status_lines(r: &TreeReaders) -> Vec<String> {
 /// shows no such line with the launchers as they are, or turned into a launcher refusal if the
 /// line keeps appearing.
 pub fn main_checkout_sessions(r: &TreeReaders, sessions: &[(String, String, i64)]) -> Vec<String> {
+    // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
     let in_main: BTreeSet<i64> = r
         .trees
         .iter()

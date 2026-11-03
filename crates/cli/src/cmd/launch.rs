@@ -816,6 +816,17 @@ fn worker_argv_for(
             &[serde_json::json!({ "permissions": { "allow": allow } })],
         );
     }
+    // air-h7l: `lane_allow` names main in its reset rule; a repo with another base needs the
+    // same rule for that branch, since that is what the lane's loop resets to.
+    let base_branch = super::handover::base_branch(repo);
+    if role == "lane" && base_branch != "main" {
+        merge_settings(
+            &mut base,
+            &[serde_json::json!({ "permissions": { "allow": [
+                format!("Bash(git reset --hard {base_branch})")
+            ] } })],
+        );
+    }
     base.extend(repo_deny(repo, "worker_deny"));
     base.extend(extra);
     Ok(base)
@@ -1232,6 +1243,7 @@ pub fn lane(
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .unwrap_or("lane");
+    // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
     if matches!(name, "main" | "coordinator") || name.contains('/') {
         eprintln!("air lane: name must be a worktree name, no slashes, not main or coordinator");
         return 1;

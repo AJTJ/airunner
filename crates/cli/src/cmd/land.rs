@@ -87,15 +87,19 @@ pub fn may_land(role: &str) -> Result<(), String> {
 /// overrides, meaning the refusal is only ever waited out and could become a plain wait; or a
 /// round with zero refusals under overlapping verifies, measured from the `landings` and
 /// `verify_inflight` tables.
-pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> Option<String> {
+pub fn in_flight_refusal(
+    flights: &[air_ledger::verify::InFlight],
+    base: &str,
+    at: &str,
+) -> Option<String> {
     if flights.is_empty() {
         return None;
     }
-    let mut s = String::from(
+    let mut s = format!(
         // air-ch9p: the run is not destroyed; it finishes and is recorded, at a head that no
         // longer contains main.
-        "refused: a verify is in flight. Landing moves main, so its green would be recorded at \
-         a head that no longer contains main.",
+        "refused: a verify is in flight. Landing moves {base}, so its green would be recorded at \
+         a head that no longer contains {base}.",
     );
     for f in flights {
         s.push_str(&format!("\n  {}", in_flight_run_line(f, at)));
@@ -114,6 +118,7 @@ pub fn in_flight_refusal(flights: &[air_ledger::verify::InFlight], at: &str) -> 
 /// (air-9ij), so a landing does not touch it. Counting it starved the lane: with three workers
 /// verifying for minutes, a green batch waited, and `air batch cut` refused while it did.
 pub fn at_risk(f: &air_ledger::verify::InFlight) -> bool {
+    // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
     f.worker == "main" || super::hook::role_for(&f.worker) == "lane"
 }
 
@@ -254,6 +259,8 @@ pub struct Site {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts<'a> {
     pub worker: &'a str,
+    /// The base branch's name (air-h7l): `main` unless `base_branch` is set. For the message.
+    pub base: &'a str,
     pub branch_exists: bool,
     /// The branch is already an ancestor of main: nothing to land.
     pub already_in_main: bool,
@@ -272,7 +279,10 @@ pub struct Facts<'a> {
 /// unlandable.
 pub fn check(site: &Site, f: &Facts<'_>) -> Result<bool, String> {
     if !site.on_main {
-        return Err("refused: main is not checked out here (fix: `git checkout main`)".to_string());
+        return Err(format!(
+            "refused: {} is not checked out here (fix: `git checkout {}`)",
+            f.base, f.base
+        ));
     }
     branch_check(f)
 }
@@ -307,10 +317,11 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
     }
     if !f.contains_main {
         return Err(format!(
-            "refused: `{}` does not contain main, so the recorded green is not a green of what \
+            "refused: `{}` does not contain {}, so the recorded green is not a green of what \
              would land (fix: in {w}'s worktree, {})",
             branch_for(w),
-            remerge_command()
+            f.base,
+            remerge_command(f.base)
         ));
     }
     match f.green_at {
@@ -338,8 +349,8 @@ pub fn branch_check(f: &Facts<'_>) -> Result<bool, String> {
 /// to miss. The coordinator may record a verify; this line is advice about a WORKER, and under
 /// a lane that worker must not. The merge is required under both flows and stays a command; the
 /// green becomes the condition it always was.
-pub fn remerge_command() -> String {
-    "`git merge main`, then a green at the new head (the worker's own, or their lane's)".to_string()
+pub fn remerge_command(base: &str) -> String {
+    format!("`git merge {base}`, then a green at the new head (the worker's own, or their lane's)")
 }
 
 /// What to say and record after `git merge --ff-only` returned an error (air-htmn).
@@ -364,17 +375,17 @@ pub enum FfVerdict {
 /// testing its own constructor, which is the trap air-682 names and which I hit twice earlier
 /// tonight. Here the inputs are the two facts and the output is the verdict, so neither is
 /// derived from the other.
-pub fn after_fast_forward(err: &str, landed: Option<bool>) -> FfVerdict {
+pub fn after_fast_forward(err: &str, base: &str, landed: Option<bool>) -> FfVerdict {
     match landed {
         Some(true) => FfVerdict::Landed,
         Some(false) => FfVerdict::Refused(format!(
-            "could not fast-forward main onto the landing commit, so main is untouched. Usually \
-             main moved, or a local change is in the way: {err}"
+            "could not fast-forward {base} onto the landing commit, so {base} is untouched. \
+             Usually {base} moved, or a local change is in the way: {err}"
         )),
         None => FfVerdict::Unknown(format!(
-            "the fast-forward returned an error and Air could not then read main, so whether \
+            "the fast-forward returned an error and Air could not then read {base}, so whether \
              the landing happened is NOT established: {err}. Check with `git merge-base \
-             --is-ancestor <landing commit> main` before running `air land` again; nothing was \
+             --is-ancestor <landing commit> {base}` before running `air land` again; nothing was \
              recorded either way, and the in-flight row stands until it is."
         )),
     }
@@ -724,7 +735,8 @@ pub fn run(
         .filter(|f| f.kind != Kind::Precheck && at_risk(f))
         .collect();
     let despite: Vec<String> = flights.iter().map(|f| in_flight_run_line(f, &at)).collect();
-    if let Some(msg) = in_flight_refusal(&flights, &at) {
+    let base = super::handover::base_branch(repo);
+    if let Some(msg) = in_flight_refusal(&flights, &base, &at) {
         if !despite_inflight {
             log_event(
                 &ledger,
@@ -833,7 +845,7 @@ pub fn run(
                 ));
                 landed.extend(batch.beads.clone());
             }
-            Outcome::Nothing => lines.push(format!("{}: already in main", batch.worker)),
+            Outcome::Nothing => lines.push(format!("{}: already in {base}", batch.worker)),
             Outcome::Refused(why) => {
                 lines.push(format!("{}: {why}", batch.worker));
                 code = 2;
@@ -988,9 +1000,13 @@ fn land_one(
 ) -> Outcome {
     let branch = branch_for(&batch.worker);
     let started_at = now();
+    // air-h7l: the base branch, `main` unless `base_branch` is set. The main checkout has it
+    // checked out (`Site::on_main`), so its HEAD is the base's tip and the fast-forward below
+    // moves it.
+    let base = super::handover::base_branch(repo);
     let tip = match git::head(repo) {
         Ok(h) => h,
-        Err(e) => return Outcome::Refused(format!("cannot read main's HEAD: {e}")),
+        Err(e) => return Outcome::Refused(format!("cannot read {base}'s HEAD: {e}")),
     };
     let branch_head = git::run(repo, &["rev-parse", &format!("{branch}^{{commit}}")]).ok();
     // The same predicate `select` and the gate read (air-7wf, after air-y3v): a branch is
@@ -1002,10 +1018,11 @@ fn land_one(
             .map(|_| h.to_string())
     });
     let site = Site {
-        on_main: git::run(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).is_ok_and(|b| b == "main"),
+        on_main: git::run(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).is_ok_and(|b| b == base),
     };
     let facts = Facts {
         worker: &batch.worker,
+        base: &base,
         branch_exists: branch_head.is_some(),
         already_in_main: branch_head
             .as_deref()
@@ -1098,18 +1115,18 @@ fn land_one(
     // `--ff-only` is the second backstop, because a main that moved cannot be fast-forwarded.
     let tip_now = match git::head(repo) {
         Ok(h) => h,
-        Err(e) => return Outcome::Refused(format!("cannot read main's HEAD: {e}")),
+        Err(e) => return Outcome::Refused(format!("cannot read {base}'s HEAD: {e}")),
     };
     let head = facts.branch_head;
     if !git::is_ancestor(repo, &tip_now, head).unwrap_or(false) {
         record("refused", None, None, Some("main-moved".into()));
         return Outcome::Refused(format!(
-            "refused: main is at {} and `{branch}` does not contain it, so its green is not a \
-             green of what would land. Main moved between the landable list and this merge. \
+            "refused: {base} is at {} and `{branch}` does not contain it, so its green is not a \
+             green of what would land. {base} moved between the landable list and this merge. \
              Nothing was changed (fix: in {}'s worktree, {})",
             tip_now.get(..8).unwrap_or(&tip_now),
             batch.worker,
-            remerge_command()
+            remerge_command(&base)
         ));
     }
     // air-bh4: the acceptance text is read BEFORE anything moves, so bd not answering refuses
@@ -1152,7 +1169,7 @@ fn land_one(
         Err(e) => {
             record("refused", None, None, Some("commit-tree".into()));
             return Outcome::Refused(format!(
-                "could not build the landing commit off main; main is untouched: {e}"
+                "could not build the landing commit off {base}; {base} is untouched: {e}"
             ));
         }
     };
@@ -1172,7 +1189,11 @@ fn land_one(
         // The worse half was the row: `record("refused", …)` ran on this branch too, so the
         // ledger said refused for a landing that happened, and `landings()`, `landed_open()`
         // and `air status` all read that row afterwards. A wrong sentence is read once.
-        match after_fast_forward(&e.to_string(), git::is_ancestor(repo, &merge, "HEAD").ok()) {
+        match after_fast_forward(
+            &e.to_string(),
+            &base,
+            git::is_ancestor(repo, &merge, "HEAD").ok(),
+        ) {
             FfVerdict::Landed => {}
             FfVerdict::Refused(msg) => {
                 record("refused", None, None, Some("fast-forward".into()));
@@ -1194,11 +1215,13 @@ fn land_one(
         Ok(landed) if landed == tree => {}
         Ok(landed) => {
             return Outcome::Refused(format!(
-                "main's tree after the fast-forward is {landed}, not `{branch}`'s {tree}; the \
+                "{base}'s tree after the fast-forward is {landed}, not `{branch}`'s {tree}; the \
                  recorded green is for {tree}."
             ));
         }
-        Err(e) => return Outcome::Refused(format!("cannot read main's tree after landing: {e}")),
+        Err(e) => {
+            return Outcome::Refused(format!("cannot read {base}'s tree after landing: {e}"));
+        }
     }
     record_landing_green(repo, ledger, head, &merge, &tip_now);
     // ── air-ayp ────────────────────────────────────────────────────────────────────────
@@ -1253,12 +1276,12 @@ mod tests {
         assert!(at_risk(&run("main")));
         assert!(at_risk(&run("lane")));
         let flights: Vec<_> = [run("worker-1")].into_iter().filter(at_risk).collect();
-        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_none());
+        assert!(in_flight_refusal(&flights, "main", "2026-09-28T10:01:00Z").is_none());
         let flights: Vec<_> = [run("worker-1"), run("main")]
             .into_iter()
             .filter(at_risk)
             .collect();
-        assert!(in_flight_refusal(&flights, "2026-09-28T10:01:00Z").is_some());
+        assert!(in_flight_refusal(&flights, "main", "2026-09-28T10:01:00Z").is_some());
     }
 
     /// 0.4.8 trial: the landing commit is green only when its tree is the verified one's.
@@ -1319,6 +1342,7 @@ mod tests {
     fn ok_facts<'a>(head: &'a str, green: Option<&'a str>) -> Facts<'a> {
         Facts {
             worker: "alpha",
+            base: "main",
             branch_exists: true,
             already_in_main: false,
             contains_main: true,
@@ -1357,7 +1381,7 @@ mod tests {
         assert!(!e.contains("air record verify"), "{e}");
         // air-y3v: and it is the same string the landable list offers, so the surface and the
         // refusal cannot say different things.
-        assert!(e.contains(&remerge_command()), "{e}");
+        assert!(e.contains(&remerge_command("main")), "{e}");
 
         // Green recorded, but at an older commit than the branch head.
         let e = check(&here(), &ok_facts("abcdef99", Some("999999aa"))).unwrap_err();

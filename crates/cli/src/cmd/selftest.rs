@@ -613,7 +613,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "status: landable is the same from a worktree as from the main checkout, and the running worker's own branch is never silently dropped",
         Mutation {
             file: "crates/cli/src/cmd/status.rs",
-            from: "    let main_tip = match git::main_tip(repo) {\n        Ok(t) => t,\n        Err(e) => {\n            out.errors.push(format!(\"git rev-parse main: {e}\"));\n            return out;\n        }\n    };",
+            from: "    let main_tip = match git::base_tip(repo) {\n        Ok(t) => t,\n        Err(e) => {\n            out.errors.push(format!(\"git rev-parse {base}: {e}\"));\n            return out;\n        }\n    };",
             to: "    let main_tip = git::head(repo).unwrap_or_default();",
             also_red: &[],
         },
@@ -716,8 +716,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: no flow-dependent fix tells a worker to record a verify, and the main-moved diagnosis is unchanged",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "fix: \"git merge main, then a green at the new head (your own, or your lane's)\"",
-            to: "fix: \"git merge main && air record verify -- make verify\"",
+            from: "            fix: format!(\n                \"git merge {base}, then a green at the new head (your own, or your lane's)\"\n            ),",
+            to: "            fix: format!(\"git merge {base} && air record verify -- make verify\"),",
             // Declared from RUNNING the mutation, not from reading: both of these assert the
             // same rule from a different surface, so they fall with it legitimately. Left
             // undeclared they would have made this VACUOUS, which is the trap the revived
@@ -1267,8 +1267,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // (air-5wq). One argument; the refusal side is untouched, so the green half
             // and `gate: main-merged` stay GREEN, which shows this reaches the ok line alone.
             file: "crates/hooks/src/gate.rs",
-            from: "containing_main(&f.main_sha)",
-            to: "containing_main(\"\")",
+            from: "containing_main(base, &f.main_sha)",
+            to: "containing_main(base, \"\")",
             also_red: &[],
         },
     ),
@@ -1750,8 +1750,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // names no batch at all. The pre-v19 fallback is untouched, so the mutation
             // reaches the recorded-main question alone.
             file: "crates/cli/src/cmd/batch.rs",
-            from: "            let against = g.main_sha.clone().unwrap_or_else(|| \"main\".to_string());",
-            to: "            let against = \"main\".to_string();",
+            from: "            let against = g\n                .main_sha\n                .clone()\n                .unwrap_or_else(|| super::handover::base_branch(repo));",
+            to: "            let against = super::handover::base_branch(repo);",
             // D1 (0.4.7): its green half is a bead covered by a green recorded over a main
             // that has since moved, which is this question.
             also_red: &[
@@ -2664,6 +2664,7 @@ fn all_probes() -> Vec<Probe> {
         probe_land_role_is_the_launchers(),
         probe_names_carry_role_and_project(),
         probe_coordinator_branch_is_batch_ready_without_a_bead(),
+        probe_base_branch_is_the_branch_the_fleet_lands_onto(),
         probe_status_warns_of_a_session_in_the_main_checkout(),
         probe_landable_pushes_once_per_branch(),
         probe_nothing_unverified_reaches_main(),
@@ -3768,7 +3769,7 @@ fn probe_land_names_a_branch() -> Probe {
         minutes,
         command: match blocked {
             None => format!("air land --worker {worker}"),
-            Some(_) => crate::cmd::land::remerge_command(),
+            Some(_) => crate::cmd::land::remerge_command("main"),
         },
         acceptance: Vec::new(),
         blocked: blocked.map(String::from),
@@ -4161,6 +4162,7 @@ fn probe_land_refusals() -> Probe {
     }
     let ok = || Facts {
         worker: "alpha",
+        base: "main",
         branch_exists: true,
         already_in_main: false,
         contains_main: true,
@@ -4913,6 +4915,7 @@ fn probe_nothing_unverified_reaches_main() -> Probe {
 
     let both = || Facts {
         worker: "alpha",
+        base: "main",
         branch_exists: true,
         already_in_main: false,
         contains_main: true,
@@ -6618,7 +6621,7 @@ fn probe_batch_cut_drops_by_the_order_rule() -> Probe {
             },
         )
     };
-    let Ok((kept, dropped)) = pre_check(typed.clone(), "main-sha", conflict) else {
+    let Ok((kept, dropped)) = pre_check(typed.clone(), "main", "main-sha", conflict) else {
         return Probe {
             name: "batch cut: a pairwise conflict drops the later-ready member, naming the other side and the paths, whatever order the members arrive in",
             red_fires: false,
@@ -6636,7 +6639,7 @@ fn probe_batch_cut_drops_by_the_order_rule() -> Probe {
         .any(|d| d.worker == "delta" && d.against == "main" && d.paths == ["m.txt"]);
     let mut reversed = typed;
     reversed.reverse();
-    let again = pre_check(reversed, "main-sha", conflict);
+    let again = pre_check(reversed, "main", "main-sha", conflict);
     let green_passes = names(&kept) == ["gamma", "alpha"]
         && dropped.len() == 2
         && again.is_ok_and(|(k, d)| k == kept && d == dropped);
@@ -6709,14 +6712,14 @@ fn probe_batch_cut_starts_from_main() -> Probe {
         };
         record(&red, 1)?;
 
-        let dry = lane_start(&dir, &l, &main, true)?;
+        let dry = lane_start(&dir, &l, "main", &main, true)?;
         let dry_ok =
             dry == LaneStart::Reset {
                 from: Some(red.clone()),
                 stale_over: None,
             } && g(&["rev-parse", "HEAD"])? == red;
 
-        let cut = lane_start(&dir, &l, &main, false)?;
+        let cut = lane_start(&dir, &l, "main", &main, false)?;
         let red_fires =
             cut == LaneStart::Reset {
                 from: Some(red.clone()),
@@ -6728,7 +6731,7 @@ fn probe_batch_cut_starts_from_main() -> Probe {
         let green = g(&["rev-parse", "HEAD"])?;
         record(&green, 0)?;
         let refused = |dry_run: bool| -> Result<bool, String> {
-            Ok(lane_start(&dir, &l, &main, dry_run)?
+            Ok(lane_start(&dir, &l, "main", &main, dry_run)?
                 == LaneStart::LandFirst {
                     head: green.clone(),
                 }
@@ -6739,14 +6742,14 @@ fn probe_batch_cut_starts_from_main() -> Probe {
         // land, so the cut is not refused; it names the batch as stale and would re-cut.
         let tree = g(&["rev-parse", "HEAD^{tree}"])?;
         let moved = g(&["commit-tree", &tree, "-p", &main, "-m", "another landing"])?;
-        let stale = lane_start(&dir, &l, &moved, true)?
+        let stale = lane_start(&dir, &l, "main", &moved, true)?
             == LaneStart::Reset {
                 from: Some(green.clone()),
                 stale_over: Some(String::new()),
             }
             && g(&["rev-parse", "HEAD"])? == green;
         g(&["branch", "-f", "main", &green])?;
-        let landed = lane_start(&dir, &l, &green, false)?
+        let landed = lane_start(&dir, &l, "main", &green, false)?
             == LaneStart::Reset {
                 from: None,
                 stale_over: None,
@@ -6780,9 +6783,158 @@ fn probe_install_merge() -> Probe {
     }
 }
 
+/// air-h7l: `base_branch` in `.claude/air.json` is the branch the fleet lands onto, read by
+/// every branch fact where it used to say `main`; the session named `main` keeps its name.
+/// Red: a repo whose only branch is `trunk` and whose config names no base. Every branch fact
+/// fails at `git rev-parse main`, so `air status --json` reports `main` as the base, an error
+/// naming it, and no batch-ready branch. Green: with `"base_branch": "trunk"`, the worker's
+/// branch is batch-ready, the lane's cut merges it, the lane's green lands by fast-forwarding
+/// `trunk` with `air land --worker lane`, the worker closes on that green, `air status --json`
+/// prints the key, and the name `main` still maps to the owner role.
+fn probe_base_branch_is_the_branch_the_fleet_lands_onto() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let dir = probe_repo()?;
+        let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+        let out = (|| -> Result<(bool, bool), String> {
+            let w = |p: &Path, text: &str| std::fs::write(p, text).map_err(|e| e.to_string());
+            probe_git(&dir, &["init", "-q", "-b", "trunk"])?;
+            std::fs::create_dir_all(dir.join(".claude")).map_err(|e| e.to_string())?;
+            w(&dir.join(".gitignore"), ".air/\n")?;
+            w(&dir.join(".claude/air.json"), "{\"verify_lane\": true}\n")?;
+            w(&dir.join("README"), "a\n")?;
+            probe_git(&dir, &["add", "-A"])?;
+            probe_git(&dir, &["commit", "-q", "-m", "a"])?;
+            let wt = |name: &str| dir.join(".claude").join("worktrees").join(name);
+            // Branches named as `air worker` names them, which `air land` resolves by name.
+            for name in ["w1", "lane"] {
+                probe_git(
+                    &dir,
+                    &[
+                        "worktree",
+                        "add",
+                        "-q",
+                        "-b",
+                        &format!("worktree-{name}"),
+                        &wt(name).display().to_string(),
+                    ],
+                )?;
+            }
+            w(&wt("w1").join("w1.txt"), "w1\n")?;
+            probe_git(&wt("w1"), &["add", "w1.txt"])?;
+            probe_git(
+                &wt("w1"),
+                &["commit", "-q", "-m", "feat: the work\n\nBead: zz-7\n"],
+            )?;
+            let work = probe_git(&wt("w1"), &["rev-parse", "HEAD"])?;
+            // The claim, written as `air claim` writes it; bd is the stub below.
+            let l = Ledger::open_for_repo(&dir).map_err(|e| e.to_string())?;
+            l.record_claim("zz-7", "w1", &[], "2026-11-03T00:00:00Z")
+                .map_err(|e| e.to_string())?;
+            drop(l);
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // Its own stub: `list --status in_progress` and `show` both hold the bead, so
+            // `air status` keeps the claim it reconciles against bd; `fake_bd_script` answers
+            // open and would release it.
+            let script = dir.join("bd");
+            w(
+                &script,
+                "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'bd version 1.3.0'; exit 0;;\n  \
+                 show) shift; out=''; for id in \"$@\"; do case \"$id\" in --*) continue;; esac\n    \
+                 out=\"$out${out:+,}{\\\"id\\\":\\\"$id\\\",\\\"status\\\":\\\"in_progress\\\",\\\"labels\\\":[]}\"; done\n    \
+                 printf '%s\\n' \"[$out]\"; exit 0;;\n  \
+                 list) echo '[{\"id\":\"zz-7\",\"status\":\"in_progress\",\"labels\":[]}]'; exit 0;;\n  \
+                 ready|epic) echo '[]'; exit 0;;\n  *) exit 0;;\nesac\n",
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| e.to_string())?;
+            }
+            let air = |cwd: &Path, args: &[&str]| -> Result<(i32, String, String), String> {
+                let out = air_command(&exe, cwd)
+                    .env("AIR_BD_BIN", &script)
+                    .env("AIR_BD_TIMEOUT_MS", "120000")
+                    .args(args)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                Ok((
+                    out.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&out.stdout).to_string(),
+                    String::from_utf8_lossy(&out.stderr).to_string(),
+                ))
+            };
+            // `--json status` is `{air, attention, snapshot}`; the snapshot is what is asserted.
+            let status = |cwd: &Path| -> Result<serde_json::Value, String> {
+                let (_, out, err) = air(cwd, &["--json", "status"])?;
+                let v: serde_json::Value =
+                    serde_json::from_str(&out).map_err(|e| format!("status --json: {e}: {err}"))?;
+                Ok(v.get("snapshot").cloned().unwrap_or_default())
+            };
+
+            // RED: no key, no branch named main, so the branch facts cannot be read.
+            let s = status(&dir)?;
+            let ready = |s: &serde_json::Value| -> bool {
+                s.get("batch_ready")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|v| v.iter().any(|b| b.get("worker") == Some(&"w1".into())))
+            };
+            let base_of = |s: &serde_json::Value| s.get("base_branch").cloned().unwrap_or_default();
+            let red = base_of(&s) == "main"
+                && !ready(&s)
+                && s.get("errors").and_then(|e| e.as_array()).is_some_and(|v| {
+                    v.iter()
+                        .any(|e| e.as_str().is_some_and(|e| e.contains("rev-parse main")))
+                });
+
+            // GREEN: the key, and the whole flow onto trunk.
+            w(
+                &dir.join(".claude/air.json"),
+                "{\"verify_lane\": true, \"base_branch\": \"trunk\"}\n",
+            )?;
+            let s = status(&dir)?;
+            let keyed = base_of(&s) == "trunk" && ready(&s);
+            let (code, out, err) = air(&wt("lane"), &["batch", "cut"])?;
+            let cut = code == 0 && out.contains("(trunk ");
+            if !cut {
+                return Err(format!("batch cut: exit {code}: {out}{err}"));
+            }
+            let (code, _, err) = air(&wt("lane"), &["record", "verify", "--", "true"])?;
+            if code != 0 {
+                return Err(format!("record verify: exit {code}: {err}"));
+            }
+            let before = probe_git(&dir, &["rev-parse", "trunk"])?;
+            let (code, out, err) = air(&dir, &["land", "--worker", "lane"])?;
+            if code != 0 {
+                return Err(format!("land: exit {code}: {out}{err}"));
+            }
+            let after = probe_git(&dir, &["rev-parse", "trunk"])?;
+            let landed = after != before
+                && probe_git(&dir, &["merge-base", "--is-ancestor", &work, "trunk"]).is_ok();
+            let (code, out, err) = air(&wt("w1"), &["close", "zz-7", "--reason", "landed"])?;
+            let closed = code == 0;
+            if !closed {
+                return Err(format!("close: exit {code}: {out}{err}"));
+            }
+            // The session sense is untouched: the primary checkout's name is the owner's.
+            let owner = crate::cmd::hook::role_for("main") == "owner";
+            Ok((red, keyed && cut && landed && closed && owner))
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "base_branch: the fleet cuts, verifies, closes and lands onto the configured branch (trunk, no main); without the key the branch facts fail at main, and the session named main is still the owner",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 fn base_facts() -> GateFacts {
     GateFacts {
         worker: "probe".into(),
+        base: String::new(),
         beads_without_commit: Vec::new(),
         refused_command: None,
         head: "0123456789abcdef".into(),
@@ -8089,6 +8241,7 @@ fn probe_red_batch_is_reported_by_member_and_lands_nothing() -> Probe {
     // Nothing lands on a red: the branch check wants a green at the head, batch or not.
     let refused = branch_check(&Facts {
         worker: "lane",
+        base: "main",
         branch_exists: true,
         already_in_main: false,
         contains_main: true,
@@ -8908,7 +9061,7 @@ fn probe_verify_in_flight() -> Probe {
     };
 
     let shown = render_for_probe(&snap(vec![flight("alpha", Some(1))]));
-    let refused = in_flight_refusal(&[flight("alpha", Some(1))], at);
+    let refused = in_flight_refusal(&[flight("alpha", Some(1))], "main", at);
     let red = shown.contains("verify in flight: alpha")
         // Elapsed in seconds: rounding a just-started run to "0 min" is what makes it look
         // ignorable, and 420 s is the number that decided this bead.
@@ -8936,7 +9089,7 @@ fn probe_verify_in_flight() -> Probe {
     let green = render_for_probe(&snap(vec![]))
         .lines()
         .all(|x| !x.starts_with("verify in flight"))
-        && in_flight_refusal(&[], at).is_none()
+        && in_flight_refusal(&[], "main", at).is_none()
         && pruned;
     Probe {
         name: "verify: a run in flight is named by status and refused by land with its pid and the override; nothing running is silent and a dead pid clears",
@@ -8996,7 +9149,7 @@ fn probe_landing_state() -> Probe {
         alive: Some(false),
     };
     let shown = render_for_probe(&snap(vec![running.clone()]));
-    let killed_line = landing_in_flight_line(&killed, at);
+    let killed_line = landing_in_flight_line(&killed, "main", at);
     let red = shown.contains("landing in flight: alpha (air-1) merged at cccccccc")
         && shown.contains("landing now")
         // "in main" is not "survived": the line names where main was before the landing,
@@ -11774,7 +11927,7 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     let untouched = cover(&[cand("b", true, &[false, false])], &commits(2)).scanned;
     let no_commits = cover(&[cand("c", true, &[])], &[]).scanned;
 
-    let says = |s: &Scanned| why_absent("air-hgi9", s);
+    let says = |s: &Scanned| why_absent("air-hgi9", "main", s);
     let four = [
         says(&none_recorded),
         says(&no_main),
@@ -11793,10 +11946,10 @@ fn probe_the_refusal_says_which_not_green_state_it_is() -> Probe {
     // The half that actually differs: wait-for-the-next-batch versus stop-waiting are opposite
     // instructions, and they used to share a fix line.
     let fixes = [
-        fix_absent("air-hgi9", &none_recorded),
-        fix_absent("air-hgi9", &no_main),
-        fix_absent("air-hgi9", &untouched),
-        fix_absent("air-hgi9", &no_commits),
+        fix_absent("air-hgi9", "main", &none_recorded),
+        fix_absent("air-hgi9", "main", &no_main),
+        fix_absent("air-hgi9", "main", &untouched),
+        fix_absent("air-hgi9", "main", &no_commits),
     ];
     let acts = fixes
         .iter()
@@ -13288,11 +13441,11 @@ fn probe_a_timed_out_fast_forward_is_not_reported_as_untouched() -> Probe {
         answer
     })();
 
-    let landed = after_fast_forward(timeout, observed);
+    let landed = after_fast_forward(timeout, "main", observed);
     let red = observed == Some(true) && landed == FfVerdict::Landed;
 
-    let refused = after_fast_forward(timeout, Some(false));
-    let unknown = after_fast_forward(timeout, None);
+    let refused = after_fast_forward(timeout, "main", Some(false));
+    let unknown = after_fast_forward(timeout, "main", None);
     let green = matches!(&refused, FfVerdict::Refused(m)
             if m.contains("main is untouched") && m.contains(timeout))
         && matches!(&unknown, FfVerdict::Unknown(m)

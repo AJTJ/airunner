@@ -264,6 +264,9 @@ pub struct Snapshot {
     /// is expected to be on. None when the file names none, and then no session is marked.
     pub model_setting: Option<String>,
     pub lane_model_setting: Option<String>,
+    /// `base_branch` from `.claude/air.json` (air-h7l): the branch the fleet lands onto, `main`
+    /// unless set. Printed only when it is not `main`.
+    pub base_branch: String,
     /// How bd reaches its data here and, in server mode, whether the port answered.
     pub bd_mode: Option<super::bd_server::Mode>,
     pub bd_server_up: bool,
@@ -584,6 +587,9 @@ pub struct NotBatchReady {
 pub struct BatchFacts {
     pub worker: String,
     pub head: String,
+    /// The base branch's name (air-h7l): `main` unless `base_branch` is set; empty reads as
+    /// `main`, so a fixture that names none is unchanged. For the detail lines only.
+    pub base: String,
     /// Beads declared by `Bead:` trailers in `main..head`.
     pub carried: Vec<String>,
     /// Beads this worker holds an open claim on.
@@ -618,6 +624,18 @@ pub struct BatchFacts {
     pub in_batch: Option<String>,
 }
 
+impl BatchFacts {
+    /// The base branch's name for a detail line: `main` when none was recorded.
+    pub fn base(&self) -> &str {
+        base_or_main(&self.base)
+    }
+}
+
+/// `main` when a snapshot or fixture recorded no base (air-h7l), else the recorded name.
+pub fn base_or_main(base: &str) -> &str {
+    if base.is_empty() { "main" } else { base }
+}
+
 /// THE batch-ready rule, pure (air-80x.3): a branch whose commits name a bead the worker holds
 /// or that is closed. A branch already green at a head that contains main is batch-ready too
 /// (air-757): under a lane nothing lands it alone, and it sat closed and unlanded. In that order, so
@@ -647,7 +665,7 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
     if f.coordinator && !f.ahead {
         return Err(not(
             "nothing-ahead",
-            format!("{} at {short}: no commit that main lacks", f.worker),
+            format!("{} at {short}: no commit that {} lacks", f.worker, f.base()),
         ));
     }
     // air-m8u: with `coordinator_autobatch` off, a coordinator head is batch-ready only once
@@ -718,8 +736,9 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         return Err(not(
             "no-claimed-bead",
             format!(
-                "{} at {short}: no commit in main..{short} names a bead {} holds a claim on or that is closed (carried: {}; held: {})",
+                "{} at {short}: no commit in {}..{short} names a bead {} holds a claim on or that is closed (carried: {}; held: {})",
                 f.worker,
+                f.base(),
                 f.worker,
                 if f.carried.is_empty() {
                     "none".to_string()
@@ -831,10 +850,11 @@ pub fn batch_ready_for(
     // VISIBLE — running from its own worktree, alerts' branch compared against itself and was
     // reported batch-ready in the same snapshot where `select` said `landable: []`. One bug in
     // two paths, disagreeing because being wrong the same way surfaces differently.
-    let main_tip = match git::main_tip(repo) {
+    let base = super::handover::base_branch(repo);
+    let main_tip = match git::base_tip(repo) {
         Ok(t) => t,
         Err(e) => {
-            errors.push(format!("git rev-parse main: {e}"));
+            errors.push(format!("git rev-parse {base}: {e}"));
             return (ready, not, errors);
         }
     };
@@ -853,7 +873,8 @@ pub fn batch_ready_for(
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // The main checkout is main; the lane's branch is the batch, not a member. The
-        // coordinator's worktree is a member (air-jc2p.1).
+        // coordinator's worktree is a member (air-jc2p.1). `main` here is the SESSION name of
+        // the primary checkout, not the base branch (air-h7l).
         let coordinator = match super::hook::role_for(&worker) {
             "worker" => false,
             "coordinator" if worker != "main" => true,
@@ -906,7 +927,8 @@ pub fn batch_ready_for(
             ahead,
             autobatch,
             offered_at_head,
-            carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
+            base: base.clone(),
+            carried: super::attribution::attributed_in_range(repo, &format!("{base}..{head}"))
                 .declared,
             held: claims
                 .iter()
@@ -1061,10 +1083,11 @@ pub fn select(repo: &Path) -> Selection {
     // An error RETURNS rather than defaulting. `unwrap_or_default()` turned a git failure into
     // an empty sha that silently disqualified every branch as "does not contain main" — a
     // failure reading as an absence, which is the one thing air-6u5 says this must never do.
-    let main_tip = match git::main_tip(repo) {
+    let base = super::handover::base_branch(repo);
+    let main_tip = match git::base_tip(repo) {
         Ok(t) => t,
         Err(e) => {
-            out.errors.push(format!("git rev-parse main: {e}"));
+            out.errors.push(format!("git rev-parse {base}: {e}"));
             return out;
         }
     };
@@ -1073,6 +1096,7 @@ pub fn select(repo: &Path) -> Selection {
     // role, other than the main checkout. Used only for a range that names no bead.
     let coordinator_head = worktrees.iter().find_map(|(p, _)| {
         let w = air_ledger::paths::worker_name_for(p).ok()?;
+        // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
         if w != "main" && super::hook::role_for(&w) == "coordinator" {
             git::head(p).ok()
         } else {
@@ -1133,6 +1157,7 @@ pub fn select(repo: &Path) -> Selection {
         // from a worktree and has no business asserting where a future `air land` will run.
         let facts = super::land::Facts {
             worker: &worker,
+            base: &base,
             branch_exists: true,    // the head above came from this worktree
             already_in_main: false, // left above
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
@@ -1145,7 +1170,7 @@ pub fn select(repo: &Path) -> Selection {
             Ok(false) => continue,
             Err(why) => Some(why),
         };
-        let range = format!("main..{head}");
+        let range = format!("{base}..{head}");
         let ids = super::attribution::attributed_in_range(repo, &range).declared;
         // air-kexg: a branch whose ONLY commits are session-journal entries carries no bead by
         // design, and is landable anyway. The journal (air-3xww) is explicitly not work on a
@@ -1155,7 +1180,7 @@ pub fn select(repo: &Path) -> Selection {
         // bead — which is what two workers were told tonight, and what the coordinator worked
         // around by having them name a bead that was already closed and that they had not
         // touched.
-        let changed = git::changed_since(&path, "main").unwrap_or_default();
+        let changed = git::changed_since(&path, &base).unwrap_or_default();
         let journal = super::handover::journal_dir(repo);
         let journal_branch = ids.is_empty() && journal_only(&changed, journal.as_deref());
         // A range of only the coordinator's commits carries no bead either. The batch-ready
@@ -1188,7 +1213,7 @@ pub fn select(repo: &Path) -> Selection {
             out.skipped.push(Skipped {
                 check: "no-bead-named",
                 detail: format!(
-                    "{worker} is green at {} but no commit in main..{} declares a bead{hint}",
+                    "{worker} is green at {} but no commit in {base}..{} declares a bead{hint}",
                     head.get(..8).unwrap_or(&head),
                     head.get(..8).unwrap_or(&head)
                 ),
@@ -1202,7 +1227,7 @@ pub fn select(repo: &Path) -> Selection {
         }
         // Oldest commit since main: how long this branch has waited. Used for ORDERING only —
         // never to decide whether a bead belongs, which is what air-6u5 was.
-        let since = git::branch_point_time(&path, "main")
+        let since = git::branch_point_time(&path, &base)
             .ok()
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
@@ -1222,7 +1247,7 @@ pub fn select(repo: &Path) -> Selection {
                 // three cycles in an hour.
                 command: match &blocked {
                     None => land_command(&worker),
-                    Some(_) => super::land::remerge_command(),
+                    Some(_) => super::land::remerge_command(&base),
                 },
                 blocked: blocked.clone(),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
@@ -1364,7 +1389,7 @@ pub fn landings_in_flight(ledger: &Ledger) -> Vec<LandingInFlight> {
 
 /// One line for a landing in flight: what merged, when, and whether anything is still working
 /// on it. The second half is the part `pgrep` was being asked for.
-pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
+pub fn landing_in_flight_line(f: &LandingInFlight, base: &str, at: &str) -> String {
     let l = &f.landing;
     let merge = l.merge_commit.as_deref().unwrap_or("");
     let elapsed = seconds_between(&l.finished_at, at)
@@ -1374,8 +1399,8 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
         // air-odv: `air land` runs no verify and arms no rollback; the fast-forward is the
         // only step that moves main, so a gone process either moved it or did not.
         Some(false) => format!(
-            "the `air land` process (pid {}) is GONE before it reported. If main is at {merge}, \
-             the landing happened; if main is still at {}, nothing moved and `air land` may \
+            "the `air land` process (pid {}) is GONE before it reported. If {base} is at {merge}, \
+             the landing happened; if {base} is still at {}, nothing moved and `air land` may \
              run again",
             l.pid.unwrap_or(0),
             l.tip_sha.as_deref().unwrap_or("<tip>")
@@ -1384,7 +1409,7 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
         None => "no pid recorded, so nothing can say whether it is still running".into(),
     };
     format!(
-        "{} ({}) merged at {} {elapsed}, main was {}: {state}",
+        "{} ({}) merged at {} {elapsed}, {base} was {}: {state}",
         l.worker,
         l.beads.join(" "),
         merge.get(..8).unwrap_or(merge),
@@ -1860,8 +1885,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 worker: worker.to_string(),
                 kind: kinds::LANDABLE,
                 detail: format!(
-                    "{worker} is green at {} with main merged, carrying {}; landing is the \
+                    "{worker} is green at {} with {} merged, carrying {}; landing is the \
                      lane's or the owner's (`air land --worker {worker}`)",
+                    base_or_main(&s.base_branch),
                     head.get(..8).unwrap_or(head),
                     beads.join(" ")
                 ),
@@ -2521,6 +2547,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             .and_then(|c| super::launch::configured_model(&c, "worker")),
         lane_model_setting: super::handover::air_json(repo)
             .and_then(|c| super::launch::configured_model(&c, "lane")),
+        base_branch: super::handover::base_branch(repo),
         bd_mode: Some(bd_mode.clone()),
         bd_server_up: super::bd_server::is_up(&bd_listener),
         bd_listener,
@@ -2529,7 +2556,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
         // the worktree's own branch, and the answer suppresses the warning — so a worker whose
         // branch contained the merge saw nothing about work main had lost.
-        rewound_carried: rewound_carried(repo, &ledger, git::main_tip(repo).ok().as_deref()),
+        rewound_carried: rewound_carried(repo, &ledger, git::base_tip(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.
@@ -2834,6 +2861,14 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             "heartbeat: expected every {n} min (`heartbeat_minutes`); `CronList` shows whether the coordinator has it\n"
         ));
     }
+    // air-h7l: said only when it is not main, since every notice and refusal then names it.
+    if !s.base_branch.is_empty() && s.base_branch != "main" {
+        out.push_str(&format!(
+            "base branch: {} (`base_branch`); landings, cuts and the close gate read it where \
+             they used to read main\n",
+            s.base_branch
+        ));
+    }
     if let Some(m) = &s.bd_mode {
         out.push_str(&format!("{}\n", super::bd_server::line(m, &s.bd_listener)));
     }
@@ -3015,7 +3050,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     for f in &s.landings_in_flight {
         out.push_str(&format!(
             "landing in flight: {}\n",
-            landing_in_flight_line(f, &s.at)
+            landing_in_flight_line(f, base_or_main(&s.base_branch), &s.at)
         ));
     }
     // air-y3v: work that is waiting but not yet landable. Shown, because the coordinator needs

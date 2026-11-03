@@ -5488,3 +5488,127 @@ fn a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead() {
         .unwrap();
     assert_eq!(greens, 1, "{out}");
 }
+
+/// air-h7l: `base_branch` in `.claude/air.json` is the branch the fleet lands onto. A repo
+/// whose only branch is `trunk` claims, cuts, verifies, closes and lands onto it, every
+/// message naming `trunk`; the session named `main` (the primary checkout) still reads as the
+/// owner, so `air land` runs there as before.
+#[test]
+fn the_fleet_lands_onto_the_configured_base_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "trunk"]);
+    std::fs::create_dir_all(main.join(".claude")).unwrap();
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_lane": true, "base_branch": "trunk"}"#,
+    )
+    .unwrap();
+    std::fs::write(main.join("README"), "a\n").unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "a"]);
+    let main = main.canonicalize().unwrap();
+    let root = main.parent().unwrap().to_path_buf();
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    // The close gate runs for a worker; the owner's shell closes without it.
+    let worker = &[
+        ("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z"),
+        ("AIR_ROLE", "worker"),
+    ];
+    for name in ["alpha", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+    }
+    let alpha = root.join("alpha").canonicalize().unwrap();
+    let lane = root.join("lane").canonicalize().unwrap();
+    let json = |out: &str| -> serde_json::Value { serde_json::from_str(out).unwrap() };
+
+    // The worker's bead, claimed and committed; no `main` branch exists anywhere.
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], dead).0, 0);
+    std::fs::write(alpha.join("a.txt"), "a\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(&alpha, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
+    let work = git(&alpha, &["rev-parse", "HEAD"]);
+
+    // `air status` names the base and lists the branch as batch-ready.
+    let (code, out, err) = air_env(&main, &bd, &["--json", "status"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    let snap = &json(&out)["snapshot"];
+    assert_eq!(snap["base_branch"], "trunk", "{out}");
+    assert!(
+        snap["batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["worker"] == "alpha"),
+        "{out}"
+    );
+    let (_, text, _) = air_env(&main, &bd, &["status"], dead);
+    assert!(text.contains("base branch: trunk"), "{text}");
+
+    // The close gate names trunk, not main, while the branch waits for the lane.
+    let (code, out, err) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "early"], worker);
+    assert_eq!(code, 2, "{out}{err}");
+    let text = format!("{out}{err}");
+    assert!(text.contains("trunk") && !text.contains("main"), "{text}");
+
+    // The cut resets to trunk and merges the branch; the green lands by fast-forwarding trunk.
+    let (code, out, err) = air_env(&lane, &bd, &["batch", "cut"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("(trunk "), "{out}");
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let before = git(&main, &["rev-parse", "trunk"]);
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    let after = git(&main, &["rev-parse", "trunk"]);
+    assert_ne!(after, before);
+    assert_eq!(
+        git(&main, &["merge-base", "--is-ancestor", &work, "trunk"]),
+        ""
+    );
+    assert_eq!(git(&main, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
+
+    // The notice names the base, and the worker closes on the lane's green.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let moved: String = conn
+        .query_row(
+            "SELECT content FROM deliveries WHERE kind = 'main-moved' LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(moved.starts_with("trunk moved to"), "{moved}");
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["close", "zz-1", "--reason", "landed"],
+        worker,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+
+    // The session named `main` is the primary checkout, whatever the base is called.
+    let w = snap["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["worker"] == "main")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(w["role"], "owner", "{snap}");
+}
