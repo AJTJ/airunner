@@ -3069,6 +3069,8 @@ pub const SURFACE: &[SurfaceChange] = &[
         action: "Optional: add `\"targets\": {\"<session>\": {\"kind\": \"ssh\", \"host\": …, \
                  \"user\": …, \"path\": \"~/air/<project>\"}}` for sessions whose heavy or \
                  Linux-only commands should run elsewhere. `air run --help` has the detail.",
+    },
+    SurfaceChange {
         id: "launch-no-startup-prompts",
         since: "2026-11-02 (air-z41)",
         headline: "`air worker`, `air lane`, `air coordinator` and `air fleet up` pre-answer the \
