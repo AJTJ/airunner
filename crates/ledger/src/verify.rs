@@ -196,6 +196,39 @@ impl Ledger {
         Ok(())
     }
 
+    /// The machine a recorded run happened on (air-opq.5, schema v29): stamped after the row,
+    /// so no query that decides green, red or flaky changes shape.
+    pub fn stamp_machine(&self, id: &str, m: &crate::runs::Machine) -> Result<()> {
+        self.conn().execute(
+            "UPDATE verify_runs SET hostname=?2, image=?3, arch=?4, nproc=?5, cpu=?6 WHERE id=?1",
+            params![id, m.hostname, m.image, m.arch, m.nproc, m.cpu],
+        )?;
+        Ok(())
+    }
+
+    /// The machine stamped on run `id`; None for a row before v29 or one never stamped.
+    pub fn machine_of(&self, id: &str) -> Result<Option<crate::runs::Machine>> {
+        let m = self
+            .conn()
+            .query_row(
+                "SELECT hostname, image, arch, nproc, cpu FROM verify_runs WHERE id=?1",
+                params![id],
+                |r| {
+                    Ok(r.get::<_, Option<String>>(0)?
+                        .map(|hostname| crate::runs::Machine {
+                            hostname,
+                            image: r.get(1).unwrap_or(None),
+                            arch: r.get(2).unwrap_or_default(),
+                            nproc: r.get(3).unwrap_or(0),
+                            cpu: r.get(4).unwrap_or_default(),
+                        }))
+                },
+            )
+            .optional()?
+            .flatten();
+        Ok(m)
+    }
+
     /// (green, red) counts of `kind` at `sha`, every worker: disagreement at one sha is
     /// flakiness made visible (the adopter's adoption log §9). Counted at the commit,
     /// not the tree (air-7wf): two commits over one tree that disagree could be flakiness OR
@@ -573,6 +606,25 @@ mod tests {
             members: vec![],
             main_sha: None,
         }
+    }
+
+    /// air-opq.5: the machine is stamped after the row and read back; an unstamped row answers
+    /// None, and the stamp changes nothing a green query reads.
+    #[rstest]
+    fn a_run_is_stamped_with_its_machine(ledger: Ledger) {
+        let r = run("lane", "abc", 0, "2026-11-03T10:00:00Z");
+        ledger.record_verify(&r).unwrap();
+        assert_eq!(ledger.machine_of(&r.id).unwrap(), None);
+        let m = crate::runs::Machine {
+            hostname: "box".into(),
+            image: None,
+            arch: "aarch64".into(),
+            nproc: 8,
+            cpu: "Apple M1".into(),
+        };
+        ledger.stamp_machine(&r.id, &m).unwrap();
+        assert_eq!(ledger.machine_of(&r.id).unwrap(), Some(m));
+        assert_eq!(ledger.runs_at("abc", Kind::Verify).unwrap(), (1, 0));
     }
 
     /// air-1pu5: the next tool call after a precheck is stamped once, and only on a finished

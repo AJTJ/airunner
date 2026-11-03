@@ -22,7 +22,7 @@ use air_ledger::verify::{Kind, VerifyRun, new_id};
 use crate::cmd::{emit, log_event, now, open};
 use crate::git;
 
-pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
+pub fn run(repo: &Path, kind: &str, command: &[String], json: bool, local: bool) -> i32 {
     let Some(kind) = Kind::parse(kind) else {
         eprintln!("air record: kind must be one of verify | docs-check | fitness | precheck");
         return 1;
@@ -105,9 +105,52 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     let previous_run = ledger.latest_run_any(&worker, kind).ok().flatten();
     let previous = previous_run.as_ref().and_then(|r| r.command.clone());
     // Air's own directory never counts as dirt (it is gitignored in a configured repo).
-    let dirty = git::dirty_files(repo)
-        .map(|v| v.iter().any(|p| !p.starts_with(".air/")))
-        .unwrap_or(false);
+    let dirt: Vec<String> = git::dirty_files(repo)
+        .map(|v| v.into_iter().filter(|p| !p.starts_with(".air/")).collect())
+        .unwrap_or_default();
+    let dirty = !dirt.is_empty();
+    // air-opq.5: with a target for this session the check runs there, on the pushed commit,
+    // and is recorded at the local head exactly as a local run is; only the producer moves.
+    // The target holds commits and nothing else, so a dirty tree is refused rather than
+    // recorded with its flag: the run would measure a tree that was never pushed. `--local`
+    // is today's path whatever the config says.
+    let target = if local {
+        None
+    } else {
+        match super::handover::air_json(repo).map(|cfg| super::run::target_for(&cfg, &worker)) {
+            None | Some(Ok(None)) => None,
+            Some(Ok(Some(t))) => Some(t),
+            Some(Err(why)) => {
+                eprintln!("air record: .claude/air.json: {why}");
+                return 2;
+            }
+        }
+    };
+    if let Some(t) = &target
+        && dirty
+    {
+        eprintln!(
+            "air record: refusing to run on {}: the tree has uncommitted changes and the target \
+             holds only commits, so the run would measure a tree that was never pushed. NOTHING \
+             was recorded. Commit, or run here with `--local`:\n  {}",
+            t.dest(),
+            dirt.join("\n  ")
+        );
+        return 2;
+    }
+    let machine = super::run::probe_machine(target.as_ref());
+    let remote_argv;
+    let (prog, args): (&str, &[String]) = match &target {
+        Some(t) => {
+            if let Some(code) = super::run::prepare_target(repo, &worker, &head, t) {
+                eprintln!("air record: NOTHING was recorded: the target could not take {head}");
+                return code;
+            }
+            remote_argv = super::run::remote_args(t, command);
+            ("ssh", &remote_argv)
+        }
+        None => (prog, args),
+    };
     let started_at = now();
     // air-4cr: publish the run BEFORE it starts, so "someone is mid-verify" is a lookup.
     // The adopter's coordinator invalidated three workers' verifies by landing under them and
@@ -184,6 +227,10 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
         eprintln!("air record: could not write ledger: {e}");
         return 1;
     }
+    // Where it ran, beside the row; a stamp, so nothing that decides green or red changes.
+    if let Err(e) = ledger.stamp_machine(&run.id, &machine) {
+        eprintln!("air record: could not stamp the machine: {e}");
+    }
     // air-ppm: a kill is not a verdict. The exit is still recorded and still mirrored below;
     // only what it is CALLED changes, and the ledger's green/red/flaky queries skip it.
     let decision = match run.verdict() {
@@ -197,6 +244,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool) -> i32 {
     }
     if dirty {
         flags.push("dirty-tree".to_string());
+    }
+    if let Some(t) = &target {
+        flags.push(format!("on {} ({})", t.dest(), machine.hostname));
     }
     // Counted at the commit, every worker (air-7wf): a peer's red at this sha and my green
     // are two verdicts on one commit. Stated as counts only (air-qlx3): the label that used to

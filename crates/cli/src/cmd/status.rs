@@ -251,6 +251,10 @@ pub struct Snapshot {
     /// The install record is older than this binary (air-d61); the same line `air doctor`
     /// prints, so the coordinator sees it without asking.
     pub install_lag: Option<super::install::InstallLag>,
+    /// The Mac's idle-sleep setting in minutes when it is under ten (air-1ye), read from
+    /// `pmset -g` by `air status` alone, not by the channel's poll; None elsewhere or when
+    /// the machine stays up long enough that nobody needs telling.
+    pub idle_sleep_min: Option<u32>,
     /// The fleet-wide stop, while one is set (air-1vri.1).
     pub fleet_stop: Option<air_ledger::fleet::FleetStop>,
     /// `heartbeat_minutes` from `.claude/air.json`: the interval the coordinator's heartbeat
@@ -2510,6 +2514,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
+        idle_sleep_min: None,
         fleet_stop: ledger.fleet_stop().ok().flatten(),
         heartbeat_minutes: super::handover::heartbeat_minutes(repo),
         model_setting: super::handover::air_json(repo)
@@ -2994,6 +2999,15 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     if let Some(l) = &s.install_lag {
         out.push_str(&format!("{}\n", super::install::lag_line(l)));
     }
+    // air-1ye: an adopter's Mac slept a minute after the owner stepped away and stayed asleep
+    // for three hours of a worker's run. Sessions Air launches hold it awake (caffeinate -i);
+    // the setting is printed so a run started any other way is not a surprise.
+    if let Some(m) = s.idle_sleep_min {
+        out.push_str(&format!(
+            "idle sleep: {m} min (pmset -g); sessions Air launched hold the Mac awake with \
+             caffeinate -i, anything started by hand does not\n"
+        ));
+    }
     for l in s.pin.iter().flat_map(super::install::pin_lines) {
         out.push_str(&format!("{l}\n"));
     }
@@ -3216,14 +3230,44 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     out
 }
 
+/// Pure: the idle-sleep minutes `pmset -g` reports when under [`IDLE_SLEEP_WARN_MIN`], else
+/// None. The line is ` sleep                1 (sleep prevented by …)`: the first token `sleep`,
+/// the second a number; `disksleep` and `displaysleep` are other words. 0 means never, so it
+/// is not short.
+pub fn idle_sleep_minutes(pmset_g: &str) -> Option<u32> {
+    pmset_g.lines().find_map(|l| {
+        let mut words = l.split_whitespace();
+        (words.next()? == "sleep")
+            .then(|| words.next()?.parse::<u32>().ok())
+            .flatten()
+            .filter(|m| (1..IDLE_SLEEP_WARN_MIN).contains(m))
+    })
+}
+
+/// Under this many minutes the setting is printed (air-1ye: the adopter's was one).
+pub const IDLE_SLEEP_WARN_MIN: u32 = 10;
+
+/// `pmset -g` on PATH, wherever one is (a test puts a fake there); None where there is none.
+fn idle_sleep_from_pmset() -> Option<u32> {
+    let out = std::process::Command::new("pmset")
+        .arg("-g")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| idle_sleep_minutes(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
 pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
-    let snap = match gather(repo) {
+    let mut snap = match gather(repo) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("air status: {e}");
             return 1;
         }
     };
+    snap.idle_sleep_min = idle_sleep_from_pmset();
     let att = attention(&snap, &snap.at, Thresholds::from_env());
     if let Ok((ledger, worker)) = open(repo) {
         log_event(
@@ -3289,6 +3333,22 @@ pub fn model_matches(recorded: &str, expected: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+
+    /// air-1ye: the `sleep` line alone, under ten minutes, and 0 (never) is not short.
+    #[test]
+    fn idle_sleep_is_read_from_the_sleep_line_under_ten_minutes() {
+        let g = |m: &str| {
+            format!(
+                " disksleep            10\n sleep                {m} (sleep prevented by x)\n displaysleep         10\n"
+            )
+        };
+        assert_eq!(idle_sleep_minutes(&g("1")), Some(1));
+        assert_eq!(idle_sleep_minutes(&g("9")), Some(9));
+        assert_eq!(idle_sleep_minutes(&g("10")), None);
+        assert_eq!(idle_sleep_minutes(&g("0")), None);
+        assert_eq!(idle_sleep_minutes(" displaysleep 1\n"), None);
+        assert_eq!(idle_sleep_minutes(""), None);
+    }
     use super::*;
 
     /// air-ap1: a session on a model other than the file's is marked; one on it, or with the

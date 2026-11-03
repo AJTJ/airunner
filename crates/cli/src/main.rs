@@ -153,9 +153,17 @@ enum Cmd {
     },
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
+    ///
+    /// With a target for this session in `.claude/air.json` (`"targets"`, see `air run`) the
+    /// command runs there on the pushed HEAD and the result is recorded at the local HEAD as
+    /// usual, with the machine beside it; a dirty tree is refused, since the target holds only
+    /// commits. `--local` runs it here whatever the config says.
     Record {
         /// verify | docs-check | fitness | precheck
         kind: String,
+        /// Run here even when this session has a target.
+        #[arg(long)]
+        local: bool,
         /// The command to run (after `--`).
         #[arg(last = true, required = true)]
         command: Vec<String>,
@@ -621,8 +629,12 @@ fn main() -> ExitCode {
         } => cmd::batch_cut::run(&repo, dry_run, &without, &only, cli.json),
         // air-4lci: the command that changed the fact queues the notices about it, so they do
         // not wait on the coordinator's channel poll.
-        Cmd::Record { kind, command } => {
-            let code = cmd::record::run(&repo, &kind, &command, cli.json);
+        Cmd::Record {
+            kind,
+            local,
+            command,
+        } => {
+            let code = cmd::record::run(&repo, &kind, &command, cli.json, local);
             cmd::fanout::after_change(&repo, false);
             code
         }

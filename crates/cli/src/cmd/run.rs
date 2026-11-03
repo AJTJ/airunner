@@ -55,7 +55,7 @@ pub struct Target {
 
 impl Target {
     /// `user@host`, or `host`.
-    fn dest(&self) -> String {
+    pub fn dest(&self) -> String {
         match &self.user {
             Some(u) => format!("{u}@{}", self.host),
             None => self.host.clone(),
@@ -223,37 +223,12 @@ fn remote(
 ) -> (i32, i64) {
     let dest = t.dest();
     let path = sh_quote(&t.path);
-    let short = sha.get(..8).unwrap_or(sha);
-    eprintln!("air run: {session} at {short} on {dest}:{}", t.path);
-    // Once: a repository at the path. Idempotent, so every run may ask.
-    let init = format!("test -d {path}/.git || {{ mkdir -p {path} && git init -q {path}; }}");
-    if let Some(code) = step("init", ssh(&dest, &init)) {
+    if let Some(code) = prepare_target(repo, session, sha, t) {
         return (code, 0);
     }
-    // Force, because the ref is this session's own and an amend or a rebase moves it back.
-    let push = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["push", "-q", "--force"])
-        .arg(format!("{dest}:{}", t.path))
-        .arg(format!("{sha}:refs/air/{session}"))
-        .stdin(Stdio::null())
-        .status();
-    if let Some(code) = step("push", push) {
-        return (code, 0);
-    }
-    let checkout = format!("cd {path} && git checkout -q --detach {sha}");
-    if let Some(code) = step("checkout", ssh(&dest, &checkout)) {
-        return (code, 0);
-    }
-    let cmd = command
-        .iter()
-        .map(|a| sh_quote(a))
-        .collect::<Vec<_>>()
-        .join(" ");
     // Through the same pump as `air record`, so the output streams as it arrives and is
     // counted.
-    let args = vec![dest.clone(), format!("cd {path} && {cmd}")];
+    let args = remote_args(t, command);
     match super::record::run_tee("ssh", &args, repo) {
         Ok((code, bytes, _)) => {
             // After the command, whatever its exit: a failed benchmark's partial results are
@@ -467,6 +442,54 @@ done"#;
             assert_eq!(size_of(&dir.path().join("d")), 7);
             assert_eq!(size_of(&dir.path().join("missing")), 0);
         }
+    }
+}
+
+/// Put `sha` on the target: a repository at the path once, the push to the session's own ref,
+/// the detached checkout. Says what it is doing on stderr. Some(exit) when a step failed, with
+/// the step named; None when the target holds `sha` checked out.
+pub fn prepare_target(repo: &Path, session: &str, sha: &str, t: &Target) -> Option<i32> {
+    let dest = t.dest();
+    let path = sh_quote(&t.path);
+    let short = sha.get(..8).unwrap_or(sha);
+    eprintln!("air run: {session} at {short} on {dest}:{}", t.path);
+    // Once: a repository at the path. Idempotent, so every run may ask.
+    let init = format!("test -d {path}/.git || {{ mkdir -p {path} && git init -q {path}; }}");
+    if let Some(code) = step("init", ssh(&dest, &init)) {
+        return Some(code);
+    }
+    // Force, because the ref is this session's own and an amend or a rebase moves it back.
+    let push = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["push", "-q", "--force"])
+        .arg(format!("{dest}:{}", t.path))
+        .arg(format!("{sha}:refs/air/{session}"))
+        .stdin(Stdio::null())
+        .status();
+    if let Some(code) = step("push", push) {
+        return Some(code);
+    }
+    let checkout = format!("cd {path} && git checkout -q --detach {sha}");
+    step("checkout", ssh(&dest, &checkout))
+}
+
+/// The argv after `ssh` that runs `command` in the target's path: the destination and one
+/// shell line.
+pub fn remote_args(t: &Target, command: &[String]) -> Vec<String> {
+    let cmd = command
+        .iter()
+        .map(|a| sh_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
+    vec![t.dest(), format!("cd {} && {cmd}", sh_quote(&t.path))]
+}
+
+/// The machine a command would run on: the target's, read over ssh, or this one's.
+pub fn probe_machine(t: Option<&Target>) -> Machine {
+    match t {
+        Some(t) => probe(Command::new("ssh").arg(t.dest()).arg(PROBE)),
+        None => probe(Command::new("sh").arg("-c").arg(PROBE)),
     }
 }
 
