@@ -63,7 +63,7 @@ Index items are 1–3 lines; detail lives behind the link.
   five row collisions in one day was the cost of checking at every verify. Never edit a row;
   append. A parity sweep (a bead titled "Parity sweep ...") lands after the round's last change to
   `crates/` or `docs/rules/`; `air release-check` refuses until it has (owner, 2026-09-29: what ships in
-  `.air/docs/` is kept current with every version). **Appending the row is not the whole round-end duty; two things go with it, both the
+  `.air/docs/` is kept current with every version). **The release-row commit carries the sweep bead's `Bead:` trailer**: the row is itself a change to `crates/`, and `air release-check` exempts only commits naming the sweep (`install.rs` `parity_facts`). A row committed without it refused the 0.4.14 release until a second commit named the sweep (2026-11-03). **Appending the row is not the whole round-end duty; two things go with it, both the
   coordinator's and both earned on 2026-09-07** (air-wt1v, air-ilh4). **Sweep every landing of the
   round against `install::SURFACE`** and append what is missing. Two populations, two numbers,
   both from 2026-09-07 and neither interchangeable: a sweep of **66 landings** found twelve gaps
