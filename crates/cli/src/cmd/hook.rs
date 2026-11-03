@@ -223,12 +223,22 @@ impl Dispatched {
 /// flag, and the launcher's task prompt is not an option because a worker launched with no task
 /// gets no prompt at all (`probe_no_task_no_prompt`). So it is said, once, here.
 ///
+/// Owner, 2026-11-02 (air-8wy): the heartbeat is opt-in. Two owners had it cancelled within
+/// the hour because each firing printed a line they read past, so the instruction is said only
+/// where `.claude/air.json` sets `heartbeat_minutes`. Remove the key and this text when the
+/// harness resumes a limited session with no timer.
+///
 /// Owner, 2026-09-26: only the coordinator is told. Air's channel notices reach workers and
 /// the lane, and the coordinator's heartbeat notices a session that did not come back.
-const WAKE_CONTEXT: &str = "air: create your 5-minute heartbeat now if you have none \
-    (`CronCreate`, every 5 minutes, prompt: \"run `air status`; if you owe work, continue it; \
-    otherwise say nothing\"). It is what brings this session back after an account limit \
-    resets, and it stays silent when there is nothing to do. See .air/roles.md.";
+fn wake_context(minutes: u64) -> String {
+    format!(
+        "air: this repo asks for a coordinator heartbeat; create it now if you have none \
+        (`CronCreate`, every {minutes} minutes, prompt: \"run `air status`; if you owe work, \
+        continue it; otherwise say nothing\"). It is what brings this session back after an \
+        account limit resets, and it stays silent when there is nothing to do. See \
+        .air/roles.md."
+    )
+}
 
 fn dispatch(
     ledger: &Ledger,
@@ -253,7 +263,9 @@ fn dispatch(
             Dispatched::new(
                 HookOutcome::Allow {
                     context: (prev.is_none() && role == "coordinator")
-                        .then(|| WAKE_CONTEXT.to_string()),
+                        .then(|| super::handover::heartbeat_minutes(cwd))
+                        .flatten()
+                        .map(wake_context),
                 },
                 dec::SESSION_START_REGISTERED,
                 transition(&prev, &state),
@@ -1493,7 +1505,14 @@ mod tests {
                 _ => None,
             }
         };
-        assert!(start("c", "coordinator", "coordinator").is_some_and(|c| c.contains("CronCreate")));
+        // air-8wy: opt-in. No key, no instruction.
+        assert_eq!(start("c0", "coordinator", "coordinator"), None);
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        std::fs::write(repo.join(".claude/air.json"), r#"{"heartbeat_minutes": 7}"#).unwrap();
+        assert!(
+            start("c", "coordinator", "coordinator")
+                .is_some_and(|c| { c.contains("CronCreate") && c.contains("every 7 minutes") })
+        );
         assert_eq!(start("w", "worker", "w1"), None);
         assert_eq!(start("l", "lane", "lane"), None);
     }

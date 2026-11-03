@@ -307,12 +307,14 @@ For anything Air does not already carry, reach one worker with `SendMessage` to 
 name `air status` shows; that should be rare. Tmux panes are for the owner to watch; do not type
 into them.
 
-A 5-minute heartbeat runs for the whole round. Create it when you start: `CronCreate` every 5
-minutes, with the prompt "run `air status`; if you owe work, continue it; otherwise say
-nothing". An account limit stops a session without any hook firing, and the heartbeat's first
-firing after the limit resets is what brings the session back. It says nothing when nothing
-changed. The channel pushes changes, and the heartbeat is
-the failsafe: a wedged worker reaches nobody by itself.
+The heartbeat is opt-in. Create it only where `.claude/air.json` sets `"heartbeat_minutes": <n>`
+(the SessionStart context says so and `air status` names the interval) or the owner asks for it:
+`CronCreate` every <n> minutes, with the prompt "run `air status`; if you owe work, continue it;
+otherwise say nothing". An account limit stops a session without any hook firing, and the
+heartbeat's first firing after the limit resets is what brings the session back; without one,
+`air status` still prints `STOPPED at <t>` with the kind. It says nothing when nothing changed.
+The channel pushes changes, and the heartbeat is the failsafe: a wedged worker reaches nobody by
+itself.
 
 Landing is the lane's, not a worker's or the coordinator's. The lane lands its green batch with
 `air land --worker <lane>`, and `air land` is refused to every other launched role; the owner's
