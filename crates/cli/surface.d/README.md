@@ -20,7 +20,8 @@ A fragment is one Rust expression, exactly the entry it replaces, with no traili
 name and type; `air install`, `air release-check` and the version line read the array as before.
 The ordinal is the position: take the number after the highest one present. Two beads in one
 round that pick the same number do not conflict, since the files differ, and sort by id after it.
-The name after the ordinal is the id, and a test holds the two equal. A missing directory or an
+The name after the ordinal is the id; a test holds each fragment's id equal to its name and
+the array's length equal to the file count. A missing directory or an
 empty one fails the build naming the directory; a malformed fragment is a rustc error naming the
 fragment, since each is included by its own path. Never edit an id, and never remove a fragment:
 the release row's count (`install::RELEASES`) only goes up.

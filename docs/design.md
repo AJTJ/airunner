@@ -52,7 +52,7 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 3,968 | The SQLite schema (v29), one row type per table, and the event writer. No network, no beads. |
+| ledger | 3,968 | The SQLite schema (v30), one row type per table, and the event writer. No network, no beads. |
 | hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
 | cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (13,903 lines, 165 probes). |
@@ -97,8 +97,9 @@ Every permission comes from `AIR_ROLE`, which only the launchers set to `worker`
 counts as a worker. The directory and the repository path never grant anything.
 
 Claude Code's deny list, passed by the launcher, keeps workers from `air land`, `git push`,
-every beads write (reads and `bd comment` stay), `claude`, the launchers, `air fleet`, the
-worktree tools and the question prompt; Air refuses `air land` and `air reclaim` again by role.
+every beads write (reads and `bd comment` stay), `claude`, the launchers, `air fleet`, `air
+ready`, the worktree tools and the question prompt; Air refuses `air land`, `air reclaim` and
+`air ready` again by role.
 The lane is a worker with `air land` allowed, plus allow rules on its own command line for its
 bare loop commands (`air land`, `air batch cut`, `air record`, `air status`, `git merge`, `git
 reset --hard main`) so auto mode's classifier does not refuse them. The coordinator is denied
@@ -123,7 +124,7 @@ Any session may run these.
 | air capture | One item, or a whole file, into the coordinator's inbox. It never blocks. |
 | air holdings | Who has edits in which files, across worktrees. A recorded edit ends once its file is clean in the holder's worktree and unchanged on its branch against main. |
 | air lease | Takes, releases or reports a named shared resource. `air lease needs "<cmd>"` says which lease a command needs under `leases` in `.claude/air.json`. |
-| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, and whether the install is out of date. Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
+| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, whether the install is out of date, and a `DIFFERS` mark on a session whose transcript names a model other than `model` or `lane_model` in `.claude/air.json`. Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
 | air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. `--without <worker>...` or `--only <worker>...` takes part of the set, and may take the newest red batch's members at their red-held heads, so a split after a red batch is a recorded cut. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
 | air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, beads' mode, and in server mode whether Dolt is the pinned version (2.3.5; reported, never refused). |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
@@ -141,7 +142,8 @@ the launchers and `air fleet`; Air refuses `air land` to every launched role but
 | air land | The lane's landing; see §6.3. It lists each landed bead with its acceptance text, tells every other session that main moved, closes each epic beads reports with all children closed, and prints the batch-ready set and the next command. |
 | air reclaim | Takes back a gone worker's bead with `bd reclaim`, once beads' five-minute claim lease has run out; never `--force`. |
 | air worker, air lane, air coordinator | Start a session (or `--print` its command). `air coordinator` first asks whether to start the fleet. `air worker` refuses while install's output is uncommitted. |
-| air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. |
+| air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. `--model <m>` sets the model for that launch over `model` and `lane_model` in `.claude/air.json`. |
+| air ready | The coordinator offers its branch's head to the lane. With `coordinator_autobatch` absent or false its branch is batch-ready only at an offered head, and a later commit needs a new offer; with it true the offer is only recorded. Refused to workers and the lane by role, and denied to workers. |
 | air fleet stop, air fleet resume | Coordinator and owner only. Stop records who and why and tells every session; while it holds, `air claim`, `air batch cut` and `air land` refuse, the ready fan-out and the stop nudge are silent, and `air status` leads with it. Nothing is killed. |
 | air install | Adds the hooks and the channel server to the settings, writes `.air/roles.md`, `.air/docs/` and the `air-*` skills, prints every notice the repository has not had, and writes only with `--write`. It refuses a downgrade, an unignored `.air`, or a different `air` on the path; `--pin` copies the binary to `.air/bin/air`. |
 | air init | Sets up a new repository: git, beads in server mode on a free port, the ignore file, `.claude/air.json`, a verify command it finds or a failing placeholder, then install. |
@@ -208,7 +210,9 @@ Every call, including the silent ones, writes one event line.
 `.claude/air.json` holds the repository's settings: `project`; `worker_deny` and
 `coordinator_deny`; `leases`; `verify_lane` (true here: the lane batches and workers run no
 verify of their own); `precheck`; `verify_key` (`tree` here, so a green stands for any commit
-with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `metis`; `adopters`; and `targets`, one
+with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `model` and `lane_model` (what every
+launcher passes as `--model`); `heartbeat_minutes`; `coordinator_autobatch`; `metis` and
+`metis_plugin_dir`; `adopters`; and `targets`, one
 remote target per session for `air run` (`{"worker-1": {"kind": "ssh", "host": …, "user": …,
 "path": …}}`; absent, every session runs locally).
 
@@ -233,6 +237,7 @@ erDiagram
   leases ||--o{ lease_wants : "resource"
   deliveries }o--|| sessions : "worktree"
   sessions ||--o{ runs : "session"
+  sessions ||--o{ offers : "worker"
 ```
 
 | Table | Holds | Written by |
@@ -241,6 +246,7 @@ erDiagram
 | verify_inflight | The check running now and its process. | record |
 | runs | One row per `air run`: session, commit, tree, command, exit, times, output size, the target (`local` or `user@host:path`), and the machine as the probe read it there (hostname, image, arch, nproc, CPU), and what `--pull` brought back (the paths and their byte total). Not a verify: no green query reads it. | run |
 | batch_cuts | The members a cut merged, keyed by lane and head. | batch cut |
+| offers | The heads the coordinator offered to the lane with `air ready` (v30): worker, commit, time. The batch-ready rule reads it for the coordinator's branch unless `coordinator_autobatch` is set. | ready |
 | claims | Who holds which bead, the files declared, and when and why it let go. | claim, release, close, reclaim |
 | sessions | One row per worker name: role, state, sticky fact, and pid with start time; alive only when that pid runs with that start time. | the hook |
 | edit_journal | Which worker touched which file, and when; deleted when the edit ends. | the hook, holdings, land |
@@ -284,7 +290,7 @@ stateDiagram-v2
 | State | Event | Next state | Decided by |
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
-| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared. The coordinator's branch needs no bead: a commit main lacks, and a head offered with `air ready` unless `coordinator_autobatch` is set | `status::batch_ready_rule` |
 | batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
 | in-batch | lane records red | batch-red: nothing lands; every member is held out | `status::red_held` |
@@ -573,7 +579,6 @@ One row per item; a row is deleted when its work lands.
 
 | Item | Added | Detail |
 |---|---|---|
-| Describe the fleet everywhere as three workers, a lane and the coordinator; CLAUDE.md still says "the workers and the coordinator". | 2026-09-14 | air-rr98 |
 | Record the failing step on a red run; `failing_step` is written only for an interrupted run. | 2026-09-14 | `cmd/record.rs` |
 | Red-batch policy: drop the member the failing step names, else halve; one recorded re-run for a suspected flake. Owner ruling open. First datum: 2026-11-03, batch 71079154 red on a test's 20 s wall-clock wait under load, the member re-entered with an empty commit, one verify wasted (air-6y5). | 2026-09-14 | recommended: drop by step |
 | A verify whose tree changed between start and exit records a green for a tree that never existed; flag it like a dirty start. | 2026-09-14 | `cmd/record.rs` |
@@ -585,7 +590,6 @@ One row per item; a row is deleted when its work lands.
 | Cut source comments to responsibility, invariants and contract, crate by crate. | 2026-09-25 | |
 | The do-less questions per mechanism, the failure direction of each text parse, a pass over the roles text, and the multi-agent question once traffic is measured. | 2026-08-29 | `do-less` |
 | Whether `bd serve` is worth a daemon, and whether beads' compare-and-set lets the claims table stop being the authority. | 2026-09-25 | §11 |
-| Keep the adopting guide current, and the README's quick start once the coordinator sets up the fleet on request. | 2026-09-25 | `docs/rules/adopting-air.md` |
 | Turn the two findings indexes about the adopter into beads. | 2026-09-25 | `private/adopter-corpus/` |
 
 ## 11. Technology decisions
@@ -609,6 +613,8 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 | The lane is a merge queue: batch, one verify at a time, fast-forward onto a verified tree, a conflict back to its author, no speculation, no rebase. | Every merge queue with a slow verify batches and splits on red; on one machine the verify is the CPU, and a rebase gives every commit a new sha. | bors-ng README, https://zuul-ci.org/docs/zuul/latest/gating.html, GitHub merge queue docs (2026-09-14) |
 | `git merge-tree --write-tree` for the conflict check; git 2.38 or later. | It merges without touching the index or the working tree. | https://git-scm.com/docs/git-merge-tree (2026-09-14) |
 | The remote runner's push over a command prefix (`kubectl exec`) is git's `ext::` remote helper, `git -c protocol.ext.allow=always push 'ext::<prefix> %S <path>'`, not a bundle piped through the prefix. | One exec per push with git's own negotiation; a bundle needs a second exec for the far tip, a temp file on the target (`git fetch /dev/stdin` fails), and a special case for nothing to send. Equal cost on a local stand-in, 0.13 s to 0.15 s cold for 100 commits (Apple M5, 2026-11-02, air-opq.2). | `git help remote-ext` (git 2.54.0, 2026-11-02); the measurement on air-opq.2 |
+| No base-branch setting: a fleet that lands onto a branch other than `main` clones with that branch as its local `main`. | Air names no remote and moves local refs only, so git already supplies the base. A key inside Air would change the meaning of every gate (15 branch-sense sites in 9 files), and no adopter has recorded a failure git's answer leaves. | `docs/research/base-branch.md` (air-zu3, 2026-11-02) |
+| No notice filter and no feed pane for the coordinator yet; its chat keeps every notice. | In the one measured day no no-reply notice reached the coordinator, so the cost is unmeasured. The next step is to log every channel push as an event and count no-tool coordinator turns for one round; the fix, if material, is two lines in the fan-out, not a per-role filter table. | `docs/research/coordinator-notices.md` (air-ank, 2026-11-02) |
 | A few sessions: three workers, a lane, a coordinator. | Returns thin beyond three or four agents; subscription usage pools across sessions. | https://arxiv.org/abs/2512.08296 (2026-08-18); https://code.claude.com/docs/en/costs.md (2026-08-17) |
 | The close gate is an external recorded check, not the agent's report. | Models still claim success they did not achieve; an anti-cheating prompt lowers the rate and leaves it high (Opus 4.5, 55% to 35%). | https://assets.anthropic.com/m/64823ba7485345a7/Claude-Opus-4-5-System-Card.pdf (2026-08-18) |
 | Facts and refusals over procedure prose, each mechanism with a removal condition. | Context files do not raise task success and cost over 20% more; harness pieces encoding what a model cannot do get removed on the next model. | https://arxiv.org/abs/2602.11988, https://www.anthropic.com/engineering/harness-design-long-running-apps (2026-08-21); `.claude/skills/do-less/references/evidence.md` |
