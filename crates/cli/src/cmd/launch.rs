@@ -720,6 +720,49 @@ fn role_argv(
 /// args), with any pass-through `--settings` merged into Air's so the line carries one
 /// (air-9dg). The lane takes the repo's `worker_deny` too: it is a worker with one permission
 /// added.
+/// `"model"` and `"lane_model"` from `.claude/air.json` (air-ap1): the model the fleet should
+/// be on, `lane_model` winning for the lane. The adopter's coordinator relaunched four sessions
+/// by hand on two days running to get them onto the owner's model, because the model lived
+/// nowhere Air reads. Pure over the parsed file; an empty or non-string value is absent.
+/// Removed when the harness carries a per-project model that launched sessions inherit.
+pub fn configured_model(cfg: &serde_json::Value, role: &str) -> Option<String> {
+    let key = |k: &str| {
+        cfg.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    if role == "lane"
+        && let Some(m) = key("lane_model")
+    {
+        return Some(m);
+    }
+    key("model")
+}
+
+/// `extra` with `--model <configured>` in front when the config names one and `extra` does
+/// not already carry `--model` (from the launcher's flag or a passthrough after `--`): the
+/// command line wins over the file, and an absent key passes nothing, so the session inherits
+/// the harness's model as before. First, for the reason [`crate::main`]'s `with_model` gives.
+pub fn with_configured_model(
+    cfg: Option<&serde_json::Value>,
+    role: &str,
+    extra: &[String],
+) -> Vec<String> {
+    let given = extra
+        .iter()
+        .any(|a| a == "--model" || a.starts_with("--model="));
+    match cfg.and_then(|c| configured_model(c, role)) {
+        Some(m) if !given => {
+            let mut v = vec!["--model".to_string(), m];
+            v.extend(extra.iter().cloned());
+            v
+        }
+        _ => extra.to_vec(),
+    }
+}
+
 fn worker_argv_for(
     repo: &Path,
     role: &str,
@@ -727,7 +770,9 @@ fn worker_argv_for(
     roles: &Path,
     extra: &[String],
 ) -> Result<Vec<String>, String> {
-    let (extra, theirs) = split_settings(extra)?;
+    let cfg = super::handover::air_json(repo);
+    let extra = with_configured_model(cfg.as_ref(), role, extra);
+    let (extra, theirs) = split_settings(&extra)?;
     let project = super::tmux::project_prefix(repo);
     let mut base = if role == "lane" {
         lane_argv(name, &project, roles, &[])
@@ -791,7 +836,9 @@ fn coordinator_argv_for(
     metis: &[String],
     extra: &[String],
 ) -> Result<Vec<String>, String> {
-    let (extra, theirs) = split_settings(extra)?;
+    let cfg = super::handover::air_json(repo);
+    let extra = with_configured_model(cfg.as_ref(), "coordinator", extra);
+    let (extra, theirs) = split_settings(&extra)?;
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
     insert_prompt_flags(&mut base, &super::worktree::main_checkout(repo));
@@ -1248,13 +1295,14 @@ pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
 /// `air fleet up`: the lane and the workers, each in its worktree and a detached tmux session
 /// (air-jc2p.5; owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator, and
 /// the fleet comes up from it). A session already running is left running and named. Every
-/// member is tried, and the exit is 1 if any failed.
-pub fn fleet_up(repo: &Path, print: bool) -> i32 {
-    fleet_up_noting(repo, print, true)
+/// member is tried, and the exit is 1 if any failed. `model` is `--model` for this launch of
+/// every member, over the file's `model` and `lane_model` (air-ap1).
+pub fn fleet_up(repo: &Path, print: bool, model: Option<&str>) -> i32 {
+    fleet_up_noting(repo, print, true, model)
 }
 
 /// `note` false when `air coordinator` has already said what the sessions will ask.
-fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
+fn fleet_up_noting(repo: &Path, print: bool, note: bool, model: Option<&str>) -> i32 {
     if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
         eprintln!("{refusal}");
         log_install_refusal(repo, "air fleet up", &refusal, print);
@@ -1274,6 +1322,11 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     if !print {
         super::bd_server::ensure_for_launch(repo, "air fleet up");
     }
+    let extra: Vec<String> = model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| vec!["--model".to_string(), m.to_string()])
+        .unwrap_or_default();
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
         let start = Start {
@@ -1282,7 +1335,7 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
             fixed: (role == "lane").then_some(LANE_START),
             detached: true,
         };
-        match launch_role(repo, role, &name, &[], start, print) {
+        match launch_role(repo, role, &name, &extra, start, print) {
             Ok(0) => {}
             Ok(code) => failed.push((name, format!("exited {code}"))),
             Err(why) => failed.push((name, why)),
@@ -1490,7 +1543,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
         super::bd_server::ensure_for_launch(repo, "air coordinator");
     }
     // Before the coordinator: on a terminal its launch replaces this process.
-    if start_fleet && fleet_up_noting(repo, print, false) != 0 {
+    if start_fleet && fleet_up_noting(repo, print, false, None) != 0 {
         eprintln!("air coordinator: the fleet did not fully start; starting the coordinator");
     }
     // Metis first, because its split paragraph goes into the file the next line writes
@@ -1880,6 +1933,55 @@ mod tests {
         );
         // And a value-less flag is an error rather than a silently eaten argument.
         assert!(split_settings(&["--settings".to_string()]).is_err());
+    }
+
+    /// air-ap1: the file's model reaches every launcher; `lane_model` wins for the lane; a
+    /// `--model` already on the command line wins over both; absent, nothing is passed.
+    #[test]
+    fn configured_model_rules() {
+        let cfg = serde_json::json!({"model": "x", "lane_model": "y"});
+        let none: &[String] = &[];
+        assert_eq!(
+            with_configured_model(Some(&cfg), "worker", none),
+            ["--model", "x"]
+        );
+        assert_eq!(
+            with_configured_model(Some(&cfg), "coordinator", none),
+            ["--model", "x"]
+        );
+        assert_eq!(
+            with_configured_model(Some(&cfg), "lane", none),
+            ["--model", "y"]
+        );
+        let only = serde_json::json!({"model": "x"});
+        assert_eq!(
+            with_configured_model(Some(&only), "lane", none),
+            ["--model", "x"],
+            "lane_model absent: the lane takes model"
+        );
+        let flag: Vec<String> = ["--model", "z"].map(String::from).to_vec();
+        assert_eq!(
+            with_configured_model(Some(&cfg), "lane", &flag),
+            flag,
+            "the command line wins"
+        );
+        let eq = vec!["--model=z".to_string(), "--verbose".to_string()];
+        assert_eq!(with_configured_model(Some(&cfg), "worker", &eq), eq);
+        let other = vec!["--verbose".to_string()];
+        assert_eq!(
+            with_configured_model(Some(&cfg), "worker", &other),
+            ["--model", "x", "--verbose"],
+            "in front, so it terminates the deny list"
+        );
+        assert_eq!(with_configured_model(None, "worker", &other), other);
+        let empty = serde_json::json!({"model": "  ", "lane_model": 3});
+        assert_eq!(
+            with_configured_model(Some(&empty), "lane", none),
+            none,
+            "blank or non-string is absent"
+        );
+        assert_eq!(configured_model(&cfg, "lane").as_deref(), Some("y"));
+        assert_eq!(configured_model(&cfg, "worker").as_deref(), Some("x"));
     }
 
     /// air-9dg: the printed line carries the env as shell assignments in front of the exec.
