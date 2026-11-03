@@ -52,7 +52,7 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 3,968 | The SQLite schema (v26), one row type per table, and the event writer. No network, no beads. |
+| ledger | 3,968 | The SQLite schema (v27), one row type per table, and the event writer. No network, no beads. |
 | hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
 | cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (13,903 lines, 165 probes). |
@@ -102,7 +102,7 @@ Any session may run these.
 | Command | What it does |
 |---|---|
 | air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step. |
-| air run | Runs a command on the calling session's target, or here when `targets` in `.claude/air.json` names none for it, with the same exit code and nothing added. With an `ssh` target it initialises a repository at the target's path once, pushes HEAD to `refs/air/<session>` there (forced; the ref is the session's own, and no remote in `.git/config` is touched), checks that commit out detached, and runs the command in that directory over ssh with the output streamed back. `ssh` is resolved on `PATH`. It records nothing yet and brings no files back. |
+| air run | Runs a command on the calling session's target, or here when `targets` in `.claude/air.json` names none for it, with the same exit code and nothing added. With an `ssh` target it initialises a repository at the target's path once, pushes HEAD to `refs/air/<session>` there (forced; the ref is the session's own, and no remote in `.git/config` is touched), checks that commit out detached, and runs the command in that directory over ssh with the output streamed back. `ssh` is resolved on `PATH`. Every run, local or not, is one row in `runs` with the machine it ran on, and `--json` prints it after the command's output. It brings no files back yet. |
 | air handover | Says what the close gate would decide for this worktree now, each missing fact with its fix, and on a pass the `air close` that would go through. |
 | air close | Closes beads in one beads process and releases their claims. For a worker or the lane it runs the close gate on each bead first, whatever `AIR_ENFORCE` says, and closes nothing if one fails. It refuses an id with whitespace, and names an id beads does not have. |
 | air claim | The only claim path: the ledger first, then beads, then the ledger row. It refuses while the fleet is stopped, and refuses a bead that is held, `owner`-labelled, an epic, closed, assigned elsewhere, or blocked by an open `blocks` dependency, naming the reason. A beads timeout is followed by a re-read, never a second claim. |
@@ -219,12 +219,14 @@ erDiagram
   captures }o--o| claims : "becomes a bead"
   leases ||--o{ lease_wants : "resource"
   deliveries }o--|| sessions : "worktree"
+  sessions ||--o{ runs : "session"
 ```
 
 | Table | Holds | Written by |
 |---|---|---|
 | verify_runs | One row per recorded check: commit, tree, exit, command, duration, dirty flag, kept log, the main it ran over, batch members. | record, land |
 | verify_inflight | The check running now and its process. | record |
+| runs | One row per `air run`: session, commit, tree, command, exit, times, output size, the target (`local` or `user@host:path`), and the machine as the probe read it there (hostname, image, arch, nproc, CPU). Not a verify: no green query reads it. | run |
 | batch_cuts | The members a cut merged, keyed by lane and head. | batch cut |
 | claims | Who holds which bead, the files declared, and when and why it let go. | claim, release, close, reclaim |
 | sessions | One row per worker name: role, state, sticky fact, and pid with start time; alive only when that pid runs with that start time. | the hook |
