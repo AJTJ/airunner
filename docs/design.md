@@ -83,8 +83,10 @@ project file, which an untrusted folder ignores. Before starting any session a l
 set) and refuses, with the fix, when it is not `true`; Air never writes that key (air-z41). The
 development-channels warning has no documented skip, so it, and any other prompt a session is
 found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
-session with `tmux send-keys` once the owner has said yes to that (air-d73). Folder trust is
-never answered by anyone but the owner. On a Mac the session runs as the child of `caffeinate
+session with `tmux send-keys` once the owner has said yes to that (air-d73); the coordinator's
+launcher allows `Bash(tmux send-keys *)` on its `--settings`, since auto mode's classifier
+refused that keystroke three times in two days (air-yux). Folder trust is never answered by
+anyone but the owner. On a Mac the session runs as the child of `caffeinate
 -i`, so the machine does not idle-sleep under a long command and may once the fleet is idle;
 `air status` prints an idle-sleep setting under ten minutes (air-1ye).
 
@@ -100,7 +102,8 @@ worktree tools and the question prompt; Air refuses `air land` and `air reclaim`
 The lane is a worker with `air land` allowed, plus allow rules on its own command line for its
 bare loop commands (`air land`, `air batch cut`, `air record`, `air status`, `git merge`, `git
 reset --hard main`) so auto mode's classifier does not refuse them. The coordinator is denied
-`git push` and the question prompt, plus `coordinator_deny`; the owner is reached through
+`git push` and the question prompt, plus `coordinator_deny`, and is allowed one command the
+same way, `tmux send-keys`, for the start-up prompt answer (air-yux); the owner is reached through
 `air capture`.
 
 ## 4. Interfaces
