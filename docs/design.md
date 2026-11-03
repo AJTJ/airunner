@@ -81,8 +81,10 @@ auto`, and `skipAutoPermissionPrompt` and `enabledMcpjsonServers` on `--settings
 project file, which an untrusted folder ignores. Before starting any session a launcher reads
 `projects["<main checkout>"].hasTrustDialogAccepted` in `~/.claude.json` (`CLAUDE_CONFIG_DIR` when
 set) and refuses, with the fix, when it is not `true`; Air never writes that key (air-z41). The
-development-channels warning has no documented skip and is still answered by hand. A session
-found on any other prompt is reported, not answered.
+development-channels warning has no documented skip, so it, and any other prompt a session is
+found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
+session with `tmux send-keys` once the owner has said yes to that (air-d73). Folder trust is
+never answered by anyone but the owner.
 
 ### 3.1 Roles and permissions
 
