@@ -253,6 +253,15 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// `coordinator_autobatch` from `.claude/air.json` (air-m8u): `true` makes every coordinator
+/// commit main lacks batch-ready, the rule before the key. Absent or anything else, the
+/// coordinator's branch is batch-ready only at a head it offered with `air ready`.
+pub fn coordinator_autobatch(repo: &Path) -> bool {
+    air_json(repo)
+        .and_then(|j| j.get("coordinator_autobatch")?.as_bool())
+        .unwrap_or(false)
+}
+
 /// `heartbeat_minutes` from `.claude/air.json`: the coordinator's heartbeat interval, set only
 /// by a repo whose owner wants one (air-8wy). Absent, `0` and a non-number mean no heartbeat.
 pub fn heartbeat_minutes(repo: &Path) -> Option<u64> {

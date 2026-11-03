@@ -40,6 +40,10 @@ use crate::cmd::install::ROLES_MD;
 /// Deny rules for a worker (roles.md "Never"; agent-roles-and-confinement §5 L1).
 pub const WORKER_DENY: &[&str] = &[
     "Bash(air land *)",
+    // air-m8u: offering a head to the lane is the coordinator's; the command refuses by role
+    // too, and this keeps the attempt out of the pane.
+    "Bash(air ready)",
+    "Bash(air ready *)",
     "Bash(git push *)",
     // Owner, 2026-09-26: a worker and the lane READ beads and add comments (`bd comment`,
     // `bd comments add`); every other change to a bead or to the store goes through `air`

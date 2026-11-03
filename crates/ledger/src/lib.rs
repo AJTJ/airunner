@@ -18,6 +18,7 @@ pub mod fleet;
 pub mod landings;
 pub mod leases;
 pub mod messages;
+pub mod offers;
 pub mod paths;
 pub mod runs;
 pub mod schema;
