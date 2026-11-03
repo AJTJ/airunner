@@ -84,7 +84,9 @@ set) and refuses, with the fix, when it is not `true`; Air never writes that key
 development-channels warning has no documented skip, so it, and any other prompt a session is
 found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
 session with `tmux send-keys` once the owner has said yes to that (air-d73). Folder trust is
-never answered by anyone but the owner.
+never answered by anyone but the owner. On a Mac the session runs as the child of `caffeinate
+-i`, so the machine does not idle-sleep under a long command and may once the fleet is idle;
+`air status` prints an idle-sleep setting under ten minutes (air-1ye).
 
 ### 3.1 Roles and permissions
 

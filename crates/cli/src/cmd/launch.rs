@@ -851,6 +851,37 @@ fn claude_bin() -> String {
     std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
 }
 
+/// The `caffeinate` to hold the Mac awake for the life of a launched session (air-1ye): an
+/// adopter's laptop, set to sleep after a minute idle, slept for three hours while a worker's
+/// measurement ran (2026-10-29, 46 sleep/wake lines in `pmset -g log`); the harness's own
+/// `caffeinate -i -t 300` covers parts of a turn, not an hour-long command. `AIR_CAFFEINATE_BIN`
+/// names another binary for a test, and empty turns it off; otherwise macOS with
+/// `/usr/bin/caffeinate` present. Elsewhere: None, and the session runs bare. Removal: when the
+/// harness holds its own idle assertion for the whole session.
+pub fn caffeinate_bin() -> Option<String> {
+    match std::env::var("AIR_CAFFEINATE_BIN") {
+        Ok(v) if v.is_empty() => None,
+        Ok(v) => Some(v),
+        Err(_) => (cfg!(target_os = "macos") && Path::new("/usr/bin/caffeinate").is_file())
+            .then(|| "caffeinate".to_string()),
+    }
+}
+
+/// Pure: the command to run, wrapped in `caffeinate -i` when there is one. `caffeinate` runs
+/// the command as its child, holds the idle assertion while it lives, and exits with it, so
+/// nothing is left behind when the session ends and the machine may sleep while the fleet is
+/// idle.
+pub fn awake(caffeinate: Option<&str>, bin: &str, argv: &[String]) -> (String, Vec<String>) {
+    match caffeinate {
+        Some(c) => {
+            let mut v = vec!["-i".to_string(), bin.to_string()];
+            v.extend(argv.iter().cloned());
+            (c.to_string(), v)
+        }
+        None => (bin.to_string(), argv.to_vec()),
+    }
+}
+
 /// POSIX single-quote an argument so `sh -c` reconstructs it byte for byte. Bare words pass
 /// through; anything else is wrapped in `'...'` with embedded `'` as `'\''`.
 pub fn shell_quote(a: &str) -> String {
@@ -961,10 +992,10 @@ fn spawn_tmux(
     detached: bool,
     print: bool,
 ) -> Result<i32, String> {
-    let bin = claude_bin();
+    let (bin, argv) = awake(caffeinate_bin().as_deref(), &claude_bin(), argv);
     let socket = tmux_socket();
     let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
-    let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, argv);
+    let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, &argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return Ok(0);
@@ -1051,15 +1082,15 @@ fn attach_existing(session: &str, socket: Option<String>, detached: bool) -> i32
 }
 
 fn exec_claude(repo: &Path, env: &[(String, String)], argv: &[String], print: bool) -> i32 {
-    let bin = claude_bin();
+    let (bin, argv) = awake(caffeinate_bin().as_deref(), &claude_bin(), argv);
     if print {
-        println!("{}", print_env_line(env, &bin, argv));
+        println!("{}", print_env_line(env, &bin, &argv));
         return 0;
     }
     let mut cmd = Command::new(&bin);
     // On the process, not only in argv: nothing on a command line can clobber it (air-9dg).
     cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .args(argv)
+        .args(&argv)
         .current_dir(repo);
     #[cfg(unix)]
     {
@@ -1985,6 +2016,19 @@ mod tests {
     }
 
     /// air-9dg: the printed line carries the env as shell assignments in front of the exec.
+    /// air-1ye: with a caffeinate the command is `caffeinate -i <bin> <argv…>`, so the session
+    /// is its child and the assertion ends with it; without one the command is unchanged.
+    #[test]
+    fn awake_wraps_the_command_in_caffeinate_only_when_there_is_one() {
+        let argv = vec!["--model".to_string(), "x".to_string()];
+        let (bin, v) = awake(Some("caffeinate"), "claude", &argv);
+        assert_eq!(bin, "caffeinate");
+        assert_eq!(v, ["-i", "claude", "--model", "x"]);
+        let (bin, v) = awake(None, "claude", &argv);
+        assert_eq!(bin, "claude");
+        assert_eq!(v, argv);
+    }
+
     #[test]
     fn print_env_line_prefixes_assignments() {
         let env = role_env("worker", "w1", "air");
