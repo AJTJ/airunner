@@ -600,7 +600,7 @@ fn main() -> ExitCode {
             cmd::fanout::after_change(&repo, false);
             code
         }
-        Cmd::Run { command } => cmd::run::run(&repo, &command),
+        Cmd::Run { command } => cmd::run::run(&repo, &command, cli.json),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }

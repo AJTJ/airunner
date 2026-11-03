@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 26;
+pub const CURRENT_VERSION: i64 = 27;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -386,6 +386,30 @@ const V26: &str = r#"
 ALTER TABLE verify_runs ADD COLUMN resumed_at TEXT;
 "#;
 
+/// v27 (2026-11-03, air-opq.3): one row per `air run`, with the machine it ran on. Not a verify:
+/// no green query reads it. An adopter's measurements had no record of the machine behind them.
+const V27: &str = r#"
+CREATE TABLE IF NOT EXISTS runs (
+  id            TEXT PRIMARY KEY,
+  session       TEXT NOT NULL,
+  sha           TEXT NOT NULL,
+  tree          TEXT,
+  command       TEXT NOT NULL,
+  exit_code     INTEGER NOT NULL,
+  started_at    TEXT NOT NULL,
+  finished_at   TEXT NOT NULL,
+  duration_ms   INTEGER NOT NULL,
+  output_bytes  INTEGER NOT NULL,
+  target        TEXT NOT NULL,
+  hostname      TEXT NOT NULL,
+  image         TEXT,
+  arch          TEXT NOT NULL,
+  nproc         INTEGER NOT NULL,
+  cpu           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS runs_session ON runs(session, started_at);
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -401,7 +425,7 @@ ALTER TABLE verify_runs ADD COLUMN resumed_at TEXT;
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25, V26,
+    V22, V23, V24, V25, V26, V27,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.
