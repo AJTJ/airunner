@@ -256,6 +256,10 @@ pub struct Snapshot {
     /// `heartbeat_minutes` from `.claude/air.json`: the interval the coordinator's heartbeat
     /// is expected at (air-8wy). None, and no line, when the repo does not ask for one.
     pub heartbeat_minutes: Option<u64>,
+    /// `model` and `lane_model` from `.claude/air.json` (air-ap1): what each launched session
+    /// is expected to be on. None when the file names none, and then no session is marked.
+    pub model_setting: Option<String>,
+    pub lane_model_setting: Option<String>,
     /// How bd reaches its data here and, in server mode, whether the port answered.
     pub bd_mode: Option<super::bd_server::Mode>,
     pub bd_server_up: bool,
@@ -2485,6 +2489,10 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         install_lag: super::install::lag(ledger.dir()),
         fleet_stop: ledger.fleet_stop().ok().flatten(),
         heartbeat_minutes: super::handover::heartbeat_minutes(repo),
+        model_setting: super::handover::air_json(repo)
+            .and_then(|c| super::launch::configured_model(&c, "worker")),
+        lane_model_setting: super::handover::air_json(repo)
+            .and_then(|c| super::launch::configured_model(&c, "lane")),
         bd_mode: Some(bd_mode.clone()),
         bd_server_up: super::bd_server::is_up(&bd_listener),
         bd_listener,
@@ -2814,6 +2822,22 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                     "?".to_string()
                 } else {
                     x.model.clone()
+                };
+                // air-ap1: a session on a model the file does not name. The adopter's
+                // coordinator relaunched four sessions by hand to find this out.
+                let expected = if w.role == "lane" {
+                    s.lane_model_setting.as_deref()
+                } else if super::is_worker_like(&w.role) || w.role == "coordinator" {
+                    s.model_setting.as_deref()
+                } else {
+                    None
+                };
+                let model = match expected {
+                    Some(e) if !x.model.is_empty() && !model_matches(&x.model, e) => format!(
+                        "{model} DIFFERS from .claude/air.json ({e}); relaunch via air {}",
+                        w.role
+                    ),
+                    _ => model,
                 };
                 // air-9dg: a worker whose hooks do not see AIR_ENFORCE=1 has the one refusal
                 // switched off, and until this line nothing said so. Only `Some(false)` on a
@@ -3230,10 +3254,61 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
     0
 }
 
+/// Pure (air-ap1): does the model a session's transcript names satisfy the configured one?
+/// Equal, or the recorded id contains the setting, case-insensitively, so `"opus"` in the file
+/// matches a session on `claude-opus-5-5` and `claude-opus-5` matches `claude-opus-5-5`.
+pub fn model_matches(recorded: &str, expected: &str) -> bool {
+    let r = recorded.trim().to_ascii_lowercase();
+    let e = expected.trim().to_ascii_lowercase();
+    !e.is_empty() && (r == e || r.contains(&e))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// air-ap1: a session on a model other than the file's is marked; one on it, or with the
+    /// file naming none, is not; `lane_model` is the lane's.
+    #[test]
+    fn model_mark_on_mismatch_only() {
+        assert!(model_matches("claude-opus-5-5", "opus"));
+        assert!(model_matches("claude-opus-5-5", "claude-opus-5"));
+        assert!(model_matches("Claude-Fable-5-1", "claude-fable-5-1"));
+        assert!(!model_matches("claude-fable-5-1", "sonnet"));
+        assert!(!model_matches("claude-fable-5-1", ""));
+        let mut w = worker("w1", Some("running"), "2026-11-03T10:00:00Z", vec![], None);
+        if let Some(x) = w.session.as_mut() {
+            x.model = "claude-fable-5-1".into();
+        }
+        let snap = |m: Option<&str>| Snapshot {
+            workers: vec![w.clone()],
+            model_setting: m.map(String::from),
+            ..Snapshot::default()
+        };
+        let on = render(&snap(Some("sonnet")), &[]);
+        assert!(
+            on.contains(
+                "[claude-fable-5-1 DIFFERS from .claude/air.json (sonnet); relaunch via air worker]"
+            ),
+            "{on}"
+        );
+        assert!(!render(&snap(Some("fable")), &[]).contains("DIFFERS"));
+        assert!(!render(&snap(None), &[]).contains("DIFFERS"));
+        let mut lane = w.clone();
+        lane.role = "lane".into();
+        lane.worker = "lane".into();
+        let s = Snapshot {
+            workers: vec![lane],
+            model_setting: Some("sonnet".into()),
+            lane_model_setting: Some("fable".into()),
+            ..Snapshot::default()
+        };
+        assert!(
+            !render(&s, &[]).contains("DIFFERS"),
+            "lane_model wins for the lane"
+        );
+    }
 
     /// air-hyli, air-vdst: every member of a red batch is held out until it moves or a green
     /// recorded after the red contains it. A two-member red holds both; a later green carrying
