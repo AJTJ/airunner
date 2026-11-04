@@ -136,7 +136,8 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
 - Sessions on other machines. Today a session's commands and checks can run elsewhere, through
-  `air run` and `air record` on an ssh target, while every session is still local.
+  `air run` and `air record` on a target reached by ssh or any command prefix such as
+  `kubectl exec`, while every session is still local.
 
 ## Inspired by
 

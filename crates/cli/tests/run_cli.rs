@@ -1,5 +1,6 @@
 //! `air run` against a stand-in `ssh` on PATH that runs the remote command locally, so the
-//! push, the checkout and the run all land in a temp directory and need no sshd (air-opq.1).
+//! push, the checkout and the run all land in a temp directory and need no sshd (air-opq.1),
+//! and against a stand-in `kubectl exec` named by an `exec` prefix (air-tfi).
 //! The test names nest under `run::skeleton` so `cargo test -p air -- run::skeleton` selects
 //! them.
 
@@ -123,6 +124,7 @@ exec sh -c "$*"
                 .args(command)
                 .env("PATH", path)
                 .env("AIR_TEST_SSH_LOG", repo.join("ssh.log"))
+                .env("AIR_TEST_EXEC_LOG", repo.join("exec.log"))
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env_remove("GIT_SSH")
@@ -141,6 +143,80 @@ exec sh -c "$*"
             std::fs::read_to_string(repo.join("ssh.log")).unwrap_or_default()
         }
 
+        /// A stand-in for `kubectl exec -i <pod> -c <c> -n ssh --`: appends its argv to
+        /// `$AIR_TEST_EXEC_LOG`, one word per line and `<end>` after each call, drops its own
+        /// words up to `--`, and runs the rest here as argv with no shell between. `--fail <n>`
+        /// exits `n` before running anything, the way a gone pod or an expired token would.
+        pub fn fake_exec() -> PathBuf {
+            static DIR: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
+                std::sync::OnceLock::new();
+            DIR.get_or_init(|| {
+                let home = tempfile::tempdir().unwrap();
+                let script = home.path().join("fake-kubectl");
+                std::fs::write(
+                    &script,
+                    r#"#!/bin/sh
+for a in "$@"; do printf '%s\n' "$a"; done >> "$AIR_TEST_EXEC_LOG"
+printf '<end>\n' >> "$AIR_TEST_EXEC_LOG"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --fail) exit "$2" ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+exec "$@"
+"#,
+                )
+                .unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+                (home, script)
+            })
+            .1
+            .clone()
+        }
+
+        pub fn exec_log(repo: &Path) -> String {
+            std::fs::read_to_string(repo.join("exec.log")).unwrap_or_default()
+        }
+
+        /// `.claude/air.json` with an `exec` target for `main` at `<repo>/target`: the stand-in
+        /// with `words` as its own arguments before `--`. One word carries a space and a
+        /// percent, the two characters the `ext::` helper treats specially, so the push proves
+        /// they arrive as one word.
+        pub fn exec_target(repo: &Path, words: &[&str]) -> (PathBuf, Vec<String>) {
+            let target = repo.join("target");
+            let mut exec = vec![fake_exec().display().to_string()];
+            exec.extend(words.iter().map(|w| w.to_string()));
+            exec.push("--".to_string());
+            std::fs::create_dir_all(repo.join(".claude")).unwrap();
+            std::fs::write(
+                repo.join(".claude/air.json"),
+                serde_json::json!({"targets": {"main": {
+                    "exec": exec, "path": target.display().to_string(),
+                }}})
+                .to_string(),
+            )
+            .unwrap();
+            (target, exec)
+        }
+
+        /// The remotes `.git/config` names, which a push through the transport leaves alone.
+        pub fn remotes(repo: &Path) -> String {
+            let out = common::command("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["config", "--get-regexp", r"^remote\."])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).to_string()
+        }
+
         /// Any `air` subcommand from `repo`, with the stand-in ssh on PATH as [`air_run_args`].
         pub fn air_cmd(repo: &Path, args: &[&str]) -> (i32, String, String) {
             let path = format!(
@@ -154,6 +230,7 @@ exec sh -c "$*"
                 .args(args)
                 .env("PATH", path)
                 .env("AIR_TEST_SSH_LOG", repo.join("ssh.log"))
+                .env("AIR_TEST_EXEC_LOG", repo.join("exec.log"))
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env_remove("GIT_SSH")
@@ -253,6 +330,11 @@ exec sh -c "$*"
                 !log.contains("git push"),
                 "ssh carries receive-pack, not a push command: {log}"
             );
+            assert_eq!(
+                remotes(repo.path()),
+                "",
+                "the push names no remote and adds none to .git/config"
+            );
 
             // A second run: an amended commit, so the ref moves backwards and the push must be
             // forced; the repository on the target is not made again.
@@ -285,6 +367,180 @@ exec sh -c "$*"
             assert_eq!(code, 2);
             assert!(err.contains("targets.main.kind"), "{err}");
             assert_eq!(ssh_log(repo.path()), "", "nothing ran");
+        }
+    }
+
+    /// A target is an argv prefix, and ssh is one spelling of it (air-tfi): the stand-in for
+    /// `kubectl exec` passes argv through with no shell, and every step, the push included,
+    /// goes through it.
+    pub mod exec {
+        use air_ledger::verify::Kind;
+
+        use super::record::split;
+        use super::skeleton::{
+            air_cmd, air_run_args, exec_log, exec_target, git, remotes, scratch_repo, ssh_log,
+        };
+
+        const WORDS: &[&str] = &["-i", "pod", "-c", "me-k8s-ssh", "-n", "100% ssh"];
+
+        #[test]
+        fn an_exec_prefix_pushes_runs_and_pulls_through_it_and_the_row_names_it() {
+            let repo = scratch_repo();
+            let (target, exec) = exec_target(repo.path(), WORDS);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            let (code, out, err) = air_run_args(
+                repo.path(),
+                &["--pull", "results/*"],
+                &[
+                    "sh",
+                    "-c",
+                    "git rev-parse HEAD; mkdir -p results; printf hi > results/a; exit 4",
+                ],
+                &[],
+                true,
+            );
+            assert_eq!(code, 4, "the command's exit comes back\n{err}");
+            let (printed, row) = split(&out);
+            assert_eq!(
+                printed,
+                format!("{sha}\n"),
+                "ran at HEAD's sha in the target"
+            );
+            assert_eq!(
+                row.target,
+                format!("{}:{}", exec.join(" "), target.display()),
+                "the row names the prefix"
+            );
+            assert_eq!(row.exit_code, 4);
+            assert_eq!(row.pulled, vec!["results/a".to_string()]);
+            assert_eq!(
+                std::fs::read_to_string(repo.path().join("results/a")).unwrap(),
+                "hi",
+                "pulled back through the prefix"
+            );
+            assert!(
+                !row.machine.hostname.is_empty(),
+                "the probe ran there: {row:?}"
+            );
+            assert!(
+                err.contains(&format!("on {}:", exec.join(" "))),
+                "one line names the target before the run: {err}"
+            );
+            assert_eq!(git(&target, &["rev-parse", "refs/air/main"]), sha);
+            assert_eq!(git(&target, &["rev-parse", "HEAD"]), sha);
+            assert_eq!(ssh_log(repo.path()), "", "no ssh anywhere");
+            assert_eq!(remotes(repo.path()), "", "no remote named or added");
+
+            // Each call is the prefix's words, then what Air appended: `sh -c <line>` with
+            // the line verbatim, or git's `git-receive-pack <path>` for the push.
+            let log = exec_log(repo.path());
+            let calls: Vec<Vec<&str>> = log
+                .split("<end>\n")
+                .filter(|c| !c.is_empty())
+                .map(|c| c.lines().collect())
+                .collect();
+            let prefix = ["-i", "pod", "-c", "me-k8s-ssh", "-n", "100% ssh", "--"];
+            for call in &calls {
+                assert_eq!(
+                    &call[..7],
+                    &prefix,
+                    "every call starts with the prefix, a space and a percent intact: {call:?}"
+                );
+            }
+            let steps: Vec<&str> = calls.iter().map(|c| c[7]).collect();
+            assert_eq!(
+                steps,
+                vec!["sh", "sh", "git-receive-pack", "sh", "sh", "sh", "sh"],
+                "probe, init, push, checkout, run, list, tar: {log}"
+            );
+            let push = &calls[2];
+            assert_eq!(push[8], target.display().to_string(), "{push:?}");
+            let run = &calls[4];
+            assert_eq!(run[8], "-c");
+            assert!(
+                run[9].starts_with(&format!("cd {} && sh -c ", target.display())),
+                "the line arrives as one unquoted word: {run:?}"
+            );
+            assert!(
+                calls[6][9].contains("tar -cf - -- results/a"),
+                "{:?}",
+                calls[6]
+            );
+        }
+
+        #[test]
+        fn a_verify_through_an_exec_prefix_is_green_at_the_local_head() {
+            let repo = scratch_repo();
+            let (target, exec) = exec_target(repo.path(), WORDS);
+            git(repo.path(), &["add", ".claude/air.json"]);
+            git(repo.path(), &["commit", "-q", "-m", "config"]);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            let (code, out, err) = air_cmd(
+                repo.path(),
+                &["record", "verify", "--", "sh", "-c", "git rev-parse HEAD"],
+            );
+            assert_eq!(code, 0, "{out}{err}");
+            assert!(out.contains(&sha), "ran at the pushed commit: {out}");
+            assert!(out.contains("recorded green verify"), "{out}");
+            assert!(
+                err.contains(&format!("on {} (", exec.join(" "))),
+                "the flag names the prefix and the hostname: {err}"
+            );
+            assert_eq!(git(&target, &["rev-parse", "HEAD"]), sha);
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(ledger.runs_at(&sha, Kind::Verify).unwrap(), (1, 0));
+            let run = ledger
+                .latest_run_any("main", Kind::Verify)
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.sha, sha, "recorded at the local head");
+            assert!(!run.dirty);
+            let m = ledger.machine_of(&run.id).unwrap().unwrap();
+            assert!(!m.hostname.is_empty() && m.nproc > 0, "{m:?}");
+            assert_eq!(ssh_log(repo.path()), "", "no ssh anywhere");
+        }
+
+        #[test]
+        fn a_transport_that_fails_before_the_command_names_the_step_and_records_no_green() {
+            let repo = scratch_repo();
+            let (target, _) = exec_target(repo.path(), &["--fail", "9"]);
+            git(repo.path(), &["add", ".claude/air.json"]);
+            git(repo.path(), &["commit", "-q", "-m", "config"]);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+
+            let (code, out, err) = air_cmd(repo.path(), &["record", "verify", "--", "true"]);
+            assert_eq!(
+                code, 9,
+                "the transport's exit, not the command's\n{out}{err}"
+            );
+            assert!(
+                err.contains("init failed (exit 9)"),
+                "the step is named: {err}"
+            );
+            assert!(
+                err.contains("NOTHING was recorded"),
+                "a failed transport is no verdict: {err}"
+            );
+            assert!(!target.exists(), "nothing was made on the target");
+            let ledger = air_ledger::Ledger::open_in(&repo.path().join(".air")).unwrap();
+            assert_eq!(
+                ledger.runs_at(&sha, Kind::Verify).unwrap(),
+                (0, 0),
+                "no green and no red"
+            );
+            assert_eq!(remotes(repo.path()), "");
+
+            // The stand-in's log is untracked now, so `air run`, which takes a dirty tree,
+            // goes second.
+            let (code, out, err) = air_run_args(repo.path(), &[], &["true"], &[], true);
+            assert_eq!(code, 9, "{err}");
+            assert!(err.contains("init failed (exit 9)"), "{err}");
+            let (_, row) = split(&out);
+            assert_eq!(row.exit_code, 9, "the run row records the failure");
+            assert_eq!(
+                row.machine.hostname, "",
+                "the probe failed too, and says so"
+            );
         }
     }
 

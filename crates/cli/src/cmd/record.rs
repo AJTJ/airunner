@@ -140,6 +140,7 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool, local: bool)
         return 2;
     }
     let machine = super::run::probe_machine(target.as_ref());
+    let remote_prog;
     let remote_argv;
     let (prog, args): (&str, &[String]) = match &target {
         Some(t) => {
@@ -147,8 +148,9 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool, local: bool)
                 eprintln!("air record: NOTHING was recorded: the target could not take {head}");
                 return code;
             }
-            remote_argv = super::run::remote_args(t, command);
-            ("ssh", &remote_argv)
+            // The target's prefix, then `sh -c <line>`: the same words `air run` uses.
+            (remote_prog, remote_argv) = t.command_line(&super::run::remote_line(t, command));
+            (&remote_prog, &remote_argv)
         }
         None => (prog, args),
     };
