@@ -170,18 +170,22 @@ enum Cmd {
     },
     /// Run a command on this session's target, or here when it has none.
     ///
-    /// `"targets"` in `.claude/air.json` names one target per session:
-    /// `{"targets": {"worker-1": {"kind": "ssh", "host": "box", "user": "me",
-    /// "path": "~/air/proj"}}}`. With no entry for this session the command runs in this
-    /// worktree with the same exit code and nothing added. With an `ssh` entry Air initialises a
-    /// repository at `path` on the host once, pushes HEAD to `refs/air/<session>` there (the
-    /// session's own ref, forced), checks that commit out detached, and runs the command in
-    /// `path` over ssh, output streamed back, exit code passed through. The push goes to the
-    /// target only, never to a remote in `.git/config`.
+    /// `"targets"` in `.claude/air.json` names one target per session: an `exec` list, the
+    /// argv prefix that runs a command on the machine with stdin and stdout attached, and the
+    /// repository `path` there: `{"targets": {"worker-1": {"exec": ["kubectl", "exec", "-i",
+    /// "<pod>", "-c", "<container>", "-n", "<ns>", "--"], "path": "~/air/proj"}}}`. The short
+    /// form `{"kind": "ssh", "host": "box", "user": "me", "path": "~/air/proj"}` is the prefix
+    /// `["ssh", "me@box"]`. With no entry for this session the command runs in this worktree
+    /// with the same exit code and nothing added. With one, Air initialises a repository at
+    /// `path` on the machine once, pushes HEAD to `refs/air/<session>` there (the session's
+    /// own ref, forced, through the same prefix as git's `ext::` remote), checks that commit
+    /// out detached, and runs the command in `path` as `<prefix> sh -c '<line>'`, output
+    /// streamed back, exit code passed through. The push goes to the target only, never to a
+    /// remote in `.git/config`.
     ///
     /// `--pull <glob>` (repeatable) brings declared result paths back: after the command exits,
     /// the paths under the target's checkout that match come back as one tar stream over the
-    /// same ssh and are unpacked into this worktree at the same relative paths, overwriting.
+    /// same prefix and are unpacked into this worktree at the same relative paths, overwriting.
     /// Nothing comes back without `--pull`; a glob that matches nothing is reported and is not
     /// an error. The run's row names the pulled paths and their byte total.
     Run {
