@@ -913,6 +913,58 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
     assert!(!stdout.contains("--tmux"), "{stdout}");
 }
 
+/// air-xdc: a top-level key in `.claude/air.json` this binary does not read is named once in
+/// `air status` and carried in `--json`; a config of known keys adds nothing. The lane ran a
+/// 0.4.13 binary against a `targets` key for a day and nothing said so.
+#[test]
+fn status_names_a_config_key_this_binary_does_not_read() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let status = |json: bool| -> String {
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
+        c.arg("--repo").arg(&repo);
+        if json {
+            c.arg("--json");
+        }
+        let out = c
+            .arg("status")
+            .current_dir(&repo)
+            .env("AIR_BD_BIN", "/nonexistent-bd")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "verify_lane": true, "tragets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: \"tragets\" is not read by this binary (air ")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(out.contains("); upgrade or remove it"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(
+        v["snapshot"]["unknown_config_keys"],
+        serde_json::json!(["tragets"])
+    );
+
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "verify_lane": true, "targets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let out = status(false);
+    assert!(!out.contains("config: "), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["unknown_config_keys"], serde_json::json!([]));
+}
+
 /// air-5lg: `tmux ls` is machine-wide, so `air status` is where the owner goes from a lane to
 /// its pane. The session name shows on the worker's row when a session for it is live.
 #[test]
