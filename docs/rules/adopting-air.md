@@ -145,6 +145,8 @@ a silent default.
 |---|---|---|
 | `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
 | `coordinator_deny` | Deny patterns added to the coordinator's list. | none |
+| `worker_allow` | Allow patterns (`"Bash(ssh *)"`) added to every worker's and the lane's allow list, beside the rules Air passes itself. See the paragraph after this table. | none |
+| `coordinator_allow` | Allow patterns added to the coordinator's list. | none |
 | `project` | The `<project>` in tmux session and Claude session names. Set it when two fleets on one machine would collide. | the beads prefix; `air init` writes the directory name |
 | `workers` | How many workers `air fleet up` starts beside the lane, named `worker-1` onward. `0` starts only the lane. | `3` |
 | `model` | The model every launcher (`air worker`, `air lane`, `air coordinator`, `air fleet up`) passes as `--model` when the command line gives none. `air status` marks a session whose transcript names another model. | absent: the session inherits the harness's model |
@@ -163,6 +165,20 @@ a silent default.
 | `metis` | `true`: `air coordinator` attaches Metis's MCP server. Workers never get it. If `metis` is not on `PATH` the launch prints one line and goes on. | `false`; `air init` writes `true` when Metis is installed |
 | `metis_plugin_dir` | The `plugins/metis` directory of a Metis checkout, attached as a plugin as well. | none |
 | `adopters` | `true`: `air adopter-check` refuses when `private/adopters.md` is missing instead of skipping. | `false` |
+
+`worker_allow` and `coordinator_allow` are the allow side of the same two lists. The launcher
+puts the patterns on that role's `--settings` under `permissions.allow`, beside the rules Air
+passes itself, so a matching line resolves before auto mode's classifier judges it. They are
+for the commands that reach the adopter's own machines, which Air does not know about. A repo
+whose coordinator deploys a Kubernetes pod sets `"coordinator_allow": ["Bash(kubectl *)",
+"Bash(gh workflow run *)"]`; one whose machine is a plain VM sets `"coordinator_allow":
+["Bash(ssh *)", "Bash(doctl *)"]` or `"Bash(hcloud *)"`. The list is whatever the adopter's
+machine commands are, and nothing in Air names a provider. Two facts hold for every allow rule.
+It matches only the bare line, since a pipe or redirect sends the whole line to the classifier.
+The deny list wins, so a pattern in both lists stays denied. A session launched before the key
+was set needs a relaunch to have it.
+Sources: Claude Code permissions reference, "Rules are evaluated in order: deny, then ask, then
+allow" (https://code.claude.com/docs/en/permissions.md, accessed 2026-11-05); air-b1h8; air-xji.
 
 A repo with its own lease guard moves its patterns into `leases` and retires the guard. Two
 lease stores that disagree refuse commands while reporting success, so drain the old store

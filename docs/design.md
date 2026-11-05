@@ -107,7 +107,10 @@ and `air record` bare the same way, since the classifier refused a worker's run 
 (air-nyi). The coordinator is denied
 `git push` and the question prompt, plus `coordinator_deny`, and is allowed one command the
 same way, `tmux send-keys`, for the start-up prompt answer (air-yux); the owner is reached through
-`air capture`.
+`air capture`. `worker_allow` and `coordinator_allow` in `.claude/air.json` add the adopter's
+own patterns to the worker's and the lane's, and to the coordinator's, allow list the same way,
+for the commands that reach its machines, which Air does not know (air-xji); the deny list wins
+where both name a command.
 
 ## 4. Interfaces
 
@@ -211,8 +214,8 @@ Every call, including the silent ones, writes one event line.
 
 `.claude/air.json` holds the repository's settings: `project`; `base_branch` (the branch the
 fleet lands onto, `main` by default; every gate, cut, landing and notice reads it where it says
-main, and the session named `main` keeps its name); `worker_deny` and
-`coordinator_deny`; `leases`; `verify_lane` (true here: the lane batches and workers run no
+main, and the session named `main` keeps its name); `worker_deny`, `coordinator_deny`,
+`worker_allow` and `coordinator_allow`; `leases`; `verify_lane` (true here: the lane batches and workers run no
 verify of their own); `precheck`; `verify_key` (`tree` here, so a green stands for any commit
 with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `model` and `lane_model` (what every
 launcher passes as `--model`); `heartbeat_minutes`; `coordinator_autobatch`; `metis` and

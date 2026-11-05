@@ -1,15 +1,23 @@
 ---
 name: user-summary
-description: The shape of every reply to the owner in chat: one line of state, then per item three bold labels, Question, Context, Recommendation, none over three sentences, the settling action last. Load for every status report, every "what are my decisions", every explanation of a finding, a defect or a trade-off, and before any message that asks the owner to choose.
+description: The shape of a reply that asks the owner to decide something or names a roadblock only they can clear: one line of state, then per item three bold labels, Question, Context, Recommendation, none over three sentences, the settling action last. Load before a message that asks the owner to choose, for "what are my decisions", and for a blocker that needs the owner. Do not load for a status, an answer to a question, a set of commands to run, or a report that nothing is needed; those are plain prose in the plain-language voice.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # User summary
 
-The owner reads a few lines and decides. A reply that is glib wastes the decision; one that
-is long hides it. This skill is the shape between the two. It builds on the `plain-language`
-skill, which still applies in full and is not restated here.
+This shape is for a message that asks the owner to decide something, or that names a
+roadblock only they can clear. It is not for a status, an answer to a question, a set of
+commands to run, or a report that nothing is needed; those are plain sentences in the
+`plain-language` voice, with no labels. Owner, 2026-11-05, after a reply that put two facts
+and two shell lines under the labels: "this is really weird that you are using this
+/user-summary skill for this sort of thing. I think it should only be used when there are
+technical roadblocks that require a decision imho."
+
+When it does apply, the owner reads a few lines and decides. A reply that is glib wastes the
+decision; one that is long hides it. This skill is the shape between the two. It builds on
+the `plain-language` skill, which still applies in full and is not restated here.
 
 ## The shape
 
@@ -30,8 +38,8 @@ what a bead, a spike or a question is in a clause the first time. The action tha
 (a comment, a word, a command) is the last sentence of the recommendation, not a label of
 its own.
 
-A single explanation with no decision keeps the same three labels, with Recommendation
-stating what happens next or "none".
+A single explanation with no decision in it is prose, not an item: there is nothing to
+recommend, so the labels would carry facts the owner only has to read.
 
 ## Simple is not glib
 
@@ -89,4 +97,7 @@ evening, and three spaced bold labels were kept. Adapted here: its writing skill
 `plain-language`, whose rule on bold names these labels as the exception; its worked example,
 which named the adopter's systems, was replaced with one from this repo; the lines that
 restated voice rules were cut. Not shipped by `air install`: ship it when an adopter asks for
-the shape. Removed when the owner says a plain reply is enough again.
+the shape. Narrowed 2026-11-05 (air-env), the first day of use: the shape applies to a
+decision or a roadblock only, and a status, an answer or a single explanation is prose,
+after the owner saw two facts and two shell lines under the labels and called it weird.
+Removed when the owner says a plain reply is enough again.

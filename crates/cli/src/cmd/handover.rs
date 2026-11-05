@@ -269,6 +269,7 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
 pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "adopters",
     "base_branch",
+    "coordinator_allow",
     "coordinator_autobatch",
     "coordinator_deny",
     "digest_dir",
@@ -285,6 +286,7 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "targets",
     "verify_key",
     "verify_lane",
+    "worker_allow",
     "worker_deny",
     "workers",
 ];
@@ -322,6 +324,13 @@ mod config_keys_tests {
         assert_eq!(unknown_keys_in(&cfg), vec!["alpha", "zeta"]);
         assert!(unknown_keys_in(&serde_json::json!({"project": "p"})).is_empty());
         assert!(unknown_keys_in(&serde_json::json!([1])).is_empty());
+        // air-xji: the two allow keys are read, so this repo's entry is not reported.
+        let cfg = serde_json::json!({"coordinator_allow": [], "worker_allow": []});
+        assert!(
+            unknown_keys_in(&cfg).is_empty(),
+            "{:?}",
+            unknown_keys_in(&cfg)
+        );
     }
 
     /// Every key the adopting guide's table documents is one this binary reads, so a key
