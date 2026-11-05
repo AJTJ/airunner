@@ -170,6 +170,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - [Design](docs/design.md): the whole system as it is today, kept current with the code.
 - [Roles](docs/rules/roles.md): what each role does, shipped to adopters as `.air/roles.md`.
 - [Adopting Air](docs/rules/adopting-air.md)
+- [Verifying on another machine](docs/rules/remote-verify.md): the setup guide for a `targets` entry, from the first entry to the first green.
 
 ## Status
 
