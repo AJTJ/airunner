@@ -48,18 +48,26 @@ pub type Result<T> = std::result::Result<T, GitError>;
 /// hook that failed open, and each one is a refusal that did not happen.
 const TIMEOUT: Duration = Duration::from_millis(1500);
 
-pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
-    let t0 = std::time::Instant::now();
-    let child = Command::new("git")
+/// Spawn `git -C <cwd> <args>` with piped output, as the leader of its own process group, so
+/// a timeout can kill git's helpers (ssh, a credential helper, a pager) with it: see
+/// [`wait_drained_group`]. stdin is null, so nothing it runs can wait on a terminal.
+pub(crate) fn spawn(cwd: &Path, args: &[&str]) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(GitError::Spawn)?;
-    let drained = wait_drained(child, TIMEOUT).map_err(GitError::Spawn);
+}
+
+pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
+    let t0 = std::time::Instant::now();
+    let child = spawn(cwd, args).map_err(GitError::Spawn)?;
+    let drained = wait_drained_group(child, TIMEOUT).map_err(GitError::Spawn);
     air_ledger::budgets::record(
         air_ledger::budgets::GIT,
         t0.elapsed(),
@@ -85,7 +93,8 @@ pub(crate) type Drained = (std::process::ExitStatus, Vec<u8>, Vec<u8>);
 
 /// Wait for a child with a timeout while draining its pipes on threads, so a child that
 /// writes more than the pipe buffer (64 KB) cannot deadlock against us and be mistaken for
-/// a hang. Kills and reaps on timeout. Returns (status, stdout, stderr).
+/// a hang. Kills and reaps the child on timeout and returns `None` at once, whatever still
+/// holds its pipes. Returns (status, stdout, stderr).
 pub(crate) fn wait_drained(
     child: std::process::Child,
     timeout: std::time::Duration,
@@ -146,9 +155,17 @@ fn wait_drained_with(
         None => {
             kill(&mut child);
             let _ = child.wait();
-            // Pipes close when the child dies; the drain threads finish.
-            let _ = out_t.join();
-            let _ = err_t.join();
+            // Do not join the drain threads. The pipes close only when every holder of a
+            // write end has exited, and a killed child's grandchild inherits them: on Linux
+            // `sh -c "sleep 5"` forks `sleep`, the kill reaches `sh` alone, and the join
+            // waited the whole 5 s of a 100 ms budget (air-dj7, the first pod verify; the
+            // same shape as a hung git's ssh or credential helper). The bd crate's twin of
+            // this function detached for the same reason first (air-19u), and the mcp path
+            // kills the whole group (air-se4n), which `wait_drained_group` does here too
+            // when the caller made the child a group leader. The threads end on their own
+            // when the pipe finally closes; their buffers are discarded.
+            drop(out_t);
+            drop(err_t);
             return Ok(None);
         }
     };
@@ -327,6 +344,58 @@ mod drain_tests {
                 .is_none()
         );
         // air-8gnk: relative to the stall the test injects.
+        assert!(t.elapsed() < STALL, "took {:?}", t.elapsed());
+    }
+
+    /// air-dj7: the child's grandchild holds the pipes and outlives the kill. `sleep … &`
+    /// forks on every sh, so this is the Linux shape of the test above on macOS too.
+    #[test]
+    fn a_grandchild_holding_the_pipes_does_not_hold_the_timeout() {
+        const STALL: Duration = Duration::from_secs(5);
+        let child = Command::new("sh")
+            .args(["-c", &format!("sleep {} & wait", STALL.as_secs())])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let t = std::time::Instant::now();
+        assert!(
+            wait_drained(child, Duration::from_millis(100))
+                .unwrap()
+                .is_none()
+        );
+        // air-8gnk: relative to the stall, not the clock; the suite runs under load.
+        assert!(t.elapsed() < STALL, "took {:?}", t.elapsed());
+    }
+
+    /// The same shape through [`super::spawn`]'s group: `git` with a helper that stalls.
+    #[test]
+    fn a_git_call_times_out_within_its_budget_when_a_helper_holds_the_pipes() {
+        const STALL: Duration = Duration::from_secs(5);
+        let dir = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .args(["-C", dir.path().to_str().unwrap(), "init", "-q"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // A git alias that forks a sleeper into the background and waits: the sleeper is
+        // git's grandchild and holds git's stdout.
+        let child = super::spawn(
+            dir.path(),
+            &[
+                "-c",
+                &format!("alias.stall=!sleep {} & wait", STALL.as_secs()),
+                "stall",
+            ],
+        )
+        .unwrap();
+        let t = std::time::Instant::now();
+        assert!(
+            super::wait_drained_group(child, Duration::from_millis(100))
+                .unwrap()
+                .is_none()
+        );
         assert!(t.elapsed() < STALL, "took {:?}", t.elapsed());
     }
 }
