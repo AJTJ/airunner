@@ -564,16 +564,22 @@ the deployment named rather than a pod, since a pod's name changes on every depl
 
 ```json
 {"targets": {"lane": {"exec": ["kubectl", "--kubeconfig", "/Users/<owner>/.kube/config-swish-multi-ds-us-west-2-dev-a",
-                               "exec", "-i", "deploy/<user>-py312-k8s-ssh", "-c", "<user>-k8s-ssh", "-n", "ssh", "--"],
+                               "exec", "-i", "deploy/<user>-py312-k8s-ssh", "-c", "<user>-k8s-ssh", "-n", "ssh", "--",
+                               "env", "PATH=/home/<user>/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
                       "path": "/home/<user>/air/airunner"}}}
 ```
 
 The kubeconfig is named in the prefix because the prefix runs with the lane's environment and
-nothing sets `KUBECONFIG` there. `make verify` needs on the pod what it needs here: cargo with
+nothing sets `KUBECONFIG` there. The prefix ends with `env PATH=…` because `kubectl exec` gives
+the `sh -c` Air appends the container's PATH, not a login shell's, and rustup installed into
+the home volume: the first pod batch stopped at `make: cargo: No such file or directory`
+(2026-11-05 02:32Z, air-tdh). `env` execs whatever follows it, the `sh -c` of a step and the
+`git-receive-pack` of the push alike, and neither added word has a space, so the `ext::` URL
+keeps its shape. `make verify` needs on the pod what it needs here: cargo with
 clippy and rustfmt, make, git, sh, tmux, ps, kill, tar and perl (the time limit). The pod is
 the `py312` image (procps, tmux, git, build-essential, perl from the Debian base) with Rust
 1.98.1, clippy and rustfmt installed by rustup into the user's home volume, which outlives a
-deleted deployment; `~/.cargo/bin` is on the `sh -c` PATH the prefix gives (air-tdh). `air
+deleted deployment, which is why the prefix puts `~/.cargo/bin` on PATH itself (air-tdh). `air
 selftest` runs against its own fake bd, so bd, Dolt and Claude Code are not needed there. The
 names, the kubeconfig path and the deploy command are in the gitignored `private/devpod-setup.md`. `air adopter-check` reads `private/adopters.md`, which is gitignored and so
 never pushed: the owner copies it once into `<path>/private/` on the pod, where the detached
