@@ -987,6 +987,13 @@ fn record_landing_green(
         ..green.run().clone()
     };
     let _ = ledger.record_verify(&run);
+    // air-2w6: the machine is stamped beside the row, not a field of it, so the copy above
+    // left the landed sha's row with no hostname, arch, nproc or cpu while the lane's row
+    // named the pod (2026-11-05). Copy it from the green this landing stands on, never from
+    // the newest row at that head, which could be a red on another machine.
+    if let Ok(Some(m)) = ledger.machine_of(&green.run().id) {
+        let _ = ledger.stamp_machine(&run.id, &m);
+    }
 }
 
 /// Land one branch: build the merge commit off main and fast-forward onto it. No verify

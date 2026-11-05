@@ -3991,6 +3991,24 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
         .unwrap();
     // 0.4.8 trial: one row, the verified green copied to the landing commit; nothing ran.
     assert_eq!(land_verifies, 1, "landing re-verifies nothing");
+    // air-2w6: the copy carries the machine the green was recorded on. The machine is
+    // stamped beside the row, so a struct copy left every machine column empty on the
+    // landed sha while the lane's row named the pod (2026-11-05).
+    let machine = |trigger: &str| -> (String, String, i64, String) {
+        conn.query_row(
+            "SELECT hostname, arch, nproc, cpu FROM verify_runs WHERE trigger=?1",
+            [trigger],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    let source = machine("record");
+    assert!(!source.0.is_empty(), "the verify was stamped: {source:?}");
+    assert_eq!(
+        machine("land"),
+        source,
+        "the landed row names the same machine"
+    );
 }
 
 /// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
