@@ -2,7 +2,7 @@
 name: plain-language
 description: The voice rules for anything a person will read in this repo (README, docs, skills, commit and PR bodies, bead text, messages to the owner). Every other writing skill points here for voice. Invoke before writing or editing prose, and when the owner says "too verbose", "weird", "just speak normally", "plain language" or "simpler".
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # Plain language
@@ -28,7 +28,8 @@ sentences. Say each thing once, in plain words, and then move on.
    a commit, not to a person's memory of one."). If the sentence carries a fact, write it as a
    plain statement. If it does not, delete it.
 6. **No bold in running prose.** Bold is for a term a scanning reader needs to find, such as a
-   list label in a reference table. Never bold a verdict or a whole sentence.
+   list label in a reference table, and for the three labels of the `user-summary` skill, which
+   the owner chose over a paragraph per item. Never bold a verdict or a whole sentence.
 7. **One qualifier at most.** A sentence gets one hedge or one condition. If a claim needs
    several, split it or move the exceptions to the document that owns them.
 8. **Citations out of the sentence.** Prose meant for people does not carry bead ids, dates,
@@ -59,5 +60,7 @@ rewritten as a plain statement.
   sounded strange and asked for normal speech. The 20-word cap, the "Say the thing. Stop." opener and
   the README and skill word budgets were removed because they pushed writing toward fragments
   and compressed prose. Rules 1 and 4 to 8 were added from the patterns the owner objected to.
+- 2026-11-05, v2.1.0 (air-a0i): rule 6 names the three labels of the `user-summary` skill as
+  the one exception to no bold in prose.
 - Removed when the owner stops reading prose written here, or when another skill owns voice
   and this one duplicates it.

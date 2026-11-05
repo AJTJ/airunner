@@ -102,8 +102,8 @@ Index items are 1–3 lines; detail lives behind the link.
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
 - **Talking to the owner.** Short, in complete ordinary sentences; the voice is the
   `plain-language` skill. Lead with the thing the owner has to know or
-  do; stop there. Default is five lines or fewer. No tables, no headers, no bold-label lists,
-  no bead ids unless the owner has to act on one. Do not report each agent finishing each task;
+  do; stop there. Default is five lines or fewer. No tables, no headers, no bead ids unless the owner has to act on one; the shape
+  is the `user-summary` skill (owner, 2026-11-05). Do not report each agent finishing each task;
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
@@ -142,6 +142,7 @@ Index items are 1–3 lines; detail lives behind the link.
 | Decomposing a feature, sizing beads | skill `decomposition` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
 | Writing prose, docs, commits, PRs, tests, reviews | skill `plain-language` owns voice; `/code-review` for reviewing a change |
+| Replying to the owner in chat: a status, a finding, a choice to make | skill `user-summary` (the shape; voice is `plain-language`) |
 | Explaining a defect, a finding, a red, a refusal or a capture, or proposing a fix | skill `defect` (seven parts, from the ground up, backed by `docs/design.md` §6 and `docs/solved-issues.md`) |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
 | What a round left behind (session journals and round logs; records, not reading) | `.air/journal/` in the main checkout (gitignored) |
