@@ -74,11 +74,18 @@ tar -cf - private/adopters.md | ssh <user>@<host> 'mkdir -p <path> && cd <path> 
 Credentials, kubeconfigs and keys never go: the machine needs the repository's tree and the
 names the check reads, nothing that authenticates.
 
-## 5. The entry in `.claude/air.json`
+## 5. The entry in `.claude/air.local.json`
 
 One entry per session, keyed by the session's name. `exec` is the argv prefix that runs a
 command on the machine with stdin and stdout attached; `path` is the repository directory
-there. The `ssh` short form expands to the prefix `ssh <user>@<host>`:
+there. The `ssh` short form expands to the prefix `ssh <user>@<host>`. The entry normally
+lives in `.claude/air.local.json`, which is gitignored and whose top-level keys replace the
+committed `.claude/air.json`'s keys of the same name (adopting-air.md, "Configure"): a
+machine's name, the kubeconfig that reaches it and the user's home path then stay out of the
+project's history, and a change takes effect when the file is written, not when a landing
+carries it. The committed file keeps only what Air does, with `targets` absent or a
+placeholder such as the first block below for a reader, and each laptop's own file carries the
+real entries:
 
 ```json
 {"targets": {"lane": {"exec": ["kubectl", "exec", "-i", "<pod-or-deploy/name>", "-c", "<container>", "-n", "<namespace>", "--"],
@@ -89,18 +96,18 @@ there. The `ssh` short form expands to the prefix `ssh <user>@<host>`:
 {"targets": {"lane": {"kind": "ssh", "host": "<host>", "user": "<user>", "path": "/home/<user>/air/<project>"}}}
 ```
 
-Three things to know before committing it. `.claude/air.json` is tracked, so every word in the
-prefix goes into the project's history: name a deployment rather than a pod if the pod's name
-changes (or resolve the pod when the command runs, step 9), and keep a kubeconfig path or a
-user name out of it if that bothers you. The prefix
-runs with the session's environment, which a launched session keeps small, so anything the
-tool needs (`--kubeconfig <file>`, a `KUBECONFIG` the shell would have set) goes in the prefix.
-And `kubectl exec` runs `sh -c` with the container's PATH, not a login shell's: a toolchain
+Three things to know before writing it. Both files are read from the main checkout, so the
+overlay is written there, never in a worktree, and `air status` run anywhere shows what it
+set; if you do commit an entry in `.claude/air.json` instead, every word of the prefix goes
+into the project's history, it takes effect only when the lane lands it after verifying that
+batch on the old target, and a pod name that changes at every redeploy is better named as a
+deployment or resolved when the command runs (step 9). The prefix runs with the session's
+environment, which a launched session keeps small, so anything the tool needs
+(`--kubeconfig <file>`, a `KUBECONFIG` the shell would have set) goes in the prefix. And
+`kubectl exec` runs `sh -c` with the container's PATH, not a login shell's: a toolchain
 installed into a home directory is not on it, and the prefix ends with
 `"env", "PATH=/home/<user>/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"`
-to put it there (`env` execs the `sh -c` and the push's `git-receive-pack` alike). The entry is
-read from the main checkout's copy of the file, so it takes effect when the commit that carries
-it lands, not when it is written in a worktree.
+to put it there (`env` execs the `sh -c` and the push's `git-receive-pack` alike).
 
 ## 6. The first run
 
