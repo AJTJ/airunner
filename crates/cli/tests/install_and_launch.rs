@@ -989,6 +989,111 @@ fn status_names_a_config_key_this_binary_does_not_read() {
     assert_eq!(v["snapshot"]["unknown_config_keys"], serde_json::json!([]));
 }
 
+/// air-aei: `.claude/air.local.json` lays its top-level keys over `.claude/air.json` for
+/// every command (here the `model` `air status` reports), an unknown key set there is named
+/// with its file, an overlay that does not parse is reported and the committed file read
+/// alone, and git tracking the overlay is warned about once. Twice on 2026-11-05 a `targets`
+/// change was a landing whose own batch verified on the old target.
+#[test]
+fn status_reads_the_config_overlay_and_names_what_it_set_or_broke() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let status = |json: bool| -> String {
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
+        c.arg("--repo").arg(&repo);
+        if json {
+            c.arg("--json");
+        }
+        let out = c
+            .arg("status")
+            .current_dir(&repo)
+            .env("AIR_BD_BIN", "/nonexistent-bd")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "model": "committed", "targets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let overlay = repo.join(".claude/air.local.json");
+    std::fs::write(&overlay, r#"{"model": "mine", "zzz": 1}"#).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "mine", "{v}");
+    assert_eq!(
+        v["snapshot"]["config_overlay"],
+        serde_json::json!({"keys": ["model", "zzz"], "invalid": null})
+    );
+    assert_eq!(v["snapshot"]["config_overlay_tracked"], false);
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: \"zzz\" is not read by this binary (air ")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(
+        out.contains("; set in .claude/air.local.json); upgrade"),
+        "{out}"
+    );
+    assert!(!out.contains("is tracked by git"), "{out}");
+
+    std::fs::write(&overlay, "{\"model\": ").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "committed", "{v}");
+    assert_eq!(
+        v["snapshot"]["config_overlay"]["keys"],
+        serde_json::json!([])
+    );
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: .claude/air.local.json is not used (")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(!out.contains("\"zzz\""), "{out}");
+
+    std::fs::write(&overlay, r#"{"model": "mine"}"#).unwrap();
+    let g = |args: &[&str]| {
+        let out = common::command("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    g(&["add", "-f", ".claude/air.local.json"]);
+    g(&["commit", "-q", "-m", "tracked by mistake"]);
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: .claude/air.local.json is tracked by git")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(
+        out.contains("git rm --cached .claude/air.local.json"),
+        "{out}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["config_overlay_tracked"], true);
+
+    std::fs::remove_file(&overlay).unwrap();
+    g(&["rm", "-q", "--cached", ".claude/air.local.json"]);
+    let out = status(false);
+    assert!(!out.contains("config: "), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "committed", "{v}");
+}
+
 /// air-5lg: `tmux ls` is machine-wide, so `air status` is where the owner goes from a lane to
 /// its pane. The session name shows on the worker's row when a session for it is live.
 #[test]

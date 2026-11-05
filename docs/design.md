@@ -110,7 +110,10 @@ same way, `tmux send-keys`, for the start-up prompt answer (air-yux); the owner 
 `air capture`. `worker_allow` and `coordinator_allow` in `.claude/air.json` add the adopter's
 own patterns to the worker's and the lane's, and to the coordinator's, allow list the same way,
 for the commands that reach its machines, which Air does not know (air-xji); the deny list wins
-where both name a command.
+where both name a command. Every key is read from the main checkout's `.claude/air.json` with
+the gitignored `.claude/air.local.json` laid over it, top-level key by top-level key, so a
+machine's own `targets` and allow lists stay out of git and take effect when written rather
+than when a landing carries them (air-aei).
 
 ## 4. Interfaces
 
@@ -211,6 +214,7 @@ Every call, including the silent ones, writes one event line.
 | `.claude/settings.json`, `.mcp.json` | The hook entries and the channel server entry, merged in by install. |
 | `.worktreeinclude` | Ignored files copied into new worktrees. |
 | `changelog.d/<bead>.md` | One changelog fragment per bead; `make changelog` folds them into `CHANGELOG.md`. |
+| `.claude/air.local.json` | One machine's own settings, gitignored by the adopter and read beside `.claude/air.json` from the main checkout; its top-level keys replace the committed file's (air-aei). `air status` names a key set there the binary does not read with the file, says once when it does not parse, and warns once if git tracks it. |
 
 `.claude/air.json` holds the repository's settings: `project`; `base_branch` (the branch the
 fleet lands onto, `main` by default; every gate, cut, landing and notice reads it where it says

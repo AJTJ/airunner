@@ -141,6 +141,20 @@ key is optional. `air status` names a top-level key the installed binary does no
 that binary's version, so a key landed ahead of an upgrade, or a typo, is seen there and not in
 a silent default.
 
+A second file, `.claude/air.local.json`, is read beside it from the same place and is for
+one machine's own values: `targets`, which name a pod or a host and the kubeconfig or user
+that reaches it, and the allow lists for the commands that reach them. Its top-level keys
+replace the committed file's keys of the same name, whole; a `targets` in the overlay
+replaces the committed `targets` and is not merged into it one session at a time. Every other
+key comes from the committed file. The committed file then says what Air does on this
+repository, and each machine's own file says where, with no commit and no landing in between:
+a change there takes effect the moment it is written, where a committed `targets` took effect
+only when the lane landed it, after verifying that very batch on the old target (twice on
+2026-11-05). You add the `.gitignore` line yourself (`air init` never touches `.gitignore`);
+`air status` warns once if git tracks the file, names a key set there that the binary does not
+read with the file, and says once when the file does not parse, in which case the committed
+file is read alone.
+
 | Key | What it does | Default |
 |---|---|---|
 | `worker_deny` | Deny patterns (`"Bash(make deploy*)"`) added to every worker's and the lane's deny list. Use patterns, not lists of targets, so a new target is covered the day it exists. | none; `air init` proposes some |
