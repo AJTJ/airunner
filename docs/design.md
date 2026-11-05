@@ -579,7 +579,8 @@ run and its row, and the gone-machine case, which records nothing. Its last sect
 every launched session, the coordinator included, a machine of its own: one ssh entry each for VMs, and for replicas of one
 deployment a script in this repository's `scripts/` that resolves the session's pod when the
 command runs (air-oep). This repository's lane
-verifies on a dev pod through an `exec` prefix that runs that script and sets PATH; the
+verifies on a dev pod through an `exec` prefix that runs that script and sets PATH, written in
+the owner's gitignored `.claude/air.local.json` and not in the committed file (air-vj6); the
 names and the deploy command are in the gitignored `private/devpod-setup.md`, and the first
 run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify 46 s against
 118 s on the laptop, 96 cores).
