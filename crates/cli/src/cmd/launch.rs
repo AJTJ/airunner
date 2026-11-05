@@ -234,8 +234,14 @@ pub fn config_patterns(cfg: Option<&serde_json::Value>, key: &str) -> Vec<String
 /// coordinator the `coordinator_*` keys) put onto an argv the role's pure builder made: the
 /// allow patterns (`worker_allow`, `coordinator_allow`) merged into the `--settings` blob's
 /// `permissions.allow` beside the hardcoded rules ([`lane_allow`], [`worker_allow`],
-/// [`coordinator_allow`]), and the deny patterns appended to the `--disallowed-tools` values
-/// as before. A key that is absent or not an array adds nothing.
+/// [`coordinator_allow`]), and the deny patterns put among the `--disallowed-tools` values,
+/// after the last one already there. A key that is absent or not an array adds nothing.
+///
+/// air-b70 (2026-11-05): the deny patterns used to be appended at the end of the argv. A
+/// worker's argv ends with its deny values, so that was right for workers; the coordinator's
+/// ends with the Metis argv (`--mcp-config <path>`), so with `metis` on a repo's
+/// `coordinator_deny` followed that path as positional arguments and denied nothing. Found by
+/// reading the code while on air-xji; dormant here (`coordinator_deny` is empty).
 ///
 /// air-xji (2026-11-05): the owner wants the coordinator to deploy and resize the fleet's
 /// machines itself and workers to use them. Every `gh workflow run` and every `kubectl` write
@@ -265,7 +271,18 @@ pub fn apply_repo_rules(argv: &mut Vec<String>, cfg: Option<&serde_json::Value>,
             &[serde_json::json!({ "permissions": { "allow": allow } })],
         );
     }
-    argv.extend(config_patterns(cfg, &format!("{side}_deny")));
+    let deny = config_patterns(cfg, &format!("{side}_deny"));
+    // After the flag's last value: the next argument that is a flag, or the end.
+    let at = match argv.iter().position(|a| a == "--disallowed-tools") {
+        Some(flag) => argv
+            .iter()
+            .enumerate()
+            .skip(flag.saturating_add(1))
+            .find(|(_, a)| a.starts_with("--"))
+            .map_or(argv.len(), |(i, _)| i),
+        None => argv.len(),
+    };
+    argv.splice(at..at, deny);
 }
 
 /// Write the task to `<main>/.air/tasks/<name>.md` and return the path. Overwritten on every
@@ -2006,6 +2023,36 @@ mod tests {
         assert!(
             !w[deny_at + 1..pat_at].iter().any(|a| a.starts_with("--")),
             "{w:?}"
+        );
+    }
+
+    /// air-b70: with Metis on, `coordinator_argv` ends `--disallowed-tools <deny> --mcp-config
+    /// <path>`, and the repo's `coordinator_deny` appended at the end followed the path as
+    /// positional arguments, denying nothing. The repo's patterns go among the flag's values.
+    #[test]
+    fn repo_deny_patterns_stay_among_the_disallowed_tools_values_with_metis_on() {
+        let roles = Path::new("/r/.air/roles.md");
+        let metis = ["--mcp-config".to_string(), "/m/metis.json".to_string()];
+        let cfg = serde_json::json!({ "coordinator_deny": ["Bash(make deploy*)"] });
+        let mut v = coordinator_argv("air", roles, "--ch", &metis, &["--verbose".to_string()]);
+        apply_repo_rules(&mut v, Some(&cfg), "coordinator");
+        let deny_at = v.iter().position(|a| a == "--disallowed-tools").unwrap();
+        let pat_at = v.iter().position(|a| a == "Bash(make deploy*)").unwrap();
+        assert!(pat_at > deny_at, "{v:?}");
+        assert!(
+            !v[deny_at + 1..pat_at].iter().any(|a| a.starts_with("--")),
+            "{v:?}"
+        );
+        // The hardcoded deny list, the Metis argv and the pass-through are all still there,
+        // in that order after the pattern.
+        for d in COORDINATOR_DENY {
+            assert!(v[deny_at + 1..pat_at].contains(&(*d).to_string()), "{v:?}");
+        }
+        let tail: Vec<&str> = v[pat_at + 1..].iter().map(String::as_str).collect();
+        assert_eq!(
+            tail,
+            ["--mcp-config", "/m/metis.json", "--verbose"],
+            "{v:?}"
         );
     }
 
