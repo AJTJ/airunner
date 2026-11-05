@@ -214,28 +214,58 @@ pub fn lane_deny() -> Vec<&'static str> {
 /// over coordinator sessions.
 pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)", "AskUserQuestion"];
 
-/// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
-/// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
-/// enumerations, so a new publish target cannot ship outside the list (the adopter's capture
-/// fcd8ff: `make deploy-site` shipped without being added to a list that named `deploy-api`).
-pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
-    let Ok(air_dir) = air_ledger::paths::air_dir_for(repo) else {
-        return Vec::new();
-    };
-    let path = air_dir
-        .parent()
-        .map(|m| m.join(".claude/air.json"))
-        .unwrap_or_default();
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get(key).and_then(|a| a.as_array()).cloned())
+/// Repo-specific permission rules, tracked in `<main>/.claude/air.json`:
+/// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...], "worker_allow": [...],
+/// "coordinator_allow": [...]}`. Patterns, not enumerations, so a new publish target cannot
+/// ship outside the list (the adopter's capture fcd8ff: `make deploy-site` shipped without
+/// being added to a list that named `deploy-api`). Pure over the parsed file: the strings
+/// under `key` when it is an array, else nothing.
+pub fn config_patterns(cfg: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    cfg.and_then(|v| v.get(key).and_then(|a| a.as_array()))
         .map(|a| {
             a.iter()
                 .filter_map(|x| x.as_str().map(str::to_string))
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Pure: the repo's own rules for `role` (`worker` and `lane` read the `worker_*` keys, the
+/// coordinator the `coordinator_*` keys) put onto an argv the role's pure builder made: the
+/// allow patterns (`worker_allow`, `coordinator_allow`) merged into the `--settings` blob's
+/// `permissions.allow` beside the hardcoded rules ([`lane_allow`], [`worker_allow`],
+/// [`coordinator_allow`]), and the deny patterns appended to the `--disallowed-tools` values
+/// as before. A key that is absent or not an array adds nothing.
+///
+/// air-xji (2026-11-05): the owner wants the coordinator to deploy and resize the fleet's
+/// machines itself and workers to use them. Every `gh workflow run` and every `kubectl` write
+/// from a launched session was refused by the auto-mode classifier as a shared-cluster
+/// mutation, so on 2026-11-05 alone five such commands were typed by the owner from text the
+/// coordinator gave inline. The commands are the adopter's, not Air's, so they cannot be
+/// hardcoded the way `tmux send-keys` (air-yux) and `air run` (air-nyi) were: Air knows no
+/// provider, and a Kubernetes pod, a VM at a hosting company and a bare host each need their
+/// own list. A config key is the pattern the deny side already has. The harness evaluates
+/// deny before allow ("Rules are evaluated in order: deny, then ask, then allow. The first
+/// match in that order determines the outcome", https://code.claude.com/docs/en/permissions.md
+/// "Manage permissions", accessed 2026-11-05), so a pattern in both lists stays denied and
+/// nothing here widens past the deny list. A rule matches the bare line only; a piped line is
+/// judged by the classifier (air-b1h8).
+///
+/// Removal: when the harness stops judging bare lines from launched sessions in auto mode.
+pub fn apply_repo_rules(argv: &mut Vec<String>, cfg: Option<&serde_json::Value>, role: &str) {
+    let side = if role == "coordinator" {
+        "coordinator"
+    } else {
+        "worker"
+    };
+    let allow = config_patterns(cfg, &format!("{side}_allow"));
+    if !allow.is_empty() {
+        merge_settings(
+            argv,
+            &[serde_json::json!({ "permissions": { "allow": allow } })],
+        );
+    }
+    argv.extend(config_patterns(cfg, &format!("{side}_deny")));
 }
 
 /// Write the task to `<main>/.air/tasks/<name>.md` and return the path. Overwritten on every
@@ -852,7 +882,7 @@ fn worker_argv_for(
             ] } })],
         );
     }
-    base.extend(repo_deny(repo, "worker_deny"));
+    apply_repo_rules(&mut base, cfg.as_ref(), role);
     base.extend(extra);
     Ok(base)
 }
@@ -904,7 +934,7 @@ fn coordinator_argv_for(
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
     insert_prompt_flags(&mut base, &super::worktree::main_checkout(repo));
-    base.extend(repo_deny(repo, "coordinator_deny"));
+    apply_repo_rules(&mut base, cfg.as_ref(), "coordinator");
     base.extend(extra);
     Ok(base)
 }
@@ -1885,6 +1915,98 @@ mod tests {
         // The coordinator's list is unchanged, and the lane's gains nothing here.
         assert_eq!(coordinator_allow(), ["Bash(tmux send-keys *)"]);
         assert!(!lane_allow(None).iter().any(|r| r == "Bash(air run *)"));
+    }
+
+    /// air-xji: `worker_allow` and `coordinator_allow` in `.claude/air.json` reach the
+    /// role's `permissions.allow` beside the hardcoded rules, the lane taking `worker_allow`
+    /// as it takes `worker_deny`. Absent or not an array, nothing is added.
+    #[test]
+    fn repo_allow_rules_reach_each_roles_settings() {
+        let roles = Path::new("/r/.air/roles.md");
+        let cfg = serde_json::json!({
+            "worker_allow": ["Bash(ssh *)", "Bash(hcloud *)"],
+            "coordinator_allow": ["Bash(kubectl *)", "Bash(gh workflow run *)"],
+        });
+        let allow_of = |v: &[String]| settings_of(v)["permissions"]["allow"].clone();
+        let has = |a: &serde_json::Value, r: &str| a.as_array().unwrap().iter().any(|x| x == r);
+
+        let mut worker = worker_argv("w", "air", roles, &[]);
+        apply_repo_rules(&mut worker, Some(&cfg), "worker");
+        let a = allow_of(&worker);
+        assert!(has(&a, "Bash(ssh *)") && has(&a, "Bash(hcloud *)"), "{a}");
+        assert!(has(&a, "Bash(air run *)"), "{a}");
+        assert!(!has(&a, "Bash(kubectl *)"), "{a}");
+
+        let mut lane = lane_argv("lane", "air", roles, &[]);
+        apply_repo_rules(&mut lane, Some(&cfg), "lane");
+        let a = allow_of(&lane);
+        assert!(has(&a, "Bash(ssh *)") && has(&a, "Bash(air land *)"), "{a}");
+        assert!(!has(&a, "Bash(kubectl *)"), "{a}");
+
+        let mut coord = coordinator_argv("air", roles, "--ch", &[], &[]);
+        apply_repo_rules(&mut coord, Some(&cfg), "coordinator");
+        let a = allow_of(&coord);
+        assert!(
+            has(&a, "Bash(kubectl *)") && has(&a, "Bash(gh workflow run *)"),
+            "{a}"
+        );
+        assert!(has(&a, "Bash(tmux send-keys *)"), "{a}");
+        assert!(!has(&a, "Bash(ssh *)"), "{a}");
+
+        // Absent, not an array, or no file at all: the list is the hardcoded one.
+        for cfg in [
+            None,
+            Some(serde_json::json!({})),
+            Some(serde_json::json!({"worker_allow": "Bash(ssh *)", "coordinator_allow": 1})),
+        ] {
+            let mut w = worker_argv("w", "air", roles, &[]);
+            apply_repo_rules(&mut w, cfg.as_ref(), "worker");
+            assert_eq!(
+                allow_of(&w),
+                serde_json::json!(worker_allow(None)),
+                "{cfg:?}"
+            );
+            let mut c = coordinator_argv("air", roles, "--ch", &[], &[]);
+            apply_repo_rules(&mut c, cfg.as_ref(), "coordinator");
+            assert_eq!(
+                allow_of(&c),
+                serde_json::json!(coordinator_allow()),
+                "{cfg:?}"
+            );
+        }
+    }
+
+    /// air-xji: a pattern in both of a role's repo lists is still on its `--disallowed-tools`,
+    /// and the harness evaluates deny before allow ("Rules are evaluated in order: deny, then
+    /// ask, then allow. The first match in that order determines the outcome",
+    /// https://code.claude.com/docs/en/permissions.md "Manage permissions", accessed
+    /// 2026-11-05), so it stays denied.
+    #[test]
+    fn a_pattern_in_both_repo_lists_stays_denied() {
+        let roles = Path::new("/r/.air/roles.md");
+        let cfg = serde_json::json!({
+            "worker_allow": ["Bash(make deploy*)"],
+            "worker_deny": ["Bash(make deploy*)"],
+        });
+        let mut w = worker_argv("w", "air", roles, &[]);
+        apply_repo_rules(&mut w, Some(&cfg), "worker");
+        let allow = settings_of(&w)["permissions"]["allow"].clone();
+        assert!(
+            allow
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "Bash(make deploy*)"),
+            "{allow}"
+        );
+        let deny_at = w.iter().position(|a| a == "--disallowed-tools").unwrap();
+        let pat_at = w.iter().position(|a| a == "Bash(make deploy*)").unwrap();
+        assert!(pat_at > deny_at, "{w:?}");
+        // Still one of the flag's values: no other flag between.
+        assert!(
+            !w[deny_at + 1..pat_at].iter().any(|a| a.starts_with("--")),
+            "{w:?}"
+        );
     }
 
     #[test]

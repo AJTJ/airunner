@@ -483,6 +483,38 @@ fn repo_deny_rules_are_appended_from_claude_air_json() {
     assert!(!out.contains("deploy"), "{out}");
 }
 
+/// air-xji: `worker_allow` and `coordinator_allow` reach the role's `--settings` allow list,
+/// the lane taking the worker's, beside the rules the launcher already passes.
+#[test]
+fn repo_allow_rules_reach_the_settings_from_claude_air_json() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"worker_allow": ["Bash(ssh *)"], "coordinator_allow": ["Bash(kubectl *)"]}"#,
+    )
+    .unwrap();
+    let (_, out, _) = air(&repo, None, &["worker", "w", "--print"]);
+    assert!(
+        out.contains(r#""Bash(ssh *)""#) && out.contains(r#""Bash(air run *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("kubectl"), "{out}");
+    let (_, out, _) = air(&repo, None, &["lane", "--print"]);
+    assert!(
+        out.contains(r#""Bash(ssh *)""#) && out.contains(r#""Bash(air land *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("kubectl"), "{out}");
+    let (_, out, _) = air(&repo, None, &["coordinator", "--print"]);
+    assert!(
+        out.contains(r#""Bash(kubectl *)""#) && out.contains(r#""Bash(tmux send-keys *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("ssh"), "{out}");
+}
+
 #[test]
 fn record_keeps_the_command_and_names_a_changed_one() {
     let dir = scratch_repo();
