@@ -84,7 +84,8 @@ there. The `ssh` short form expands to the prefix `ssh <user>@<host>`:
 
 Three things to know before committing it. `.claude/air.json` is tracked, so every word in the
 prefix goes into the project's history: name a deployment rather than a pod if the pod's name
-changes, and keep a kubeconfig path or a user name out of it if that bothers you. The prefix
+changes (or resolve the pod when the command runs, step 9), and keep a kubeconfig path or a
+user name out of it if that bothers you. The prefix
 runs with the session's environment, which a launched session keeps small, so anything the
 tool needs (`--kubeconfig <file>`, a `KUBECONFIG` the shell would have set) goes in the prefix.
 And `kubectl exec` runs `sh -c` with the container's PATH, not a login shell's: a toolchain
@@ -132,3 +133,59 @@ lane continues with `air record verify --local -- <command>` until the machine i
 
 That is the adopter's job, not Air's: reservations, idle reapers and redeploys belong to
 whoever runs the machine, and Air records what it finds when it runs. One line, no mechanism.
+
+## 9. One machine per session
+
+Once workers run `air run` while the lane verifies, one machine is one CPU budget shared by
+all of them, and the rule is one machine per launched session, the coordinator included, since
+the owner runs tests from that session too. Nothing in Air changes for this: `targets` takes
+one entry per session name, each a prefix and a path, and a session with no entry keeps
+running locally.
+
+Machines reachable by ssh, a cloud VM each from any provider, are the simple case: one
+short-form entry per session, each with its own path, and no resolver at all. Each machine
+needs what step 3 lists and each path the gitignored files of step 4.
+
+```json
+{"targets": {"coordinator": {"kind": "ssh", "host": "<host-1>", "user": "<user>", "path": "/home/<user>/air/coordinator"},
+             "lane":        {"kind": "ssh", "host": "<host-2>", "user": "<user>", "path": "/home/<user>/air/lane"},
+             "worker-1":    {"kind": "ssh", "host": "<host-3>", "user": "<user>", "path": "/home/<user>/air/worker-1"},
+             "worker-2":    {"kind": "ssh", "host": "<host-4>", "user": "<user>", "path": "/home/<user>/air/worker-2"},
+             "worker-3":    {"kind": "ssh", "host": "<host-5>", "user": "<user>", "path": "/home/<user>/air/worker-3"}}}
+```
+
+Replicas of one deployment are the special case, and three facts shape the entries. Every
+replica mounts the same home volume, so the user's home is one directory from every pod, and
+what separates the sessions is the `path`: one directory each, with its own build directory,
+while the toolchain in the home is installed once for all of them. `kubectl exec deploy/<name>`
+resolves to one pod of the deployment, the same one every time, so with that prefix every
+session lands on one replica and the others sit idle. And a pod's name changes at every
+redeploy, so the pod for a session cannot be written into the file; it has to be resolved when
+the command runs. This repository resolves it with `scripts/kube-exec-nth`, which reads the
+deployment's selector, lists its Running pods sorted by name, and runs the command on the Nth:
+the coordinator is 1, the lane 2 and worker-N is N+2, so every session sees the same order
+while the pod set is unchanged. The entry is the script, its arguments, and the `env PATH=` tail of step 5; the
+push and the command both go through it, since git's `ext::` helper runs the prefix as argv.
+
+```json
+{"targets": {"worker-1": {"exec": ["<repo>/scripts/kube-exec-nth", "<kubeconfig>", "<namespace>", "<deployment>", "<container>",
+                                   "3", "worker-1",
+                                   "env", "PATH=/home/<user>/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+                          "path": "/home/<user>/air/worker-1"}}}
+```
+
+A session whose replica does not exist fails before anything runs, with one line naming the
+session and the count, and never falls through to another session's pod; `air run` reports it
+as the init step failing (step 7), and the lane records locally until the replicas are back.
+
+```
+kube-exec-nth: session worker-3 wants replica 5 of <deployment>; Running pods: 1
+```
+
+The script is this repository's configuration and not part of Air: `air install` does not ship
+it, and its test runs it against a fake `kubectl` (`crates/cli/tests/kube_exec_nth.rs`). A
+path that already holds a warm build may keep its name when the entries are added; this
+repository's lane kept the path it verified at before, with the step 4 file already in it.
+Switching from VMs to replicas or back, or adding a session, edits `targets` only: the session
+names, the path convention and the proof stay the same, and the proof is a `runs` or
+`verify_runs` row whose hostname differs per session.

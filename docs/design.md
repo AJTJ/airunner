@@ -568,8 +568,11 @@ Verifying on a target. A session whose entry in `targets` names a machine runs i
 lane, whose `air record` line is allowed past the auto-mode classifier, §3.1), what the
 machine needs on a non-login PATH, the gitignored files copied once (`private/adopters.md`
 here, since `air adopter-check` refuses without it), the entry in both forms, the first cold
-run and its row, and the gone-machine case, which records nothing. This repository's lane
-verifies on a dev pod through an `exec` prefix that names a deployment and sets PATH; the
+run and its row, and the gone-machine case, which records nothing. Its last section gives
+every launched session, the coordinator included, a machine of its own: one ssh entry each for VMs, and for replicas of one
+deployment a script in this repository's `scripts/` that resolves the session's pod when the
+command runs (air-oep). This repository's lane
+verifies on a dev pod through an `exec` prefix that runs that script and sets PATH; the
 names and the deploy command are in the gitignored `private/devpod-setup.md`, and the first
 run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify 46 s against
 118 s on the laptop, 96 cores).
