@@ -287,8 +287,14 @@ pub fn run(repo: &Path, command: &[String], pull: &[String], json: bool) -> i32 
 /// The machine, read there by one shell command before the run: hostname, `AIR_IMAGE` (empty
 /// when the target sets none), `uname -m`, the processor count, the CPU model. One line each,
 /// Linux or macOS.
+///
+/// The CPU model falls back in order (air-c14): `model name` in `/proc/cpuinfo` (x86 Linux),
+/// then `Model name:` from `lscpu`, then `CPU implementer` and `CPU part` from `/proc/cpuinfo`
+/// joined by a space, then macOS's `sysctl`. arm64 Linux prints no `model name` line, so the
+/// first full pod verify recorded an empty column and the run test was red there
+/// (2026-11-05, aarch64, Neoverse-V2 reported by `lscpu` as `0x41 0xd4f` in cpuinfo).
 const PROBE: &str = r#"printf '%s
-' "$(hostname)" "${AIR_IMAGE:-}" "$(uname -m)" "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)" "$(sed -n 's/^model name[^:]*: *//p' /proc/cpuinfo 2>/dev/null | head -1; sysctl -n machdep.cpu.brand_string 2>/dev/null)""#;
+' "$(hostname)" "${AIR_IMAGE:-}" "$(uname -m)" "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)" "$(c=$(sed -n 's/^model name[^:]*: *//p' /proc/cpuinfo 2>/dev/null | head -1); [ -n "$c" ] || c=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1); [ -n "$c" ] || c=$(sed -n 's/^CPU implementer[^:]*: *//p; s/^CPU part[^:]*: *//p' /proc/cpuinfo 2>/dev/null | head -2 | tr '\n' ' '); [ -n "$c" ] || c=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); printf '%s' "$c")""#;
 
 /// Run the probe and read its five lines; a probe that fails leaves the fields empty.
 fn probe(cmd: &mut Command) -> Machine {
