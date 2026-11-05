@@ -64,7 +64,17 @@ awk -v list="$list" '
                 }
             }
             close(f)
-            add[h] = (h in add) ? add[h] "\n" entry : entry
+            # Test the key before any reference to add[h]. Under mawk (the awk of Debian
+            # and of the pod) the ternary form `(h in add) ? add[h] "\n" entry : entry`
+            # created the element by referencing it before the test ran, so the first entry
+            # under a heading was joined onto "" with a newline and every pod verify was red
+            # on the changelog tests (air-6kt, 2026-11-05). No apostrophe in this comment:
+            # the awk program is a single-quoted shell string.
+            if (h in add) {
+                add[h] = add[h] "\n" entry
+            } else {
+                add[h] = entry
+            }
         }
     }
     # A heading [Unreleased] lacks is added at the end of that section, in the standard order.
