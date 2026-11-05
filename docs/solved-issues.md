@@ -239,6 +239,18 @@ Fix: the lane's whole loop is allowed bare (`crates/cli/src/cmd/launch.rs:413` `
 roles.md tells it to run the commands with no pipe or redirect. Commit 7292918 (air-b1h8).
 Do not: add a pipe to a lane command; the allow rule matches only the bare line.
 
+**A worker's `air run` against a target was refused by the auto-mode classifier.**
+Seen: 2026-11-04, a worker's direct `kubectl exec` (air-kzt); 2026-11-05, a worker's bare
+`air run -- true` against a pod, twice, the second time with no reason given (air-tdh). A
+target for a worker was worth nothing, and each refusal cost a capture and a triage.
+Fix: the lane is the session that runs on a target, through its allowed `air record` line
+(`crates/cli/src/cmd/launch.rs:417` `lane_allow`); `air worker` passes the same kind of rule
+for `air run *` and `air record *` (`launch.rs:453` `worker_allow`, air-nyi), which a session
+launched before it gets on relaunch. The setup guide `docs/rules/remote-verify.md` says which
+session gets the target and why (air-mwj).
+Do not: give a target to a session that has no allow rule for the line and expect it to run;
+do not pipe or chain the line, which takes it back to the classifier.
+
 **`idle-without-claim` offered the lane 58 beads 945 s into a batch verify.**
 Seen: an adopter's lane, 2026-09-06.
 Fix: the condition is silent while the worker's own verify runs. Commit 8b1b7e1 (air-t6ap).

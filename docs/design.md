@@ -563,40 +563,16 @@ contains no network code. Pushing the tag runs `.github/workflows/release.yml`, 
 cargo-dist from `dist-workspace.toml`, which builds the binaries and publishes the release.
 
 Verifying on a target. A session whose entry in `targets` names a machine runs its checks there
-(`air run`, §4). For this repository's lane the entry is an `exec` prefix for a dev pod, with
-the deployment named rather than a pod, since a pod's name changes on every deploy and
-`kubectl exec` resolves `deploy/<name>` to a pod itself:
-
-```json
-{"targets": {"lane": {"exec": ["kubectl", "--kubeconfig", "/Users/<owner>/.kube/config-swish-multi-ds-us-west-2-dev-a",
-                               "exec", "-i", "deploy/<user>-py312-k8s-ssh", "-c", "<user>-k8s-ssh", "-n", "ssh", "--",
-                               "env", "PATH=/home/<user>/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
-                      "path": "/home/<user>/air/airunner"}}}
-```
-
-The kubeconfig is named in the prefix because the prefix runs with the lane's environment and
-nothing sets `KUBECONFIG` there. The prefix ends with `env PATH=…` because `kubectl exec` gives
-the `sh -c` Air appends the container's PATH, not a login shell's, and rustup installed into
-the home volume: the first pod batch stopped at `make: cargo: No such file or directory`
-(2026-11-05 02:32Z, air-tdh). `env` execs whatever follows it, the `sh -c` of a step and the
-`git-receive-pack` of the push alike, and neither added word has a space, so the `ext::` URL
-keeps its shape. `make verify` needs on the pod what it needs here: cargo with
-clippy and rustfmt, make, git, sh, tmux, ps, kill, tar and perl (the time limit). The pod is
-the `py312` image (procps, tmux, git, build-essential, perl from the Debian base) with Rust
-1.98.1, clippy and rustfmt installed by rustup into the user's home volume, which outlives a
-deleted deployment, which is why the prefix puts `~/.cargo/bin` on PATH itself (air-tdh). `air
-selftest` runs against its own fake bd, so bd, Dolt and Claude Code are not needed there. The
-names, the kubeconfig path and the deploy command are in the gitignored `private/devpod-setup.md`. `air adopter-check` reads `private/adopters.md`, which is gitignored and so
-never pushed: the owner copies it once into `<path>/private/` on the pod, where the detached
-checkouts leave it alone. That is a copy of names, not of a credential; no kubeconfig, key or
-credentials file goes to the pod. A target that is gone (the deployment scaled down, or the
-wrong name) fails the first step, `init`, before anything runs: `air record` prints the step and
-the exit and records nothing, so the lane sees no verdict rather than a red of the tree. A
-launched session's auto-mode classifier refuses a bare `air run` line once it knows the target
-is a pod (worker-2, 2026-11-05, twice); the lane's `air record` passes by its allow rule, which
-resolves before the classifier (§3.1), and the owner's shell has no classifier. The
-first run's measurements (cold build, warm verify, the probe's round trip, whether one exec
-survives a verify) are on air-kzt.
+(`air run`, §4), and the setup from the first entry to the first green is
+[`docs/rules/remote-verify.md`](rules/remote-verify.md): which session gets the target (the
+lane, whose `air record` line is allowed past the auto-mode classifier, §3.1), what the
+machine needs on a non-login PATH, the gitignored files copied once (`private/adopters.md`
+here, since `air adopter-check` refuses without it), the entry in both forms, the first cold
+run and its row, and the gone-machine case, which records nothing. This repository's lane
+verifies on a dev pod through an `exec` prefix that names a deployment and sets PATH; the
+names and the deploy command are in the gitignored `private/devpod-setup.md`, and the first
+run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify 46 s against
+118 s on the laptop, 96 cores).
 
 ### 9.1 The live trial
 
