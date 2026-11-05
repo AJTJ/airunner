@@ -13,10 +13,6 @@ fn scratch_repo() -> tempfile::TempDir {
             .arg("-C")
             .arg(dir.path())
             .args(args)
-            .env("GIT_AUTHOR_NAME", "air")
-            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-            .env("GIT_COMMITTER_NAME", "air")
-            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
         assert!(
@@ -243,10 +239,6 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
             .arg("-C")
             .arg(&repo)
             .args(args)
-            .env("GIT_AUTHOR_NAME", "air")
-            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-            .env("GIT_COMMITTER_NAME", "air")
-            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");

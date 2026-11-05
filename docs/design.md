@@ -392,7 +392,10 @@ sequenceDiagram
 Main, meaning the base branch (`base_branch`, `main` by default), which the main checkout must
 have checked out, moves only by fast-forward onto a commit whose tree has a green, so nothing
 is re-verified or rolled back. The landing records the beads its commits name by trailer; a range naming none
-lands only if every commit is a journal entry or the coordinator's. The row is written after
+lands only if every commit is a journal entry or the coordinator's. The landing commit's author is the main
+checkout's git identity, and a checkout with none cannot land: `git commit-tree` exits 128
+and main is untouched. Air adopts an identity of its own only when an adopter records
+hitting that. The row is written after
 main moves, and the notice after the row. Epics whose children are all closed are closed. The
 worker closes its own bead, before or after. `--despite-inflight` lands over a running verify
 and records it.
