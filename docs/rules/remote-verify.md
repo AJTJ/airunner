@@ -7,7 +7,8 @@ the worked examples are a generic `kubectl exec` target and a generic `ssh` one.
 
 ## 1. What a target is
 
-A target is a machine one session owns, named in `.claude/air.json` under `"targets"`. `air run
+A target is a machine one session owns, named under `"targets"` in `.claude/air.local.json` on the
+machine that reaches it (step 5). `air run
 -- <command>` and `air record <kind> -- <command>` push that session's commit into a clone on
 the machine, run the line there under `sh -c`, stream the output back, and record where it
 ran (hostname, architecture, core count, CPU) beside the commit. Nothing else moves: no remote
@@ -85,7 +86,9 @@ machine's name, the kubeconfig that reaches it and the user's home path then sta
 project's history, and a change takes effect when the file is written, not when a landing
 carries it. The committed file keeps only what Air does, with `targets` absent or a
 placeholder such as the first block below for a reader, and each laptop's own file carries the
-real entries:
+real entries. This repository's own five entries, one per launched session, live in that file
+on the owner's laptop and not in git; its committed file has no `targets` key, so a fresh clone
+on another machine runs locally until its owner writes an overlay of their own:
 
 ```json
 {"targets": {"lane": {"exec": ["kubectl", "exec", "-i", "<pod-or-deploy/name>", "-c", "<container>", "-n", "<namespace>", "--"],
