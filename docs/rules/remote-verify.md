@@ -37,6 +37,13 @@ classifier (air-b1h8); and a session Air did not launch has no such rule, so a t
 works only from a shell with no classifier, or with an exact allow rule in the project's
 `.claude/settings.json`, which this guide does not recommend.
 
+A coordinator that deploys or resizes the machine itself needs the deploy commands in
+`coordinator_allow` in `.claude/air.json` (the table in
+[`adopting-air.md`](adopting-air.md)), for the same reason: its `gh workflow run` and
+`kubectl` lines were refused by the classifier on 2026-11-04 and 2026-11-05 until the owner
+typed them (air-xji). The patterns are the adopter's own, since Air names no provider, and a
+session launched before the key was set needs a relaunch.
+
 ## 3. What the machine needs
 
 Everything the verify spawns, on the PATH a non-login `sh -c` sees: git, sh, tar, the
