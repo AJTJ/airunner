@@ -136,7 +136,9 @@ Source: https://git-scm.com/docs/gitattributes, "Built-in merge drivers", `union
 ## Configure: `.claude/air.json`
 
 This file is tracked, read from the main checkout, and never written by `air install`. Every
-key is optional.
+key is optional. `air status` names a top-level key the installed binary does not read, with
+that binary's version, so a key landed ahead of an upgrade, or a typo, is seen there and not in
+a silent default.
 
 | Key | What it does | Default |
 |---|---|---|

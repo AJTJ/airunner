@@ -260,6 +260,10 @@ pub struct Snapshot {
     /// `heartbeat_minutes` from `.claude/air.json`: the interval the coordinator's heartbeat
     /// is expected at (air-8wy). None, and no line, when the repo does not ask for one.
     pub heartbeat_minutes: Option<u64>,
+    /// Top-level keys of `.claude/air.json` this binary does not read (air-xdc), sorted. One
+    /// line each; empty, the normal state, prints nothing. `handover::KNOWN_CONFIG_KEYS` has
+    /// the incident and the removal condition.
+    pub unknown_config_keys: Vec<String>,
     /// `model` and `lane_model` from `.claude/air.json` (air-ap1): what each launched session
     /// is expected to be on. None when the file names none, and then no session is marked.
     pub model_setting: Option<String>,
@@ -2543,6 +2547,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         idle_sleep_min: None,
         fleet_stop: ledger.fleet_stop().ok().flatten(),
         heartbeat_minutes: super::handover::heartbeat_minutes(repo),
+        unknown_config_keys: super::handover::unknown_config_keys(repo),
         model_setting: super::handover::air_json(repo)
             .and_then(|c| super::launch::configured_model(&c, "worker")),
         lane_model_setting: super::handover::air_json(repo)
@@ -2871,6 +2876,16 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     }
     if let Some(m) = &s.bd_mode {
         out.push_str(&format!("{}\n", super::bd_server::line(m, &s.bd_listener)));
+    }
+    // air-xdc: a key the running binary does not read, once per key, under the bd line. A
+    // fleet ran a build thirteen days behind main and nothing said so.
+    for k in &s.unknown_config_keys {
+        out.push_str(&format!(
+            "config: \"{k}\" is not read by this binary (air {}, built from {}); upgrade or \
+             remove it\n",
+            env!("CARGO_PKG_VERSION"),
+            super::install::BUILD
+        ));
     }
     for w in &s.workers {
         let sess = w
@@ -3442,6 +3457,29 @@ mod tests {
         );
         assert!(on.contains("heartbeat: expected every 5 min"), "{on}");
         assert!(!render(&Snapshot::default(), &[]).contains("heartbeat"));
+    }
+
+    /// air-xdc: a key the binary does not read is named once, with the binary; a config of
+    /// known keys adds no line.
+    #[test]
+    fn config_line_names_each_unknown_key_once_and_nothing_otherwise() {
+        let on = render(
+            &Snapshot {
+                unknown_config_keys: vec!["targets".into(), "zzz".into()],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: \"targets\" is not read by this binary (air ")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert_eq!(on.matches("config: \"zzz\" is not read").count(), 1, "{on}");
+        assert!(on.contains("built from "), "{on}");
+        assert!(on.contains("; upgrade or remove it"), "{on}");
+        assert!(!render(&Snapshot::default(), &[]).contains("config: "));
     }
 
     #[test]
