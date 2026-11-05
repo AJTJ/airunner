@@ -6,7 +6,8 @@
   "targets": {
     "lane": {
       "exec": ["kubectl", "--kubeconfig", "/Users/comp_swish/.kube/config-swish-multi-ds-us-west-2-dev-a",
-               "exec", "-i", "deploy/aaronjanke-py312-k8s-ssh", "-c", "aaronjanke-k8s-ssh", "-n", "ssh", "--"],
+               "exec", "-i", "deploy/aaronjanke-py312-k8s-ssh", "-c", "aaronjanke-k8s-ssh", "-n", "ssh", "--",
+               "env", "PATH=/home/aaronjanke/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
       "path": "/home/aaronjanke/air/airunner"
     }
   },
