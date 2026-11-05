@@ -564,20 +564,26 @@ the deployment named rather than a pod, since a pod's name changes on every depl
 
 ```json
 {"targets": {"lane": {"exec": ["kubectl", "--kubeconfig", "/Users/<owner>/.kube/config-swish-multi-ds-us-west-2-dev-a",
-                               "exec", "-i", "deploy/<user>-rust1981-k8s-ssh", "-c", "<user>-k8s-ssh", "-n", "ssh", "--"],
+                               "exec", "-i", "deploy/<user>-py312-k8s-ssh", "-c", "<user>-k8s-ssh", "-n", "ssh", "--"],
                       "path": "/home/<user>/air/airunner"}}}
 ```
 
 The kubeconfig is named in the prefix because the prefix runs with the lane's environment and
 nothing sets `KUBECONFIG` there. `make verify` needs on the pod what it needs here: cargo with
-clippy and rustfmt, make, git, sh, tmux, ps, kill, tar and perl (the time limit), all in the
-`rust1981` image; `air selftest` runs against its own fake bd, so bd, Dolt and Claude Code are
-not needed there. `air adopter-check` reads `private/adopters.md`, which is gitignored and so
+clippy and rustfmt, make, git, sh, tmux, ps, kill, tar and perl (the time limit). The pod is
+the `py312` image (procps, tmux, git, build-essential, perl from the Debian base) with Rust
+1.98.1, clippy and rustfmt installed by rustup into the user's home volume, which outlives a
+deleted deployment; `~/.cargo/bin` is on the `sh -c` PATH the prefix gives (air-tdh). `air
+selftest` runs against its own fake bd, so bd, Dolt and Claude Code are not needed there. The
+names, the kubeconfig path and the deploy command are in the gitignored `private/devpod-setup.md`. `air adopter-check` reads `private/adopters.md`, which is gitignored and so
 never pushed: the owner copies it once into `<path>/private/` on the pod, where the detached
 checkouts leave it alone. That is a copy of names, not of a credential; no kubeconfig, key or
 credentials file goes to the pod. A target that is gone (the deployment scaled down, or the
 wrong name) fails the first step, `init`, before anything runs: `air record` prints the step and
-the exit and records nothing, so the lane sees no verdict rather than a red of the tree. The
+the exit and records nothing, so the lane sees no verdict rather than a red of the tree. A
+launched session's auto-mode classifier refuses a bare `air run` line once it knows the target
+is a pod (worker-2, 2026-11-05, twice); the lane's `air record` passes by its allow rule, which
+resolves before the classifier (§3.1), and the owner's shell has no classifier. The
 first run's measurements (cold build, warm verify, the probe's round trip, whether one exec
 survives a verify) are on air-kzt.
 

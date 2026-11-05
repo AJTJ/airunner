@@ -3,6 +3,13 @@
   "coordinator_deny": [],
   "metis": true,
   "project": "ai_runner",
+  "targets": {
+    "lane": {
+      "exec": ["kubectl", "--kubeconfig", "/Users/comp_swish/.kube/config-swish-multi-ds-us-west-2-dev-a",
+               "exec", "-i", "deploy/aaronjanke-py312-k8s-ssh", "-c", "aaronjanke-k8s-ssh", "-n", "ssh", "--"],
+      "path": "/home/aaronjanke/air/airunner"
+    }
+  },
   "verify_key": "tree",
   "verify_lane": true,
   "worker_deny": [
