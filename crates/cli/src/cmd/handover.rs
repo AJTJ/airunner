@@ -258,6 +258,96 @@ pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// Every top-level key of `.claude/air.json` this binary reads (air-xdc). `air status` names
+/// a key outside this list, once, as not read by this binary: on 2026-11-05 `targets.lane`
+/// landed on main and every lane verify kept running locally, because the installed `air` was
+/// 0.4.13 and had no `targets` at all; the lane found it by reading `air --version` after a
+/// landed bead's acceptance could not be met. On 2026-09-07 the same gap, a build eleven
+/// hours behind main, made a red undiagnosable. A count, not a gate: nothing refuses.
+/// Removed when the binary is installed by a mechanism that follows main (or a release)
+/// automatically, so the gap cannot open.
+pub const KNOWN_CONFIG_KEYS: &[&str] = &[
+    "adopters",
+    "base_branch",
+    "coordinator_autobatch",
+    "coordinator_deny",
+    "digest_dir",
+    "digests",
+    "heartbeat_minutes",
+    "journal_dir",
+    "lane_model",
+    "leases",
+    "metis",
+    "metis_plugin_dir",
+    "model",
+    "precheck",
+    "project",
+    "targets",
+    "verify_key",
+    "verify_lane",
+    "worker_deny",
+    "workers",
+];
+
+/// The top-level keys of `.claude/air.json` this binary does not read, sorted; empty when
+/// the file is absent, not an object, or names only known keys.
+pub fn unknown_config_keys(repo: &Path) -> Vec<String> {
+    air_json(repo)
+        .map(|c| unknown_keys_in(&c))
+        .unwrap_or_default()
+}
+
+/// Pure: the keys of `cfg` outside `KNOWN_CONFIG_KEYS`, sorted.
+pub fn unknown_keys_in(cfg: &serde_json::Value) -> Vec<String> {
+    let Some(obj) = cfg.as_object() else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = obj
+        .keys()
+        .filter(|k| !KNOWN_CONFIG_KEYS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod config_keys_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_keys_are_those_outside_the_known_list_sorted() {
+        let cfg = serde_json::json!({"zeta": 1, "targets": {}, "alpha": true, "verify_lane": true});
+        assert_eq!(unknown_keys_in(&cfg), vec!["alpha", "zeta"]);
+        assert!(unknown_keys_in(&serde_json::json!({"project": "p"})).is_empty());
+        assert!(unknown_keys_in(&serde_json::json!([1])).is_empty());
+    }
+
+    /// Every key the adopting guide's table documents is one this binary reads, so a key
+    /// added to the guide without being added here shows up as "not read" at every adopter.
+    #[test]
+    fn every_documented_config_key_is_known() {
+        let guide = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/rules/adopting-air.md");
+        let text = std::fs::read_to_string(&guide).unwrap();
+        let documented: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `")?.split_once('`').map(|(k, _)| k))
+            .filter(|k| !k.contains(' ') && !k.contains('/') && !k.contains('.'))
+            .collect();
+        assert!(documented.len() >= 15, "{documented:?}");
+        for k in documented {
+            assert!(
+                KNOWN_CONFIG_KEYS.contains(&k),
+                "{k} is in the guide and not in KNOWN_CONFIG_KEYS"
+            );
+        }
+        let mut sorted = KNOWN_CONFIG_KEYS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, KNOWN_CONFIG_KEYS, "keep the list sorted");
+    }
+}
+
 /// `base_branch` from `.claude/air.json` (air-h7l): the branch the fleet lands onto, which every
 /// gate, cut and landing reads where it used to say `main`. Absent, empty or not a string:
 /// `main`. It is the BRANCH only: the session named `main` (the primary checkout, mapped to the
