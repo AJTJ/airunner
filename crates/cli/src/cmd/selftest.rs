@@ -67,9 +67,22 @@ impl std::io::Write for Shared {
     }
 }
 
+/// The git identity every probe's git and air carry (air-3sh). `air land` builds the landing
+/// commit with `git commit-tree`, which refuses with exit 128 and "Author identity unknown"
+/// without one from the environment or the config. The owner's macOS has a global config, so
+/// the base_branch probe never set one and was the last red on the dev pod, which has none.
+/// The tests' `common::command` does the same (air-xiu).
+const GIT_IDENTITY: [(&str, &str); 4] = [
+    ("GIT_AUTHOR_NAME", "air"),
+    ("GIT_AUTHOR_EMAIL", "air@example.invalid"),
+    ("GIT_COMMITTER_NAME", "air"),
+    ("GIT_COMMITTER_EMAIL", "air@example.invalid"),
+];
+
 fn air_command(exe: &Path, cwd: &Path) -> Command {
     let mut c = Command::new(exe);
     c.current_dir(cwd)
+        .envs(GIT_IDENTITY)
         .env_remove("AIR_ROLE")
         .env_remove("BEADS_ACTOR")
         .env_remove("AIR_PROJECT")
@@ -3343,10 +3356,7 @@ fn probe_capture_takes_a_file_whole() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -3532,10 +3542,7 @@ fn probe_capture_records_where_it_was_written() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -3612,10 +3619,7 @@ fn probe_close_with_proof_sequence() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -4801,10 +4805,7 @@ fn probe_worker_close_runs_the_gate() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -5419,10 +5420,7 @@ fn probe_install_refuses_unignored_air() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -6670,10 +6668,7 @@ fn probe_batch_cut_starts_from_main() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -7431,10 +7426,7 @@ fn probe_green_follows_the_tree_only_where_declared() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -7527,10 +7519,7 @@ fn probe_git_ancestor() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -7591,10 +7580,7 @@ fn probe_worker_task_prompt() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !git.status.success() {
@@ -7717,10 +7703,7 @@ fn probe_env_reaches_the_hook() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -7917,10 +7900,7 @@ fn probe_worktree_is_airs() -> Probe {
                 .arg("-C")
                 .arg(cwd)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -8479,10 +8459,7 @@ fn probe_subagent_stop_is_not_a_stop() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -8604,10 +8581,7 @@ fn probe_no_session_reads_stuck() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -9197,10 +9171,7 @@ fn probe_git(dir: &Path, args: &[&str]) -> Result<String, String> {
         .arg("-C")
         .arg(dir)
         .args(args)
-        .env("GIT_AUTHOR_NAME", "air")
-        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-        .env("GIT_COMMITTER_NAME", "air")
-        .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+        .envs(GIT_IDENTITY)
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -9653,10 +9624,7 @@ fn probe_a_hook_records_its_own_wall_clock() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -10506,10 +10474,7 @@ fn probe_a_batch_records_exactly_the_branches_it_merged() -> Probe {
                 .arg("-C")
                 .arg(cwd)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -11116,10 +11081,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -11229,10 +11191,7 @@ fn probe_record_refuses_an_unresolved_merge_but_not_a_dirty_tree() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -11355,10 +11314,7 @@ fn probe_close_takes_a_reason_file_whole() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -11495,10 +11451,7 @@ fn probe_the_assignee_refusal_says_whether_anyone_holds_it() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -11621,10 +11574,7 @@ fn probe_a_batch_records_the_shas_it_took_and_never_drops_one() -> Probe {
                 .arg("-C")
                 .arg(at)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -11767,10 +11717,7 @@ fn probe_landable_does_not_depend_on_which_worktree_asked() -> Probe {
                 .arg("-C")
                 .arg(at)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
@@ -12051,10 +11998,7 @@ fn probe_the_peer_warning_dates_the_entry() -> Probe {
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
-                .env("GIT_AUTHOR_NAME", "air")
-                .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-                .env("GIT_COMMITTER_NAME", "air")
-                .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
+                .envs(GIT_IDENTITY)
                 .output()
                 .map_err(|e| e.to_string())?;
             if !out.status.success() {
