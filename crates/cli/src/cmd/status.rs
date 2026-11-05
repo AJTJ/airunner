@@ -264,6 +264,13 @@ pub struct Snapshot {
     /// line each; empty, the normal state, prints nothing. `handover::KNOWN_CONFIG_KEYS` has
     /// the incident and the removal condition.
     pub unknown_config_keys: Vec<String>,
+    /// What `.claude/air.local.json` contributed (air-aei): the keys it set, named on an
+    /// unknown-key line that came from it, and why it was not used when it is invalid, which
+    /// is one line with the path. The default, and no line, when it is absent.
+    pub config_overlay: super::handover::ConfigOverlay,
+    /// True when `.claude/air.local.json` exists and git tracks it (air-aei): one line naming
+    /// the `.gitignore` entry to add, since a tracked overlay lands a machine's own values.
+    pub config_overlay_tracked: bool,
     /// `model` and `lane_model` from `.claude/air.json` (air-ap1): what each launched session
     /// is expected to be on. None when the file names none, and then no session is marked.
     pub model_setting: Option<String>,
@@ -2548,6 +2555,8 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         fleet_stop: ledger.fleet_stop().ok().flatten(),
         heartbeat_minutes: super::handover::heartbeat_minutes(repo),
         unknown_config_keys: super::handover::unknown_config_keys(repo),
+        config_overlay: super::handover::config_overlay(repo),
+        config_overlay_tracked: super::handover::config_overlay_tracked(repo),
         model_setting: super::handover::air_json(repo)
             .and_then(|c| super::launch::configured_model(&c, "worker")),
         lane_model_setting: super::handover::air_json(repo)
@@ -2880,11 +2889,33 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // air-xdc: a key the running binary does not read, once per key, under the bd line. A
     // fleet ran a build thirteen days behind main and nothing said so.
     for k in &s.unknown_config_keys {
+        // air-aei: a key the overlay set is named with its file, since the committed file
+        // does not show it.
+        let from = if s.config_overlay.keys.contains(k) {
+            format!("; set in {}", super::handover::AIR_LOCAL_JSON)
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "config: \"{k}\" is not read by this binary (air {}, built from {}); upgrade or \
-             remove it\n",
+            "config: \"{k}\" is not read by this binary (air {}, built from {}{from}); upgrade \
+             or remove it\n",
             env!("CARGO_PKG_VERSION"),
             super::install::BUILD
+        ));
+    }
+    // air-aei: an overlay that could not be used is said once, with the path, so a machine's
+    // own targets do not vanish silently; a tracked overlay would land them.
+    if let Some(why) = &s.config_overlay.invalid {
+        out.push_str(&format!(
+            "config: {} is not used ({why}); .claude/air.json is read alone until it parses\n",
+            super::handover::AIR_LOCAL_JSON
+        ));
+    }
+    if s.config_overlay_tracked {
+        out.push_str(&format!(
+            "config: {0} is tracked by git, so its machine-specific values would land; add \
+             `{0}` to .gitignore and run `git rm --cached {0}`\n",
+            super::handover::AIR_LOCAL_JSON
         ));
     }
     for w in &s.workers {
@@ -3480,6 +3511,72 @@ mod tests {
         assert!(on.contains("built from "), "{on}");
         assert!(on.contains("; upgrade or remove it"), "{on}");
         assert!(!render(&Snapshot::default(), &[]).contains("config: "));
+    }
+
+    /// air-aei: an unknown key the overlay set names its file; an overlay that does not parse
+    /// and a tracked overlay each get one line with the path; an applied overlay of known keys
+    /// adds nothing.
+    #[test]
+    fn config_lines_name_the_overlay_where_it_set_or_broke_something() {
+        let overlay =
+            |keys: &[&str], invalid: Option<&str>| super::super::handover::ConfigOverlay {
+                keys: keys.iter().map(|k| k.to_string()).collect(),
+                invalid: invalid.map(str::to_string),
+            };
+        let on = render(
+            &Snapshot {
+                unknown_config_keys: vec!["zzz".into()],
+                config_overlay: overlay(&["targets", "zzz"], None),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("; set in .claude/air.local.json); upgrade or remove it")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(!on.contains("is not used"), "{on}");
+        let on = render(
+            &Snapshot {
+                config_overlay: overlay(&[], Some("EOF while parsing a value at line 1 column 12")),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: .claude/air.local.json is not used (EOF while parsing")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(on.contains("; .claude/air.json is read alone"), "{on}");
+        let on = render(
+            &Snapshot {
+                config_overlay_tracked: true,
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: .claude/air.local.json is tracked by git")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(
+            on.contains("add `.claude/air.local.json` to .gitignore"),
+            "{on}"
+        );
+        let quiet = render(
+            &Snapshot {
+                config_overlay: overlay(&["targets"], None),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(!quiet.contains("config: "), "{quiet}");
     }
 
     #[test]

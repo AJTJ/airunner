@@ -251,6 +251,21 @@ session gets the target and why (air-mwj).
 Do not: give a target to a session that has no allow rule for the line and expect it to run;
 do not pipe or chain the line, which takes it back to the classifier.
 
+**A `targets` change was a landing, and the lane verified that very batch on the old target.**
+Seen: 2026-11-05, twice. The lane's first pod entry (air-tdh) landed in a batch the lane had to
+record `--local`, because the installed binary read `targets` from the main checkout and the
+entry was not there yet; the PATH fix to the same entry that evening went the same way. The
+committed entry also carried a user name, a kubeconfig path under one laptop's home and the
+pod's home path into the project's history.
+Fix: `.claude/air.local.json`, gitignored by the adopter, is read beside `.claude/air.json`
+from the main checkout and its top-level keys replace the committed file's
+(`crates/cli/src/cmd/handover.rs` `air_json`, `read_config`; air-aei). A machine's `targets`
+and allow lists live there and take effect when written. `air status` names an unknown key
+set there with the file, says once when the overlay does not parse (the committed file is read
+alone), and warns once if git tracks the overlay.
+Do not: write the overlay in a worktree, which is never read; commit the overlay, which lands
+one laptop's values; expect a nested merge, since a key replaces the committed key whole.
+
 **`idle-without-claim` offered the lane 58 beads 945 s into a batch verify.**
 Seen: an adopter's lane, 2026-09-06.
 Fix: the condition is silent while the worker's own verify runs. Commit 8b1b7e1 (air-t6ap).

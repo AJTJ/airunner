@@ -251,11 +251,116 @@ fn seconds_between(earlier: &str, later: &str) -> Option<i64> {
     Some(b.duration_since(a).as_secs())
 }
 
-/// `<main>/.claude/air.json`, parsed; None when absent or unreadable.
+/// The gitignored overlay read beside `.claude/air.json` (air-aei), relative to the main
+/// checkout.
+pub const AIR_LOCAL_JSON: &str = ".claude/air.local.json";
+
+/// What `.claude/air.local.json` contributed, for `air status` (air-aei).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigOverlay {
+    /// The top-level keys the overlay set, sorted; empty when it is absent or not used.
+    pub keys: Vec<String>,
+    /// Why a present overlay was not used: the JSON error, or "not a JSON object". None when
+    /// it is absent or applied.
+    pub invalid: Option<String>,
+}
+
+/// `<main>/.claude/air.json` with `<main>/.claude/air.local.json` laid over it: the overlay's
+/// top-level keys replace the committed file's keys of the same name, and every other key
+/// comes from the committed file. None when the committed file is absent or unreadable and
+/// the overlay adds nothing.
+///
+/// air-aei: the overlay is gitignored by the adopter, so a machine's own `targets` and allow
+/// lists never enter git history and take effect when written, not when a landing carries
+/// them. Twice on 2026-11-05 a `targets` change was a landing whose own batch the lane had
+/// to verify with the old target (`--local` for air-tdh's entry, then the PATH fix). An
+/// overlay that is not valid JSON, or not an object, adds nothing and `air status` says so
+/// with the path, so it is never silently ignored. Removed when Air reads its configuration
+/// from the ledger or from `air init` arguments rather than a file in the tree.
 pub fn air_json(repo: &Path) -> Option<serde_json::Value> {
-    let air_dir = air_ledger::paths::air_dir_for(repo).ok()?;
-    let path = air_dir.parent()?.join(".claude/air.json");
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    read_config(&main_checkout_of(repo)?).0
+}
+
+/// What the overlay contributed for `repo`; the default when the repo cannot be found.
+pub fn config_overlay(repo: &Path) -> ConfigOverlay {
+    main_checkout_of(repo)
+        .map(|m| read_config(&m).1)
+        .unwrap_or_default()
+}
+
+/// True when `.claude/air.local.json` exists in the main checkout and git tracks it, which
+/// is the one way the overlay lands a machine's own values: the adopter owns the `.gitignore`
+/// line and `air init` never writes it (adopting-air.md, "never touches `.gitignore`").
+pub fn config_overlay_tracked(repo: &Path) -> bool {
+    let Some(main) = main_checkout_of(repo) else {
+        return false;
+    };
+    main.join(AIR_LOCAL_JSON).is_file()
+        && crate::git::run(&main, &["ls-files", "--error-unmatch", AIR_LOCAL_JSON]).is_ok()
+}
+
+fn main_checkout_of(repo: &Path) -> Option<std::path::PathBuf> {
+    air_ledger::paths::air_dir_for(repo)
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
+
+/// The two files under `main`, read and merged; pure over the directory, so a test needs no
+/// git repository.
+pub fn read_config(main: &Path) -> (Option<serde_json::Value>, ConfigOverlay) {
+    let base: Option<serde_json::Value> = std::fs::read_to_string(main.join(".claude/air.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let Ok(text) = std::fs::read_to_string(main.join(AIR_LOCAL_JSON)) else {
+        return (base, ConfigOverlay::default());
+    };
+    let overlay = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(serde_json::Value::Object(m)) => m,
+        Ok(_) => {
+            return (
+                base,
+                ConfigOverlay {
+                    keys: Vec::new(),
+                    invalid: Some("not a JSON object".to_string()),
+                },
+            );
+        }
+        Err(e) => {
+            return (
+                base,
+                ConfigOverlay {
+                    keys: Vec::new(),
+                    invalid: Some(e.to_string()),
+                },
+            );
+        }
+    };
+    let mut keys: Vec<String> = overlay.keys().cloned().collect();
+    keys.sort();
+    (
+        Some(overlaid(base, overlay)),
+        ConfigOverlay {
+            keys,
+            invalid: None,
+        },
+    )
+}
+
+/// Pure: `overlay`'s top-level keys replace `base`'s of the same name; the rest of `base`
+/// stays. A `base` that is absent or not an object contributes nothing.
+pub fn overlaid(
+    base: Option<serde_json::Value>,
+    overlay: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let mut merged = match base {
+        Some(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+    for (k, v) in overlay {
+        merged.insert(k, v);
+    }
+    serde_json::Value::Object(merged)
 }
 
 /// Every top-level key of `.claude/air.json` this binary reads (air-xdc). `air status` names
@@ -317,6 +422,85 @@ pub fn unknown_keys_in(cfg: &serde_json::Value) -> Vec<String> {
 #[allow(clippy::unwrap_used)]
 mod config_keys_tests {
     use super::*;
+
+    fn main_with(air_json: Option<&str>, overlay: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        if let Some(s) = air_json {
+            std::fs::write(dir.path().join(".claude/air.json"), s).unwrap();
+        }
+        if let Some(s) = overlay {
+            std::fs::write(dir.path().join(AIR_LOCAL_JSON), s).unwrap();
+        }
+        dir
+    }
+
+    /// air-aei: the overlay's top-level keys replace the committed file's, and a key the
+    /// overlay does not name comes from the committed file; a nested object is replaced
+    /// whole, never merged deeper.
+    #[test]
+    fn overlay_replaces_top_level_keys_and_keeps_the_rest() {
+        let dir = main_with(
+            Some(
+                r#"{"project": "p", "verify_lane": true, "targets": {"lane": {"path": "old"}, "worker-1": {}}}"#,
+            ),
+            Some(
+                r#"{"targets": {"lane": {"path": "new"}}, "coordinator_allow": ["Bash(kubectl *)"]}"#,
+            ),
+        );
+        let (cfg, overlay) = read_config(dir.path());
+        assert_eq!(
+            cfg,
+            Some(serde_json::json!({
+                "project": "p",
+                "verify_lane": true,
+                "targets": {"lane": {"path": "new"}},
+                "coordinator_allow": ["Bash(kubectl *)"],
+            }))
+        );
+        assert_eq!(overlay.keys, vec!["coordinator_allow", "targets"]);
+        assert_eq!(overlay.invalid, None);
+        // A key the committed file lacks is read from the overlay alone, and the unknown-key
+        // report sees it.
+        assert_eq!(
+            unknown_keys_in(&overlaid(
+                None,
+                serde_json::json!({"zzz": 1}).as_object().unwrap().clone()
+            )),
+            vec!["zzz"]
+        );
+    }
+
+    /// air-aei: no overlay, nothing changes; the committed file is returned as it was.
+    #[test]
+    fn absent_overlay_changes_nothing() {
+        let dir = main_with(Some(r#"{"project": "p", "targets": {"lane": {}}}"#), None);
+        let (cfg, overlay) = read_config(dir.path());
+        assert_eq!(
+            cfg.unwrap(),
+            serde_json::json!({"project": "p", "targets": {"lane": {}}})
+        );
+        assert_eq!(overlay, ConfigOverlay::default());
+        let (none, overlay) = read_config(main_with(None, None).path());
+        assert_eq!(none, None);
+        assert_eq!(overlay, ConfigOverlay::default());
+    }
+
+    /// air-aei: an overlay that is not valid JSON, or not an object, adds nothing, the
+    /// committed file is used alone, and the reason is carried for `air status`.
+    #[test]
+    fn invalid_overlay_is_reported_and_the_committed_file_is_used() {
+        let dir = main_with(Some(r#"{"project": "p"}"#), Some("{\"targets\": "));
+        let (cfg, overlay) = read_config(dir.path());
+        assert_eq!(cfg.unwrap(), serde_json::json!({"project": "p"}));
+        assert!(overlay.keys.is_empty());
+        let why = overlay.invalid.unwrap();
+        assert!(why.contains("EOF"), "{why}");
+        let dir = main_with(Some(r#"{"project": "p"}"#), Some("[1, 2]"));
+        let (cfg, overlay) = read_config(dir.path());
+        assert_eq!(cfg.unwrap(), serde_json::json!({"project": "p"}));
+        assert_eq!(overlay.invalid.as_deref(), Some("not a JSON object"));
+    }
 
     #[test]
     fn unknown_keys_are_those_outside_the_known_list_sorted() {
