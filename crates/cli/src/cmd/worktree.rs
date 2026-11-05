@@ -40,6 +40,7 @@
 //! add`), or the owner reverses the 2026-08-30 ruling.
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// The main checkout for `repo` (the ledger's directory, minus `.air`).
@@ -85,8 +86,16 @@ pub(crate) fn git_status(
     timeout: Duration,
 ) -> Result<(i32, String, String), String> {
     let t0 = std::time::Instant::now();
-    let child = crate::git::spawn(cwd, args).map_err(|e| format!("git: {e}"))?;
-    let drained = crate::git::wait_drained_group(child, timeout).map_err(|e| format!("git: {e}"));
+    let child = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git: {e}"))?;
+    let drained = crate::git::wait_drained(child, timeout).map_err(|e| format!("git: {e}"));
     air_ledger::budgets::record(
         air_ledger::budgets::GIT_WORKTREE,
         t0.elapsed(),
