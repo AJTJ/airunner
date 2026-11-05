@@ -132,7 +132,9 @@ and no conflict markers remaining, not by reading command output.
 
 Where `targets` in `.claude/air.json` names a machine for your session, `air run -- <command>`
 runs the command there at your HEAD, `--pull <glob>` brings result files back, and `air record`
-runs its check there the same way; with no entry both run here.
+runs its check there the same way; with no entry both run here. Your launcher allows both
+bare, so run them with no pipe or redirect: a piped line is judged by the auto-mode
+classifier, which has refused a worker's `air run` as a remote write.
 
 A close needs no message. The proof is on the bead, and `air status` and the channel tell the
 coordinator what is batch-ready and landable. Message the coordinator only when you are

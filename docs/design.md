@@ -102,7 +102,9 @@ ready`, the worktree tools and the question prompt; Air refuses `air land`, `air
 `air ready` again by role.
 The lane is a worker with `air land` allowed, plus allow rules on its own command line for its
 bare loop commands (`air land`, `air batch cut`, `air record`, `air status`, `git merge`, `git
-reset --hard main`) so auto mode's classifier does not refuse them. The coordinator is denied
+reset --hard main`) so auto mode's classifier does not refuse them; a worker is allowed `air run`
+and `air record` bare the same way, since the classifier refused a worker's run against a target
+(air-nyi). The coordinator is denied
 `git push` and the question prompt, plus `coordinator_deny`, and is allowed one command the
 same way, `tmux send-keys`, for the start-up prompt answer (air-yux); the owner is reached through
 `air capture`.

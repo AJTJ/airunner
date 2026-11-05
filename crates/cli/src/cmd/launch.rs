@@ -434,6 +434,31 @@ pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
     v
 }
 
+/// Allow rules for a worker: `air run` and `air record`, the two commands that reach a target
+/// in `targets` (`.claude/air.json`), and the pinned binary's forms as [`lane_allow`] has them.
+///
+/// air-nyi (2026-11-05): a worker's launcher wrote no allow list, so every line went to the
+/// auto-mode classifier, which reads the conversation and refused a bare `air run -- true`
+/// against a pod twice (once with no reason given) and a direct `kubectl exec` the day before.
+/// A target for a worker was therefore worth nothing. Same shape as the lane's `air land`
+/// (air-8cdh) and the same fix: a narrow allow rule on the role's `--settings`, which resolves
+/// before the classifier (the sources are on [`lane_allow`]). The rule matches the bare line
+/// only; a piped line is judged by the classifier (air-b1h8), and roles.md tells workers so.
+/// The deny list still wins where it names a command, so nothing here widens what a worker
+/// may do beyond these two air subcommands.
+///
+/// Removal: when the harness stops refusing bare `air run` lines in auto mode, measured by a
+/// round with zero `hook.PermissionDenied` events naming `air run` or `air record` from a
+/// worker.
+pub fn worker_allow(pin: Option<&Path>) -> Vec<String> {
+    const AIR: &[&str] = &["run *", "record *"];
+    let mut v: Vec<String> = AIR.iter().map(|c| format!("Bash(air {c})")).collect();
+    if let Some(p) = pin {
+        v.extend(AIR.iter().map(|c| format!("Bash({} {c})", p.display())));
+    }
+    v
+}
+
 /// Allow rule for the coordinator: `tmux send-keys`, the one keystroke roles.md lets it type
 /// into another session (the recorded answer to a known start-up prompt, after the owner's yes;
 /// air-d73).
@@ -717,10 +742,10 @@ fn role_argv(
     deny: &[&str],
     extra: &[String],
 ) -> Vec<String> {
-    let allow = if role == "lane" {
-        lane_allow(None)
-    } else {
-        Vec::new()
+    let allow = match role {
+        "lane" => lane_allow(None),
+        "worker" => worker_allow(None),
+        _ => Vec::new(),
     };
     let settings = settings_blob(&role_env(role, name, project), &allow);
     let mut v: Vec<String> = vec![
@@ -1785,7 +1810,11 @@ mod tests {
         let allow = lane["permissions"]["allow"].as_array().unwrap();
         assert!(allow.iter().any(|r| r == "Bash(air land *)"), "{lane}");
         let worker = settings_of(&worker_argv("w", "air", roles, &[]));
-        assert!(worker.get("permissions").is_none(), "{worker}");
+        let worker_rules = worker["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !worker_rules.iter().any(|r| r == "Bash(air land *)"),
+            "{worker}"
+        );
         let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
         let coord_allow = coord["permissions"]["allow"].as_array().unwrap();
         assert!(
@@ -1832,6 +1861,33 @@ mod tests {
     /// three times in two days. The rule is on the coordinator's settings, exactly one, and on
     /// no other role's.
     #[test]
+    fn workers_are_allowed_air_run_and_air_record_past_the_classifier() {
+        let roles = Path::new("/r/.air/roles.md");
+        let worker = settings_of(&worker_argv("w", "air", roles, &[]));
+        assert_eq!(
+            worker["permissions"]["allow"],
+            serde_json::json!(["Bash(air run *)", "Bash(air record *)"]),
+            "{worker}"
+        );
+        // Every rule is an air subcommand; the deny list still names what a worker may not run.
+        for r in worker_allow(None) {
+            assert!(r.starts_with("Bash(air "), "{r}");
+        }
+        let pin = worker_allow(Some(Path::new("/m/.air/bin/air")));
+        assert!(
+            pin.contains(&"Bash(/m/.air/bin/air run *)".to_string()),
+            "{pin:?}"
+        );
+        assert!(
+            pin.contains(&"Bash(/m/.air/bin/air record *)".to_string()),
+            "{pin:?}"
+        );
+        // The coordinator's list is unchanged, and the lane's gains nothing here.
+        assert_eq!(coordinator_allow(), ["Bash(tmux send-keys *)"]);
+        assert!(!lane_allow(None).iter().any(|r| r == "Bash(air run *)"));
+    }
+
+    #[test]
     fn only_the_coordinator_is_allowed_tmux_send_keys_past_the_classifier() {
         let roles = Path::new("/r/.air/roles.md");
         let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
@@ -1841,7 +1897,11 @@ mod tests {
             "{coord}"
         );
         let worker = settings_of(&worker_argv("w", "air", roles, &[]));
-        assert!(worker.get("permissions").is_none(), "{worker}");
+        let worker_rules = worker["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !worker_rules.iter().any(|r| r == "Bash(tmux send-keys *)"),
+            "{worker}"
+        );
         let lane = settings_of(&lane_argv("lane", "air", roles, &[]));
         let lane_rules = lane["permissions"]["allow"].as_array().unwrap();
         assert!(
