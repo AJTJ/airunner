@@ -465,6 +465,17 @@ each pane with the recorded Enter, and takes a fixed `TRIAL_DIR` the owner trust
 Do not: make a launched session's first step a file read; the classifier judges it like any
 other command.
 
+**The trial coordinator waited hours at the base-branch row for the owner to rename `main`.**
+Seen: 2026-11-06, the pod trial: ten scenarios closed untouched, then the request's last row
+said "ask the owner" to rename the copy's `main` to `trunk` and set `base_branch`, and the
+coordinator refused to edit "the owner's checkout" and asked.
+Fix: the row says the copy is scratch and its main checkout is the coordinator's to edit, and
+gives the three commands; `git branch -m main trunk` from the coordinator's worktree moves the
+main checkout's `HEAD` with it, and `air status` prints `base branch: trunk` once the key is
+committed there (`scripts/trial/request.md`; air-3hw).
+Do not: write a step for a person into the trial request; `make trial` is meant to reach
+`.air/trial-report.md` with nobody typing (air-fkb).
+
 **`air fleet up` started a second claude in every worker's worktree after the project name changed.**
 Seen: twice on 2026-09-28 (22:15Z and 23:59Z), this repo: `"project": "ai_runner"` landed, the
 tmux sessions were renamed from `air-*` to `ai_runner-*`, and `fleet up` saw no
