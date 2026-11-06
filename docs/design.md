@@ -85,8 +85,10 @@ development-channels warning has no documented skip, so it, and any other prompt
 found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
 session with `tmux send-keys` once the owner has said yes to that (air-d73); the coordinator's
 launcher allows `Bash(tmux send-keys *)` on its `--settings`, since auto mode's classifier
-refused that keystroke three times in two days (air-yux). Folder trust is never answered by
-anyone but the owner. On a Mac the session runs as the child of `caffeinate
+refused that keystroke three times in two days (air-yux). For the trial fleet, `make trial`
+sends that Enter to each pane itself (§9.1, air-fkb). Folder trust is never answered by
+anyone but the owner. `air coordinator -- "<text>"` starts the coordinator on `<text>` as its
+first prompt, placed first in argv like a worker's task prompt (air-fkb). On a Mac the session runs as the child of `caffeinate
 -i`, so the machine does not idle-sleep under a long command and may once the fleet is idle;
 `air status` prints an idle-sleep setting under ten minutes (air-1ye).
 
@@ -588,11 +590,19 @@ run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify 46
 ### 9.1 The live trial
 
 Every release is tried on a real fleet before it is tagged. `make trial` builds the binary,
-adopts a scratch copy of `examples/minimal` with it pinned, and commits the scenarios' config
-(`"verify_lane": true`, `"precheck": true`, the `serve` lease and the precheck line in
-`CLAUDE.md`) so no session has to edit a config file. It copies `scripts/trial/request.md` in.
-The coordinator, started with `.air/bin/air coordinator --fleet`, reads the request and files
-the scenarios' beads. When every bead is closed it writes
+adopts a copy of `examples/minimal` at `$TRIAL_DIR/minimal` with it pinned, and commits the
+scenarios' config (`"verify_lane": true`, `"precheck": true`, the `serve` lease and the
+precheck line in `CLAUDE.md`) so no session has to edit a config file. It then starts the
+fleet with `.air/bin/air coordinator --fleet -- "<request>"`, the text of
+`scripts/trial/request.md` as the coordinator's launch prompt (a copy stays in
+`.air/trial-request.md` as the record), and answers the development-channels prompt in every
+pane with `tmux send-keys Enter` (`scripts/trial/answer-prompts.sh`, tested against stub panes
+in `crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner once it starts (air-fkb: the
+2026-11-05 trial's coordinator, told to read the request from a file, had the read refused by
+the auto-mode classifier and waited hours, air-fzl). `TRIAL_DIR` defaults to one fixed path,
+`$TMPDIR/air-trial`, which the owner trusts once by running `claude` there after the first
+`make trial`; every later copy at that path starts without the dialog (air-ekj). The
+coordinator files the scenarios' beads. When every bead is closed it writes
 `.air/trial-report.md`, and an observer checks it against the events, git and beads and adds
 the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
 not fixed during the trial. The release is tagged only if every scenario ends as expected.

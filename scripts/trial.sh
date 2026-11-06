@@ -1,39 +1,57 @@
 #!/bin/sh
-# `make trial` (air-4usc): prepare the live trial (docs/design.md §9.1). Copies examples/minimal
-# to a scratch directory outside this repo, adopts it with this tree's release build, and pins
-# that build into the copy with `air install --write --pin`, and copies in the fixed scenario
-# request (scripts/trial/request.md). The `air` on PATH, which the fleet
-# building Air runs, is not touched. Starts no session; it prints how to start one.
+# `make trial` (air-4usc, air-fkb): run the live trial (docs/design.md §9.1) with no keystroke
+# from the owner once it starts. Copies examples/minimal to $TRIAL_DIR/minimal, adopts the copy
+# with this tree's release build, pins that build into it with `air install --write --pin`,
+# copies in the fixed scenario request (scripts/trial/request.md), starts the trial fleet with
+# that request as the coordinator's launch prompt, and answers the development-channels prompt
+# in every pane. The `air` on PATH, which the fleet building Air runs, is not touched.
 #
-# Needs bd and claude on PATH, like `air init` itself. TRIAL_DIR picks the parent directory.
+# Needs bd and claude on PATH, like `air init` itself. TRIAL_DIR is the copy's parent and
+# defaults to $TMPDIR/air-trial, one fixed path: Claude Code keys folder trust on the path, so
+# the owner runs `claude` once in $TRIAL_DIR/minimal after the first `make trial`, answers yes,
+# and every later trial at that path starts without the dialog (docs/research/folder-trust.md,
+# air-ekj). Nothing here answers that dialog: the launcher refuses, naming the fix, while the
+# copy is not trusted, and `make trial` is run again after it.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 bin="$here/target/release"
 [ -x "$bin/air" ] || { echo "trial: build first (cargo build --release -p air)"; exit 1; }
 
-# Clear the previous trial first, so `make trial` never collides with it: its sessions are named
-# `<project>-*`, which the new copy's would also want. Only
-# copies this script made are touched: a directory under $TMPDIR named air-trial.* holding
-# minimal/ with a pinned air.
+# tmux as the launcher sees it: AIR_TMUX_SOCKET names a private server (the tests' and a
+# rehearsal's), else the owner's own.
+tmux_() {
+    if [ -n "${AIR_TMUX_SOCKET:-}" ]; then tmux -L "$AIR_TMUX_SOCKET" "$@"; else tmux "$@"; fi
+}
+
+# Stop a previous trial's sessions first, so `make trial` never collides with it: they are named
+# `<project>-*`, which the new copy's would also want, and a fleet left running on a deleted
+# copy took the new fleet's session names once (0.4.9 trial, 2026-09-26). Only a copy this
+# script made is touched: a directory holding minimal/ with a pinned air. Fails when $1 holds
+# no such copy.
+stop_copy() {
+    [ -x "$1/minimal/.air/bin/air" ] || return 1
+    old_project=$(sed -n 's/^ *"project": *"\([^"]*\)".*/\1/p' "$1/minimal/.claude/air.json" 2>/dev/null | head -n 1)
+    [ -n "$old_project" ] || return 0
+    for s in $(tmux_ ls -F '#{session_name}' 2>/dev/null | grep "^$old_project-" || true); do
+        tmux_ kill-session -t "=$s"
+        echo "trial: stopped the previous trial's tmux session $s"
+    done
+}
+# Copies made by the earlier default, a fresh mktemp directory per run.
 for old in "${TMPDIR:-/tmp}"/air-trial.*; do
-    [ -x "$old/minimal/.air/bin/air" ] || continue
-    project=$(sed -n 's/^ *"project": *"\([^"]*\)".*/\1/p' "$old/minimal/.claude/air.json" 2>/dev/null | head -n 1)
-    # Every session of the old trial: its fleet as well as its Dolt server. A fleet left running
-    # on a deleted copy took the new fleet's session names once (0.4.9 trial, 2026-09-26).
-    if [ -n "$project" ]; then
-        for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep "^$project-"); do
-            tmux kill-session -t "=$s"
-            echo "trial: stopped the previous trial's tmux session $s"
-        done
-    fi
+    stop_copy "$old" || continue
     rm -rf "$old"
     echo "trial: removed the previous trial copy $old"
 done
-
-parent=${TRIAL_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/air-trial.XXXXXX")}
+parent=${TRIAL_DIR:-${TMPDIR:-/tmp}/air-trial}
 repo="$parent/minimal"
-[ ! -e "$repo" ] || { echo "trial: $repo already exists"; exit 1; }
+if stop_copy "$parent"; then
+    rm -rf "$repo"
+    echo "trial: removed the previous trial copy $repo"
+fi
+[ ! -e "$repo" ] || { echo "trial: $repo exists and is not a copy this script made"; exit 1; }
+mkdir -p "$parent"
 unset AIR_PROJECT AIR_ROLE AIR_ENFORCE CLAUDE_PID BEADS_ACTOR 2>/dev/null || true
 
 # The project as it was before Air: examples/minimal minus every file `air init` writes.
@@ -81,13 +99,24 @@ grep -q 'sh -n greet.sh' CLAUDE.md || { echo "trial: CLAUDE.md does not name the
 git add -A
 git commit -qm "Adopt Air, pinned to the candidate, with the verification lane and the trial's config"
 
-# The scenario request is fixed, so nobody rewrites it per run. .air is ignored by git.
+# The scenario request is fixed, so nobody rewrites it per run. It is the coordinator's launch
+# prompt (air-fkb): told to read it from a file, the trial coordinator of 2026-11-05 had its
+# `cat` refused by the auto-mode classifier and waited on the owner for hours (air-fzl). The
+# file stays as the record; .air is ignored by git. stdin is not a terminal here, so the
+# launcher starts every session detached and returns, and the panes are answered below.
 cp "$here/scripts/trial/request.md" .air/trial-request.md
-
+request=$(cat "$here/scripts/trial/request.md")
+project=$(sed -n 's/^ *"project": *"\([^"]*\)".*/\1/p' "$cfg" | head -n 1)
 echo "trial copy: $repo"
 echo "pinned:     $("$repo/.air/bin/air" --version)"
-echo "start it:   cd $repo && .air/bin/air coordinator --fleet"
-echo "then say:   Read $repo/.air/trial-request.md and do what it says."
+"$repo/.air/bin/air" coordinator --fleet -- "$request" </dev/null \
+    || { echo "trial: the fleet did not start; do what the launcher said, then run make trial again"; exit 1; }
+
+# Every session warns about loading development channels (the Air channel) and Claude Code
+# documents no skip; scripts/trial/answer-prompts.sh sends each pane the recorded Enter once the
+# prompt is on it, and names any pane that shows neither the prompt nor the auto-mode status
+# line within three minutes.
+sh "$here/scripts/trial/answer-prompts.sh" "$project" \
+    || echo "trial: a pane may still be waiting; read it with tmux capture-pane -p -t <session>"
+echo "attach:     tmux attach -t $project-coordinator"
 echo "report:     $repo/.air/trial-report.md, once every bead is closed"
-echo "Start with the pinned copy: an older air on PATH does not know about the pin and would"
-echo "start sessions without it. Every session Air starts there runs the pin."
