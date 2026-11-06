@@ -84,6 +84,34 @@ fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, Stri
     )
 }
 
+/// air-fkb: `make trial` hands the trial coordinator its request as the launch prompt
+/// (`air coordinator -- "<text>"`), so the session starts on it rather than on a file read the
+/// auto-mode classifier can refuse. The positional leads claude's argv, where a worker's task
+/// prompt goes (air-2ct); appended, it would be one more `--disallowed-tools` value.
+#[test]
+fn the_coordinators_positional_is_its_launch_prompt() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let text = "File the trial's beads now.";
+    let (code, out, err) = air(&repo, None, &["coordinator", "--print", "--", text]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains(
+            " -- claude 'File the trial'\\''s beads now.' --dangerously-load-development-channels "
+        ),
+        "{out}"
+    );
+    // With a configured model the prompt still leads and the model flag follows.
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"model": "opus"}"#).unwrap();
+    let (code, out, _) = air(&repo, None, &["coordinator", "--print", "--", "hello"]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(" -- claude hello --dangerously") && out.contains(" --model opus"),
+        "{out}"
+    );
+}
+
 /// air-e07q: removing a hook that contradicts Air is a command, not a hand edit. Without the
 /// flag the `bd prime` hook stays and is reported; with it the hook is gone and nothing else is.
 #[test]

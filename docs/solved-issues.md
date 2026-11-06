@@ -428,6 +428,18 @@ Seen: 0.4.1 live trial, 2026-09-25.
 Fix: each launch approves the `air` server in its own settings (`enabledMcpjsonServers`).
 Commit 3a9a9ba (air-oe9k).
 
+**The trial coordinator, told to read its request from a file, waited hours on the refused read.**
+Seen: 2026-11-05, the pod trial (air-fzl): the auto-mode classifier refused its `cat
+.air/trial-request.md`, and the pane sat with the owner's answer typed and unsent. The
+2026-11-03 trial needed the owner at launch too.
+Fix: `make trial` passes the request text as the coordinator's launch prompt, `air coordinator
+-- "<text>"`, a positional that now leads argv the way a worker's task prompt does (air-2ct;
+`crates/cli/src/cmd/launch.rs` `leading_prompt`), answers the development-channels prompt in
+each pane with the recorded Enter, and takes a fixed `TRIAL_DIR` the owner trusts once
+(`scripts/trial.sh`; air-fkb).
+Do not: make a launched session's first step a file read; the classifier judges it like any
+other command.
+
 **`air fleet up` started a second claude in every worker's worktree after the project name changed.**
 Seen: twice on 2026-09-28 (22:15Z and 23:59Z), this repo: `"project": "ai_runner"` landed, the
 tmux sessions were renamed from `air-*` to `ai_runner-*`, and `fleet up` saw no

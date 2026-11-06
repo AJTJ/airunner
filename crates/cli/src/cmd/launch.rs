@@ -904,12 +904,30 @@ fn worker_argv_for(
     Ok(base)
 }
 
+/// Pure: a leading positional in the coordinator's pass-through (`air coordinator -- "<text>"`)
+/// is its first prompt, and the rest stays pass-through. Nothing when `extra` starts with a
+/// flag or is empty.
+///
+/// air-fkb (2026-11-05): the live trial's coordinator was told to read its request from a
+/// file; the auto-mode classifier refused the `cat`, and the trial waited on the owner for
+/// hours (air-fzl). `make trial` now passes the request text here. Unlike a worker's `--task`
+/// (air-er0), the text rides in argv, so a `pkill -f` naming a command the text quotes would
+/// match the coordinator's process; the trial's request names `air land` and `make verify`.
+pub fn leading_prompt(extra: &[String]) -> (Option<&str>, &[String]) {
+    match extra.split_first() {
+        Some((p, rest)) if !p.starts_with('-') && !p.trim().is_empty() => (Some(p), rest),
+        _ => (None, extra),
+    }
+}
+
 /// Pure: the argv for the coordinator session.
 ///
 /// `metis` is whatever [`super::metis::argv`] returned: the MCP server, and the plugin
 /// directory when the repo declared one that exists (air-g5o). It is placed BEFORE `extra`, so
 /// a caller passing its own `--mcp-config` is last and wins, the same ordering every other
 /// pass-through here already has. Workers get none of it: the coordinator plans, workers work.
+/// A leading positional in `extra` ([`leading_prompt`]) goes first, where a worker's task
+/// prompt goes (air-2ct): appended, it sat among the `--disallowed-tools` values.
 pub fn coordinator_argv(
     project: &str,
     roles: &Path,
@@ -917,6 +935,7 @@ pub fn coordinator_argv(
     metis: &[String],
     extra: &[String],
 ) -> Vec<String> {
+    let (prompt, extra) = leading_prompt(extra);
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
     // the coordinator is the one that can see every fleet on the machine.
     // Plus its one allow rule, `tmux send-keys` (air-yux).
@@ -935,7 +954,7 @@ pub fn coordinator_argv(
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
     v.extend(metis.iter().cloned());
     v.extend(extra.iter().cloned());
-    v
+    worker_argv_prompt(v, prompt)
 }
 
 fn coordinator_argv_for(
@@ -946,6 +965,8 @@ fn coordinator_argv_for(
     extra: &[String],
 ) -> Result<Vec<String>, String> {
     let cfg = super::handover::air_json(repo);
+    // The prompt first, before a configured `--model` is put in front of the pass-through.
+    let (prompt, extra) = leading_prompt(extra);
     let extra = with_configured_model(cfg.as_ref(), "coordinator", extra);
     let (extra, theirs) = split_settings(&extra)?;
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
@@ -953,7 +974,7 @@ fn coordinator_argv_for(
     insert_prompt_flags(&mut base, &super::worktree::main_checkout(repo));
     apply_repo_rules(&mut base, cfg.as_ref(), "coordinator");
     base.extend(extra);
-    Ok(base)
+    Ok(worker_argv_prompt(base, prompt))
 }
 
 fn claude_bin() -> String {
@@ -2054,6 +2075,30 @@ mod tests {
             ["--mcp-config", "/m/metis.json", "--verbose"],
             "{v:?}"
         );
+    }
+
+    /// air-fkb (2026-11-05): `air coordinator -- "<request>"` is how `make trial` hands the
+    /// trial coordinator its request, so the session starts on it instead of on a file read.
+    /// The positional leads argv, where a worker's task prompt goes (air-2ct): appended, it
+    /// sat among the `--disallowed-tools` values and read as one more deny rule.
+    #[test]
+    fn a_leading_positional_in_the_coordinators_extra_leads_argv() {
+        let roles = Path::new("/r/.air/roles.md");
+        let text = "File the trial's beads.";
+        let v = coordinator_argv(
+            "air",
+            roles,
+            "--ch",
+            &[],
+            &[text.to_string(), "--verbose".to_string()],
+        );
+        assert_eq!(v[0], text, "{v:?}");
+        assert!(task_is_prompt(&v, text), "{v:?}");
+        assert_eq!(v.last().map(String::as_str), Some("--verbose"));
+        // Pass-through flags alone are placed as before.
+        let v = coordinator_argv("air", roles, "--ch", &[], &["--verbose".to_string()]);
+        assert_eq!(v[0], "--ch", "{v:?}");
+        assert_eq!(v.last().map(String::as_str), Some("--verbose"));
     }
 
     #[test]
