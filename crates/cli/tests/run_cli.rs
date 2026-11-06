@@ -147,6 +147,11 @@ exec sh -c "$*"
         /// `$AIR_TEST_EXEC_LOG`, one word per line and `<end>` after each call, drops its own
         /// words up to `--`, and runs the rest here as argv with no shell between. `--fail <n>`
         /// exits `n` before running anything, the way a gone pod or an expired token would.
+        /// `--tar <mode>` shapes the `--pull` stream's sender (air-b50): `sigpipe141` and
+        /// `sigpipe13` send the whole archive and then exit 141 or die of SIGPIPE, the way
+        /// `kubectl exec` ends once the local tar has closed the pipe; `empty2` sends nothing
+        /// and exits 2, a target-side tar that could not read a file; `truncate` cuts the
+        /// stream inside a member.
         pub fn fake_exec() -> PathBuf {
             static DIR: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
                 std::sync::OnceLock::new();
@@ -158,13 +163,21 @@ exec sh -c "$*"
                     r#"#!/bin/sh
 for a in "$@"; do printf '%s\n' "$a"; done >> "$AIR_TEST_EXEC_LOG"
 printf '<end>\n' >> "$AIR_TEST_EXEC_LOG"
+tarmode=
 while [ $# -gt 0 ]; do
   case "$1" in
     --fail) exit "$2" ;;
+    --tar) tarmode=$2; shift 2 ;;
     --) shift; break ;;
     *) shift ;;
   esac
 done
+case "$tarmode:$*" in
+  sigpipe141:*"tar -cf -"*) "$@"; exit 141 ;;
+  sigpipe13:*"tar -cf -"*) "$@"; kill -13 $$ ;;
+  empty2:*"tar -cf -"*) exit 2 ;;
+  truncate:*"tar -cf -"*) "$@" | head -c 700; exit 0 ;;
+esac
 exec "$@"
 "#,
                 )
@@ -686,6 +699,82 @@ exec "$@"
             assert!(
                 log.contains("tar -cf - -- results/a.txt"),
                 "one tar stream over the same transport: {log}"
+            );
+        }
+
+        /// air-b50 (pod trial, 2026-11-06): every pull through `kubectl exec` was reported as
+        /// "the tar stream failed" and recorded as empty, though the file had arrived. The local
+        /// tar stops at the end-of-archive marker and closes the pipe, and the prefix dies of
+        /// SIGPIPE writing the padding (exit 141 from a shell, signal 13 from a program). The
+        /// verdict is the unpack's, as `kubectl cp`'s is; a sender that exits with a code is
+        /// still a failure, since tar exits 0 on an empty stream (docs/research/pull-over-exec.md).
+        #[test]
+        fn the_unpack_is_the_verdict_and_a_sender_dying_of_sigpipe_is_the_normal_end() {
+            let write = "mkdir -p results; printf hi > results/a";
+            for mode in ["sigpipe141", "sigpipe13"] {
+                let repo = scratch_repo();
+                exec_target(repo.path(), &["--tar", mode]);
+                let (code, out, err) = air_run_args(
+                    repo.path(),
+                    &["--pull", "results/*"],
+                    &["sh", "-c", write],
+                    &[],
+                    true,
+                );
+                assert_eq!(code, 0, "{mode}: {err}");
+                let (_, row) = split(&out);
+                assert_eq!(row.pulled, vec!["results/a".to_string()], "{mode}: {err}");
+                assert_eq!(row.pulled_bytes, 2, "{mode}");
+                assert_eq!(
+                    std::fs::read_to_string(repo.path().join("results/a")).unwrap(),
+                    "hi",
+                    "{mode}"
+                );
+                assert!(
+                    !err.contains("tar stream failed")
+                        && err.contains("pulled results/a (2 bytes)"),
+                    "{mode}: a complete archive is a good pull: {err}"
+                );
+            }
+
+            // A sender that exits with a code sent nothing it could not read. bsdtar (macOS)
+            // exits 0 on an empty stream, so the code is the only sign and it is reported; GNU
+            // tar (Linux, the pod) refuses the empty stream itself. Either way nothing is
+            // recorded as pulled.
+            let repo = scratch_repo();
+            exec_target(repo.path(), &["--tar", "empty2"]);
+            let (code, out, err) = air_run_args(
+                repo.path(),
+                &["--pull", "results/*"],
+                &["sh", "-c", write],
+                &[],
+                true,
+            );
+            assert_eq!(code, 0, "the command's exit, not the pull's: {err}");
+            let (_, row) = split(&out);
+            assert!(row.pulled.is_empty(), "{err}");
+            assert_eq!(row.pulled_bytes, 0);
+            assert!(
+                (err.contains("exited 2") || err.contains("the tar stream failed"))
+                    && !err.contains("pulled results"),
+                "the failure is reported, by the sender's code or the unpack: {err}"
+            );
+
+            // A stream cut inside a member fails on the unpack, whatever the sender said.
+            let repo = scratch_repo();
+            exec_target(repo.path(), &["--tar", "truncate"]);
+            let (_, out, err) = air_run_args(
+                repo.path(),
+                &["--pull", "results/*"],
+                &["sh", "-c", write],
+                &[],
+                true,
+            );
+            let (_, row) = split(&out);
+            assert!(row.pulled.is_empty(), "{err}");
+            assert!(
+                err.contains("the tar stream failed") && !err.contains("pulled results"),
+                "{err}"
             );
         }
 

@@ -374,7 +374,7 @@ fn remote(
 /// `--pull`: declared result paths back from the target as one tar stream (air-opq.4).
 pub mod pull {
     use std::path::Path;
-    use std::process::{Command, Stdio};
+    use std::process::{Command, ExitStatus, Stdio};
 
     use super::{Target, sh_quote};
 
@@ -480,14 +480,18 @@ done"#;
             .arg(repo)
             .stdin(Stdio::from(stream))
             .status();
-        let sent = send.wait().map(|s| s.success()).unwrap_or(false);
+        let sent = send.wait();
         match unpack {
-            Ok(s) if s.success() && sent => {}
+            Ok(s) if s.success() => {}
             Ok(s) => {
                 eprintln!(
                     "air run: --pull: the tar stream failed (target {}, unpack exit {}); the \
                      worktree may hold part of it",
-                    if sent { "ok" } else { "failed" },
+                    if sent.as_ref().is_ok_and(ExitStatus::success) {
+                        "ok"
+                    } else {
+                        "failed"
+                    },
                     s.code().unwrap_or(1)
                 );
                 return Pulled::default();
@@ -497,9 +501,44 @@ done"#;
                 return Pulled::default();
             }
         }
+        if let Some(code) = sender_failure(&sent) {
+            eprintln!(
+                "air run: --pull: the target's tar exited {code} after the stream; nothing \
+                 recorded as pulled"
+            );
+            return Pulled::default();
+        }
         let bytes = paths.iter().map(|p| size_of(&repo.join(p))).sum();
         eprintln!("air run: pulled {} ({bytes} bytes)", paths.join(", "));
         Pulled { paths, bytes }
+    }
+
+    /// Pure: the sender's exit read the way the field reads a tar pipeline's (air-b50,
+    /// `docs/research/pull-over-exec.md`): the unpack is the verdict, so a sender killed by
+    /// SIGPIPE (signal 13, or exit 141 from a shell) is the normal end, since the local tar
+    /// stops at the end-of-archive marker and closes the pipe while the prefix is still
+    /// writing the padding. Any other non-zero exit is the target's own `tar` failing, which
+    /// an empty stream would otherwise hide where the local tar is bsdtar, which exits 0 on
+    /// one (GNU tar refuses it); it is returned as the code. In the pod trial every pull through `kubectl exec` was reported failed and
+    /// recorded empty on the 141 alone. Removal: when the pull is no longer a tar stream.
+    pub fn sender_failure(sent: &std::io::Result<ExitStatus>) -> Option<i32> {
+        match sent {
+            Ok(s) if s.success() || died_of_sigpipe(*s) => None,
+            Ok(s) => Some(s.code().unwrap_or(1)),
+            Err(_) => Some(1),
+        }
+    }
+
+    /// Signal 13, or exit code 141 (128 + 13) from a shell that relayed it.
+    fn died_of_sigpipe(s: ExitStatus) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if s.signal() == Some(13) {
+                return true;
+            }
+        }
+        s.code() == Some(141)
     }
 
     /// Bytes of a file, or of every file under a directory; 0 for what cannot be read.
@@ -552,6 +591,29 @@ done"#;
             let (paths, missed) = parse_list(&String::from_utf8_lossy(&out.stdout));
             assert_eq!(paths, vec!["results/a.txt", "top"]);
             assert_eq!(missed, vec!["../*", "/etc/passwd", "none/*"]);
+        }
+
+        /// air-b50: the sender's exit as the field reads it. Raw wait statuses: a signal is
+        /// the low bits, an exit code is shifted by eight.
+        #[cfg(unix)]
+        #[test]
+        fn a_sender_killed_by_sigpipe_is_not_a_failure_and_an_exit_code_is() {
+            use std::os::unix::process::ExitStatusExt;
+            let status =
+                |raw: i32| -> std::io::Result<ExitStatus> { Ok(ExitStatus::from_raw(raw)) };
+            assert_eq!(sender_failure(&status(0)), None);
+            assert_eq!(sender_failure(&status(13)), None, "signal 13");
+            assert_eq!(sender_failure(&status(141 << 8)), None, "exit 141");
+            assert_eq!(sender_failure(&status(2 << 8)), Some(2));
+            assert_eq!(
+                sender_failure(&status(9)),
+                Some(1),
+                "another signal is a failure"
+            );
+            assert_eq!(
+                sender_failure(&Err(std::io::Error::other("no wait"))),
+                Some(1)
+            );
         }
 
         #[test]
