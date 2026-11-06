@@ -519,6 +519,16 @@ Seen: 0.4.10 live trial.
 Fix: the notice and the peer-held refusal say the list is a snapshot and point at `bd ready`.
 Commit ced8a06 (air-0blv).
 
+**The ready notice still listed beads a peer already held, and workers claimed from it.**
+Seen: 2026-11-06 trial: worker-1 lost three claim races and worker-2 two on ids the notice
+carried, with the snapshot sentence above it; each refusal was clear and cost one call.
+Fix: the notice carries a count and `bd ready`, never ids (`crates/cli/src/cmd/fanout.rs`
+`beads_ready_text`, air-bcg); `bd ready` answers in about 0.12 s. The per-recipient rotation
+of the list (the entry two above) went with the list, since there is nothing to rotate.
+Do not: put a bead id in a notice that is read later than it is sent. Watch: refused claims on
+the first bead of `bd ready` in `air audit`; if a round brings the 0.4.9 race back, the spread
+returns as a start position, not as a list.
+
 **Only the coordinator had a channel, so the lane and workers learned things on their 5-minute wakes.**
 Seen: 2026-09-26 live trial: a bead waited minutes between done and closed; the coordinator
 waited about 4 minutes after wave 1 landed; a capture sat until the next wake.
@@ -635,6 +645,17 @@ Fix: the gate distinguishes Missing, Untracked and Tracked. Commit 9024929 (air-
 **The lease check missed a leased command followed by `2>&1`.**
 Seen: 0.4.6 live trial, 2026-09-26, D4.
 Fix: redirections are stripped before matching. SURFACE `lease-sees-redirects`.
+
+**The lease gate refused `air lease take X --reason "..." && <cmd>` as a whole.**
+Seen: the 0.4.7 and 0.4.8 live trials, and again on 2026-11-06 (worker-1 and worker-2, two
+`lease-needed` refusals in `air audit`). Each worker read the advice and split the line, so the
+cost was one retry per worker, in three trials.
+Fix: a take of the same resource earlier on the line, joined to the command by `&&` all the way,
+counts as holding it: a refused take stops the chain before the command runs. A `;`, `||`, `|`
+or newline between them, a take for another resource, or a second uncovered run of the command
+is still refused (`crates/cli/src/cmd/lease.rs` `needs`, `taken_before`). SURFACE
+`lease-take-on-the-line` (air-643).
+Do not: refuse a line for what it reads before the take has run, when the take itself decides.
 
 **The peer warning dated nothing, so a live edit and a fortnight-old one read the same.**
 Seen: 2026-09-06.
@@ -1026,7 +1047,6 @@ landed Air change. The coordinator can check each.
   f9f6071): no incident detail beyond the subject line.
 - `air fleet stop` (air-1vri.1): an owner request; "one SendMessage per session" is not a
   recorded failure.
-- A lease refusal for `air lease take X && <cmd>` (CHANGELOG): no incident detail.
 - The `dated-cutoffs` doctor report: superseded by deleting the fallbacks (air-jsee); listed
   above under tests.
 - `stuck`, `cross-project-fence`, `gone-with-claim` history and `owner-decision-waiting`:

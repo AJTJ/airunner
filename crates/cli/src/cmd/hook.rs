@@ -810,7 +810,7 @@ pub fn lease_gate(
         };
         rows.push(serde_json::json!({
             "resource": n.resource, "pattern": n.pattern, "holder": holder,
-            "held": s == Standing::Mine,
+            "held": s == Standing::Mine, "taken_on_line": n.taken,
         }));
         if let Some(a) = advice(n, &s, worker) {
             missing.push(a);
@@ -819,28 +819,45 @@ pub fn lease_gate(
     let inputs = serde_json::json!({"command": cmd, "enforce": enforce, "needs": rows});
     let denominator = format!("{} lease(s) needed", need.len());
     if missing.is_empty() {
+        // A need whose `air lease take <resource>` runs earlier on the line, joined by `&&`,
+        // counts as held (air-643): a refused take stops the chain before the command.
+        let reason = if need.iter().any(|n| n.taken) {
+            "every lease the command needs is held or taken earlier on the line"
+        } else {
+            "every lease the command needs is held"
+        };
         return Ok(Some(
             Dispatched::new(
                 HookOutcome::Allow { context: None },
                 dec::PRE_TOOL_USE_LEASE_HELD,
-                "every lease the command needs is held",
+                reason,
             )
             .inputs(inputs)
             .denominator(denominator),
         ));
     }
-    // 0.4.7 and 0.4.8 trials: `air lease take X && <cmd>` is refused as a whole, because the
-    // line is checked before any of it runs.
+    // The 0.4.7 and 0.4.8 trials and the 2026-11-06 round refused `air lease take X && <cmd>`
+    // as a whole (air-643). That shape now counts; a take still on the line but not counted is
+    // for another resource, or not joined to the command by `&&` all the way.
     if super::lease::segments(cmd)
         .iter()
-        .any(|s| s.starts_with("air lease take"))
+        .any(|s| super::lease::take_resource(s).is_some())
     {
-        missing.push(
-            "This line also runs `air lease take`, and this check reads the whole line before \
-             any of it runs: run `air lease take <name> --reason \"<why>\"` as its own Bash call \
-             first, then this command."
-                .to_string(),
-        );
+        let wanted = need
+            .iter()
+            .filter(|n| !n.taken)
+            .map(|n| {
+                format!(
+                    "`air lease take {} --reason \"<why>\" && {}`",
+                    n.resource, n.segment
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        missing.push(format!(
+            "This line also runs `air lease take`, which counts only as {wanted}: the take \
+             for that resource, then `&&`, then the command, with nothing but `&&` between."
+        ));
     }
     let msg = format!("air: {}", missing.join("\n"));
     let (outcome, decision) = if enforce {
@@ -1741,7 +1758,7 @@ mod tests {
         };
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
         let fan = |set: &[&str], at: &str| {
-            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), &[], at)
+            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), at)
         };
         assert!(
             fan(&[], "2026-09-26T22:20:00Z").is_empty(),

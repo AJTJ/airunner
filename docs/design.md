@@ -194,7 +194,7 @@ Every call, including the silent ones, writes one event line.
 | Event | What happens |
 |---|---|
 | SessionStart, SessionEnd | The session's row is created idle, or ended. A start from compaction keeps the state it found. |
-| PreToolUse | For an edit, a warning if another worker's recorded edit is on the file. A command the repository says needs a lease is refused to a worker or the lane not holding it (redirections removed before matching). A `SendMessage` is recorded with its content. |
+| PreToolUse | For an edit, a warning if another worker's recorded edit is on the file. A command the repository says needs a lease is refused to a worker or the lane not holding it (redirections removed before matching; `air lease take <resource>` earlier on the same line, joined by `&&`, counts as holding it). A `SendMessage` is recorded with its content. |
 | PostToolUse | The edited file goes in the edit journal and the session is marked working. |
 | PostToolUseFailure, PermissionRequest, PermissionDenied, Notification, StopFailure | The session's state is updated. A stop failure, a quota notification, or a permission or idle prompt is the session's sticky fact, shown until the session's next event of its own. |
 | Stop | The session is marked idle. A worker is nudged with ready beads it has confirmed when it holds no claim or, under a lane, when every claim it holds is batch-ready; the same set is named once. The lane and the coordinator are never nudged. |
@@ -436,7 +436,7 @@ is repeated unchanged.
 
 | Notice | Queued by | To |
 |---|---|---|
-| beads are ready | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
+| beads are ready (a count and `bd ready`, never ids: air-bcg) | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
 | batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
 | batch green, batch red | `air record` at a batch head | each member; a green names only beads it covers that the member still holds |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |

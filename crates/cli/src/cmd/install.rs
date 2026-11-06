@@ -1761,7 +1761,9 @@ mod tests {
         ));
         // Air's messages and the fleet stop (air-1vri): each role hears them and knows what to
         // do, and the coordinator reaches the fleet with one command to Air.
-        assert!(has("`beads are ready: <ids>` arrives when"));
+        // air-bcg: a count and `bd ready`, never ids, which were stale by the time they were read.
+        assert!(has("bead(s) are claimable; run bd ready` arrives when"));
+        assert!(!has("`beads are ready: <ids>`"));
         assert!(has("`batch-ready: <worker> at <sha> (<beads>)`"));
         assert!(has(
             "`fleet stop from the coordinator` means all work stops"
