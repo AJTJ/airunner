@@ -2416,6 +2416,50 @@ fn probe_lease_needed_gate() -> Probe {
     }
 }
 
+/// air-643: `air lease take serve --reason "x" && sh serve.sh` was refused as a whole in the
+/// 0.4.7 and 0.4.8 trials and again on 2026-11-06 (two workers, `lease-needed` 2 in the audit),
+/// because the gate reads the line before any of it runs. Green: that line passes the gate for a
+/// worker holding nothing, with a `cd` between and with a redirection after, and `air lease
+/// needs` says why. Red: the same with `;`, `||` or a newline in place of `&&`, a take for a
+/// different resource, and a second uncovered run of the command are still refused.
+fn probe_lease_take_on_the_line_counts() -> Probe {
+    use crate::cmd::hook::lease_gate;
+    use air_hooks::HookOutcome;
+    let res = (|| -> Result<(bool, bool), String> {
+        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
+        let decl = crate::cmd::lease::declared_from(&serde_json::json!({"serve": ["sh serve.sh"]}));
+        let refused = |cmd: &str| -> Result<bool, String> {
+            Ok(matches!(
+                lease_gate(&l, "w1", "worker", &decl, cmd, true, |_| None)?.map(|d| d.outcome),
+                Some(HookOutcome::Block { .. })
+            ))
+        };
+        let red = [
+            "air lease take serve --reason \"x\"; sh serve.sh",
+            "air lease take serve --reason \"x\" || sh serve.sh",
+            "air lease take serve --reason \"x\"\nsh serve.sh",
+            "air lease take runtime --reason \"x\" && sh serve.sh",
+            "air lease take serve --reason \"x\" && sh serve.sh; sh serve.sh",
+        ]
+        .iter()
+        .try_fold(true, |ok, c| Ok::<bool, String>(ok && refused(c)?))?;
+        let green = !refused("air lease take serve --reason \"x\" && sh serve.sh")?
+            && !refused(
+                "air lease take serve --reason \"x\" && cd d && sh serve.sh > out.txt 2>&1",
+            )?
+            && crate::cmd::lease::needs(&decl, "air lease take serve && sh serve.sh")
+                .first()
+                .is_some_and(|n| n.taken);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "lease: `air lease take X && <cmd>` counts as holding X; `;`, `||` or another resource does not",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// D4 of the 0.4.6 live trial: `sh serve.sh 2>&1; echo x` ran with no lease while another
 /// worker held `serve`, because the redirect stayed in the segment and the pattern
 /// `sh serve.sh` no longer matched. Red: the leased command followed by each common
@@ -2571,6 +2615,7 @@ fn all_probes() -> Vec<Probe> {
         probe_model_is_recorded_per_session(),
         probe_lease_store_is_named(),
         probe_lease_needed_gate(),
+        probe_lease_take_on_the_line_counts(),
         probe_lease_sees_through_redirects(),
         probe_no_task_no_prompt(),
         probe_gate_verify(),
