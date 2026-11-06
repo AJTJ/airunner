@@ -1727,6 +1727,16 @@ mod tests {
         assert!(has("air close <id> --reason-file <proof>"));
         assert!(!has("bd close"));
         assert!(has("You need not merge main to stay batch-ready"));
+        // air-6el: no command line in the shipped text hardcodes `main` as the branch. Where a
+        // repo sets `base_branch`, a copied `git merge main` fails (two workers in the
+        // 2026-11-06 trial); the sequence says `<base branch>` and Every role says where to
+        // read the name.
+        assert!(
+            !has("git merge main"),
+            "a command line in roles.md hardcodes main"
+        );
+        assert!(has("git merge <base branch>"));
+        assert!(has("`air status` prints `base branch: <name>`"));
         assert!(has("commit forward and never amend"));
         // air-w18h: no fence; the roles say where to work. The harness claim stays absent
         // because it would promise a block that is not there (air-8gj).
