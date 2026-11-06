@@ -498,39 +498,130 @@ pub fn declared_from(v: &serde_json::Value) -> Vec<(String, Vec<String>)> {
         .unwrap_or_default()
 }
 
-/// One lease a command needs: which resource, the pattern that matched, the segment it matched.
+/// One lease a command needs: which resource, the pattern that matched, the segment it matched,
+/// and whether `air lease take <resource>` runs earlier on the same line, joined to the segment
+/// by `&&` all the way (`taken`). A take joined that way settles the lease before the command
+/// runs: a refused take stops the chain, so the command never runs without it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Need {
     pub resource: String,
     pub pattern: String,
     pub segment: String,
+    pub taken: bool,
 }
 
-/// Every declared lease this command needs, one entry per resource (the first match wins).
+/// Every declared lease this command needs, one entry per resource. The entry names the first
+/// matching segment that no earlier `air lease take <resource> &&` covers; when every matching
+/// segment is covered, it names the first and is `taken`. The 0.4.7 and 0.4.8 live trials and
+/// the 2026-11-06 round each refused `air lease take X --reason "..." && <cmd>` as a whole
+/// (air-643); the shape is now counted as held, and `;`, `||`, `|` or a newline between the
+/// take and the command, or a take for another resource, still is not.
 pub fn needs(declared: &[(String, Vec<String>)], cmd: &str) -> Vec<Need> {
-    let segs = segments(cmd);
+    let segs = joined_segments(cmd);
     declared
         .iter()
         .filter_map(|(resource, pats)| {
             pats.iter().find_map(|p| {
-                segs.iter().find(|s| pattern_matches(p, s)).map(|s| Need {
+                let matching: Vec<usize> = segs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, s))| pattern_matches(p, s))
+                    .map(|(i, _)| i)
+                    .collect();
+                let uncovered = matching
+                    .iter()
+                    .copied()
+                    .find(|&i| !taken_before(&segs, i, resource));
+                let (i, taken) = match (uncovered, matching.first()) {
+                    (Some(i), _) => (i, false),
+                    (None, Some(&i)) => (i, true),
+                    (None, None) => return None,
+                };
+                segs.get(i).map(|(_, s)| Need {
                     resource: resource.clone(),
                     pattern: p.clone(),
                     segment: s.clone(),
+                    taken,
                 })
             })
         })
         .collect()
 }
 
+/// Whether segment `i` is reached only through `air lease take <resource>`: every joiner from
+/// that take up to `i` is `&&`. A `;`, `||`, `|`, `&` or newline anywhere between breaks the
+/// chain, and so does reaching the start of the line.
+fn taken_before(segs: &[(Join, String)], i: usize, resource: &str) -> bool {
+    let mut j = i;
+    while let Some((join, _)) = segs.get(j) {
+        if *join != Join::And {
+            return false;
+        }
+        j = j.saturating_sub(1);
+        if segs
+            .get(j)
+            .is_some_and(|(_, s)| take_resource(s).as_deref() == Some(resource))
+        {
+            return true;
+        }
+        if j == 0 {
+            return false;
+        }
+    }
+    false
+}
+
+/// The resource an `air lease take` segment takes, with the command's own default when the
+/// line names none (`runtime`, `LeaseOp::Take` in main.rs). `None` for any other segment.
+/// A `--reason` value is skipped whether it is a separate word or `--reason=<why>`.
+pub fn take_resource(seg: &str) -> Option<String> {
+    let toks: Vec<&str> = seg.split_whitespace().collect();
+    let is_air = toks
+        .first()
+        .is_some_and(|t| t.rsplit('/').next() == Some("air"));
+    if !(is_air && toks.get(1) == Some(&"lease") && toks.get(2) == Some(&"take")) {
+        return None;
+    }
+    let mut i = 3usize;
+    while let Some(t) = toks.get(i) {
+        if *t == "--reason" {
+            i = i.saturating_add(2);
+        } else if t.starts_with('-') {
+            i = i.saturating_add(1);
+        } else {
+            return Some(t.trim_matches(['"', '\'']).to_string());
+        }
+    }
+    Some("runtime".to_string())
+}
+
+/// How a segment is joined to the one before it. `Seq` is `;`, a newline or a background `&`,
+/// all of which run the next segment whatever the previous one did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Join {
+    Start,
+    And,
+    Or,
+    Pipe,
+    Seq,
+}
+
 /// The simple commands in a shell line, wrappers and leading assignments stripped, whitespace
 /// collapsed. Splits on `&&`, `||`, `;`, `|`, `&` and newlines outside quotes; heredoc bodies
 /// are skipped.
 pub fn segments(cmd: &str) -> Vec<String> {
+    joined_segments(cmd).into_iter().map(|(_, s)| s).collect()
+}
+
+/// `segments`, each with the joiner that leads to it. An empty segment (a trailing `;`, a
+/// closing brace on its own) is dropped and the next one keeps its own joiner.
+pub fn joined_segments(cmd: &str) -> Vec<(Join, String)> {
     let chars: Vec<char> = cmd.chars().collect();
     let at = |j: usize| chars.get(j).copied();
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<(Join, String)> = Vec::new();
     let mut cur = String::new();
+    // The joiner that led to the segment being built; the next separator seen sets the next.
+    let mut join = Join::Start;
     let mut quote: Option<char> = None;
     let mut heredocs: Vec<String> = Vec::new();
     let mut i = 0usize;
@@ -587,7 +678,8 @@ pub fn segments(cmd: &str) -> Vec<String> {
                 continue;
             }
             '\n' => {
-                out.push(std::mem::take(&mut cur));
+                out.push((join, std::mem::take(&mut cur)));
+                join = Join::Seq;
                 i = i.saturating_add(1);
                 // Skip each pending heredoc body, up to and including its delimiter line.
                 for delim in std::mem::take(&mut heredocs) {
@@ -604,38 +696,46 @@ pub fn segments(cmd: &str) -> Vec<String> {
                 }
                 continue;
             }
-            ';' => out.push(std::mem::take(&mut cur)),
+            ';' => {
+                out.push((join, std::mem::take(&mut cur)));
+                join = Join::Seq;
+            }
             '|' => {
-                out.push(std::mem::take(&mut cur));
+                out.push((join, std::mem::take(&mut cur)));
                 if next == Some('|') {
+                    join = Join::Or;
                     i = i.saturating_add(1);
+                } else {
+                    join = Join::Pipe;
                 }
             }
             '&' => {
                 let prev = i.checked_sub(1).and_then(at);
                 if next == Some('&') {
-                    out.push(std::mem::take(&mut cur));
+                    out.push((join, std::mem::take(&mut cur)));
+                    join = Join::And;
                     i = i.saturating_add(1);
                 } else if matches!(prev, Some('>') | Some('<')) || next == Some('>') {
                     cur.push(c); // `2>&1`, `&>file`: a redirection, not a separator.
                 } else {
-                    out.push(std::mem::take(&mut cur));
+                    out.push((join, std::mem::take(&mut cur)));
+                    join = Join::Seq;
                 }
             }
             _ => cur.push(c),
         }
         i = i.saturating_add(1);
     }
-    out.push(cur);
+    out.push((join, cur));
     out.iter()
-        .map(|s| {
+        .map(|(j, s)| {
             let s = s
                 .trim()
                 .trim_start_matches(['(', '{', ' '])
                 .trim_end_matches([')', '}', ' ']);
-            strip_wrappers(&strip_redirects(s))
+            (*j, strip_wrappers(&strip_redirects(s)))
         })
-        .filter(|s| !s.is_empty())
+        .filter(|(_, s)| !s.is_empty())
         .collect()
 }
 
@@ -793,6 +893,9 @@ pub fn standing_now(
 
 /// What to tell a session that needs `need` and stands at `s`. None when it holds the lease.
 pub fn advice(need: &Need, s: &Standing, me: &str) -> Option<String> {
+    if need.taken {
+        return None;
+    }
     let r = &need.resource;
     let take = format!("air lease take {r} --reason \"<why>\"");
     let head = format!(
@@ -848,7 +951,8 @@ pub fn needs_cmd(repo: &Path, cmd: &str, json: bool) -> i32 {
             };
             serde_json::json!({
                 "resource": n.resource, "pattern": n.pattern, "segment": n.segment,
-                "held": s == Standing::Mine, "holder": holder, "advice": advice(&n, &s, &me),
+                "held": s == Standing::Mine, "holder": holder, "taken_on_line": n.taken,
+                "advice": advice(&n, &s, &me),
             })
         })
         .collect();
@@ -865,9 +969,12 @@ pub fn needs_cmd(repo: &Path, cmd: &str, json: bool) -> i32 {
             rows.iter()
                 .map(|r| {
                     let res = r["resource"].as_str().unwrap_or("");
-                    match r["advice"].as_str() {
-                        None => format!("needs {res}: held by you ({me}); run it"),
-                        Some(a) => format!("needs {res}: {a}"),
+                    match (r["advice"].as_str(), r["taken_on_line"].as_bool()) {
+                        (None, Some(true)) => format!(
+                            "needs {res}: taken earlier on this line by `air lease take {res}` and joined by `&&`; run it"
+                        ),
+                        (None, _) => format!("needs {res}: held by you ({me}); run it"),
+                        (Some(a), _) => format!("needs {res}: {a}"),
                     }
                 })
                 .collect::<Vec<_>>()
@@ -916,6 +1023,52 @@ mod tests {
         assert_eq!(
             segments("git commit -F- <<'EOF'\nadb shell\nEOF\ngit log"),
             vec!["git commit -F-", "git log"]
+        );
+    }
+
+    /// air-643: `air lease take X && <cmd>` counts as holding X for `<cmd>`; any other joiner
+    /// between them, or a take for another resource, does not.
+    #[test]
+    fn a_take_joined_by_and_before_the_command_counts_as_held() {
+        let decl = declared_from(&serde_json::json!({"serve": ["sh serve.sh"]}));
+        let taken = |cmd: &str| {
+            let n = needs(&decl, cmd);
+            assert_eq!(n.len(), 1, "{cmd}");
+            n[0].taken
+        };
+        assert!(taken("air lease take serve --reason \"x\" && sh serve.sh"));
+        assert!(taken(
+            "air lease take serve --reason=x && cd d && sh serve.sh > out.txt 2>&1"
+        ));
+        assert!(taken("(air lease take serve && sh serve.sh | tee log)"));
+        assert!(taken(
+            "/usr/local/bin/air lease take --reason x serve && sh serve.sh"
+        ));
+        assert!(!taken("air lease take serve --reason \"x\"; sh serve.sh"));
+        assert!(!taken("air lease take serve --reason \"x\" || sh serve.sh"));
+        assert!(!taken("air lease take serve --reason \"x\"\nsh serve.sh"));
+        assert!(!taken("air lease take serve && echo a; sh serve.sh"));
+        assert!(!taken(
+            "air lease take runtime --reason \"x\" && sh serve.sh"
+        ));
+        assert!(!taken("air lease take --reason \"x\" && sh serve.sh"));
+        assert!(!taken("sh serve.sh && air lease take serve"));
+        // Every matching segment has to be covered; the uncovered one is the one named.
+        assert!(!taken("air lease take serve && sh serve.sh; sh serve.sh"));
+        assert!(!taken("sh serve.sh"));
+        assert_eq!(take_resource("air lease take"), Some("runtime".to_string()));
+        assert_eq!(take_resource("air lease status"), None);
+        assert_eq!(
+            joined_segments("a && b || c | d; e\nf & g"),
+            vec![
+                (Join::Start, "a".to_string()),
+                (Join::And, "b".to_string()),
+                (Join::Or, "c".to_string()),
+                (Join::Pipe, "d".to_string()),
+                (Join::Seq, "e".to_string()),
+                (Join::Seq, "f".to_string()),
+                (Join::Seq, "g".to_string()),
+            ]
         );
     }
 

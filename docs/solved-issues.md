@@ -646,6 +646,17 @@ Fix: the gate distinguishes Missing, Untracked and Tracked. Commit 9024929 (air-
 Seen: 0.4.6 live trial, 2026-09-26, D4.
 Fix: redirections are stripped before matching. SURFACE `lease-sees-redirects`.
 
+**The lease gate refused `air lease take X --reason "..." && <cmd>` as a whole.**
+Seen: the 0.4.7 and 0.4.8 live trials, and again on 2026-11-06 (worker-1 and worker-2, two
+`lease-needed` refusals in `air audit`). Each worker read the advice and split the line, so the
+cost was one retry per worker, in three trials.
+Fix: a take of the same resource earlier on the line, joined to the command by `&&` all the way,
+counts as holding it: a refused take stops the chain before the command runs. A `;`, `||`, `|`
+or newline between them, a take for another resource, or a second uncovered run of the command
+is still refused (`crates/cli/src/cmd/lease.rs` `needs`, `taken_before`). SURFACE
+`lease-take-on-the-line` (air-643).
+Do not: refuse a line for what it reads before the take has run, when the take itself decides.
+
 **The peer warning dated nothing, so a live edit and a fortnight-old one read the same.**
 Seen: 2026-09-06.
 Fix: `is also journaled by w3 (14 d ago)`. Commit 1654748 (air-et0o).
@@ -1036,7 +1047,6 @@ landed Air change. The coordinator can check each.
   f9f6071): no incident detail beyond the subject line.
 - `air fleet stop` (air-1vri.1): an owner request; "one SendMessage per session" is not a
   recorded failure.
-- A lease refusal for `air lease take X && <cmd>` (CHANGELOG): no incident detail.
 - The `dated-cutoffs` doctor report: superseded by deleting the fallbacks (air-jsee); listed
   above under tests.
 - `stuck`, `cross-project-fence`, `gone-with-claim` history and `owner-decision-waiting`:
