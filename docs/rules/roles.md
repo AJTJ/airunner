@@ -21,6 +21,11 @@ session, `<project>-<name>`. The names are `worker-<N>`, `lane` and `coordinator
 name grants nothing, and an older `w<N>` worktree is a worker. Nobody works in the main
 checkout; `air status` warns about any launched session running there.
 
+A command in this file that says `<base branch>` means the branch the fleet lands onto, which
+is `main` unless the repo's `.claude/air.json` sets `base_branch`. `air status` prints
+`base branch: <name>` when it is not `main`, and every notice and refusal names it (`trunk
+moved to`); merging `main` on such a repo fails, because no `main` exists.
+
 Act only on your own project. Other fleets run on this machine, and `tmux ls` and `ListAgents`
 show their sessions next to yours. Their worktrees, tmux sessions and workers are never yours
 to kill, restart or tidy. Reading them and messaging them is fine. Air refuses `air --repo`
@@ -78,8 +83,8 @@ Without a lane:
 
     air claim <id> [--files a,b]
     … the work, every commit with a `Bead: <id>` trailer; the digest, if the repo asks for one
-    git merge main
-    air record verify -- <the repo's verify command>   # last, so the green contains main
+    git merge <base branch>
+    air record verify -- <the repo's verify command>   # last, so the green contains it
     air close <id> --reason-file <proof>
 
 With a lane, you run no verify of your own. The batch only forms if workers stop verifying one
@@ -189,14 +194,14 @@ for anything that is not part of the repo.
 
 A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has the
 worker deny list minus `air land`, and the Stop hook offers it no ready beads. It holds no bead,
-batching or between batches: `air batch cut` resets the lane's branch to main (or the base
-branch) before it merges, so work of the lane's own does not survive a cut.
+batching or between batches: `air batch cut` resets the lane's branch to the base branch
+before it merges, so work of the lane's own does not survive a cut.
 
-The lane's loop. Run `air batch cut` in your worktree. It resets your branch to `main` and
-merges every batch-ready branch at the sha `air status` lists, never a sha from a message,
-refusing while your tree is dirty or your head is a passing batch that could still land (one
-main moved past is re-cut), and drops and names a branch that conflicts with main or an earlier
-member. `--dry-run` merges nothing. Then run the test-state reset, if any, and `air record
+The lane's loop. Run `air batch cut` in your worktree. It resets your branch to the base
+branch and merges every batch-ready branch at the sha `air status` lists, never a sha from a
+message, refusing while your tree is dirty or your head is a passing batch that could still
+land (one main moved past is re-cut), and drops and names a branch that conflicts with main or
+an earlier member. `--dry-run` merges nothing. Then run the test-state reset, if any, and `air record
 verify -- <verify command>`. A target for your session in `.claude/air.json` runs it there on
 the pushed batch commit, the green recorded at your head; `--local` runs it here. Its worker
 resolves a dropped branch, not the lane. A red batch lands nothing; split it with `--without` or
