@@ -620,6 +620,13 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 | Start-up prompts | A fresh fleet, `air fleet up` on a trusted checkout | Every session registers in `air status` and no pane is on a prompt (air-z41) |
 | Base branch | `"base_branch": "trunk"` on a copy with no `main` branch, one bead | The cut, the green, the close and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
 
+The trial was last run with one pod per session on 2026-11-06 (air-fzl): the five sessions
+each on their own replica through this repository's `scripts/kube-exec-nth`, with every
+batch verified on the lane's pod and no two sessions on one machine. Five scenarios ended as
+expected, four never ran because the trial's coordinator session ended first, and the
+`--pull` addition found two defects, fixed the same night (air-32u, air-b50). The report is
+`.air/trial-report-2026-11-05-pods.md` in the main checkout.
+
 ## 10. TODO
 
 One row per item; a row is deleted when its work lands.
