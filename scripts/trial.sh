@@ -12,6 +12,13 @@
 # and every later trial at that path starts without the dialog (docs/research/folder-trust.md,
 # air-ekj). Nothing here answers that dialog: the launcher refuses, naming the fix, while the
 # copy is not trusted, and `make trial` is run again after it.
+#
+# TRIAL_PODS=1 puts the trial fleet on pods, one replica per session (air-1bn): the copy gets a
+# gitignored .claude/air.local.json of five targets, each through this checkout's
+# scripts/kube-exec-nth with its own replica number and its own path, built by
+# scripts/trial/pod-targets.py from the owner's own .claude/air.local.json in the main
+# checkout, after the first replica has answered `hostname`. Unset, the copy has no overlay
+# and every session runs locally.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -98,6 +105,22 @@ mv CLAUDE.md.new CLAUDE.md
 grep -q 'sh -n greet.sh' CLAUDE.md || { echo "trial: CLAUDE.md does not name the precheck"; exit 1; }
 git add -A
 git commit -qm "Adopt Air, pinned to the candidate, with the verification lane and the trial's config"
+
+# The pod overlay (air-1bn) is written after the adopt commit and hidden from the copy's git by
+# its own exclude file, so no landing in the copy can carry it; the owner's entries in the main
+# checkout supply the cluster values. The check runs first: a cluster that does not answer
+# stops here with its reason and no session started.
+if [ -n "${TRIAL_PODS:-}" ]; then
+    main_checkout=$(cd "$here" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
+    source="$main_checkout/.claude/air.local.json"
+    [ -f "$source" ] || {
+        echo "trial: TRIAL_PODS is set but $source does not exist; it supplies the cluster values (docs/rules/remote-verify.md, step 5)"
+        exit 1
+    }
+    python3 "$here/scripts/trial/pod-targets.py" "$source" "$here/scripts/kube-exec-nth" "$repo/.claude/air.local.json" || exit 1
+    mkdir -p .git/info
+    echo '.claude/air.local.json' >>.git/info/exclude
+fi
 
 # The scenario request is fixed, so nobody rewrites it per run. It is the coordinator's launch
 # prompt (air-fkb): told to read it from a file, the trial coordinator of 2026-11-05 had its
