@@ -207,3 +207,8 @@ repository's lane kept the path it verified at before, with the step 4 file alre
 Switching from VMs to replicas or back, or adding a session, edits `targets` only: the session
 names, the path convention and the proof stay the same, and the proof is a `runs` or
 `verify_runs` row whose hostname differs per session.
+
+This repository's own live trial (`docs/design.md` §9.1) runs its fleet the same way:
+`TRIAL_PODS=1 make trial` copies the five entries from the owner's overlay into the scratch
+copy's own gitignored overlay, each at `<path's parent>/trial/<session>`, once replica 1 has
+answered `hostname` (`scripts/trial/pod-targets.py`, air-1bn).

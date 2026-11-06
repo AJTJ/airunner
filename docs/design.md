@@ -627,7 +627,16 @@ each on their own replica through this repository's `scripts/kube-exec-nth`, wit
 batch verified on the lane's pod and no two sessions on one machine. Five scenarios ended as
 expected, four never ran because the trial's coordinator session ended first, and the
 `--pull` addition found two defects, fixed the same night (air-32u, air-b50). The report is
-`.air/trial-report-2026-11-05-pods.md` in the main checkout.
+`.air/trial-report-2026-11-05-pods.md` in the main checkout. That copy was built by hand;
+`TRIAL_PODS=1 make trial` builds it (air-1bn): after the adopt commit,
+`scripts/trial/pod-targets.py` reads the owner's own `.claude/air.local.json` in the main
+checkout, takes the kubeconfig, namespace, deployment, container and `env PATH=` tail from
+its first kube-exec-nth entry, runs `hostname` on replica 1 through this checkout's
+`scripts/kube-exec-nth` and stops with kubectl's reason if that fails, then writes the copy's
+`.claude/air.local.json` with the five targets (coordinator 1, lane 2, worker-N N+2, each at
+`<the owner's path's parent>/trial/<session>`), hidden from the copy's git by its
+`.git/info/exclude` so no landing there can carry it. Unset, the copy has no overlay and runs
+locally. Removed when the trial no longer runs on pods.
 
 ## 10. TODO
 
