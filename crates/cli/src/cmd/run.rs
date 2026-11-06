@@ -592,7 +592,14 @@ pub fn prepare_target(repo: &Path, session: &str, sha: &str, t: &Target) -> Opti
     if let Some(code) = step("push", push) {
         return Some(code);
     }
-    let checkout = format!("cd {path} && git checkout -q --detach {sha}");
+    // The target holds only commits (air-32u): what the last command wrote there is removed
+    // before the checkout, because git refuses to overwrite an untracked file that the commit
+    // now tracks, and the lane's verify or a precheck then records nothing. `-d` takes
+    // directories with it; no `-x`, so ignored files (a build directory, the private files
+    // the setup guide has the adopter copy there) stay. `-f` on the checkout covers a tracked
+    // file the command modified the same way. Pulled results are listed after the command
+    // in this same run, so nothing a run wants back is lost; what goes is the previous run's.
+    let checkout = format!("cd {path} && git clean -qfd && git checkout -q -f --detach {sha}");
     step("checkout", t.command(&checkout).status())
 }
 

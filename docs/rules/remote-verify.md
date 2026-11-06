@@ -63,8 +63,9 @@ step 5.
 ## 4. Gitignored files the verify reads
 
 A push carries commits only, so a gitignored file the check reads is absent on the machine.
-Copy it once into the checkout path there; a detached checkout leaves an ignored untracked
-file alone, so one copy survives every run. For this repository that file is
+Copy it once into the checkout path there; every run removes what the previous command left
+untracked in that checkout (`git clean -qfd`, air-32u) and leaves an ignored file alone, so
+one copy survives every run and a result file does not. For this repository that file is
 `private/adopters.md`, which `air adopter-check` refuses to run without (air-jsz).
 
 ```
