@@ -436,7 +436,7 @@ is repeated unchanged.
 
 | Notice | Queued by | To |
 |---|---|---|
-| beads are ready | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
+| beads are ready (a count and `bd ready`, never ids: air-bcg) | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
 | batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
 | batch green, batch red | `air record` at a batch head | each member; a green names only beads it covers that the member still holds |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |

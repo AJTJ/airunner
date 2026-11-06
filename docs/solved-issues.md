@@ -519,6 +519,16 @@ Seen: 0.4.10 live trial.
 Fix: the notice and the peer-held refusal say the list is a snapshot and point at `bd ready`.
 Commit ced8a06 (air-0blv).
 
+**The ready notice still listed beads a peer already held, and workers claimed from it.**
+Seen: 2026-11-06 trial: worker-1 lost three claim races and worker-2 two on ids the notice
+carried, with the snapshot sentence above it; each refusal was clear and cost one call.
+Fix: the notice carries a count and `bd ready`, never ids (`crates/cli/src/cmd/fanout.rs`
+`beads_ready_text`, air-bcg); `bd ready` answers in about 0.12 s. The per-recipient rotation
+of the list (the entry two above) went with the list, since there is nothing to rotate.
+Do not: put a bead id in a notice that is read later than it is sent. Watch: refused claims on
+the first bead of `bd ready` in `air audit`; if a round brings the 0.4.9 race back, the spread
+returns as a start position, not as a list.
+
 **Only the coordinator had a channel, so the lane and workers learned things on their 5-minute wakes.**
 Seen: 2026-09-26 live trial: a bead waited minutes between done and closed; the coordinator
 waited about 4 minutes after wave 1 landed; a capture sat until the next wake.
