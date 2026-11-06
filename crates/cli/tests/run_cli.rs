@@ -737,8 +737,10 @@ exec "$@"
                 );
             }
 
-            // A sender that exits with a code sent nothing it could not read: tar exits 0 on an
-            // empty stream, so the code is the only sign and it is reported.
+            // A sender that exits with a code sent nothing it could not read. bsdtar (macOS)
+            // exits 0 on an empty stream, so the code is the only sign and it is reported; GNU
+            // tar (Linux, the pod) refuses the empty stream itself. Either way nothing is
+            // recorded as pulled.
             let repo = scratch_repo();
             exec_target(repo.path(), &["--tar", "empty2"]);
             let (code, out, err) = air_run_args(
@@ -753,8 +755,9 @@ exec "$@"
             assert!(row.pulled.is_empty(), "{err}");
             assert_eq!(row.pulled_bytes, 0);
             assert!(
-                err.contains("exited 2") && !err.contains("pulled results"),
-                "the target's tar exit is named: {err}"
+                (err.contains("exited 2") || err.contains("the tar stream failed"))
+                    && !err.contains("pulled results"),
+                "the failure is reported, by the sender's code or the unpack: {err}"
             );
 
             // A stream cut inside a member fails on the unpack, whatever the sender said.

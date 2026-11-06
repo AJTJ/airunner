@@ -257,7 +257,7 @@ Fix: the unpack is the verdict, as `kubectl cp`'s is: a sender killed by SIGPIPE
 unpack (signal 13, or exit 141 from a shell) is the normal end, since the local tar stops at the
 end-of-archive marker and closes the pipe while the prefix writes the padding; a sender that
 exits with any other code is the target's `tar` failing and is reported with the code, because
-tar exits 0 on an empty stream (`crates/cli/src/cmd/run.rs` `pull::sender_failure`; air-b50,
+bsdtar exits 0 on an empty stream (GNU tar refuses one) (`crates/cli/src/cmd/run.rs` `pull::sender_failure`; air-b50,
 from `docs/research/pull-over-exec.md`). Tests: `a_sender_killed_by_sigpipe_is_not_a_failure_and_an_exit_code_is`,
 `the_unpack_is_the_verdict_and_a_sender_dying_of_sigpipe_is_the_normal_end` (a sender exiting
 141, one dying of signal 13, one exiting 2 with nothing sent, one stream cut mid-member).

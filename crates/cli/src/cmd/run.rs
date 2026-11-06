@@ -518,8 +518,8 @@ done"#;
     /// SIGPIPE (signal 13, or exit 141 from a shell) is the normal end, since the local tar
     /// stops at the end-of-archive marker and closes the pipe while the prefix is still
     /// writing the padding. Any other non-zero exit is the target's own `tar` failing, which
-    /// an empty stream would otherwise hide because tar exits 0 on one; it is returned as the
-    /// code. In the pod trial every pull through `kubectl exec` was reported failed and
+    /// an empty stream would otherwise hide where the local tar is bsdtar, which exits 0 on
+    /// one (GNU tar refuses it); it is returned as the code. In the pod trial every pull through `kubectl exec` was reported failed and
     /// recorded empty on the 141 alone. Removal: when the pull is no longer a tar stream.
     pub fn sender_failure(sent: &std::io::Result<ExitStatus>) -> Option<i32> {
         match sent {
