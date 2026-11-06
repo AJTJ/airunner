@@ -152,7 +152,7 @@ pub(super) fn view(
 /// sat idle; every trial had hidden it by filing beads after the workers joined.
 ///
 /// Red: the channel's first tick over a non-empty set tells `busy`, already without a claim;
-/// `idle` joining later, with the set unchanged, is told it, rotated by its place. Green: a
+/// `idle` joining later, with the set unchanged, is told it. Green: a
 /// repeat tells nobody, the worker holding a claim and the lane are never told, and a worker
 /// whose claim ended is told only a set it was not already told.
 pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
@@ -174,7 +174,7 @@ pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
         };
         let set = ["zz-1".to_string(), "zz-2".to_string()];
         let tick =
-            |w: &[WorkerView], at: &str| fan_out_ready(&l, "coordinator", &snap(w), &set, &[], at);
+            |w: &[WorkerView], at: &str| fan_out_ready(&l, "coordinator", &snap(w), &set, at);
         let first = tick(&early, "2026-09-26T00:00:00Z");
         let joined = tick(&all, "2026-09-26T00:00:30Z");
         let again = tick(&all, "2026-09-26T00:01:00Z");
@@ -190,9 +190,9 @@ pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
             .map_err(|e| e.to_string())?;
         let red = first == ["busy"]
             && joined == ["idle"]
-            && rows.iter().any(|d| {
-                d.to_worker == "idle" && d.content.starts_with("beads are ready: zz-2 zz-1 (")
-            });
+            && rows
+                .iter()
+                .any(|d| d.to_worker == "idle" && d.content.starts_with("2 beads are claimable;"));
         let green = again.is_empty()
             && back.is_empty()
             && rows.len() == 2
@@ -214,7 +214,7 @@ pub(super) fn probe_a_joining_worker_hears_the_ready_set() -> Probe {
 /// nobody else.
 ///
 /// Red: after a seeding tick over an empty set, a tick where the set gains beads queues one
-/// row each for `idle` and `busy` (mid-turn, holding nothing), naming both beads. Green: the
+/// row each for `idle` and `busy` (mid-turn, holding nothing), with the count. Green: the
 /// worker holding a claim and the lane get nothing; the seeding tick, a repeat of the same
 /// set, and a set that only shrank queue nothing more. (A first tick over a non-empty set does
 /// tell: that is air-oerm's probe.)
@@ -234,8 +234,7 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
             ..Default::default()
         };
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
-        let tick =
-            |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), &[], at);
+        let tick = |set: &[&str], at: &str| fan_out_ready(&l, "coordinator", &s, &ids(set), at);
         let seeded = tick(&[], "2026-09-26T00:00:00Z");
         let grew = tick(&["zz-1", "zz-2"], "2026-09-26T00:00:30Z");
         let same = tick(&["zz-1", "zz-2"], "2026-09-26T00:01:00Z");
@@ -243,16 +242,14 @@ pub(super) fn probe_new_beads_reach_idle_workers_once() -> Probe {
         let rows = l
             .deliveries_since("2026-09-26T00:00:00Z")
             .map_err(|e| e.to_string())?;
-        // Recipients are told in name order, and the second reads the same beads rotated
-        // by one (0.4.9 trial), so the two rows start with the two orders.
+        // Both rows carry the count and `bd ready`, and neither names a bead (air-bcg).
         let red = grew == ["busy", "idle"]
             && rows.len() == 2
-            && rows
-                .iter()
-                .any(|d| d.content.starts_with("beads are ready: zz-1 zz-2."))
-            && rows
-                .iter()
-                .any(|d| d.content.starts_with("beads are ready: zz-2 zz-1 ("));
+            && rows.iter().all(|d| {
+                d.content
+                    .starts_with("2 beads are claimable; run `bd ready`")
+            })
+            && !rows.iter().any(|d| d.content.contains("zz-"));
         let green = seeded.is_empty()
             && same.is_empty()
             && shrank.is_empty()
