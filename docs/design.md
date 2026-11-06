@@ -602,9 +602,11 @@ in `crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner on
 the auto-mode classifier and waited hours, air-fzl). `TRIAL_DIR` defaults to one fixed path,
 `$TMPDIR/air-trial`, which the owner trusts once by running `claude` there after the first
 `make trial`; every later copy at that path starts without the dialog (air-ekj). The
-coordinator files the scenarios' beads. When every bead is closed it writes
-`.air/trial-report.md`, and an observer checks it against the events, git and beads and adds
-the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
+coordinator files the scenarios' beads, and the base-branch scenario's rename and key are its
+own edits in the scratch copy's main checkout, not a step for the owner (air-3hw: the
+2026-11-06 trial stopped for hours at that row waiting to be told). When every bead is closed
+it writes `.air/trial-report.md`, and an observer checks it against the events, git and beads
+and adds the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
 not fixed during the trial. The release is tagged only if every scenario ends as expected.
 
 | Scenario | Set up | Expected |
@@ -618,7 +620,7 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
 | Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
 | Start-up prompts | A fresh fleet, `air fleet up` on a trusted checkout | Every session registers in `air status` and no pane is on a prompt (air-z41) |
-| Base branch | `"base_branch": "trunk"` on a copy with no `main` branch, one bead | The cut, the green, the close and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
+| Base branch | The coordinator renames the copy's `main` to `trunk` and sets `"base_branch": "trunk"` itself (air-3hw), one bead | The cut, the green, the close and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
 
 The trial was last run with one pod per session on 2026-11-06 (air-fzl): the five sessions
 each on their own replica through this repository's `scripts/kube-exec-nth`, with every
