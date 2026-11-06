@@ -323,7 +323,9 @@ exec "$@"
                 "the push went over ssh: {log}"
             );
             assert!(
-                log.contains(&format!("git checkout -q --detach {sha}")),
+                log.contains(&format!(
+                    "git clean -qfd && git checkout -q -f --detach {sha}"
+                )),
                 "{log}"
             );
             assert!(
@@ -622,7 +624,7 @@ exec "$@"
     /// (air-opq.4).
     pub mod pull {
         use super::record::split;
-        use super::skeleton::{air_run_args, scratch_repo, ssh_log, ssh_target};
+        use super::skeleton::{air_run_args, exec_target, git, scratch_repo, ssh_log, ssh_target};
 
         const WRITE: &str = "mkdir -p results other; printf hello > results/a.txt; \
                              printf nope > results/b.log; printf x > other/c.txt; exit 3";
@@ -729,6 +731,65 @@ exec "$@"
             );
         }
 
+        /// air-32u: a run's untracked output stayed in the target checkout, and git refused
+        /// the next checkout of a commit that tracks it, so the precheck or the lane's verify
+        /// recorded nothing (the pod trial, 2026-11-06). The target holds only commits: what
+        /// the last command wrote goes before the checkout, a tracked file it modified is
+        /// overwritten, and ignored files stay.
+        #[test]
+        fn a_runs_output_on_the_target_does_not_block_the_next_checkout_and_ignored_files_stay() {
+            let repo = scratch_repo();
+            std::fs::write(repo.path().join(".gitignore"), "cache/\n").unwrap();
+            git(repo.path(), &["add", ".gitignore"]);
+            git(repo.path(), &["commit", "-q", "-m", "ignore cache"]);
+            let (target, _) = exec_target(repo.path(), &["-i", "pod"]);
+            // Run one writes a result, scribbles on a tracked file and leaves an ignored file.
+            let (code, _, err) = air_run_args(
+                repo.path(),
+                &["--pull", "out.txt"],
+                &[
+                    "sh",
+                    "-c",
+                    "echo hi > out.txt; echo scribble >> note; mkdir -p cache; echo c > cache/x",
+                ],
+                &[],
+                true,
+            );
+            assert_eq!(code, 0, "{err}");
+            assert_eq!(
+                std::fs::read_to_string(repo.path().join("out.txt")).unwrap(),
+                "hi\n"
+            );
+            // The session commits the pulled result, as the trial's worker did.
+            git(repo.path(), &["add", "out.txt"]);
+            git(repo.path(), &["commit", "-q", "-m", "result"]);
+            let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+            // Before the fix: "The following untracked working tree files would be
+            // overwritten by checkout" and `air run: checkout failed (exit 1)`.
+            let (code, out, err) = air_run_args(
+                repo.path(),
+                &[],
+                &[
+                    "sh",
+                    "-c",
+                    "git rev-parse HEAD; cat out.txt; git status --porcelain; \
+                     test -f cache/x && echo kept",
+                ],
+                &[],
+                true,
+            );
+            assert_eq!(code, 0, "{err}");
+            assert!(!err.contains("checkout failed"), "{err}");
+            let (printed, row) = split(&out);
+            assert_eq!(
+                printed,
+                format!("{sha}\nhi\nkept\n"),
+                "the commit is checked out, the tree is clean, the ignored file stayed"
+            );
+            assert_eq!(row.exit_code, 0);
+            assert_eq!(git(&target, &["rev-parse", "HEAD"]), sha);
+        }
+
         #[test]
         fn a_local_run_pulls_nothing_because_the_files_are_here() {
             let repo = scratch_repo();
@@ -786,7 +847,9 @@ exec "$@"
             );
             let log = ssh_log(repo.path());
             assert!(
-                log.contains(&format!("git checkout -q --detach {sha}")),
+                log.contains(&format!(
+                    "git clean -qfd && git checkout -q -f --detach {sha}"
+                )),
                 "{log}"
             );
             assert!(

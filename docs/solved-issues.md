@@ -266,6 +266,19 @@ alone), and warns once if git tracks the overlay.
 Do not: write the overlay in a worktree, which is never read; commit the overlay, which lands
 one laptop's values; expect a nested merge, since a key replaces the committed key whole.
 
+**A run's output stayed in the target checkout and blocked the next checkout there.**
+Seen: the pod trial, 2026-11-06 (air-fzl). A worker's `air run --pull` wrote `out-1.txt` on its
+pod, the worker committed the pulled file, and its `air record precheck` for that commit
+failed at the checkout step on the pod: git refused to overwrite the untracked file the
+commit now tracked, and nothing was recorded. Under a precheck gate the bead was stuck; with
+no precheck, the lane's verify of any batch holding that commit would fail the same way.
+Fix: `prepare_target` runs `git clean -qfd` and a forced detached checkout before the command
+(`crates/cli/src/cmd/run.rs`, air-32u), so the target holds only commits; no `-x`, so ignored
+files (a build directory, the gitignored files the setup guide has the adopter copy there)
+stay. The test in `run_cli.rs` writes a result, commits it, and runs again at that commit.
+Do not: keep unignored, untracked state on a target between runs, which is removed; put the
+gitignored files the check reads anywhere but under an ignore rule, which is what keeps them.
+
 **`idle-without-claim` offered the lane 58 beads 945 s into a batch verify.**
 Seen: an adopter's lane, 2026-09-06.
 Fix: the condition is silent while the worker's own verify runs. Commit 8b1b7e1 (air-t6ap).
