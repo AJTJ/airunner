@@ -251,6 +251,18 @@ session gets the target and why (air-mwj).
 Do not: give a target to a session that has no allow rule for the line and expect it to run;
 do not pipe or chain the line, which takes it back to the classifier.
 
+**Every `--pull` through `kubectl exec` was reported failed and recorded empty though the file arrived.**
+Seen: 2026-11-06, the pod trial (air-fzl), both pulls; reproduced from a worktree.
+Fix: the unpack is the verdict, as `kubectl cp`'s is: a sender killed by SIGPIPE after a good
+unpack (signal 13, or exit 141 from a shell) is the normal end, since the local tar stops at the
+end-of-archive marker and closes the pipe while the prefix writes the padding; a sender that
+exits with any other code is the target's `tar` failing and is reported with the code, because
+tar exits 0 on an empty stream (`crates/cli/src/cmd/run.rs` `pull::sender_failure`; air-b50,
+from `docs/research/pull-over-exec.md`). Tests: `a_sender_killed_by_sigpipe_is_not_a_failure_and_an_exit_code_is`,
+`the_unpack_is_the_verdict_and_a_sender_dying_of_sigpipe_is_the_normal_end` (a sender exiting
+141, one dying of signal 13, one exiting 2 with nothing sent, one stream cut mid-member).
+Do not: read a transport's exit as a pipeline's verdict after the receiver has finished.
+
 **A `targets` change was a landing, and the lane verified that very batch on the old target.**
 Seen: 2026-11-05, twice. The lane's first pod entry (air-tdh) landed in a batch the lane had to
 record `--local`, because the installed binary read `targets` from the main checkout and the
