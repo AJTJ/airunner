@@ -839,8 +839,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "beads-ready-fanout",
         class: "nudge",
-        what: "When the claimable ready set gains a bead, Air queues \"beads are ready: <ids>\" \
-               for every worker with a live session holding no claim, whatever its state; a \
+        what: "When the claimable ready set gains a bead, Air queues \"<n> bead(s) are \
+               claimable; run `bd ready`\" (a count, never the ids, air-bcg) for every worker \
+               with a live session holding no claim, whatever its state; a \
                worker newly without a claim (joined, or its claim ended) is told a non-empty \
                set as it stands (air-oerm). No worker hears the same set twice; never the lane \
                or a worker holding a claim.",
