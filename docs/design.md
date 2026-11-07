@@ -86,8 +86,8 @@ found on, is answered by hand: by the owner in the pane, or by the coordinator f
 session with `tmux send-keys` once the owner has said yes to that (air-d73); the coordinator's
 launcher allows `Bash(tmux send-keys *)` on its `--settings`, since auto mode's classifier
 refused that keystroke three times in two days (air-yux). For the trial fleet, `make trial`
-sends that Enter to each pane itself (§9.1, air-fkb). Folder trust is never answered by
-anyone but the owner. `air coordinator -- "<text>"` starts the coordinator on `<text>` as its
+sends that Enter to each pane itself (§9.1, air-fkb). Folder trust is answered by the owner,
+except for the trial's scratch copy, which `make trial` marks trusted itself (§9.1, air-zau). `air coordinator -- "<text>"` starts the coordinator on `<text>` as its
 first prompt, placed first in argv like a worker's task prompt (air-fkb). On a Mac the session runs as the child of `caffeinate
 -i`, so the machine does not idle-sleep under a long command and may once the fleet is idle;
 `air status` prints an idle-sleep setting under ten minutes (air-1ye).
@@ -600,8 +600,16 @@ pane with `tmux send-keys Enter` (`scripts/trial/answer-prompts.sh`, tested agai
 in `crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner once it starts (air-fkb: the
 2026-11-05 trial's coordinator, told to read the request from a file, had the read refused by
 the auto-mode classifier and waited hours, air-fzl). `TRIAL_DIR` defaults to one fixed path,
-`$TMPDIR/air-trial`, which the owner trusts once by running `claude` there after the first
-`make trial`; every later copy at that path starts without the dialog (air-ekj). The
+`$TMPDIR/air-trial`, and `make trial` marks the copy trusted itself: `scripts/trial/trust-copy.py`
+writes the one key Claude Code reads, `projects[<copy>].hasTrustDialogAccepted`, under the
+path's physical form, through a temp file and a rename, with every other key in `~/.claude.json`
+as it was (tested in `crates/cli/tests/trial_trust_copy.rs`; the launcher's refusal before and
+not after is pinned in `install_and_launch.rs`). The trial stopped on that dialog three times
+on 2026-11-05 and 2026-11-06, hours each, and the owner ruled on 2026-11-07 that it needs no step
+at all (air-zau; the research had recommended trusting the path once per machine, air-ekj). The
+launcher still refuses an untrusted repository and never writes the key; the script writes it
+for a directory it has just built from Air's own example. Removed when Claude Code offers a
+session-level flag that pre-trusts a directory. The
 coordinator files the scenarios' beads, and the base-branch scenario's rename and key are its
 own edits in the scratch copy's main checkout, not a step for the owner (air-3hw: the
 2026-11-06 trial stopped for hours at that row waiting to be told). When every bead is closed
@@ -679,7 +687,7 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 | `git merge-tree --write-tree` for the conflict check; git 2.38 or later. | It merges without touching the index or the working tree. | https://git-scm.com/docs/git-merge-tree (2026-09-14) |
 | The remote runner's push over a command prefix (`kubectl exec`) is git's `ext::` remote helper, `git -c protocol.ext.allow=always push 'ext::<prefix> %S <path>'`, not a bundle piped through the prefix. | One exec per push with git's own negotiation; a bundle needs a second exec for the far tip, a temp file on the target (`git fetch /dev/stdin` fails), and a special case for nothing to send. Equal cost on a local stand-in, 0.13 s to 0.15 s cold for 100 commits (Apple M5, 2026-11-02, air-opq.2). | `git help remote-ext` (git 2.54.0, 2026-11-02); the measurement on air-opq.2 |
 | One `base_branch` key, read by one function, for the branch the fleet lands onto; the session named `main` keeps its name. | The research recommended no key (git's local `main` already supplies the base, and a key touches every gate: 15 branch-sense sites in 9 files). The owner reversed that on 2026-11-03: renaming a feature branch to local `main` is a hack and a hard-coded name makes no sense either. The research's §3 is the shape that was built. | `docs/research/base-branch.md` (air-zu3, 2026-11-02); owner ruling 2026-11-03 and the build, air-h7l |
-| Folder trust stays the owner's answer; a trial copy at a fixed `TRIAL_DIR` is trusted once. | Claude Code has no flag or setting that pre-accepts trust for a session (the settings reference searched whole), only the hand-set `hasTrustDialogAccepted` key, which its own docs tell an agent not to set on the user's behalf; parent-directory trust stops at a nested repository (2.1.232). Trust is keyed by path, so a fixed `TRIAL_DIR` the owner trusted once covers every later copy. Nothing built. | `docs/research/folder-trust.md` (air-ekj, 2026-11-05) |
+| Folder trust stays the owner's answer for a repository; the trial's scratch copy is marked trusted by `make trial` itself. | Claude Code has no flag or setting that pre-accepts trust for a session (the settings reference searched whole), only the hand-set `hasTrustDialogAccepted` key, which its own docs tell an agent not to set on the user's behalf; parent-directory trust stops at a nested repository (2.1.232). The research recommended trusting a fixed `TRIAL_DIR` once per machine and building nothing; after the dialog stopped the trial three times, the owner ruled on 2026-11-07 that the trial needs no step, and the research's option D was built narrowed to the trial script and one path (`scripts/trial/trust-copy.py`). The launcher never writes the key. | `docs/research/folder-trust.md` (air-ekj, 2026-11-05); owner ruling 2026-11-07, air-zau |
 | The remote runner stays the lane's verify transport and is not extended for workers. | Every product that gives an agent a machine puts the agent's process on it (Claude Code cloud and self-hosted sessions, dev containers, Cursor, Codex, Copilot); shipping a commit and a command to a machine and recording the verdict at the commit is the CI shape, which is right for the lane's green and wrong for a session that wants to work there. Six of the runner's eleven parts are friction a session on the machine would not have; the two trial defects are that friction. The shape to try for workers is one fleet on one pod, with no Air change. | `docs/research/remote-runner.md` (air-9ao, 2026-11-06) |
 | `--pull` stays a tar stream over the prefix, judged by the receiving tar; a sender killed by SIGPIPE after a good unpack is the normal end, and a sender's non-zero exit code is still a failure. | The idiom's verdict is the receiver's: `kubectl cp` returns only its local unpack's error and never collects the exec's (cp.go:361, :403-406), the shell pipeline's status is the last command's, and GNU tar 1.24 reverted the one release that treated a SIGPIPE death as an error. The 141 is the local `kubectl` (Go: a write to a broken stdout exits with SIGPIPE) after bsdtar stopped at the end-of-archive marker with 6 KiB of record padding still in flight, measured. rsync needs rsync on every target and a wrapper; not for result files. Nothing built beyond air-b50's lines. | `docs/research/pull-over-exec.md` (air-uyn, 2026-11-06) |
 | No notice filter and no feed pane for the coordinator yet; its chat keeps every notice. | In the one measured day no no-reply notice reached the coordinator, so the cost is unmeasured. The next step is to log every channel push as an event and count no-tool coordinator turns for one round; the fix, if material, is two lines in the fan-out, not a per-role filter table. | `docs/research/coordinator-notices.md` (air-ank, 2026-11-02) |
