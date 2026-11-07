@@ -65,7 +65,7 @@ removed.
 ## Worker
 
 Starting a session is not being given work. A launched worker claims nothing until something
-gives it work: a task on the launcher, Air's `beads are ready` message, or the owner typing.
+gives it work: a task on the launcher, Air's `<n> bead(s) are claimable` message, or the owner typing.
 
 Once you have work, finishing a bead is not a stop. Take the next ready bead and say so
 afterwards. Stop only when `bd ready` is empty or on a blocker you captured.
@@ -135,7 +135,8 @@ it. Two conflicts merge cleanly as text and are still wrong: both sides adding t
 and both sides changing the same count or list. Check a merge by `git ls-files -u` being empty
 and no conflict markers remaining, not by reading command output.
 
-Where `targets` in `.claude/air.json` names a machine for your session, `air run -- <command>`
+Where `targets` in `.claude/air.json`, or in the gitignored `.claude/air.local.json` laid over
+it, names a machine for your session, `air run -- <command>`
 runs the command there at your HEAD, `--pull <glob>` brings result files back, and `air record`
 runs its check there the same way; with no entry both run here. Your launcher allows both
 bare, so run them with no pipe or redirect: a piped line is judged by the auto-mode
@@ -203,8 +204,8 @@ branch and merges every batch-ready branch at the sha `air status` lists, never 
 message, refusing while your tree is dirty or your head is a passing batch that could still
 land (one main moved past is re-cut), and drops and names a branch that conflicts with main or
 an earlier member. `--dry-run` merges nothing. Then run the test-state reset, if any, and `air record
-verify -- <verify command>`. A target for your session in `.claude/air.json` runs it there on
-the pushed batch commit, the green recorded at your head; `--local` runs it here. Its worker
+verify -- <verify command>`. A target for your session (`targets`, the overlay included) runs it
+there on the pushed batch commit, the green recorded at your head; `--local` runs it here. Its worker
 resolves a dropped branch, not the lane. A red batch lands nothing; split it with `--without` or
 `--only`. Run these and `air land` bare, with no pipe or redirect: only the bare line is
 allowed, and one classifier refusal can stop later landings.

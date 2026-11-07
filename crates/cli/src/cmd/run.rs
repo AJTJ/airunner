@@ -1,7 +1,7 @@
 //! `air run -- <command…>`: run a command on the calling session's target, or locally.
 //!
-//! A target is a machine the session owns, named in `.claude/air.json` under `"targets"`,
-//! keyed by session name. It is an argv prefix that runs a command on the machine with stdin
+//! A target is a machine the session owns, named under `"targets"` in `.claude/air.json` or
+//! in the gitignored `.claude/air.local.json` laid over it (air-aei), keyed by session name. It is an argv prefix that runs a command on the machine with stdin
 //! and stdout attached, and the repository directory there:
 //!
 //! ```json

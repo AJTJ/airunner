@@ -62,7 +62,8 @@ recommend, so the labels would carry facts the owner only has to read.
 ## Worked example
 
 Asked "how much of a technical lift would it be to give each harness its own pod from what
-we have set up currently?", on 2026-11-05, with the lane verifying this repo on one dev pod:
+we have set up currently?", on 2026-11-05, with the lane verifying this repo on one dev pod
+(before workers were allowed `air run`, air-nyi; kept for its shape, not its facts):
 
 > Small on Air's side, awkward on the cluster's side.
 >

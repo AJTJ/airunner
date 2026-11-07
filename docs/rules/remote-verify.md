@@ -18,9 +18,10 @@ never know where the check ran (`crates/cli/src/cmd/run.rs`, the module doc).
 
 ## 2. Which session gets the target
 
-Give it to the lane. Under `"verify_lane": true` the lane is the only session that runs the
-verify, so one entry, `targets.lane`, moves every batch's check; a worker runs nothing it
-would need a machine for.
+Start with the lane. Under `"verify_lane": true` the lane is the only session that runs the
+verify, so one entry, `targets.lane`, moves every batch's check. A worker gets an entry only
+when its bead runs something the local machine cannot (`air run`, `--pull`), and then every
+session gets its own machine; section 9 has that shape.
 
 The fact behind that, stated plainly: every Bash line a launched session runs in auto mode
 goes through Claude Code's permission classifier, which reads the conversation as context and
@@ -29,9 +30,9 @@ settings matches the bare line first. On 2026-11-04 a worker's direct `kubectl e
 refused (air-kzt); on 2026-11-05 a worker's bare `air run -- true` against a pod was refused
 twice, the second time with no reason given (air-tdh). The lane never met the classifier,
 because its `air record` line is on its allow list
-(`crates/cli/src/cmd/launch.rs:417` `lane_allow`, from air-8cdh and air-b1h8). Since
+(`crates/cli/src/cmd/launch.rs:464` `lane_allow`, from air-8cdh and air-b1h8). Since
 air-nyi (2026-11-05) `air worker` passes the same kind of rule for `air run *` and `air record
-*` (`launch.rs:453` `worker_allow`), so a worker's bare line resolves before the classifier
+*` (`launch.rs:500` `worker_allow`), so a worker's bare line resolves before the classifier
 too; a session launched before that needs a relaunch to have it. Two rules follow from the
 mechanism: the line must be bare, since a pipe or redirect takes the whole line back to the
 classifier (air-b1h8); and a session Air did not launch has no such rule, so a target for it
@@ -115,7 +116,7 @@ to put it there (`env` execs the `sh -c` and the push's `git-receive-pack` alike
 
 ## 6. The first run
 
-The lane's first batch after the entry lands is cold: the toolchain may download, the
+The lane's first batch after the entry is written is cold: the toolchain may download, the
 dependencies compile from nothing, and the run's duration is that build plus the check. On a
 96-core machine this repository's cold compile took about 71 s and the warm verify 46 s
 against 118 s on the laptop (air-tdh, 2026-11-05). The row records where it ran:

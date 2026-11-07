@@ -40,7 +40,9 @@ Not in this folder, because they are generated per machine:
 - `.beads/` is bd's configuration, created by `bd init` in server mode. The server's port is
   in `.beads/dolt-server.port`, which is not committed. Air starts the server when it is not
   running (`air bd-server up`, and before any session starts).
-- `.claude/skills/air-*` are three skills `air install` writes.
+
+Also not in this folder: `.claude/skills/air-*`, the three skills `air install` writes, which a
+real repo commits beside `.claude/settings.json` and `.mcp.json`.
 
 ## Try it
 
