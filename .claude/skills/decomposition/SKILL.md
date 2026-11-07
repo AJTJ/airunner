@@ -18,11 +18,11 @@ under "Additional resources".
 | Metis | Air | Notes (Air's, not Metis's) |
 |---|---|---|
 | Vision | **feature** | Owner picks it; not tracked (owner, 2026-08-17). A paragraph in the epic's `--design`. |
-| Initiative | **epic** | `bd create --type=epic` with `--design` as its spec. Non-empty `--design` before any child can be claimed (SYNTHESIS §4.3 check 8; owner 2026-08-18 item 1). |
+| Initiative | **epic** | `bd create --type=epic` with `--design` as its spec. The coordinator reads it before decomposing; nothing refuses a claim on an empty one (SYNTHESIS §4.3 check 8 and owner 2026-08-18 item 1 asked for that gate; it was never built, air-633). |
 | Task | **bead** | One agent, one session, one reviewable diff, one runnable acceptance. |
 | Backlog item (bug/feature/tech-debt) | **capture** | One line, not `ready`, no acceptance. Workers capture; they never file (`docs/design.md` §8.1). |
 | Initiative `discovery → design → ready → decompose → active → completed` | epic `discovery → design → decompose → triaged → active → closed`, **derived, never stored** | Metis's `ready` is Air's triage commitment point on the children. |
-| "decompose phase is a visible buffer" | same | Ledger metric: time from `--design` to first child claim. |
+| "decompose phase is a visible buffer" | same | Not measured: Air records no time from `--design` to the first child claim (air-633). |
 | `estimated_complexity` XS-XL | `--estimate <minutes>` on beads, recorded not gated | "the missing instrument is a size estimate at filing time" (an adopter's retrospective of its overnight fleet run of 2026-08-15). |
 
 ## When to decompose (Metis)
@@ -450,3 +450,7 @@ file; a checklist description is an uncut epic; `--design` empty on an epic is a
   became bead, epic, id and the fleet; its manual check on the initiative became an `owner`
   item on the epic; its review after creation became a review before `bd create`, because an
   Air bead is claimable the moment it exists.
+- 2026-11-07 (air-633): two claims removed as never built. The vocabulary table said a
+  non-empty `--design` was required before any child could be claimed and that the ledger
+  measured the time from `--design` to the first child claim; `crates/` has neither the gate
+  nor the metric, and no claim was ever refused on it. The rows now say what is true.
