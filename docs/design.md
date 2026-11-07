@@ -181,7 +181,7 @@ and pushed when new, changed or escalating; its age counts from when the channel
 | idle without claim | A worker is idle with no claim while claimable beads are ready and nothing of its own runs in its tree. |
 | handover not green | Someone tried to close a bead without the green the gate wants. |
 | landable | A branch other than the lane's is green and contains main, and no lane session is alive. |
-| closed not landed | A bead is closed and its commits are only on one worktree's branch. |
+| closed not landed | A bead is closed and its commits are only on one worktree's branch. When the lane would not cut that branch either, the detail says why, with the fix (air-zni). |
 | rewound and carried | A merge that was rewound off main is still carried by a branch. History only. |
 | lease held by dead session | A shared resource's holder has gone. |
 | lease stale | A shared resource's holder has not refreshed it in time. |

@@ -4132,6 +4132,102 @@ fn a_closed_bead_on_a_branch_behind_main_is_named_and_an_open_one_is_not() {
     );
 }
 
+/// air-zni: a closed bead on a branch with no green precheck at its head, in a repo that gates
+/// the batch on one, is named with the cut reason and its fix in the same `closed-not-landed`
+/// detail, in `--json` and in the printed line; once the precheck is green at that head the
+/// clause is gone and the row reads as before. In the 2026-11-06 trial the notice said only
+/// "does not contain main", and the worker merged main while the lane waited on a precheck.
+#[test]
+fn a_closed_bead_the_lane_will_not_cut_names_the_missing_precheck() {
+    let (_tmp, main, alpha) = land_repo("true");
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "precheck": true}"#,
+    )
+    .unwrap();
+    git(&main, &["add", ".claude/air.json"]);
+    git(&main, &["commit", "-q", "-m", "precheck gate"]);
+    let root = main.parent().unwrap().to_path_buf();
+    let beta = root.join("beta");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-beta",
+            beta.to_str().unwrap(),
+        ],
+    );
+    let bd = fake_bd(&main);
+    for (wt, bead, file) in [(&alpha, "zz-1", "a.txt"), (&beta, "zz-2", "b.txt")] {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0);
+        std::fs::write(wt.join(file), "work\n").unwrap();
+        git(wt, &["add", file]);
+        git(
+            wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("feat: work\n\nBead: {bead}\n"),
+            ],
+        );
+        git(wt, &["merge", "-q", "main", "-m", "merge main"]);
+        assert_eq!(air(wt, &bd, &["record", "verify", "--", "true"]).0, 0);
+    }
+    std::fs::write(main.join("bd.in_progress"), "zz-2\n").unwrap();
+    let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    std::fs::write(
+        main.join("bd.issue.json"),
+        r#"[{"id":"zz-2","status":"closed","labels":[]}]"#,
+    )
+    .unwrap();
+
+    let read = |out: &str| -> (serde_json::Value, String) {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        let row = v["snapshot"]["closed_not_landed"][0].clone();
+        let detail = v["attention"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .find(|a| a["kind"] == "closed-not-landed")
+            .map(|a| a["detail"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default();
+        (row, detail)
+    };
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    let (row, detail) = read(&out);
+    assert_eq!(row["bead"], "zz-2", "{out}{err}");
+    let not = row["not_batch_ready"].as_str().unwrap_or_default();
+    assert!(not.contains("no green precheck at this head"), "{out}{err}");
+    assert!(
+        detail.contains("the lane will not cut it: beta at")
+            && detail.contains("run `air record precheck -- <the repo's precheck command>`"),
+        "{detail}"
+    );
+    let (_c, out, err) = air(&main, &bd, &["status"]);
+    assert!(
+        out.contains("closed, not landed: beta (zz-2)")
+            && out.contains("  not cut by the lane: beta at"),
+        "{out}{err}"
+    );
+
+    // The precheck goes green at that head: the branch is batch-ready and the clause is gone.
+    assert_eq!(air(&beta, &bd, &["record", "precheck", "--", "true"]).0, 0);
+    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    let (row, detail) = read(&out);
+    assert_eq!(row["bead"], "zz-2", "{out}{err}");
+    assert!(row.get("not_batch_ready").is_none(), "{out}{err}");
+    assert!(!detail.contains("the lane will not cut it"), "{detail}");
+    assert!(detail.contains("does not contain main"), "{detail}");
+}
+
 /// air-y3v: after a land, the branches left behind read as needing a re-merge, and `air land`
 /// refuses them with the same reason the list gave.
 ///

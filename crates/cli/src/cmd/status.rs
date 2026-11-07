@@ -1027,6 +1027,13 @@ pub struct ClosedNotLanded {
     /// Why the branch is not landable right now, when that is known — the same sentence
     /// `landable` shows. `None` when the branch could land as it stands and simply has not.
     pub blocked: Option<String>,
+    /// Why the lane would not cut the branch either, when it is not batch-ready: the first
+    /// fact it lacks, as `not_batch_ready` names it (air-zni). `None` when the branch is
+    /// batch-ready, so the lane's next cut takes it. A worker in the 2026-11-06 trial closed
+    /// on its own verify with no precheck at its head; the notice said only "does not contain
+    /// main", the lane waited, and the coordinator found `no-precheck` in `air status`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_batch_ready: Option<String>,
 }
 
 /// A branch that is not landable, and why. Never silent (air-6u5).
@@ -1934,10 +1941,15 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
     for c in &s.closed_not_landed {
         let (bead, worker) = (&c.bead, &c.worker);
         let short = c.head.get(..8).unwrap_or(&c.head);
-        let why = match &c.blocked {
+        let mut why = match &c.blocked {
             Some(b) => format!("that branch cannot land as it stands: {b}"),
             None => "that branch could land as it stands and has not".to_string(),
         };
+        // air-zni: and why the lane will not cut it either, when it will not. The landing
+        // reason alone sent a worker merging main while the lane waited on its precheck.
+        if let Some(n) = &c.not_batch_ready {
+            why.push_str(&format!("; the lane will not cut it: {n}"));
+        }
         out.push(Attention {
             worker: worker.clone(),
             kind: kinds::CLOSED_NOT_LANDED,
@@ -2574,7 +2586,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.
-        closed_not_landed: closed_not_landed(&ledger, &selection.landings),
+        closed_not_landed: closed_not_landed(&ledger, &selection.landings, &batch.1),
         landable: selection.landings,
         land_skipped: selection.skipped,
         land_errors: selection.errors,
@@ -2609,7 +2621,11 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
 ///
 /// The closed set is read once and used as a set, so this is O(landable) with no per-bead
 /// lookup: the beads of unlanded branches are few and the closed rows are one query.
-fn closed_not_landed(ledger: &Ledger, landable: &[Landing]) -> Vec<ClosedNotLanded> {
+fn closed_not_landed(
+    ledger: &Ledger,
+    landable: &[Landing],
+    not_batch_ready: &[NotBatchReady],
+) -> Vec<ClosedNotLanded> {
     let closed: std::collections::BTreeSet<String> = match ledger.closed_claims() {
         Ok(v) => v.into_iter().map(|c| c.bead).collect(),
         // A failed lookup is not a fact about any bead (air-x1ha). Reporting nothing here is
@@ -2629,6 +2645,10 @@ fn closed_not_landed(ledger: &Ledger, landable: &[Landing]) -> Vec<ClosedNotLand
             worker: l.worker.clone(),
             head: l.head.clone(),
             blocked: l.blocked.clone(),
+            not_batch_ready: not_batch_ready
+                .iter()
+                .find(|n| n.worker == l.worker && n.head == l.head)
+                .map(|n| n.detail.clone()),
         });
     }
     out.sort_by(|a, b| (&a.worker, &a.bead).cmp(&(&b.worker, &b.bead)));
@@ -3129,6 +3149,9 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 .unwrap_or("could land as it stands")
                 .trim_start_matches("refused: "),
         ));
+        if let Some(n) = &c.not_batch_ready {
+            out.push_str(&format!("  not cut by the lane: {n}\n"));
+        }
     }
     // air-80x.3: what the verify lane merges next. A fact, printed where the lane reads it;
     // the reasons a branch is absent are in `--json` (`not_batch_ready`).
@@ -3679,6 +3702,56 @@ mod tests {
             ..Default::default()
         };
         assert!(batch_ready_rule(&w).is_ok());
+    }
+
+    /// air-zni: a closed bead on a branch the lane will not cut says why, with the fix, in the
+    /// same `closed-not-landed` detail; a batch-ready branch reads as before; and the
+    /// fingerprint is still (bead, head), so the richer text is pushed once per head.
+    #[test]
+    fn a_closed_bead_the_lane_will_not_cut_names_the_cut_reason_once() {
+        use crate::cmd::mcp::{Pushed, select_new};
+        let row = |not: Option<&str>| ClosedNotLanded {
+            bead: "zz-2".into(),
+            worker: "beta".into(),
+            head: "abcdef1234567890".into(),
+            blocked: Some("refused: branch does not contain main".into()),
+            not_batch_ready: not.map(str::to_string),
+        };
+        let fired = |c: ClosedNotLanded| -> Attention {
+            let snap = Snapshot {
+                closed_not_landed: vec![c],
+                ..Default::default()
+            };
+            attention(&snap, "2026-11-07T00:00:00Z", Thresholds::default())
+                .into_iter()
+                .find(|a| a.kind == kinds::CLOSED_NOT_LANDED)
+                .unwrap()
+        };
+        let plain = fired(row(None));
+        assert!(
+            plain.detail.ends_with("branch does not contain main"),
+            "{}",
+            plain.detail
+        );
+        assert!(!plain.detail.contains("the lane will not cut it"));
+        let held = fired(row(Some(
+            "beta at abcdef12: no green precheck at this head, and this repo gates the batch \
+             on one (`precheck` in .claude/air.json); run `air record precheck -- <the repo's \
+             precheck command>` in beta's worktree",
+        )));
+        assert!(
+            held.detail
+                .contains("; the lane will not cut it: beta at abcdef12: no green precheck"),
+            "{}",
+            held.detail
+        );
+        assert!(held.detail.contains("run `air record precheck --"));
+        assert_eq!(held.fingerprint, "zz-2/abcdef1234567890");
+        assert_eq!(held.fingerprint, plain.fingerprint);
+        // Pushed once for that (bead, head); a second poll with the same row pushes nothing.
+        let mut p = Pushed::new();
+        assert_eq!(select_new(&mut p, std::slice::from_ref(&held)).len(), 1);
+        assert!(select_new(&mut p, std::slice::from_ref(&held)).is_empty());
     }
 
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds

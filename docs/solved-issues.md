@@ -579,6 +579,17 @@ while the precheck was already running.
 Fix: the notice and the event line are deleted; `air status` still names `no-precheck`. Commit
 a5f8666 (air-aepb).
 
+**`closed-not-landed` named the landing reason while the lane was waiting on a precheck.**
+Seen: 2026-11-06 pod trial: a worker closed on its own verify with no green precheck at its
+head, the notice said "does not contain main", the worker merged main, the lane cut nothing,
+and the coordinator found `no-precheck` in `air status` and messaged the worker; about 5
+minutes.
+Fix: the same condition's detail carries the first batch-ready fact the branch lacks, with its
+fix, when there is one (`crates/cli/src/cmd/status.rs` `ClosedNotLanded::not_batch_ready`,
+air-zni). The key stays (bead, head), so it is pushed once per head, not per cut.
+Do not: push the precheck reason per cut (the entry above), and do not add a notice to the
+worker for it; the lane says nothing and the coordinator reads one line.
+
 **The `landable` condition was raised for the lane's own branch and offered `air land --all`.**
 Seen: 0.4.8 live trial, 2026-09-26.
 Fix: it skips the lane's branch and names who lands. SURFACE `landable-not-for-lane`.
