@@ -3522,6 +3522,7 @@ fn probe_closed_bead_not_landed_is_named() -> Probe {
                 worker: "alpha".into(),
                 head: "abcdef1234".into(),
                 blocked: Some("refused: branch does not contain main".into()),
+                not_batch_ready: None,
             }],
             ..Default::default()
         };

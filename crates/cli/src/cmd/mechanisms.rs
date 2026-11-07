@@ -258,7 +258,8 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "attention",
         what: "A bead bd has closed whose commits are in no tree but its author's worktree. \
                No other condition reaches it — `landable` needs a branch containing main so \
-               it goes quiet the moment main moves.",
+               it goes quiet the moment main moves. When the lane would not cut the branch \
+               either, the detail carries the first fact it lacks, with the fix (air-zni).",
         added: "2026-09-07 (air-gazh)",
         source: "crates/cli/src/cmd/status.rs (closed_not_landed)",
         fires: Fires::Condition("closed-not-landed"),
