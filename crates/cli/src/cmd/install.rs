@@ -674,6 +674,9 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-10-22: Dolt pinned at 2.3.5 in `air doctor`; bd and Dolt install from their releases.
     ("0.4.13", 43, 203),
     ("0.4.14", 44, 220),
+    // 2026-11-07: targets as argv prefixes, the config overlay, pull by unpack, one pod per
+    // session in the trial, the trial trusts its own copy; 0.4.14 was never tagged.
+    ("0.4.15", 45, 236),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
