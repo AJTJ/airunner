@@ -6,12 +6,13 @@
 # that request as the coordinator's launch prompt, and answers the development-channels prompt
 # in every pane. The `air` on PATH, which the fleet building Air runs, is not touched.
 #
-# Needs bd and claude on PATH, like `air init` itself. TRIAL_DIR is the copy's parent and
-# defaults to $TMPDIR/air-trial, one fixed path: Claude Code keys folder trust on the path, so
-# the owner runs `claude` once in $TRIAL_DIR/minimal after the first `make trial`, answers yes,
-# and every later trial at that path starts without the dialog (docs/research/folder-trust.md,
-# air-ekj). Nothing here answers that dialog: the launcher refuses, naming the fix, while the
-# copy is not trusted, and `make trial` is run again after it.
+# Needs bd, claude and python3 on PATH. TRIAL_DIR is the copy's parent and defaults to
+# $TMPDIR/air-trial. The copy is marked trusted in Claude Code's ~/.claude.json before any
+# session starts (scripts/trial/trust-copy.py: one key for that one path, everything else in
+# the file as it was; air-zau), so the folder-trust dialog never shows for it, on any machine.
+# The launcher's own refusal of an untrusted repository is unchanged; only this script writes
+# the key, for a directory it has just built from examples/minimal (docs/research/folder-trust.md,
+# option D narrowed; owner, 2026-11-07).
 #
 # TRIAL_PODS=1 puts the trial fleet on pods, one replica per session (air-1bn): the copy gets a
 # gitignored .claude/air.local.json of five targets, each through this checkout's
@@ -105,6 +106,10 @@ mv CLAUDE.md.new CLAUDE.md
 grep -q 'sh -n greet.sh' CLAUDE.md || { echo "trial: CLAUDE.md does not name the precheck"; exit 1; }
 git add -A
 git commit -qm "Adopt Air, pinned to the candidate, with the verification lane and the trial's config"
+
+# Folder trust for the copy (air-zau): the one key Claude Code reads, written before any session
+# starts. The trial stopped on the dialog three times on 2026-11-05 and 2026-11-06.
+python3 "$here/scripts/trial/trust-copy.py" "$repo" || exit 1
 
 # The pod overlay (air-1bn) is written after the adopt commit and hidden from the copy's git by
 # its own exclude file, so no landing in the copy can carry it; the owner's entries in the main

@@ -1651,6 +1651,36 @@ fn launchers_pre_answer_prompts_and_refuse_without_folder_trust() {
         );
         assert!(!repo.join(".claude/worktrees").exists(), "{args:?}");
     }
+
+    // air-zau: `make trial` writes the key for its own scratch copy with
+    // `scripts/trial/trust-copy.py`; the launcher is unchanged and reads what it wrote, so the
+    // same launch is no longer refused on trust (it fails later, on the absent claude). The
+    // config directory is the test's own temp one, never the real file.
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/trial/trust-copy.py");
+    let wrote = common::command("python3")
+        .arg(&script)
+        .arg(&repo)
+        .env("CLAUDE_CONFIG_DIR", empty.path())
+        .output()
+        .unwrap();
+    assert!(
+        wrote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["coordinator", "--no-fleet"])
+        .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", empty.path())
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .env("AIR_CLAUDE_BIN", "/nonexistent/claude")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("hasTrustDialogAccepted"), "{err}");
 }
 
 /// air-1ye: on a Mac the launched session is `caffeinate -i`'s child, so the machine does not
