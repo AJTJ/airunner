@@ -162,3 +162,12 @@ Two small follow-ups, both documentation, filed as the coordinator sees fit: a s
 `docs/design.md` §9.1 and in `scripts/trial.sh`'s header saying that a fixed `TRIAL_DIR`
 trusted once answers the dialog for every later trial; and, if the owner wants `make trial` to
 clear a fixed `TRIAL_DIR` as it clears `$TMPDIR`, one more loop in the script.
+
+Superseded in part on 2026-11-07 (air-zau). The dialog stopped the trial twice more after this
+was written, and the owner ruled that the trial should need no step at all. Option D was built
+narrowed to what this section objected to least: only `scripts/trial.sh` writes the key, for the
+one path it has just built from `examples/minimal`, before any session starts, through a temp
+file and a rename so Claude Code's own writes are never raced
+(`scripts/trial/trust-copy.py`). The launcher's refusal and its removal condition are
+unchanged, and a repository clone still takes one answer per machine. Removed when Claude Code
+offers a session-level flag that pre-trusts a directory.

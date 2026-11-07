@@ -547,8 +547,9 @@ pub const MCP_SERVERS: &[&str] = &["air"];
 /// documented way is by hand, `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`
 /// (https://code.claude.com/docs/en/permissions.md "What runs before you trust a folder"),
 /// a file "that it writes for itself; you don't need to edit it"
-/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so Air
-/// does not write it. Trust in a worktree is keyed on the main checkout's root
+/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so the
+/// launcher does not write it; `make trial` writes it for its own scratch copy, built from Air's
+/// example (`scripts/trial/trust-copy.py`, air-zau). Trust in a worktree is keyed on the main checkout's root
 /// (permissions.md "Project allow rules and workspace trust"), so one accept covers every
 /// session Air starts; the trial asked five times because five sessions started at once in a
 /// fresh copy. The development-channels warning has no documented skip either: the flag works
@@ -619,8 +620,8 @@ pub fn trust_accepted(claude_json: &str, main: &Path) -> bool {
     accepted(main) || main.canonicalize().is_ok_and(|c| accepted(&c))
 }
 
-/// The refusal when the main checkout is not trusted, else None. Air never writes the key: the
-/// dialog is the owner's consent. Before this, five sessions started at once each stopped on the
+/// The refusal when the main checkout is not trusted, else None. The launcher never writes the
+/// key: the dialog is the owner's consent (the trial script writes it for its own copy, air-zau). Before this, five sessions started at once each stopped on the
 /// dialog (air-z41, an adopter 2026-10-28 to 2026-10-30).
 fn trust_refusal(main: &Path, who: &str) -> Option<String> {
     let text = claude_json_path()

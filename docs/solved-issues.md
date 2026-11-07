@@ -465,6 +465,16 @@ each pane with the recorded Enter, and takes a fixed `TRIAL_DIR` the owner trust
 Do not: make a launched session's first step a file read; the classifier judges it like any
 other command.
 
+**The trial stopped on the folder-trust dialog, three times in two days.**
+Seen: 2026-11-05 (air-fzl) and twice on 2026-11-06: the launcher refused the untrusted copy, or
+five panes sat on the dialog, until the owner ran `claude` there and accepted; hours each.
+Fix: `make trial` marks its scratch copy trusted itself before any session starts
+(`scripts/trial/trust-copy.py`: one key, `projects[<copy>].hasTrustDialogAccepted`, under the
+path's physical form, every other key as it was, temp file and rename; air-zau, owner ruling
+2026-11-07). The launcher still refuses an untrusted repository and never writes the key.
+Do not: have the launcher or `air fleet up` write trust for a directory the coordinator was
+pointed at; the key is written only for a directory the trial script built from Air's example.
+
 **The trial coordinator waited hours at the base-branch row for the owner to rename `main`.**
 Seen: 2026-11-06, the pod trial: ten scenarios closed untouched, then the request's last row
 said "ask the owner" to rename the copy's `main` to `trunk` and set `base_branch`, and the
