@@ -154,7 +154,8 @@ enum Cmd {
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
     ///
-    /// With a target for this session in `.claude/air.json` (`"targets"`, see `air run`) the
+    /// With a target for this session in `.claude/air.json` or the `.claude/air.local.json`
+    /// overlay (`"targets"`, see `air run`) the
     /// command runs there on the pushed HEAD and the result is recorded at the local HEAD as
     /// usual, with the machine beside it; a dirty tree is refused, since the target holds only
     /// commits. `--local` runs it here whatever the config says.
@@ -170,7 +171,8 @@ enum Cmd {
     },
     /// Run a command on this session's target, or here when it has none.
     ///
-    /// `"targets"` in `.claude/air.json` names one target per session: an `exec` list, the
+    /// `"targets"` in `.claude/air.json`, or in the gitignored `.claude/air.local.json` laid
+    /// over it, names one target per session: an `exec` list, the
     /// argv prefix that runs a command on the machine with stdin and stdout attached, and the
     /// repository `path` there: `{"targets": {"worker-1": {"exec": ["kubectl", "exec", "-i",
     /// "<pod>", "-c", "<container>", "-n", "<ns>", "--"], "path": "~/air/proj"}}}`. The short
@@ -450,6 +452,9 @@ enum Cmd {
     ///
     /// Before it starts, it asks on the terminal whether to start the fleet (`air fleet up`).
     /// `--fleet` or `--no-fleet` answers in advance; with no terminal the answer is no.
+    ///
+    /// `air coordinator -- "<text>"` starts the session on `<text>` as its first prompt (air-fkb);
+    /// flags after `--` are passed to `claude`.
     Coordinator {
         /// Model to launch on (air-air); omitted, `model` in `.claude/air.json` (air-ap1),
         /// else inherited.
@@ -463,6 +468,7 @@ enum Cmd {
         no_fleet: bool,
         #[arg(long)]
         print: bool,
+        /// A first prompt, then extra arguments passed to `claude` (after `--`).
         #[arg(last = true)]
         extra: Vec<String>,
     },

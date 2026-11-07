@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run a command on the Nth Running pod of a deployment: the program of a target prefix in
-# .claude/air.json, one entry per session.
+# the gitignored .claude/air.local.json (or .claude/air.json), one entry per session.
 #
 # Usage: kube-exec-nth KUBECONFIG NAMESPACE DEPLOYMENT CONTAINER N SESSION COMMAND...
 #

@@ -235,7 +235,7 @@ Fix: `permissions.allow: Bash(air land *)` on the lane's settings. Commit 32bfee
 **The lane piped `air land` into `tail`, the classifier refused it, and the session refused every later landing.**
 Seen: 2026-09-28 21:34Z, this repo; nothing landed for 45 minutes and the owner landed from a
 shell.
-Fix: the lane's whole loop is allowed bare (`crates/cli/src/cmd/launch.rs:413` `lane_allow`) and
+Fix: the lane's whole loop is allowed bare (`crates/cli/src/cmd/launch.rs:464` `lane_allow`) and
 roles.md tells it to run the commands with no pipe or redirect. Commit 7292918 (air-b1h8).
 Do not: add a pipe to a lane command; the allow rule matches only the bare line.
 
@@ -244,8 +244,8 @@ Seen: 2026-11-04, a worker's direct `kubectl exec` (air-kzt); 2026-11-05, a work
 `air run -- true` against a pod, twice, the second time with no reason given (air-tdh). A
 target for a worker was worth nothing, and each refusal cost a capture and a triage.
 Fix: the lane is the session that runs on a target, through its allowed `air record` line
-(`crates/cli/src/cmd/launch.rs:417` `lane_allow`); `air worker` passes the same kind of rule
-for `air run *` and `air record *` (`launch.rs:453` `worker_allow`, air-nyi), which a session
+(`crates/cli/src/cmd/launch.rs:464` `lane_allow`); `air worker` passes the same kind of rule
+for `air run *` and `air record *` (`launch.rs:500` `worker_allow`, air-nyi), which a session
 launched before it gets on relaunch. The setup guide `docs/rules/remote-verify.md` says which
 session gets the target and why (air-mwj).
 Do not: give a target to a session that has no allow rule for the line and expect it to run;
@@ -290,6 +290,24 @@ files (a build directory, the gitignored files the setup guide has the adopter c
 stay. The test in `run_cli.rs` writes a result, commits it, and runs again at that commit.
 Do not: keep unignored, untracked state on a target between runs, which is removed; put the
 gitignored files the check reads anywhere but under an ignore rule, which is what keeps them.
+
+**The row `air land` wrote at the landed sha carried no machine while the green it copied named the pod.**
+Seen: 2026-11-05, rows 01M6MWQ7WQ8PJ2KT3CH9R4G3Z0 and 01M6MWRMFZDE5ZFAWK2PFJM5J5: the machine is
+stamped beside a verify row, not held in it, so the struct copy left hostname, image, arch,
+nproc and cpu empty.
+Fix: the landing reads the machine of the green it selected, never the newest row at that
+head, and stamps it on the new row (`crates/cli/src/cmd/land.rs` `record_landing_green`;
+air-2w6). The landing test in `claim_cli.rs` asserts the two machines are equal. SURFACE
+`landing-row-names-the-machine`.
+Do not: take the machine from the newest row at the head, which may be a red on another machine.
+
+**The run row's CPU column was empty on arm64 Linux.**
+Seen: 2026-11-05, the first full pod verify (aarch64, Neoverse-V2): `/proc/cpuinfo` has no
+`model name` line there, so the probe stored an empty cpu and the run test was red on the pod.
+Fix: the probe's CPU field falls back from `model name` to `lscpu`'s `Model name:`, then to
+`CPU implementer` and `CPU part` joined, then to macOS `sysctl` (`crates/cli/src/cmd/run.rs`
+`PROBE`; air-c14), still one `sh -c` argument and five lines. SURFACE `machine-probe-arm64-linux`.
+Do not: read one `/proc/cpuinfo` key as the CPU model; the line set differs by architecture.
 
 **`idle-without-claim` offered the lane 58 beads 945 s into a batch verify.**
 Seen: an adopter's lane, 2026-09-06.
@@ -384,8 +402,8 @@ Do not: decide liveness from pid existence.
 **`STOPPED at <t>` stuck 16.5 h after the session resumed; a 6 h permission prompt showed running; 491 SubagentStop events flipped the parent idle; ages read negative.**
 Seen: an adopter, 0.4.10 round.
 Fix: a sticky fact holds only until the session's next own event
-(`crates/cli/src/cmd/status.rs:2678` `sticky_holds`); `waiting for the person since <t>` after a
-prompt notification (`hook.rs:537` `is_waiting_kind`); subagent hooks never change the parent;
+(`crates/cli/src/cmd/status.rs:2830` `sticky_holds`); `waiting for the person since <t>` after a
+prompt notification (`hook.rs:549` `is_waiting_kind`); subagent hooks never change the parent;
 one clock read. Commit cb7489b (air-n9f3); test `sticky_facts_yield_to_the_sessions_next_own_event`.
 Do not: let whichever hook fires last write the session state.
 
@@ -425,7 +443,7 @@ for the owner is a bead labelled `owner`. Commit 101bb44 (air-jcfb).
 **The model column showed `[?]` for every launched session.**
 Seen: 2026-09-28, checked on the coordinator's own transcript: the first assistant line was past
 the 64 KB the reader stopped at.
-Fix: `model_of` reads to the first model line (`crates/cli/src/cmd/hook.rs:1057`). Commit
+Fix: `model_of` reads to the first model line (`crates/cli/src/cmd/hook.rs:1086`). Commit
 a4830c0 (air-06k7); test `the_model_is_found_past_the_first_64_kb`.
 
 **A hook fired from a fixture wrote a session row that raised channel conditions.**
@@ -517,7 +535,7 @@ one worker (air-fd8p).
 **A worker that joined, or finished its claim, while beads were already ready was never told.**
 Seen: 2026-09-28 (air-oerm); the notice went out only when the set changed.
 Fix: a worker newly without a claim is told the set as it stands, once
-(`crates/cli/src/cmd/fanout.rs:128` `fan_out_ready`). Commit fbe623d.
+(`crates/cli/src/cmd/fanout.rs:87` `fan_out_ready`). Commit fbe623d.
 
 **Three idle workers all tried the same first bead.**
 Seen: 0.4.9 live trial, 2026-09-26.
@@ -721,6 +739,8 @@ come from `bd_cache` and one line says they are stale. Commit 713e411 (air-19u).
 **A grandchild holding the pipe open turned a 2 s budget into a 25 s wait.**
 Seen: 2026-08-21, in the full test run.
 Fix: drain threads are not joined after a timed-out bd is killed. Commit 008fa85 (air-19u).
+The git path (`crates/cli/src/git.rs` `wait_drained_with`) keeps the join and records the same
+shape as a known gap with its condition (air-dj7); no git call has been recorded stalling this way.
 
 **A child writing more than 64 KB blocked against `wait_timeout` and was killed as a hang.**
 Seen: 2026-08-20: `git status` on a busy worktree, `air status --json` on a full ledger.
@@ -856,7 +876,9 @@ Fix: each failed launch is named and the event reads `fleet / incomplete`. Commi
 **Tests that spawn `air` inherited the launcher's `AIR_ROLE`, so verify was red from every fleet session and nothing could land.**
 Seen: 2026-09-28, found by the lane: every batch, including main's own tree, red on `mcp_stdio`.
 Fix: one helper strips `AIR_*` and `BEADS_ACTOR` from every spawn
-(`crates/cli/tests/common/mod.rs:17` `command`). Commit 4312544 (air-8o59).
+(`crates/cli/tests/common/mod.rs:25` `command`), and since air-xiu gives every spawn a git identity of
+its own with no global git config, so a test passes and fails the same on every host. Commits
+4312544 (air-8o59), d82ad16 (air-xiu).
 Do not: call `Command::new` directly in `crates/cli/tests`.
 
 **A test asserted a fixed 3 s bar and went red under load.**
@@ -893,7 +915,7 @@ and zero FAIL. Commit b2426f7 (air-g7e).
 
 **A test asserted the fixture's `AIR_PROJECT` only while the ambient one was unset, and hid a bug that blocked every landing.**
 Seen: 2026-08-22.
-Fix: `project_from(env, cwd)` (`crates/cli/src/cmd/hook.rs:1016`) tested without touching the
+Fix: `project_from(env, cwd)` (`crates/cli/src/cmd/hook.rs:1045`) tested without touching the
 environment; the sweep runs with every launcher variable set. Commit 4dc5732 (air-7ah).
 
 **A blocking `read_line` hung the MCP test for minutes instead of failing at its deadline.**
@@ -939,10 +961,18 @@ Fix: commit 6111ebe.
 **A selftest probe's synthetic hook inherited `CLAUDE_PID` and registered a worker as a live session owned by the claude running the suite.**
 Seen: 2026-09-29, the lane's batch red at 2a4ffa8: the probe "env reaches the hook" went
 BLOCKED because `air worker w` then read worker w as running.
-Fix: `air_command` (`crates/cli/src/cmd/selftest.rs:81`) and the tests' `common::command`
-(`crates/cli/tests/common/mod.rs:22`) clear `CLAUDE_PID` with the `AIR_*` variables. Commit
+Fix: `air_command` (`crates/cli/src/cmd/selftest.rs:82`) and the tests' `common::command`
+(`crates/cli/tests/common/mod.rs:25`) clear `CLAUDE_PID` with the `AIR_*` variables. Commit
 b5f287c (air-4n5t).
 Do not: let a spawned probe or test inherit a variable a hook reads as its session's identity.
+
+**`air selftest`'s base_branch probe landed without a git identity and was red on a host with no global git config.**
+Seen: 2026-11-04, the first Linux verify: `air land` builds its commit with `git commit-tree`,
+which exited 128 with the author identity unknown.
+Fix: every `air` a probe spawns carries the identity its git fixtures set, from one constant
+(`crates/cli/src/cmd/selftest.rs:75` `GIT_IDENTITY`). Commit e3e8610 (air-3sh). SURFACE
+`selftest-git-identity`.
+Do not: let a probe's `air` take its identity from the host's global git config.
 
 **The bd-server probe and the tmux launch test waited a fixed 10 s for a freshly written executable, and went red under fleet load.**
 Seen: 2026-09-28, worker-2 at 7789c160 with three sessions verifying: the keep-alive probe

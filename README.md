@@ -123,9 +123,10 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Channel.** `air mcp` tells the coordinator when something needs attention.
 - **Merge queue.** `air record`, `air batch cut` and `air land`; `air ready` offers the
   coordinator's own branch to the lane.
-- **Remote runner.** `air run -- <command>` runs a command on the machine `targets` in
-  `.claude/air.json` names for the session, pushing the branch there first; `air record` runs
-  the check there the same way, and `--pull` brings result files back.
+- **Remote runner.** `air run -- <command>` runs a command on the machine `targets` names for
+  the session (in `.claude/air.json`, or in the gitignored `.claude/air.local.json` laid over
+  it), pushing the branch there first; `air record` runs the check there the same way, and
+  `--pull` brings result files back.
 - **Diagnostics.**
   - `air status` shows the whole fleet on one screen.
   - `air audit` shows how often each rule fired, so rules that never fire can be removed.

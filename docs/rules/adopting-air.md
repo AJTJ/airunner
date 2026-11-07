@@ -73,8 +73,10 @@ One prompt remains, "Loading development channels", on every session, because ea
 Air channel, a local server, and Claude Code documents no skip for it. Choose "I am using this
 for local development", or let the coordinator do it: after a launch it reads each pane, asks
 you once whether to accept on your behalf, and on a yes answers with `tmux send-keys`, which its
-launcher allows. The lane's whole loop (`air batch cut`, `air record verify`, `air land`) is on
-its allow list, run bare, so auto mode's classifier does not refuse it.
+launcher allows. The lane's whole loop (`air batch cut`, `air record verify`, `air land`) and a
+worker's `air run` and `air record` are on that session's allow list, run bare, so auto mode's
+classifier does not refuse them; `worker_allow` and `coordinator_allow` in `.claude/air.json`
+(the table below) add your own.
 
 A session started before the install has no hooks and no channel. Restart it through these
 launchers.
@@ -97,11 +99,13 @@ Optionally, the repo also provides:
 - a precheck command, which workers run under a lane with `air record precheck -- <cmd>`;
 - a test-state reset the lane runs after a cut;
 - `"leases"` in `.claude/air.json` for commands that need a shared resource;
-- `"targets"` in `.claude/air.json`, a machine per session that `air run -- <command>` pushes
-  the session's branch to and runs the command on, for work the local machine cannot do;
+- `"targets"`, normally in the gitignored `.claude/air.local.json` beside `.claude/air.json`
+  (see Configure), a machine per session that `air run -- <command>` pushes the session's
+  branch to and runs the command on, for work the local machine cannot do;
   `air record` runs the check there the same way. The machine is reached by whatever argv
   prefix runs a command on it, `ssh` or `kubectl exec` alike; the setup, from the first
-  entry to the first green, is [`remote-verify.md`](remote-verify.md);
+  entry to the first green, is `docs/rules/remote-verify.md` in Air's repository (not shipped
+  into `.air/docs/`);
 - a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
   copies into each new worktree.
 - bead sections bd must see before it files a bead, under `lint: sections:` in
@@ -150,7 +154,7 @@ key comes from the committed file. The committed file then says what Air does on
 repository, and each machine's own file says where, with no commit and no landing in between:
 a change there takes effect the moment it is written, where a committed `targets` took effect
 only when the lane landed it, after verifying that very batch on the old target (twice on
-2026-11-05). You add the `.gitignore` line yourself (`air init` never touches `.gitignore`);
+2026-11-05). You add the `.gitignore` line for `.claude/air.local.json` yourself (`air init` adds only `.air/`);
 `air status` warns once if git tracks the file, names a key set there that the binary does not
 read with the file, and says once when the file does not parse, in which case the committed
 file is read alone.
@@ -172,7 +176,7 @@ file is read alone.
 | `precheck` | `true`: a branch is batch-ready only with a green `air record precheck` at its head. A precheck green never counts as a verify green. | `false` |
 | `verify_key` | `"tree"`: a green at one commit also counts at another commit with the identical tree. Set it only if your verify reads the tree and not git history (`git log`, `rev-list`, commit messages). | `"commit"` |
 | `leases` | `{"<resource>": ["<pattern>", …]}` in deny-rule syntax. Air refuses a matching command to a worker or the lane that does not hold the lease, and advises the coordinator. `air lease needs "<cmd>"` shows the match. | none |
-| `targets` | `{"<session>": {"exec": ["kubectl", "exec", "-i", "<pod>", "-c", "<container>", "-n", "<ns>", "--"], "path": "~/air/<project>"}}`, one per session (`worker-1`, `lane`, …): `exec` is the argv prefix that runs a command on the machine with stdin and stdout attached, and `path` the repository directory there. `{"kind": "ssh", "host": "<h>", "user": "<u>", "path": …}` is the short form for the prefix `ssh <u>@<h>`; it is a kind of its own because ssh hands its arguments to a remote shell as one line, where `kubectl exec` passes them as argv, and Air quotes for that shell only in the short form. `air run -- <cmd>` from that session pushes HEAD to `refs/air/<session>` in a repository it initialises at `path` (the push runs the prefix as git's `ext::` remote, turned on for that one command), checks it out, and runs the command there as `<prefix> sh -c '<line>'`; the exit code and output come back. A session with no entry runs the command locally. The push never goes to the project's remote, and `.git/config` is not written. `air record` through a target runs the check there on the pushed HEAD and records the result at the local HEAD; a dirty tree is refused, since the target holds only commits, and `--local` runs it here. What a command wrote in the checkout there is removed before the next checkout (`git clean -qfd`, then a forced detached checkout); ignored files stay, so a copied gitignored file survives every run. `air run --pull <glob>` brings the matching result paths back into the worktree. Every run, local or not, is one row in the ledger's `runs` table with the machine it ran on, and `--json` prints it (air-opq.3, air-opq.4, air-opq.5). Setting one up, step by step with the gitignored files, the PATH and the gone-machine case: [`remote-verify.md`](remote-verify.md). | none: every session runs locally |
+| `targets` | `{"<session>": {"exec": ["kubectl", "exec", "-i", "<pod>", "-c", "<container>", "-n", "<ns>", "--"], "path": "~/air/<project>"}}`, one per session (`worker-1`, `lane`, …): `exec` is the argv prefix that runs a command on the machine with stdin and stdout attached, and `path` the repository directory there. `{"kind": "ssh", "host": "<h>", "user": "<u>", "path": …}` is the short form for the prefix `ssh <u>@<h>`; it is a kind of its own because ssh hands its arguments to a remote shell as one line, where `kubectl exec` passes them as argv, and Air quotes for that shell only in the short form. `air run -- <cmd>` from that session pushes HEAD to `refs/air/<session>` in a repository it initialises at `path` (the push runs the prefix as git's `ext::` remote, turned on for that one command), checks it out, and runs the command there as `<prefix> sh -c '<line>'`; the exit code and output come back. A session with no entry runs the command locally. The push never goes to the project's remote, and `.git/config` is not written. `air record` through a target runs the check there on the pushed HEAD and records the result at the local HEAD; a dirty tree is refused, since the target holds only commits, and `--local` runs it here. What a command wrote in the checkout there is removed before the next checkout (`git clean -qfd`, then a forced detached checkout); ignored files stay, so a copied gitignored file survives every run. `air run --pull <glob>` brings the matching result paths back into the worktree. Every run, local or not, is one row in the ledger's `runs` table with the machine it ran on, and `--json` prints it (air-opq.3, air-opq.4, air-opq.5). Setting one up, step by step with the gitignored files, the PATH and the gone-machine case: `docs/rules/remote-verify.md` in Air's repository. | none: every session runs locally |
 | `digests` | `true`: the close gate needs a digest naming the bead in the main checkout's `.air/digests/`. | `false` |
 | `digest_dir` | A repo path: the close gate needs a digest naming the bead there, tracked by git. Wins over `digests`. | none |
 | `journal_dir` | A repo path for session journals, tracked in the repo instead of `.air/journal/`. | none |

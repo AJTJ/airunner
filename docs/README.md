@@ -12,7 +12,7 @@ reopened for that purpose 2026-11-03).
 | Learning what Air is and how it works today: components, every interface, the ledger, the main flows as diagrams, invariants, failure model, operations, the TODO list with the fleet's target shape (§10), and the technology decisions with their sources (§11) | [`design.md`](design.md) (kept current with the code; skill `design-doc`) |
 | Integrating Air into a target repo: install, configure (`.claude/air.json`), upgrade | [`rules/adopting-air.md`](rules/adopting-air.md) |
 | Which role a session is and what it may do; shipped to adopters as `.air/roles.md` | [`rules/roles.md`](rules/roles.md) |
-| Having the lane verify on another machine (a `targets` entry): what the machine needs, the gitignored files, the entry, the first run, the machine gone | [`rules/remote-verify.md`](rules/remote-verify.md) |
+| Running checks and commands on another machine (a `targets` entry): what the machine needs, the gitignored files, the entry in the overlay, the first run, the machine gone, and one machine per session (VMs or replicas of one deployment) | [`rules/remote-verify.md`](rules/remote-verify.md) |
 | Every problem Air has hit and solved, and what would regress it; read before changing a mechanism | [`solved-issues.md`](solved-issues.md) |
 
 | Record | Where |
