@@ -122,7 +122,12 @@ Index items are 1–3 lines; detail lives behind the link.
   neither checked, plausibly *because* the other had said it.
   **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
   number about this repo, before claiming a mechanism fires or is shipped, and before saying what
-  the installed `air` does (owner, 2026-08-29, air-476).
+  the installed `air` does (owner, 2026-08-29, air-476). **And before summarising anything:
+  a summary cites the file, command or bead it was read from, and nothing is described from a
+  compaction summary, a trial report's findings list or memory when the source is one `Read`
+  away** (owner, 2026-11-06: four wrong statements in one exchange, a bead described without
+  opening it, one trial event reported as two findings, a fix ranked and then shelved without
+  reading `claim.rs`; each corrected only when the file was opened).
 - **This file** is rules + indexes + essentials only. What is still to build goes in `docs/design.md`
   §10, technology choices in its §11, standing rulings in its §8.1, and the dated history of rulings
   and framing in `private/decisions.md`, which the owner keeps and does not publish (owner, 2026-09-26).
