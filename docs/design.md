@@ -6,9 +6,9 @@ from memory: which commit passed verification, who is editing which file, who ho
 task, and who holds a shared resource. On every close it checks the gate: a bead does not close
 without a recorded green that contains main and every commit naming the bead.
 
-This document describes main at `2679a622` on 2026-11-07: version 0.4.14 (the last release row,
-`install::RELEASES`), with 15 notices waiting for the next release (235 files in
-`crates/cli/surface.d/` against the row's 220). The statements the round's 24 commits touch were
+This document describes main at `b8a73fdb` on 2026-11-07 with the 0.4.15 release row on top:
+version 0.4.15 (the last release row, `install::RELEASES`), with no notices waiting (236 files
+in `crates/cli/surface.d/` against the row's 236). The statements the round's 24 commits touch were
 re-checked against that tree the same day (air-0b7). What was removed, and why, is in `docs/solved-issues.md` and `CHANGELOG.md`; this
 document describes only what exists.
 
