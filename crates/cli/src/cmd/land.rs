@@ -868,6 +868,7 @@ pub fn run(
         done = outcome;
     }
     let closed_now: Vec<String> = done.closed.iter().map(|(b, _)| b.clone()).collect();
+    let refused_now: Vec<String> = done.refused.iter().map(|(b, _)| b.clone()).collect();
     if !landed.is_empty() {
         lines.extend(close_finished_epics(repo, &worker));
     }
@@ -885,6 +886,7 @@ pub fn run(
             &moved.2,
             &done.closed,
             &done.waiting,
+            &done.refused,
         );
         // air-84lz: a holding whose change this landing put in main, in a clean tree, ends.
         super::holdings::expire(&ledger, repo);
@@ -919,6 +921,7 @@ pub fn run(
             "ok": code == 0,
             "landed": landed,
             "closed": closed_now,
+            "refused": refused_now,
             "batch_ready": next_ready,
             "log": lines,
         }),
@@ -928,12 +931,15 @@ pub fn run(
 }
 
 /// What a landing did with the done declarations (air-4xj.1, air-4xj.2): the `(bead, worker)`
-/// pairs it closed, and the done beads whose declared head the base branch still lacks. Both
-/// go into each member's "main moved" notice.
+/// pairs it closed, the done beads whose declared head the base branch still lacks, and the
+/// ones whose head it holds but bd refused to close (air-52u). All three go into each
+/// member's "main moved" notice, each under its own words: "not on main yet" and "bd refused"
+/// call for opposite responses, and the trial read them as one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DoneClosed {
     pub closed: Vec<(String, String)>,
     pub waiting: Vec<(String, String)>,
+    pub refused: Vec<(String, String)>,
 }
 
 /// Close every bead its worker declared done whose declared head the base branch now contains
@@ -1010,13 +1016,19 @@ fn close_done(
         proofs.join("; ")
     );
     let bd = super::claim::bd_for(repo);
-    if let Err(e) = bd.close_all(&ids, &reason, &actor) {
+    // bd's `--force` (air-52u): bd 1.3.0 refuses to close a bead whose assignee is not the
+    // actor, and this landing closes as the lane what a worker holds. Every landing of the
+    // 2026-11-09 trial was refused that way, and no bead closed by a landing all trial. The
+    // force is the landing's only (owner, 2026-11-09): `air close` and `air reclaim` pass none.
+    if let Err(e) = bd.close_all(&ids, &reason, &actor, true) {
         lines.push(format!(
-            "done: could not close {}: {e}; the next landing tries again",
+            "done: bd refused to close {}: {e}; the next landing tries again",
             ids.join(" ")
         ));
-        // Not closed, so still waiting, for the notice as for the next landing.
-        out.waiting.append(&mut out.closed);
+        // Refused, not waiting: the head is on the base branch and bd said no, which is not
+        // "not on main yet" (air-hgi9: one sentence per state). The next landing reads the
+        // same rows and tries again.
+        out.refused.append(&mut out.closed);
         return (lines, out);
     }
     match ledger.release_claims_on(&ids, "landed", &now()) {
@@ -1058,10 +1070,12 @@ fn close_finished_epics(repo: &Path, worker: &str) -> Vec<String> {
         .ok()
         .filter(|a| !a.is_empty())
         .unwrap_or_else(|| worker.to_string());
+    // An epic has no assignee, so no `--force` (air-52u).
     match bd.close_all(
         &ids,
         "All children completed; closed by air land (air-92o0)",
         &actor,
+        false,
     ) {
         Ok(()) => vec![format!(
             "closed epic(s) whose children are all closed: {}",

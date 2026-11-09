@@ -234,6 +234,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-52u: the landing's close drops bd's `--force`, so bd 1.3.0 refuses to close what
+    // a worker holds, as it did at every landing of the 2026-11-09 trial. Seen red 2026-11-09.
+    (
+        "done: a bead declared done before the lane's green closes at the landing, and a dependent is refused until then",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "    if let Err(e) = bd.close_all(&ids, &reason, &actor, true) {",
+            to: "    if let Err(e) = bd.close_all(&ids, &reason, &actor, false) {",
+            also_red: &[],
+        },
+    ),
     // air-1vri.3: the want is kept after the worker was told. Seen red 2026-09-26.
     (
         "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
@@ -4090,7 +4101,7 @@ fn probe_batch_close() -> Probe {
     let red = gated("worker") && gated(crate::cmd::role_from(Some("lane")));
     let green = (|| -> Result<bool, String> {
         let ids: Vec<String> = (1..=10).map(|i| format!("zz-{i}")).collect();
-        let argv = air_bd::close_argv(&ids, "landed", "main");
+        let argv = air_bd::close_argv(&ids, "landed", "main", false);
         let one_process = argv.first().map(String::as_str) == Some("close")
             && ids.iter().all(|i| argv.contains(i));
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
@@ -4908,9 +4919,11 @@ fn probe_worker_close_is_refused_naming_air_done() -> Probe {
 /// real repo with a stateful fake bd: one bead open, a second blocked by it.
 ///
 /// Red: after `air done` and before the landing, the proof is on the bead as a comment, the
-/// head is on the claim, bd was asked to close nothing, and `air claim` on the dependent is
-/// refused naming the blocker. Green: the lane records a green at its batch and lands; the
-/// landing closes the bead in bd, releases the claim as `landed`, and the dependent claims.
+/// head is on the claim, bd was asked to close nothing, `air claim` on the dependent is
+/// refused naming the blocker, and the fake refuses the lane a close without `--force` while
+/// the worker holds the bead, as bd 1.3.0 does (air-52u). Green: the lane records a green at
+/// its batch and lands; the landing closes the bead in bd with `--force` as `lane`, releases
+/// the claim as `landed`, and the dependent claims.
 fn probe_done_closes_at_the_landing() -> Probe {
     let res = (|| -> Result<(bool, bool), String> {
         let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -4964,7 +4977,9 @@ closed.*
         };
         let w1 = wt("w1")?;
         let lane = wt("lane")?;
-        // A fake bd that remembers a close: zz-2 is blocked by zz-1 until zz-1 is closed.
+        // A fake bd that remembers a claim's actor and a close: zz-2 is blocked by zz-1 until
+        // zz-1 is closed, and a close by another actor without --force is refused, as bd 1.3.0
+        // refuses it (air-52u: every landing of the 2026-11-09 trial).
         let script = main.join("bd");
         std::fs::write(
             &script,
@@ -4984,7 +4999,17 @@ case "$1" in
     done
     printf '%s
 ' "[$out]"; exit 0;;
-  close) shift; for id in "$@"; do case "$id" in --*) break;; esac; : > "$d/closed.$id"; done; exit 0;;
+  update) case "$*" in *--claim*) actor="$BEADS_ACTOR"; prev=""
+      for a in "$@"; do [ "$prev" = "--actor" ] && actor="$a"; prev="$a"; done
+      printf '%s' "$actor" > "$d/assignee.$2";; esac; exit 0;;
+  close) actor="$BEADS_ACTOR"; prev=""; force=no
+    for a in "$@"; do [ "$prev" = "--actor" ] && actor="$a"; [ "$a" = "--force" ] && force=yes; prev="$a"; done
+    shift; for id in "$@"; do case "$id" in --*) break;; esac
+      if [ -f "$d/assignee.$id" ] && [ "$(cat "$d/assignee.$id")" != "$actor" ] && [ "$force" = no ]; then
+        echo "cannot close $id: assignee is \"$(cat "$d/assignee.$id")\", actor is \"$actor\"; reclaim or use --force to override" >&2; exit 1
+      fi
+    done
+    for id in "$@"; do case "$id" in --*) break;; esac; : > "$d/closed.$id"; done; exit 0;;
   list|ready|epic) echo '[]'; exit 0;;
   *) exit 0;;
 esac
@@ -4999,26 +5024,29 @@ esac
                 .map_err(|e| e.to_string())?;
         }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let air =
-            |cwd: &Path, role: Option<&str>, args: &[&str]| -> Result<(i32, String), String> {
-                let mut c = air_command(&exe, cwd);
-                c.args(args)
-                    .env("AIR_BD_BIN", &script)
-                    .env("AIR_BD_TIMEOUT_MS", "120000")
-                    .env("BEADS_ACTOR", "probe");
-                if let Some(r) = role {
-                    c.env("AIR_ROLE", r);
-                }
-                let out = c.output().map_err(|e| e.to_string())?;
-                Ok((
-                    out.status.code().unwrap_or(-1),
-                    format!(
-                        "{}{}",
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr)
-                    ),
-                ))
-            };
+        let air = |cwd: &Path,
+                   role: Option<&str>,
+                   actor: &str,
+                   args: &[&str]|
+         -> Result<(i32, String), String> {
+            let mut c = air_command(&exe, cwd);
+            c.args(args)
+                .env("AIR_BD_BIN", &script)
+                .env("AIR_BD_TIMEOUT_MS", "120000")
+                .env("BEADS_ACTOR", actor);
+            if let Some(r) = role {
+                c.env("AIR_ROLE", r);
+            }
+            let out = c.output().map_err(|e| e.to_string())?;
+            Ok((
+                out.status.code().unwrap_or(-1),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+            ))
+        };
         let log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
         let claim_row = || -> Option<(Option<String>, Option<String>, Option<String>)> {
             rusqlite::Connection::open(main.join(".air").join("ledger.db"))
@@ -5031,7 +5059,7 @@ esac
                 .ok()
         };
 
-        let (code, out) = air(&w1, Some("worker"), &["claim", "zz-1"])?;
+        let (code, out) = air(&w1, Some("worker"), "w1", &["claim", "zz-1"])?;
         if code != 0 {
             return Err(format!("claim zz-1: {out}"));
         }
@@ -5058,6 +5086,7 @@ Bead: zz-1
         let (code, out) = air(
             &w1,
             Some("worker"),
+            "w1",
             &["done", "zz-1", "--reason", "selftest: it works"],
         )?;
         if code != 0 {
@@ -5069,30 +5098,50 @@ Bead: zz-1
             && !main.join("closed.zz-1").exists()
             && claim_row()
                 .is_some_and(|(h, released, _)| h == Some(head.clone()) && released.is_none());
-        let (code, out) = air(&w1, Some("worker"), &["claim", "zz-2"])?;
+        let (code, out) = air(&w1, Some("worker"), "w1", &["claim", "zz-2"])?;
         let dependent_refused = code == 2 && out.contains("blocked by zz-1");
-        let red = commented && not_closed && dependent_refused;
+        // bd 1.3.0's rule, in the fake: the lane's close without --force is refused while
+        // the worker holds the bead (air-52u), so the landing below needs the flag.
+        let forceless = Command::new("sh")
+            .arg(&script)
+            .args(["close", "zz-1", "--reason", "x", "--actor", "lane"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let lane_refused = forceless.status.code() == Some(1)
+            && String::from_utf8_lossy(&forceless.stderr)
+                .contains("cannot close zz-1: assignee is \"w1\", actor is \"lane\"")
+            && !main.join("closed.zz-1").exists();
+        let red = commented && not_closed && dependent_refused && lane_refused;
 
         // GREEN: the lane's batch goes green and lands.
         g(
             &lane,
             &["merge", "-q", "--no-ff", "worktree-w1", "-m", "batch"],
         )?;
-        let (code, out) = air(&lane, Some("lane"), &["record", "verify", "--", "true"])?;
+        let (code, out) = air(
+            &lane,
+            Some("lane"),
+            "lane",
+            &["record", "verify", "--", "true"],
+        )?;
         if code != 0 {
             return Err(format!("record verify: {out}"));
         }
-        let (code, out) = air(&main, None, &["land", "--worker", "lane"])?;
+        let (code, out) = air(&main, None, "lane", &["land", "--worker", "lane"])?;
         if code != 0 {
             return Err(format!("air land: {out}"));
         }
         let landing_closed = out.contains("closed: zz-1")
             && main.join("closed.zz-1").exists()
-            && log().lines().filter(|l| l.starts_with("close ")).count() == 1
+            && log()
+                .lines()
+                .filter(|l| l.starts_with("close ") && l.ends_with("--actor lane --force"))
+                .count()
+                == 1
             && claim_row().is_some_and(|(_, released, why)| {
                 released.is_some() && why.as_deref() == Some("landed")
             });
-        let (code, _) = air(&w1, Some("worker"), &["claim", "zz-2"])?;
+        let (code, _) = air(&w1, Some("worker"), "w1", &["claim", "zz-2"])?;
         let green = landing_closed && code == 0;
         let _ = std::fs::remove_dir_all(&root);
         Ok((red, green))
@@ -9155,7 +9204,7 @@ fn probe_acceptance_budget_scales_with_ids() -> Probe {
         let read_red = matches!(&refused, Err(m) if m.contains("14 id(s)")
             && m.contains("within a budget of 0.5 s")
             && m.contains("AIR_BD_TIMEOUT_MS"));
-        let close_err = air_bd::WorkLedger::close_all(&flat, &ids, "landed", "")
+        let close_err = air_bd::WorkLedger::close_all(&flat, &ids, "landed", "", false)
             .err()
             .map(|e| crate::cmd::close::refusal(&e, ids.len(), false));
         let close_red = matches!(&close_err, Some(m) if m.contains("14 id(s)")
@@ -9172,7 +9221,7 @@ fn probe_acceptance_budget_scales_with_ids() -> Probe {
         let answered = acceptance_with(&scaled, &ids, false);
         let all_read = matches!(&answered, Ok(c) if c.len() == 14
             && c.iter().all(|clauses| clauses.len() == 1));
-        let closed = air_bd::WorkLedger::close_all(&scaled, &ids, "landed", "").is_ok();
+        let closed = air_bd::WorkLedger::close_all(&scaled, &ids, "landed", "", false).is_ok();
         let shipped = air_bd::BdCli::new(&dir);
         let covers_measured =
             shipped.budget(14) > Duration::from_secs(21) && shipped.budget(14) > shipped.budget(1);

@@ -724,19 +724,23 @@ pub fn paths_line(paths: &[String]) -> String {
 
 /// One session's side of a landing (air-4xj.2): the head of its own the landing carried,
 /// when the batch commit named one (a batch of one fast-forwards and names none), the beads
-/// of its own the landing closed, and its done beads whose declared head is still not on the
-/// base branch.
+/// of its own the landing closed, its done beads whose declared head is still not on the
+/// base branch, and its done beads whose head is on it but bd refused to close (air-52u).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemberMove {
     pub sha: Option<String>,
     pub closed: Vec<String>,
     pub waiting: Vec<String>,
+    pub refused: Vec<String>,
 }
 
 impl MemberMove {
     /// Nothing to say to this session beyond the fact.
     pub fn is_empty(&self) -> bool {
-        self.sha.is_none() && self.closed.is_empty() && self.waiting.is_empty()
+        self.sha.is_none()
+            && self.closed.is_empty()
+            && self.waiting.is_empty()
+            && self.refused.is_empty()
     }
 }
 
@@ -790,6 +794,19 @@ pub fn main_moved_text(
                 m.waiting.join(" ")
             ));
         }
+        // air-52u: its own words. The 2026-11-09 trial's notices said "waiting" for a head
+        // that was on main and a close bd had refused, and the workers read a contradiction.
+        if !m.refused.is_empty() {
+            parts.push(format!(
+                "{}done but refused: {} (bd refused the close; the next landing tries again)",
+                if m.sha.is_none() && m.closed.is_empty() && m.waiting.is_empty() {
+                    "Of yours, "
+                } else {
+                    ""
+                },
+                m.refused.join(" ")
+            ));
+        }
         t.push(' ');
         t.push_str(&parts.join("; "));
         t.push('.');
@@ -816,6 +833,7 @@ pub fn main_moved(
     members: &[LandedMember],
     closed: &[(String, String)],
     waiting: &[(String, String)],
+    refused: &[(String, String)],
 ) -> Vec<String> {
     let paths: Vec<String> = crate::git::run(
         repo,
@@ -854,6 +872,7 @@ pub fn main_moved(
                 .map(|(m, _)| m.sha.clone()),
             closed: of(closed, w),
             waiting: of(waiting, w),
+            refused: of(refused, w),
         };
         let text = main_moved_text(&base, merge, beads, &paths, Some(&member));
         let queued = ledger
@@ -1150,15 +1169,37 @@ mod tests {
             sha: Some("0011223344".into()),
             closed: mine.clone(),
             waiting: names(&["b-2"]),
+            refused: names(&["b-3"]),
         };
         let w = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&member));
         assert!(
             w.contains(
                 "files changed: f0. Your 00112233 is in it; closed: b-1; done but waiting: b-2 \
-                 (the declared head is not on main yet). No reply needed."
+                 (the declared head is not on main yet); done but refused: b-3 (bd refused \
+                 the close; the next landing tries again). No reply needed."
             ),
             "{w}"
         );
+        // air-52u: refused alone is still "of yours", and never "waiting".
+        let refused_only = MemberMove {
+            refused: names(&["b-3"]),
+            ..Default::default()
+        };
+        let r = main_moved_text(
+            "main",
+            "abcdef0123",
+            &mine,
+            &paths[..1],
+            Some(&refused_only),
+        );
+        assert!(
+            r.contains(
+                "Of yours, done but refused: b-3 (bd refused the close; the next landing \
+                 tries again). No reply needed."
+            ),
+            "{r}"
+        );
+        assert!(!r.contains("waiting"), "{r}");
         // air-fehk: the fact only; whether to merge is the worker's call. air-4xj.2: no bead
         // to go and close either.
         assert!(!w.contains("git merge main"), "{w}");
@@ -1177,7 +1218,7 @@ mod tests {
         let unnamed = MemberMove {
             sha: None,
             closed: mine.clone(),
-            waiting: Vec::new(),
+            ..Default::default()
         };
         let u = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&unnamed));
         assert!(
