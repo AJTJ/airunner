@@ -1689,6 +1689,9 @@ mod tests {
         assert!(has("never the folder-trust dialog"));
         // 2026-09-26: SendMessage is for what Air does not already carry (air-uzh2, air-1vri).
         assert!(has("reach one worker with `SendMessage`"));
+        // air-bpn: what reaches a worker about a bead it holds now, by kind.
+        assert!(has("An addition to the bead is a bead,"));
+        assert!(has("A correction not seen to arrive becomes a bead"));
         // The heartbeat is the failsafe, and roles.md promises no `stuck` condition (air-12k).
         assert!(has("the heartbeat is the failsafe"));
         assert!(!has("the channel (stuck,"));
