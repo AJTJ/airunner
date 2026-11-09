@@ -866,7 +866,8 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("bd: median"), "{out}");
 
-    // A worker's close runs the hand-over gate.
+    // A worker's close is refused naming `air done` (air-4xj.2), and `air done` runs the
+    // gate without the green.
     let wt = repo.join("wt-w");
     let g = common::command("git")
         .args([
@@ -886,23 +887,29 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     let (code, out, err) = air_env(&wt, &bd, &["claim", "zz-11"], &worker);
     assert_eq!(code, 0, "{out}{err}");
     std::fs::write(wt.join("bd.log"), "").unwrap();
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("air close refused for"), "{out}");
-    assert!(out.contains("verify-green-at-head"), "{out}");
-    // A refusal closes nothing. It asks bd, once, whether the id exists (air-a8ra), so an
-    // unknown id is named instead of the gate's advice.
-    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
-    assert!(!log.contains("close"), "{log}");
-    assert!(log.lines().count() <= 1, "{log}");
+    for role in ["worker", "lane"] {
+        let (code, out, _) = air_env(
+            &wt,
+            &bd,
+            &["close", "zz-11", "--reason", "x"],
+            &[("AIR_ROLE", role)],
+        );
+        assert_eq!(code, 2, "{role}: {out}");
+        assert!(
+            out.contains("`air done <id> --reason-file <proof>`"),
+            "{role}: {out}"
+        );
+        assert!(!out.contains("verify-green-at-head"), "{role}: {out}");
+    }
+    // A refusal closes nothing and asks bd nothing: the role is enough.
+    assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
 
-    // air-a8ra: an id and a filename as one argument is refused before bd or the gate, and
-    // an id bd does not have is named rather than advised about.
-    std::fs::write(wt.join("bd.log"), "").unwrap();
+    // air-a8ra, on `air done` now: an id and a filename as one argument is refused before bd
+    // or the gate, and an id bd does not have is named rather than advised about.
     let (code, out, _) = air_env(
         &wt,
         &bd,
-        &["close", "zz-11 notes.md", "--reason", "x"],
+        &["done", "zz-11 notes.md", "--reason", "x"],
         &worker,
     );
     assert_eq!(code, 2, "{out}");
@@ -910,7 +917,7 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert!(!out.contains("Bead:"), "{out}");
     assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
     std::fs::write(wt.join("bd.unknown"), "zz-99\n").unwrap();
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-99", "--reason", "x"], &worker);
+    let (code, out, _) = air_env(&wt, &bd, &["done", "zz-99", "--reason", "x"], &worker);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("bd has no bead zz-99"), "{out}");
     let (code, out, err) = air_env(&wt, &bd, &["handover", "--bead", "zz-99"], &worker);
@@ -918,26 +925,37 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert!(out.contains("bd has no bead zz-99"), "{out}");
     std::fs::remove_file(wt.join("bd.unknown")).unwrap();
 
-    // air-gcjp: a green head is not enough while no commit names the bead.
+    // air-gcjp: a green head is not enough while no commit names the bead; with the
+    // commit, the declaration passes with no green at all.
     let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    let (code, out, _) = air_env(&wt, &bd, &["done", "zz-11", "--reason", "x"], &worker);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("bead-commit"), "{out}");
     assert!(out.contains("`Bead: zz-11`"), "{out}");
     std::fs::write(wt.join("zz-11.md"), "done\n").unwrap();
     git(&wt, &["add", "zz-11.md"]);
     git(&wt, &["commit", "-q", "-m", &bead_trailer("zz-11")]);
-    let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
+    std::fs::write(wt.join("bd.log"), "").unwrap();
+    let (code, out, err) = air_env(&wt, &bd, &["done", "zz-11", "--reason", "x"], &worker);
     assert_eq!(code, 0, "{out}{err}");
-    let (code, out, err) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
+    assert!(log.contains("comment zz-11 done at "), "{log}");
+    assert!(!log.contains("close"), "{log}");
+    // The coordinator's close is unchanged, and ends the worker's claim.
+    let (code, out, err) = air_env(
+        &wt,
+        &bd,
+        &["close", "zz-11", "--reason", "x"],
+        &[("AIR_ROLE", "coordinator")],
+    );
     assert_eq!(code, 0, "{out}{err}");
     let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
     assert!(log.contains("close zz-11 --reason x"), "{log}");
     assert!(
         claims(&repo)
             .iter()
-            .any(|c| c.0 == "zz-11" && c.2.as_deref() == Some("closed")),
+            .any(|c| c.0 == "zz-11" && c.2.as_deref() == Some("landed")),
         "{:?}",
         claims(&repo)
     );
@@ -1278,16 +1296,17 @@ fn air_handover_is_a_query_and_a_refused_close_is_the_attempt() {
     }
     assert_eq!(alarms(), 0, "a query must not raise the alarm");
 
-    // A worker's actual close, refused because there is no green at HEAD. THAT is a
-    // hand-over attempt, and it is the one the coordinator should see.
+    // A worker's actual declaration, refused because no commit names the bead. THAT is a
+    // hand-over attempt, and it is the one the coordinator should see (air-4xj.2: `air done`
+    // runs the gate; a worker's `air close` is refused before it).
     let (code, out, err) = air_env(
         &repo,
         &bd,
-        &["close", "zz-1", "--reason", "done"],
+        &["done", "zz-1", "--reason", "done"],
         &[("AIR_ROLE", "worker")],
     );
     assert_ne!(code, 0, "the gate must refuse: {out}{err}");
-    assert_eq!(alarms(), 1, "the close must raise it exactly once");
+    assert_eq!(alarms(), 1, "the declaration must raise it exactly once");
 }
 
 /// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.
@@ -1659,19 +1678,21 @@ fn handover_and_close_name_a_red_at_head_and_a_missing_precheck() {
     assert_ne!(code, 0);
     for args in [
         &["handover", "--bead", "zz-e"][..],
-        &["close", "zz-e", "--reason", "x"][..],
+        &["done", "zz-e", "--reason", "x"][..],
     ] {
         let (code, out, err) = air_env(&repo, &bd, args, w);
         let text = format!("{out}{err}");
-        // `air handover` reports and exits 0; `air close` refuses.
-        if args[0] == "close" {
+        // `air handover` reports and exits 0; `air done` refuses on the precheck alone,
+        // since it reads no verify (air-4xj.2).
+        if args[0] == "done" {
             assert_ne!(code, 0, "{text}");
+        } else {
+            assert!(
+                text.contains("a red verify is recorded at this head, output: ")
+                    && text.contains(".air/logs/"),
+                "{args:?}: {text}"
+            );
         }
-        assert!(
-            text.contains("a red verify is recorded at this head, output: ")
-                && text.contains(".air/logs/"),
-            "{args:?}: {text}"
-        );
         assert!(
             text.contains("precheck: no precheck recorded at")
                 && text.contains("`air record precheck -- <the repo's precheck command>`"),
@@ -2804,8 +2825,9 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     assert!(out.contains("batch-ready: delta at"), "{out}");
     assert!(out.trim_end().ends_with("next: air batch cut"), "{out}");
 
-    // Each member heard the green and the landing. The owner ran this landing, so the lane
-    // was not told delta by its output and the channel still will.
+    // No member heard the green (air-4xj.2: nothing to do on one); each heard the landing.
+    // The owner ran this landing, so the lane was not told delta by its output and the
+    // channel still will.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let told: Vec<(String, String)> = conn
         .prepare("SELECT to_worker, kind FROM deliveries ORDER BY id")
@@ -2814,12 +2836,7 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    for (name, _) in &workers {
-        assert!(
-            told.contains(&(name.clone(), "batch-green".to_string())),
-            "{name} batch-green: {told:?}"
-        );
-    }
+    assert!(!told.iter().any(|(_, k)| k == "batch-green"), "{told:?}");
     // air-4lci: the lane's own `air record` queues batch-ready for the members that were
     // batch-ready then; what this guards is that the owner's landing told the lane nothing
     // about delta, which the channel still will.
@@ -2857,8 +2874,11 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         .unwrap();
     assert!(text.starts_with("main moved to "), "{text}");
     assert!(text.contains("files changed: "), "{text}");
-    assert!(text.contains("close any of those beads"), "{text}");
-    assert!(text.contains("No reply needed."), "{text}");
+    assert!(text.contains(" is in it. No reply needed."), "{text}");
+    assert!(
+        !text.contains("close any"),
+        "no bead to go and close: {text}"
+    );
 
     // One landing row, every bead once, every member head recorded.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
@@ -3002,8 +3022,9 @@ fn a_precheck_that_makes_a_branch_batch_ready_tells_the_lane_with_no_poll() {
     assert_eq!(queued(&main, "lane", "batch-ready"), 1);
 }
 
-/// air-4lci: a worker's close of its last claim tells it the beads that are ready, with no
-/// poll running.
+/// air-4lci: the close that ends a worker's last claim tells it the beads that are ready,
+/// with no poll running. The close is the coordinator's since air-4xj.2 (a worker's is
+/// refused); what is measured is the claim ending.
 #[test]
 fn closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -3025,7 +3046,12 @@ fn closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll() {
     let (code, out, err) = air_env(&alpha, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(queued(&main, "alpha", "beads-ready"), 0);
-    let (code, out, err) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "x"], &worker);
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["close", "zz-1", "--reason", "x"],
+        &[("AIR_ROLE", "coordinator"), ("BEADS_ACTOR", "coordinator")],
+    );
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(queued(&main, "alpha", "beads-ready"), 1);
     // Another command over the same state adds nothing.
@@ -5673,11 +5699,18 @@ fn the_fleet_lands_onto_the_configured_base_branch() {
     let (_, text, _) = air_env(&main, &bd, &["status"], dead);
     assert!(text.contains("base branch: trunk"), "{text}");
 
-    // The close gate names trunk, not main, while the branch waits for the lane.
-    let (code, out, err) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "early"], worker);
-    assert_eq!(code, 2, "{out}{err}");
+    // The gate names trunk, not main, while the branch waits for the lane; the worker's
+    // declaration says which branch the landing has to reach (air-4xj.2).
+    let (code, out, err) = air_env(&alpha, &bd, &["handover", "--bead", "zz-1"], worker);
+    assert_eq!(code, 0, "{out}{err}");
     let text = format!("{out}{err}");
     assert!(text.contains("trunk") && !text.contains("main"), "{text}");
+    let (code, out, err) = air_env(&alpha, &bd, &["done", "zz-1", "--reason", "early"], worker);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("`air land` closes it once trunk contains that commit"),
+        "{out}"
+    );
 
     // The cut resets to trunk and merges the branch; the green lands by fast-forwarding trunk.
     let (code, out, err) = air_env(&lane, &bd, &["batch", "cut"], dead);
@@ -5690,6 +5723,7 @@ fn the_fleet_lands_onto_the_configured_base_branch() {
     let before = git(&main, &["rev-parse", "trunk"]);
     let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
     assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1"), "{out}");
     let after = git(&main, &["rev-parse", "trunk"]);
     assert_ne!(after, before);
     assert_eq!(
@@ -5698,23 +5732,18 @@ fn the_fleet_lands_onto_the_configured_base_branch() {
     );
     assert_eq!(git(&main, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
 
-    // The notice names the base, and the worker closes on the lane's green.
+    // The notice names the base, and the landing closed the declared bead, so the worker's
+    // copy names it closed.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let moved: String = conn
         .query_row(
-            "SELECT content FROM deliveries WHERE kind = 'main-moved' LIMIT 1",
+            "SELECT content FROM deliveries WHERE kind = 'main-moved' AND to_worker = 'alpha'",
             [],
             |r| r.get(0),
         )
         .unwrap();
     assert!(moved.starts_with("trunk moved to"), "{moved}");
-    let (code, out, err) = air_env(
-        &alpha,
-        &bd,
-        &["close", "zz-1", "--reason", "landed"],
-        worker,
-    );
-    assert_eq!(code, 0, "{out}{err}");
+    assert!(moved.contains("closed: zz-1."), "{moved}");
 
     // The session named `main` is the primary checkout, whatever the base is called.
     let w = snap["workers"]
@@ -5776,10 +5805,14 @@ fn done_declares_without_a_green_and_the_landing_closes_with_one_bd_process() {
     assert!(!log().contains("comment"), "nothing written: {}", log());
     assert_eq!(row().0, None);
 
-    // No green anywhere: `air close` refuses on the green, `air done` passes.
+    // No green anywhere: `air close` is refused naming `air done` (air-4xj.2), and `air
+    // done` passes.
     let (code, out, _) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "p"], worker);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("verify-green-at-head"), "{out}");
+    assert!(
+        out.contains("`air done <id> --reason-file <proof>`"),
+        "{out}"
+    );
     let (code, out, err) = air_env(
         &alpha,
         &bd,

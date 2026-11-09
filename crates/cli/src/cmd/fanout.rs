@@ -550,20 +550,18 @@ fn member_beads(
     out
 }
 
-/// What each member hears when the lane records a batch verify: `close` on a green, the exit
-/// and the kept output on a red. A kill is no verdict and says nothing. Pure over the run and
-/// each member's beads.
-///
-/// A green names only the beads it covers (air-5ynn). A member with none, such as the
-/// coordinator whose commits name no bead, hears the green with no close instruction: an
-/// adopter's coordinator had about fifteen "close them now" in a day with nothing to close.
+/// What each member hears when the lane records a batch verify: the exit and the kept output
+/// on a red. A green says nothing here (air-4xj.2): a member declared its bead done when the
+/// work was committed, and the landing's "main moved" names what it closed; the "close them
+/// now" note a green used to carry had nothing left to ask for. A kill is no verdict and says
+/// nothing. Pure over the run and each member's beads.
 pub fn batch_result_notes(
     run: &air_ledger::verify::VerifyRun,
     beads_of: &dyn Fn(&Member) -> MemberBeads,
 ) -> Vec<MemberNote> {
     use air_ledger::verify::Verdict;
     let verdict = run.verdict();
-    if verdict == Verdict::Killed {
+    if verdict == Verdict::Killed || verdict == Verdict::Green {
         return Vec::new();
     }
     let alone = run.members.len() == 1;
@@ -572,79 +570,43 @@ pub fn batch_result_notes(
         .filter(|m| !m.worker.is_empty())
         .map(|m| {
             let beads = beads_of(m);
-            let (kind, content, named) = if verdict == Verdict::Green {
-                let later = if beads.later.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " {} has a later commit this batch does not contain; the next batch \
-                         covers it.",
-                        beads.later.join(" ")
-                    )
-                };
-                // air-ch9p (air-23ve): a batch of one fast-forwards, so "batch green at X
-                // contains your X" named one commit twice.
-                let what = if alone {
-                    format!("your {} is green as a batch of one", short(&m.sha))
-                } else {
-                    format!(
-                        "batch green at {} contains your {}",
-                        short(&run.sha),
-                        short(&m.sha)
-                    )
-                };
-                let content = if beads.covered.is_empty() {
-                    format!("{what}; it covers no bead you hold open.{later}")
-                } else {
-                    format!(
-                        "{what} ({}). Close them now with `air close <id> --reason-file \
-                         <proof>`; the proof is the lane's green at {}. `air handover` says \
-                         whether the close will pass.{later}",
-                        beads.covered.join(" "),
-                        run.sha
-                    )
-                };
-                ("batch-green", content, beads.covered)
+            let mut all = beads.covered;
+            all.extend(beads.later);
+            let list = if all.is_empty() {
+                "your commits".to_string()
             } else {
-                let mut all = beads.covered;
-                all.extend(beads.later);
-                let list = if all.is_empty() {
-                    "your commits".to_string()
-                } else {
-                    all.join(" ")
-                };
-                let output = run.log_path.as_deref().unwrap_or("not kept");
-                // air-ch9p (air-23ve): a batch of one has nothing to split, and since
-                // air-hyli its member stays out of the next batch until it moves.
-                let content = if alone {
-                    format!(
-                        "batch red at {} (exit {}); your {} ({list}) was its only member. \
-                         Output: {output}. Nothing lands on it. Your branch is batch-ready \
-                         again once it has a new commit, or a later green contains it.",
-                        short(&run.sha),
-                        run.exit_code,
-                        short(&m.sha),
-                    )
-                } else {
-                    format!(
-                        "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
-                         Output: {output}. Nothing lands on it and the lane splits the batch. \
-                         Your branch is out of the next batch until a later green contains your \
-                         commit (the split proves it) or you commit again; if the failure is in \
-                         your change, fix it with a new commit.",
-                        short(&run.sha),
-                        run.exit_code,
-                        short(&m.sha),
-                        run.members.len(),
-                    )
-                };
-                ("batch-red", content, all)
+                all.join(" ")
+            };
+            let output = run.log_path.as_deref().unwrap_or("not kept");
+            // air-ch9p (air-23ve): a batch of one has nothing to split, and since
+            // air-hyli its member stays out of the next batch until it moves.
+            let content = if alone {
+                format!(
+                    "batch red at {} (exit {}); your {} ({list}) was its only member. \
+                     Output: {output}. Nothing lands on it. Your branch is batch-ready \
+                     again once it has a new commit, or a later green contains it.",
+                    short(&run.sha),
+                    run.exit_code,
+                    short(&m.sha),
+                )
+            } else {
+                format!(
+                    "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
+                     Output: {output}. Nothing lands on it and the lane splits the batch. \
+                     Your branch is out of the next batch until a later green contains your \
+                     commit (the split proves it) or you commit again; if the failure is in \
+                     your change, fix it with a new commit.",
+                    short(&run.sha),
+                    run.exit_code,
+                    short(&m.sha),
+                    run.members.len(),
+                )
             };
             MemberNote {
                 to: m.worker.clone(),
-                kind,
+                kind: "batch-red",
                 key: run.id.clone(),
-                beads: named.join(" "),
+                beads: all.join(" "),
                 content,
             }
         })
@@ -760,9 +722,28 @@ pub fn paths_line(paths: &[String]) -> String {
     }
 }
 
-/// The text one session reads. Everyone gets the fact, and a member also reads that its beads
-/// are in and may be closed, so a member gets one notice rather than this and a second "landed"
-/// one. Asks for no reply.
+/// One session's side of a landing (air-4xj.2): the head of its own the landing carried,
+/// when the batch commit named one (a batch of one fast-forwards and names none), the beads
+/// of its own the landing closed, and its done beads whose declared head is still not on the
+/// base branch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberMove {
+    pub sha: Option<String>,
+    pub closed: Vec<String>,
+    pub waiting: Vec<String>,
+}
+
+impl MemberMove {
+    /// Nothing to say to this session beyond the fact.
+    pub fn is_empty(&self) -> bool {
+        self.sha.is_none() && self.closed.is_empty() && self.waiting.is_empty()
+    }
+}
+
+/// The text one session reads. Everyone gets the fact, and a member also reads that its head
+/// is in and which of its beads the landing closed, so a member gets one notice rather than
+/// this and a second "landed" one. It names only beads the landing closed, never a bead to go
+/// and close (air-4xj.2: a worker declares done and the landing closes). Asks for no reply.
 ///
 /// No command for merging (air-fehk). Workers read "`git merge main` brings these into your
 /// branch" as an instruction and merged mid-batch, moving the head off the sha the lane was
@@ -774,7 +755,7 @@ pub fn main_moved_text(
     merge: &str,
     beads: &[String],
     paths: &[String],
-    member: Option<(&str, &[String])>,
+    member: Option<&MemberMove>,
 ) -> String {
     let mut t = format!(
         "{base} moved to {}: landed {}; files changed: {}.",
@@ -786,17 +767,32 @@ pub fn main_moved_text(
         },
         paths_line(paths)
     );
-    if let Some((sha, mine)) = member {
-        t.push_str(&format!(
-            " Your {} ({}) is in it: close any of those beads still open, with the lane's green \
-             as proof.",
-            short(sha),
-            if mine.is_empty() {
-                "your commits".to_string()
-            } else {
-                mine.join(" ")
-            }
-        ));
+    if let Some(m) = member.filter(|m| !m.is_empty()) {
+        let mut parts = Vec::new();
+        if let Some(sha) = &m.sha {
+            parts.push(format!("Your {} is in it", short(sha)));
+        }
+        if !m.closed.is_empty() {
+            parts.push(format!(
+                "{}closed: {}",
+                if m.sha.is_none() { "Of yours, " } else { "" },
+                m.closed.join(" ")
+            ));
+        }
+        if !m.waiting.is_empty() {
+            parts.push(format!(
+                "{}done but waiting: {} (the declared head is not on {base} yet)",
+                if m.sha.is_none() && m.closed.is_empty() {
+                    "Of yours, "
+                } else {
+                    ""
+                },
+                m.waiting.join(" ")
+            ));
+        }
+        t.push(' ');
+        t.push_str(&parts.join("; "));
+        t.push('.');
     }
     t.push_str(" No reply needed.");
     t
@@ -806,7 +802,8 @@ pub fn main_moved_text(
 pub type LandedMember = (air_ledger::landings::Member, String);
 
 /// After `air land` moved main from `before` to `merge`: tell every session but the lane and
-/// the caller, once per landing. Returns who was queued.
+/// the caller, once per landing. `closed` and `waiting` are `(bead, worker)` pairs from the
+/// landing's done pass, and each member reads its own. Returns who was queued.
 #[allow(clippy::too_many_arguments)]
 pub fn main_moved(
     repo: &Path,
@@ -817,6 +814,8 @@ pub fn main_moved(
     merge: &str,
     beads: &[String],
     members: &[LandedMember],
+    closed: &[(String, String)],
+    waiting: &[(String, String)],
 ) -> Vec<String> {
     let paths: Vec<String> = crate::git::run(
         repo,
@@ -839,18 +838,24 @@ pub fn main_moved(
     let subject = beads.join(" ");
     let base = super::handover::base_branch(repo);
     let mut told = Vec::new();
+    let of = |rows: &[(String, String)], w: &str| -> Vec<String> {
+        rows.iter()
+            .filter(|(_, who)| who == w)
+            .map(|(b, _)| b.clone())
+            .collect()
+    };
     for w in &to {
-        let member = members.iter().find(|(m, _)| &m.worker == w);
-        let mine = member
-            .map(|(m, tip)| beads_between(repo, tip, &m.sha))
-            .unwrap_or_default();
-        let text = main_moved_text(
-            &base,
-            merge,
-            beads,
-            &paths,
-            member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
-        );
+        // A session hears its own side whether or not the batch commit named its head: a
+        // batch of one fast-forwards and names no member, and its bead still closed.
+        let member = MemberMove {
+            sha: members
+                .iter()
+                .find(|(m, _)| &m.worker == w)
+                .map(|(m, _)| m.sha.clone()),
+            closed: of(closed, w),
+            waiting: of(waiting, w),
+        };
+        let text = main_moved_text(&base, merge, beads, &paths, Some(&member));
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
@@ -1141,19 +1146,54 @@ mod tests {
         assert!(!t.contains("Merge main"), "{t}");
         assert!(t.ends_with("No reply needed."), "{t}");
         let mine = names(&["b-1"]);
-        let w = main_moved_text(
+        let member = MemberMove {
+            sha: Some("0011223344".into()),
+            closed: mine.clone(),
+            waiting: names(&["b-2"]),
+        };
+        let w = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&member));
+        assert!(
+            w.contains(
+                "files changed: f0. Your 00112233 is in it; closed: b-1; done but waiting: b-2 \
+                 (the declared head is not on main yet). No reply needed."
+            ),
+            "{w}"
+        );
+        // air-fehk: the fact only; whether to merge is the worker's call. air-4xj.2: no bead
+        // to go and close either.
+        assert!(!w.contains("git merge main"), "{w}");
+        assert!(!w.contains("close any"), "{w}");
+        let bare = MemberMove {
+            sha: Some("0011223344".into()),
+            ..Default::default()
+        };
+        let b = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&bare));
+        assert!(
+            b.contains("Your 00112233 is in it. No reply needed."),
+            "{b}"
+        );
+        // A batch of one fast-forwards and names no member head; the closed bead is still
+        // its worker's to hear. Nothing of its own: the fact alone.
+        let unnamed = MemberMove {
+            sha: None,
+            closed: mine.clone(),
+            waiting: Vec::new(),
+        };
+        let u = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&unnamed));
+        assert!(
+            u.contains("f0. Of yours, closed: b-1. No reply needed."),
+            "{u}"
+        );
+        let none = main_moved_text(
             "main",
             "abcdef0123",
             &mine,
             &paths[..1],
-            Some(("0011223344", &mine)),
+            Some(&MemberMove::default()),
         );
         assert!(
-            w.contains("files changed: f0. Your 00112233 (b-1) is in it"),
-            "{w}"
+            none.ends_with("files changed: f0. No reply needed."),
+            "{none}"
         );
-        // air-fehk: the fact only; whether to merge is the worker's call.
-        assert!(!w.contains("git merge main"), "{w}");
-        assert!(w.ends_with("No reply needed."), "{w}");
     }
 }

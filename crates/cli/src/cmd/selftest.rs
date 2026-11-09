@@ -256,20 +256,20 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     ),
     // air-1vri.2: a killed batch is reported to its members as if it were a verdict.
     (
-        "lane: the lane hears each newly batch-ready branch once and members hear a green, red or drop at once; land and a batch record end with the next cut",
+        "lane: the lane hears each newly batch-ready branch once and members hear a red or drop at once, and nothing on a green; land and a batch record end with the next cut",
         Mutation {
             file: "crates/cli/src/cmd/fanout.rs",
-            from: "    if verdict == Verdict::Killed {\n        return Vec::new();\n    }\n",
+            from: "    if verdict == Verdict::Killed || verdict == Verdict::Green {\n        return Vec::new();\n    }\n",
             to: "",
             also_red: &[],
         },
     ),
-    // air-1vri.2: a close after a batch green is never counted.
+    // air-1vri.2, air-4xj.2: a landing after a done declaration is never counted.
     (
-        "loops: batch-ready to its batch and batch green to close are measured from ledger rows; a wait that has not ended is no sample",
+        "loops: batch-ready to its batch and done to landed are measured from ledger rows; a wait that has not ended is no sample",
         Mutation {
             file: "crates/cli/src/cmd/loops.rs",
-            from: "                out.green_to_close.push(s);",
+            from: "                out.done_to_landed.push(s);",
             to: "                let _ = s;",
             also_red: &[],
         },
@@ -712,10 +712,14 @@ const MUTATIONS: &[(&str, Mutation)] = &[
     (
         "handover: only a hand-over the gate refused counts as an attempt, and one that passes clears the count",
         Mutation {
-            file: "crates/cli/src/cmd/close.rs",
+            // In `done::gate` since air-4xj.2; `close::gate` carried the same lines until then.
+            // Seen red 2026-11-09, with the landing probe, since no declaration passes.
+            file: "crates/cli/src/cmd/done.rs",
             from: "        if v.pass {",
             to: "        if false {",
-            also_red: &[],
+            also_red: &[
+                "done: a bead declared done before the lane's green closes at the landing, and a dependent is refused until then",
+            ],
         },
     ),
     // air-et0o. The anchor is the render alone. The query, the change-only fingerprint, the
@@ -999,14 +1003,14 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // Owner, 2026-09-26. The mutation treats every worker's close as green, which is what a raw
-    // `bd close` the matcher missed did in the 0.4.5 live trial. Seen red 2026-09-26.
+    // air-4xj.2: the mutation lets every role close, which is the raw `bd close` of the 0.4.5
+    // live trial one command over. Seen red 2026-11-09.
     (
-        "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
+        "close: a worker's or the lane's air close is refused naming air done; the coordinator's and the owner's close",
         Mutation {
             file: "crates/cli/src/cmd/close.rs",
-            from: "        let mut f = super::handover::facts(ledger, worker, repo, Some(b), false)?;\n",
-            to: "        let mut f = super::handover::facts(ledger, worker, repo, Some(b), false)?;\n        f.green_at_head = true;\n",
+            from: "    if !gated(role) {\n        return None;\n    }\n",
+            to: "    if !gated(role) || gated(role) {\n        return None;\n    }\n",
             also_red: &[],
         },
     ),
@@ -1018,9 +1022,7 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             file: "crates/hooks/src/gate.rs",
             from: "        let subject = f.refused_command.as_deref().unwrap_or(\"handover\");",
             to: "        let subject = \"handover\";",
-            also_red: &[
-                "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
-            ],
+            also_red: &[],
         },
     ),
     (
@@ -2748,7 +2750,7 @@ fn all_probes() -> Vec<Probe> {
         probe_doctor_names_the_binary_against_the_checkout(),
         probe_overlap_names_only_holders_that_can_collide(),
         probe_refusal_names_the_command_it_refused(),
-        probe_worker_close_runs_the_gate(),
+        probe_worker_close_is_refused_naming_air_done(),
         probe_done_closes_at_the_landing(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
@@ -3724,8 +3726,11 @@ fn probe_close_with_proof_sequence() -> Probe {
             })
             .map_err(|e| e.to_string())
         };
+        // The gate with its green checks, as `air handover` runs it (a worker's `air close`
+        // ran it until air-4xj.2; `air done` runs it without the green).
         let passes = |bead: &str| -> bool {
-            crate::cmd::close::gate(&l, "probe", &dir, &[bead.to_string()]).is_ok()
+            crate::cmd::handover::facts(&l, "probe", &dir, Some(bead), false)
+                .is_ok_and(|f| handover_verdict(&f).pass)
         };
 
         // Bead one: claim, work already committed, verify recorded, close.
@@ -4811,9 +4816,10 @@ fn probe_overlap_names_only_holders_that_can_collide() -> Probe {
 /// reported as a failed hand-over. `stop_message` runs at Stop, where no command was refused,
 /// so it must not name one.
 ///
-/// Red: `air close` refused by the gate names `air close` and does not call itself a
-/// hand-over. Green: `air handover`, which has no command, keeps the old subject. (The Stop
-/// hook's message was the other surface here until air-wau8 deleted it.)
+/// Red: `air done` refused by the gate names `air done` and does not call itself a
+/// hand-over (it was `air close` until air-4xj.2 refused a worker's close outright). Green:
+/// `air handover`, which has no command, keeps the old subject. (The Stop hook's message was
+/// the other surface here until air-wau8 deleted it.)
 fn probe_refusal_names_the_command_it_refused() -> Probe {
     use air_hooks::handover_verdict;
 
@@ -4825,12 +4831,12 @@ fn probe_refusal_names_the_command_it_refused() -> Probe {
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_claim("zz-1", "w3", &[], "t0")
             .map_err(|e| e.to_string())?;
-        // The reported case, through `air close`'s gate: no green at HEAD.
-        let reason = crate::cmd::close::gate(&l, "w3", &dir, &["zz-1".to_string()])
+        // The reported case, through `air done`'s gate: no commit names the bead.
+        let reason = crate::cmd::done::gate(&l, "w3", &dir, &["zz-1".to_string()])
             .err()
             .unwrap_or_default();
         let red =
-            reason.contains("air close refused for w3 at") && !reason.contains("handover refused");
+            reason.contains("air done refused for w3 at") && !reason.contains("handover refused");
         // No command to name: `air handover` IS the hand-over query, so the subject stands.
         let f = crate::cmd::handover::facts(&l, "w3", &dir, Some("zz-1"), true)?;
         let v = handover_verdict(&f);
@@ -4847,75 +4853,21 @@ fn probe_refusal_names_the_command_it_refused() -> Probe {
     }
 }
 
-/// Owner ruling, 2026-09-26: a worker closes with `air close`, and the close runs the hand-over
-/// gate itself. In the 0.4.5 live trial a worker put a commit and a raw `bd close` on separate
-/// lines of one Bash call; the text matcher missed the close and the bead closed with no green
-/// containing its commits. The check now runs when the close runs, whatever the line looks like.
+/// air-4xj.2: a worker's or the lane's `air close` is refused before anything else and names
+/// `air done`, the declaration the landing closes on; the coordinator and the owner close
+/// landed work here as before. Pure over the role, as the refusal is.
 ///
-/// Red: a worker's close with no green at HEAD is refused, naming `air close` and the missing
-/// verify. Green: with a green recorded at HEAD the same close passes.
-fn probe_worker_close_runs_the_gate() -> Probe {
-    use crate::cmd::close::gate;
+/// Red: the worker and the lane are refused and the refusal names the command. Green: the
+/// coordinator and the owner are not.
+fn probe_worker_close_is_refused_naming_air_done() -> Probe {
+    use crate::cmd::close::worker_refusal;
 
-    let res = (|| -> Result<(bool, bool), String> {
-        let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let g = |args: &[&str]| -> Result<String, String> {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&dir)
-                .args(args)
-                .envs(GIT_IDENTITY)
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).to_string());
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
-        g(&["init", "-q", "-b", "main"])?;
-        // air-gcjp: the bead's work is a commit naming it, on a branch: one on main is landed.
-        g(&["commit", "-q", "--allow-empty", "-m", "base"])?;
-        g(&["checkout", "-q", "-b", "w"])?;
-        g(&["commit", "-q", "--allow-empty", "-m", "a\n\nBead: zz-1\n"])?;
-        let head = g(&["rev-parse", "HEAD"])?;
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        l.record_claim("zz-1", "w3", &[], "t0")
-            .map_err(|e| e.to_string())?;
-        let beads = vec!["zz-1".to_string()];
-
-        let refused = gate(&l, "w3", &dir, &beads);
-        let red = refused.as_ref().is_err_and(|m| {
-            m.contains("air close refused for w3 at") && m.contains("verify-green-at-head")
-        });
-
-        l.record_verify(&VerifyRun {
-            id: new_id(),
-            worker: "w3".into(),
-            sha: head,
-            kind: Kind::Verify,
-            exit_code: 0,
-            trigger: "selftest".into(),
-            failing_step: None,
-            started_at: "t".into(),
-            finished_at: "t".into(),
-            log_path: None,
-            command: None,
-            duration_ms: None,
-            output_bytes: None,
-            dirty: false,
-            tree: None,
-            members: vec![],
-            main_sha: None,
-        })
-        .map_err(|e| e.to_string())?;
-        let green = gate(&l, "w3", &dir, &beads).is_ok();
-        let _ = std::fs::remove_dir_all(&dir);
-        Ok((red, green))
-    })();
-    let (red, green) = res.unwrap_or_else(blocked);
+    let red = ["worker", "lane"].iter().all(|r| {
+        worker_refusal(r).is_some_and(|m| m.contains("`air done <id> --reason-file <proof>`"))
+    });
+    let green = worker_refusal("coordinator").is_none() && worker_refusal("owner").is_none();
     Probe {
-        name: "close: a worker's air close runs the hand-over gate, refusing with no green and passing with one",
+        name: "close: a worker's or the lane's air close is refused naming air done; the coordinator's and the owner's close",
         red_fires: red,
         green_passes: green,
     }
@@ -13139,12 +13091,13 @@ fn probe_batch_members_are_the_shas_the_batch_took() -> Probe {
 /// evidence that closes were working — and a coordinator who ignores a condition is worse off
 /// than one who never had it, if a real refusal ever arrives on the same text.
 ///
-/// Red: a close the gate REFUSES stamps one attempt.
+/// Red: a declaration the gate REFUSES stamps one attempt (`air done`'s gate since
+/// air-4xj.2; a worker's `air close` ran the same stamp until then).
 ///
-/// Green: a close the gate PASSES stamps none and clears what was there. The clearing is the
-/// half that is easy to miss: without it the counter is a high-water mark, so one early
-/// refusal keeps the condition firing after a clean close, which is the same false positive
-/// arriving a few minutes later.
+/// Green: a declaration the gate PASSES stamps none and clears what was there. The clearing
+/// is the half that is easy to miss: without it the counter is a high-water mark, so one early
+/// refusal keeps the condition firing after a clean declaration, which is the same false
+/// positive arriving a few minutes later.
 fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
     let res = (|| -> Result<(bool, bool), String> {
         let dir = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
@@ -13160,14 +13113,6 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
         // air-gcjp: the bead's work is a commit naming it, on a branch: one on main is landed.
         g(&["commit", "-qm", "seed"])?;
         g(&["checkout", "-q", "-b", "w"])?;
-        g(&[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "work\n\nBead: zz-1\n",
-        ])?;
-        let head = g(&["rev-parse", "HEAD"])?;
 
         let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
         l.record_claim("zz-1", "w3", &[], "t0")
@@ -13181,32 +13126,19 @@ fn probe_only_a_failed_handover_counts_as_an_attempt() -> Probe {
                 .map_or(-1, |c| c.handover_attempts)
         };
 
-        // No green: the gate refuses, and THAT is an attempt.
-        let refused = crate::cmd::close::gate(&l, "w3", &dir, &beads).is_err();
+        // No commit names the bead: the gate refuses, and THAT is an attempt.
+        let refused = crate::cmd::done::gate(&l, "w3", &dir, &beads).is_err();
         let after_refusal = attempts();
 
-        // Now green at that head, so the same close passes.
-        l.record_verify(&VerifyRun {
-            id: new_id(),
-            worker: "w3".into(),
-            sha: head,
-            kind: Kind::Verify,
-            exit_code: 0,
-            trigger: "selftest".into(),
-            failing_step: None,
-            started_at: "t1".into(),
-            finished_at: "t1".into(),
-            log_path: None,
-            command: None,
-            duration_ms: None,
-            output_bytes: None,
-            dirty: false,
-            tree: None,
-            members: Vec::new(),
-            main_sha: None,
-        })
-        .map_err(|e| e.to_string())?;
-        let passed = crate::cmd::close::gate(&l, "w3", &dir, &beads).is_ok();
+        // Now a commit with the trailer, so the same declaration passes with no green at all.
+        g(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "work\n\nBead: zz-1\n",
+        ])?;
+        let passed = crate::cmd::done::gate(&l, "w3", &dir, &beads).is_ok();
         let after_pass = attempts();
 
         let _ = std::fs::remove_dir_all(&dir);

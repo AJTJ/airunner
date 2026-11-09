@@ -7,8 +7,10 @@
 //! - batch-ready to its batch: from the moment Air queued "batch-ready" for the lane (or told it
 //!   in `air land`'s output) to the start of the first lane verify whose members include that
 //!   head. The cut itself leaves no row; the verify it feeds starts seconds later.
-//! - green to close: from the moment Air queued "batch green" for a member to the release of
-//!   that member's claim on each bead the message named.
+//! - done to landed: from the worker's `air done` on a claim to the landing that released that
+//!   claim as `landed` (air-4xj.2). Until then the second number was batch green to close,
+//!   which measured a worker's reaction to a notice; now nothing waits on the worker after the
+//!   declaration, and the number is the lane's whole loop.
 //!
 //! Read from the ledger's rows, never from the event log, so nothing parses prose. A wait that
 //! has not ended is not a sample. Removed with the lane, or when the harness reports these waits
@@ -23,8 +25,8 @@ use air_ledger::verify::Kind;
 pub struct LoopTimes {
     /// Seconds from batch-ready to the batch verify's start, one per branch head.
     pub ready_to_batch: Vec<i64>,
-    /// Seconds from a batch green's message to the member's close, one per bead.
-    pub green_to_close: Vec<i64>,
+    /// Seconds from a bead's done declaration to the landing that closed it, one per claim.
+    pub done_to_landed: Vec<i64>,
 }
 
 /// The middle value, the lower of the two middles for an even count.
@@ -57,21 +59,18 @@ pub fn measure(ledger: &Ledger, since: &str) -> LoopTimes {
             out.ready_to_batch.push(s);
         }
     }
-    for d in rows.iter().filter(|d| d.kind == "batch-green") {
-        for bead in d.subject.split_whitespace() {
-            let released: Option<String> = ledger
-                .conn()
-                .query_row(
-                    "SELECT released_at FROM claims WHERE bead=?1 AND worker=?2 \
-                     AND released_at IS NOT NULL AND released_at >= ?3",
-                    rusqlite::params![bead, d.to_worker, d.created_at],
-                    |r| r.get(0),
-                )
-                .ok();
-            if let Some(s) =
-                released.and_then(|r| super::status::seconds_between(&d.created_at, &r))
-            {
-                out.green_to_close.push(s);
+    // The claim row carries both ends: `done_at` from `air done`, `released_at` from the
+    // landing (`release_reason` = landed). A claim released any other way ended no such wait.
+    if let Ok(mut st) = ledger.conn().prepare(
+        "SELECT done_at, released_at FROM claims WHERE done_at IS NOT NULL \
+         AND done_at >= ?1 AND released_at IS NOT NULL AND release_reason = 'landed' \
+         ORDER BY done_at",
+    ) && let Ok(rows) = st.query_map([since], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    }) {
+        for (done, landed) in rows.flatten() {
+            if let Some(s) = super::status::seconds_between(&done, &landed) {
+                out.done_to_landed.push(s);
             }
         }
     }
@@ -80,7 +79,7 @@ pub fn measure(ledger: &Ledger, since: &str) -> LoopTimes {
 
 /// The `air status` line, or `None` when nothing was measured.
 pub fn line(t: &LoopTimes) -> Option<String> {
-    if t.ready_to_batch.is_empty() && t.green_to_close.is_empty() {
+    if t.ready_to_batch.is_empty() && t.done_to_landed.is_empty() {
         return None;
     }
     let part = |v: &[i64], what: &str| {
@@ -92,6 +91,6 @@ pub fn line(t: &LoopTimes) -> Option<String> {
     Some(format!(
         "loops (24 h): {}; {}",
         part(&t.ready_to_batch, "batch-ready to its batch verify"),
-        part(&t.green_to_close, "batch green to close")
+        part(&t.done_to_landed, "done to landed")
     ))
 }

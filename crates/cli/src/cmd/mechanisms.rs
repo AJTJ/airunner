@@ -150,12 +150,15 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
         class: "refusal",
-        what: "A worker's or the lane's close needs a recorded green that contains main and \
-               the bead's commits. `air close` runs it; `air done` runs it without the green \
-               checks (air-4xj.1); `hook.PreToolUse / refuse` is the matcher on raw `bd close` \
-               deleted 2026-09-26, kept so older days attribute.",
-        added: "2026-08-22 (air-i59); in `air close` 2026-09-26",
-        source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/close.rs, gate",
+        what: "A worker's or the lane's `air done` needs a commit carrying the bead's trailer, \
+               the worker's own claim, a green precheck where the repo declares one and a \
+               digest where it declares one; no green (air-4xj.1). `air handover` reports the \
+               same facts with the green beside them. A worker's `air close` is refused outright \
+               and names `air done` (air-4xj.2); until then it ran this gate with the green. \
+               `hook.PreToolUse / refuse` is the matcher on raw `bd close` deleted 2026-09-26, \
+               kept so older days attribute.",
+        added: "2026-08-22 (air-i59); in `air close` 2026-09-26; `air done` 2026-11-09",
+        source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/done.rs, gate; close.rs, worker_refusal",
         // `hook.handover` is what the first slice called the same gate before hook events
         // were dispatched by name (2026-08-18). It is not a second mechanism and never was, so
         // it is a second entry point here rather than a row of its own — which is exactly what
@@ -165,9 +168,9 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.PreToolUse", "refuse"),
             ("handover", "refuse"),
             ("hook.handover", "refuse"),
-            // A worker's `air close` refused by the same gate (owner, 2026-09-26). Until then
-            // this line was `close-refusal`, the role refusal of a worker's `air close`, which
-            // that ruling removed.
+            // A worker's `air close` refused by the same gate (owner, 2026-09-26); since
+            // air-4xj.2 the refusal names `air done` instead of running the gate, and the
+            // event is the same line.
             ("close", "refuse"),
             // A worker's `air done` refused by the same gate without its green checks
             // (air-4xj.1): the bead's commit, its claim and a missing precheck.
@@ -880,16 +883,17 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "batch-result-to-members",
         class: "nudge",
-        what: "Each member worker hears its batch's result at once: close on a green or a \
-               landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it. A killed run says \
+        what: "Each member worker hears its batch's red at once, with the exit and the kept \
+               output, and the other side and the paths when `air batch cut` drops it. A green \
+               says nothing to members (air-4xj.2: the worker declared done before the batch, \
+               and the landing's \"main moved\" names what it closed). A killed run says \
                nothing.",
-        added: "2026-09-26 (air-1vri.2)",
+        added: "2026-09-26 (air-1vri.2); the green note removed 2026-11-09 (air-4xj.2)",
         source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
-        // Same trial: a worker learned the lane's green, and could close, only on its own wake.
+        // Same trial: a worker learned the lane's red, and could fix it, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(
-            "the lane is removed, or a round's `loops` line shows batch green to close no shorter with the push than the wake gave",
+            "the lane is removed, or a round shows no member committing a fix or resolving a drop before its own wake would have told it",
         ),
     },
     Mechanism {
@@ -897,8 +901,8 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "When `air land` moves main, every session but the lane and the one that ran it \
                hears \"main moved to <sha>: landed <beads>; files changed: <paths>\" once per \
-               landing; a member's copy also says its beads may be closed. It asks for no \
-               reply.",
+               landing; a member's copy also names the beads of its own the landing closed and \
+               any done bead still waiting for its head (air-4xj.2). It asks for no reply.",
         added: "2026-09-26 (air-1vri.4)",
         source: "crates/cli/src/cmd/fanout.rs, main_moved; called from land.rs run",
         // Owner, 2026-09-26: "have air fan out a msg to ALL agents ... whenever the lane lands
