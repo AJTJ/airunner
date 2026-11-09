@@ -7,6 +7,66 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-11-09
+
+A worker declares its bead done with `air done` and proof; the landing that puts that commit
+on main closes the bead. Live trial on 2026-11-09 on pods
+(`.air/trial-report-2026-11-09-pods.md`) found three defects, fixed in this release; the trial
+of record is the rerun after them.
+
+### Added
+
+- `air done <id> --reason-file <proof>` for a worker or the lane: the hand-over gate without
+  its green checks (the bead's commit, your claim, a declared precheck), the proof as a comment
+  on the bead and the judged head on the claim. `air land` closes a done bead once the base
+  branch contains that head, in one bd process, and releases the claim as `landed`; a bead
+  already on the base branch closes at once. A bead nobody declared done is never closed by a
+  landing.
+- After a red batch of several members, `air record` and `air status` list the members not
+  yet verified alone and the `--only` cut for the first, until each has been cut alone or a
+  later green carries it (owner ruling 2026-11-09: each member is tested individually). The split
+  chooses among every red-held branch, not only the newest red batch's members. The trial's Red
+  batch row files three beads, two breakers and one harmless, held in one cut by the fleet stop.
+
+### Changed
+
+- A worker's or the lane's `air close` is refused and names `air done`; the landing
+  closes a declared bead once the base branch holds its head. The coordinator's and the
+  owner's `air close` are unchanged. The `batch green` notice to a batch's members is gone,
+  since a green asks nothing of a worker that has declared done; the red and dropped notices
+  stay. A member's `main moved` notice names the beads of its own the landing closed and any
+  done bead still waiting for its head. The loops line measures done to landed in place of
+  batch green to close.
+- The roles text, the design doc, CLAUDE.md, the README, the adopting guide, the beads
+  and decomposition skills and the example say what the round built: a worker declares its
+  bead done with `air done` and the landing closes it; `air close` is the coordinator's and the
+  owner's.
+- The live trial covers the done flow: Early close is Done before green, with one more
+  commit after the declaration; a Dependency scenario shows a dependent refused until its
+  dependency lands; the red batch has two members and a fleet stop and resume inside the
+  breaker's wait; the lease beads are one epic's children, closed by the last landing; the
+  conflict pair hears the peer-file warning. Eleven scenarios, in the request and in §9.1.
+
+### Removed
+
+- The `closed-not-landed` attention condition: its input, a worker's close before the
+  landing, no longer arrives once a worker declares done and the landing closes. Recorded
+  firings still attribute in `air audit`. `handover-not-green` is renamed `done-refused`: a
+  worker whose `air done` was refused and has not passed since, with the attempt count per
+  bead and the last attempt's time, whatever the green at its head.
+
+### Fixed
+
+- `air land` could not close a bead its worker held: bd 1.3.0 refuses a close by another
+  actor without `--force`, and the lane was refused at every landing of the 2026-11-09 trial.
+  The landing's close passes `--force` (the landing's only; `air close` and `air reclaim` pass
+  none), a close bd refuses even so is reported as `done: bd refused to close` and in the
+  `main moved` notice as `done but refused`, apart from a bead still waiting for its head, and
+  `air handover` names a missing precheck whatever the green, as `air done` does.
+- `air status` showed a session's model from the first transcript line carrying the key,
+  whatever the record kind, so the coordinator read as Opus while it ran Fable. The model is
+  now the newest assistant record's, and a `/model` switch after launch shows on the next hook.
+
 ## [0.4.15] - 2026-11-07
 
 Live trial on 2026-11-06, the first with every session on its own pod
