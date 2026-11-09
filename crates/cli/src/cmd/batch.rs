@@ -493,11 +493,12 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         .iter()
         .map(|m| format!("{}@{}", m.worker, short(&m.sha)))
         .collect();
-    // air-ch9p: a batch of one has nothing to split.
+    // air-ch9p: a batch of one has nothing to split. air-67q: a batch of more is verified
+    // member by member, and the members still to verify are listed beside this line.
     let then = if b.members.len() == 1 {
         "its only member is batch-ready again after a new commit or a later green containing it"
     } else {
-        "the lane splits by hand"
+        "the lane verifies each member alone"
     };
     format!(
         "batch red at {} ({}): members {}; nothing lands on it, {then}",
@@ -505,6 +506,83 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         b.worker,
         members.join(", ")
     )
+}
+
+/// Pure (air-67q): the members of `red` not yet verified on their own. A member is verified
+/// alone once a run finished after the red whose members are exactly that member at that sha,
+/// whatever its verdict: green and it is landable, red and it is the breaker waiting for a
+/// commit. A member a later green contains is out as well, whether that green was a split of
+/// one or a batch. `contains(green_sha, member_sha)` is git's ancestry question, passed in so
+/// the function and its tests run with no repository. Killed runs are no verdict and must not
+/// be in `runs_since`; the ledger's `runs_since` leaves them out.
+///
+/// Owner ruling 2026-11-09: when a whole batch is red, each member is tested individually. The
+/// 2026-11-09 pod trial's lane cut one member on a guess, saw it red, and never cut the other,
+/// because nothing Air printed said which members had not been tested alone.
+pub fn untested_alone(
+    red: &RedBatch,
+    runs_since: &[air_ledger::verify::VerifyRun],
+    contains: &dyn Fn(&str, &str) -> bool,
+) -> Vec<air_ledger::landings::Member> {
+    red.members
+        .iter()
+        .filter(|m| {
+            let alone = runs_since
+                .iter()
+                .filter(|r| r.finished_at > red.at && !r.is_killed())
+                .any(|r| r.members.len() == 1 && r.members[0] == **m);
+            let carried = runs_since
+                .iter()
+                .filter(|r| r.finished_at > red.at && r.is_green())
+                .any(|r| contains(&r.sha, &m.sha));
+            !alone && !carried
+        })
+        .cloned()
+        .collect()
+}
+
+/// The red batch the lane is splitting (air-67q): the newest red batch of more than one member
+/// that no later green has superseded, with the members not yet verified alone. `None` when
+/// no such batch stands. Read by `air record` after a batch and by `air status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RedSplit {
+    pub batch: RedBatch,
+    pub untested: Vec<air_ledger::landings::Member>,
+}
+
+/// The split in progress, if any: see [`RedSplit`]. The newest standing red batch may be a
+/// member cut alone and found red; the batch it came from still stands until a green carries
+/// every member, and it is the one whose remaining members the lane needs listed.
+pub fn red_split_standing(ledger: &Ledger, repo: &Path) -> Option<RedSplit> {
+    let runs = ledger.red_batches(Kind::Verify).ok()?;
+    let red = red_batches_of(&runs)
+        .into_iter()
+        .filter(|b| b.members.len() > 1)
+        .find(|b| {
+            let greens = ledger.greens_since(Kind::Verify, &b.at).unwrap_or_default();
+            !superseded_by(repo, b, &greens)
+        })?;
+    let since = ledger.runs_since(Kind::Verify, &red.at).unwrap_or_default();
+    let contains = |g: &str, m: &str| git::is_ancestor(repo, m, g).unwrap_or(false);
+    let untested = untested_alone(&red, &since, &contains);
+    Some(RedSplit {
+        batch: red,
+        untested,
+    })
+}
+
+/// The lines `air record` and `air status` print for a split in progress: one per member not
+/// yet verified alone, then the `--only` cut for the first. Nothing when every member has been
+/// verified alone, so the ok path is silent.
+pub fn untested_lines(untested: &[air_ledger::landings::Member]) -> Vec<String> {
+    let mut v: Vec<String> = untested
+        .iter()
+        .map(|m| format!("not yet verified alone: {}@{}", m.worker, short(&m.sha)))
+        .collect();
+    if let Some(first) = untested.first() {
+        v.push(format!("next: air batch cut --only {}", first.worker));
+    }
+    v
 }
 
 /// The two sentences the gate carries (air-80x.1): the ok line when every bead in `beads`
@@ -824,5 +902,118 @@ mod tests {
         // count says the candidate was reached rather than filtered out.
         let s = cover(&[cand("z", true, &[false, true])], &commits).scanned;
         assert_eq!((s.with_main, s.touching), (1, 1));
+    }
+
+    /// air-67q: a red batch of three; one green alone, one red alone, the third is what is
+    /// left; a green carrying it empties the list. A two-member run tests nobody alone, and a
+    /// killed run would be no verdict, but the ledger never hands one in.
+    #[test]
+    fn untested_alone_lists_the_members_no_run_has_verified_on_their_own() {
+        use air_ledger::landings::Member;
+        use air_ledger::verify::{Kind, VerifyRun};
+        let member = |w: &str, sha: &str| Member {
+            worker: w.into(),
+            sha: sha.into(),
+        };
+        let red = RedBatch {
+            sha: "batch000".into(),
+            worker: "lane".into(),
+            at: "2026-11-09T19:22:21Z".into(),
+            members: vec![
+                member("a", "aaaa"),
+                member("b", "bbbb"),
+                member("c", "cccc"),
+            ],
+            log_path: None,
+        };
+        let run = |sha: &str, exit: i32, at: &str, members: Vec<Member>| VerifyRun {
+            id: sha.into(),
+            worker: "lane".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: exit,
+            trigger: "record".into(),
+            failing_step: None,
+            started_at: at.into(),
+            finished_at: at.into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members,
+            main_sha: None,
+        };
+        // Containment as a table: a green's sha names the member shas it carries.
+        let contains = |g: &str, m: &str| match g {
+            "cut-c" => m == "cccc",
+            "big" => matches!(m, "aaaa" | "bbbb" | "cccc"),
+            _ => false,
+        };
+        let names = |v: Vec<Member>| v.into_iter().map(|m| m.worker).collect::<Vec<_>>();
+
+        // Fresh red: nobody has been tested alone.
+        assert_eq!(names(untested_alone(&red, &[], &contains)), ["a", "b", "c"]);
+        // A run before the red, and a run of two members, test nobody alone.
+        let before = run("old", 0, "2026-11-09T19:00:00Z", vec![member("a", "aaaa")]);
+        let pair = run(
+            "pair",
+            1,
+            "2026-11-09T19:23:00Z",
+            vec![member("a", "aaaa"), member("b", "bbbb")],
+        );
+        assert_eq!(
+            names(untested_alone(&red, &[pair, before], &contains)),
+            ["a", "b", "c"]
+        );
+        // c green alone and a red alone: b is what is left, whatever the order of the rows.
+        let c_green = run(
+            "cut-c",
+            0,
+            "2026-11-09T19:24:00Z",
+            vec![member("c", "cccc")],
+        );
+        let a_red = run(
+            "cut-a",
+            2,
+            "2026-11-09T19:25:00Z",
+            vec![member("a", "aaaa")],
+        );
+        let since = vec![a_red.clone(), c_green.clone()];
+        assert_eq!(names(untested_alone(&red, &since, &contains)), ["b"]);
+        // A green that carries b (a later batch of everything) empties the list.
+        let big = run("big", 0, "2026-11-09T19:30:00Z", vec![]);
+        assert!(untested_alone(&red, &[big, a_red, c_green], &contains).is_empty());
+        // A member at a different sha is a different member.
+        let moved = run(
+            "cut-b2",
+            0,
+            "2026-11-09T19:26:00Z",
+            vec![member("b", "b2b2")],
+        );
+        assert_eq!(
+            names(untested_alone(&red, &[moved], &contains)),
+            ["a", "b", "c"]
+        );
+
+        // The lines: one per member, then the first's cut; nothing for an empty list.
+        let lines = untested_lines(&[member("b", "bbbbbbbbcccc"), member("c", "cccc")]);
+        assert_eq!(
+            lines,
+            [
+                "not yet verified alone: b@bbbbbbbb",
+                "not yet verified alone: c@cccc",
+                "next: air batch cut --only b",
+            ]
+        );
+        assert!(untested_lines(&[]).is_empty());
+        // The red line of a batch of several says what the lane does, and never "by hand".
+        let line = red_batch_line(&red);
+        assert!(
+            line.contains("the lane verifies each member alone"),
+            "{line}"
+        );
+        assert!(!line.contains("by hand"), "{line}");
     }
 }
