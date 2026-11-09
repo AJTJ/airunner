@@ -6,12 +6,13 @@ from memory: which commit passed verification, who is editing which file, who ho
 task, and who holds a shared resource. A worker declares a bead done once a commit names it, and
 the bead closes only when a landing puts that commit on main after the lane's green.
 
-This document describes main at `da16bd3e` on 2026-11-09, the end of the done-at-landing round:
-version 0.4.15 (the last release row, `install::RELEASES`), with four notices waiting (240 files
-in `crates/cli/surface.d/` against the row's 236). The statements the 0.4.15 round's 24 commits touch were
-re-checked against that tree on 2026-11-07 (air-0b7), and the done flow (air-4xj) was written into
-§4 to §8 on 2026-11-09. What was removed, and why, is in `docs/solved-issues.md` and `CHANGELOG.md`; this
-document describes only what exists.
+This document describes main at `92c1ac51` on 2026-11-09, the end of the done-at-landing round
+and the three fixes its pod trial asked for (air-52u, air-67q, air-ius): version 0.4.15 (the last
+release row, `install::RELEASES`), with seven notices waiting (243 files in `crates/cli/surface.d/`
+against the row's 236). The statements the 0.4.15 round's 24 commits touch were re-checked against
+that tree on 2026-11-07 (air-0b7), the done flow (air-4xj) was written into §4 to §8 on 2026-11-09,
+and the trial fixes were swept into §4, §6, §8.1 and §9.1 the same day (air-nfd). What was removed,
+and why, is in `docs/solved-issues.md` and `CHANGELOG.md`; this document describes only what exists.
 
 ## 1. Context and goals
 
@@ -455,7 +456,7 @@ is repeated unchanged.
 |---|---|---|
 | beads are ready (a count and `bd ready`, never ids: air-bcg) | `air claim`, `air release`, `air close`, `air done` and `air land` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
 | batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
-| batch red | `air record` at a batch head | each member, with the exit and the kept output; a green says nothing to members, since the landing closes their declared beads (air-4xj.2) |
+| batch red | `air record` at a batch head | each member, with the exit and the kept output; the lane's own output lists the members not yet verified alone and the `--only` cut for the first (air-67q); a green says nothing to members, since the landing closes their declared beads (air-4xj.2) |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |
 | main moved | `air land` | every session but the lane and the one that landed; a member's copy names the beads of its own the landing closed, any done bead still waiting for its head, and any beads refused to close |
 | capture from | `air capture` | the coordinator |
