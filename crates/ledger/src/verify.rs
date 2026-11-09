@@ -855,7 +855,7 @@ mod tests {
         let since = ledger.runs_since(Kind::Verify, at).unwrap();
         let shas: Vec<&str> = since.iter().map(|r| r.sha.as_str()).collect();
         assert_eq!(shas, ["green", "cut-a"]);
-        assert_eq!(since[1].members, alone.members);
+        assert_eq!(since.get(1).map(|r| &r.members), Some(&alone.members));
     }
 
     /// air-80x.4: a run's members round-trip, and `latest_runs` returns every verdict newest

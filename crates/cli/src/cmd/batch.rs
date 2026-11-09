@@ -530,7 +530,7 @@ pub fn untested_alone(
             let alone = runs_since
                 .iter()
                 .filter(|r| r.finished_at > red.at && !r.is_killed())
-                .any(|r| r.members.len() == 1 && r.members[0] == **m);
+                .any(|r| r.members.len() == 1 && r.members.first() == Some(*m));
             let carried = runs_since
                 .iter()
                 .filter(|r| r.finished_at > red.at && r.is_green())
