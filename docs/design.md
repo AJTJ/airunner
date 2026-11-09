@@ -537,6 +537,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 
 | Rule | Date | Carried by |
 |---|---|---|
+| An addition to a bead a worker holds is a bead plus a `SendMessage` to the holder; a correction is a `SendMessage` checked as received, and a bead if it was not. | 2026-11-09 | `docs/rules/roles.md`, coordinator section |
 | A worker declares its bead done with proof through `air done`; the landing that puts that head on main closes it. A landing closes nothing nobody declared done. | 2026-11-09 | `done.rs`, `land::close_done`, `close::worker_refusal` |
 | When a whole batch is red, each member is verified alone. Air lists the members not yet verified alone and the next `--only` cut, and picks nobody for the lane. | 2026-11-09 | `batch::untested_alone`, `record::after_batch`, `batch_cut::red_held_members` |
 | Closing needs a green containing main and the bead's commits; a digest only where configured (superseded 2026-11-09, first row: the declaration needs no green, and the landing supplies it). | 2026-09-25 | the gate behind `air handover` |
