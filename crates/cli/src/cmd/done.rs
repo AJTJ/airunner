@@ -261,7 +261,9 @@ pub fn run(
     if !landed.is_empty() {
         let main_sha = git::run(repo, &["rev-parse", &base]).unwrap_or_default();
         let why = format!("landed at {}; {proof}", short(&main_sha));
-        if let Err(e) = bd.close_all(&landed, &why, &actor) {
+        // The worker closes its own bead here, and bd's assignee is this actor: no `--force`
+        // (air-52u: the force is the landing's).
+        if let Err(e) = bd.close_all(&landed, &why, &actor, false) {
             let msg = format!(
                 "air done: {} already on {base}, and bd refused the close: {e}; the done \
                  declaration is recorded, re-run to close",

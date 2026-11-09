@@ -316,10 +316,12 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         });
     }
     // air-erii: "wait for the next batch" read as the worker having nothing to do, when a
-    // branch with no precheck never enters one. The fix is the worker's own. Beside a missing
-    // green under the full gate; whenever it is missing under `air done` (air-4xj.1), since a
-    // done bead waits on a batch that a branch without a precheck never joins.
-    if f.precheck_missing && (!f.require_green || !green) {
+    // branch with no precheck never enters one. The fix is the worker's own. Named whenever
+    // the fact is set, under both gates (air-52u): under the full gate it used to hide behind
+    // a batch green, so `air handover` said the done would pass while `air done` refused for
+    // it (the 2026-11-09 trial). `handover::facts` sets it whenever the repo declares a
+    // precheck and none is green at the head.
+    if f.precheck_missing {
         missing.push(Missing {
             check: "precheck",
             detail: format!(
@@ -665,9 +667,11 @@ mod tests {
         );
         f.red_at_head = Some(None);
         assert!(handover_verdict(&f).message.contains("output: not kept"));
+        // air-52u: the gate names the fact whenever it is set, green or not; `handover::facts`
+        // sets it whenever the repo declares a precheck and none is green at the head.
         let mut green = facts();
         green.precheck_missing = true;
-        assert!(handover_verdict(&green).pass);
+        assert!(!handover_verdict(&green).pass);
     }
 
     fn facts() -> GateFacts {
@@ -770,15 +774,50 @@ mod tests {
             "{}",
             v.message
         );
-        // Under the full gate the same fact is named only beside the missing green.
+        // air-52u: under the full gate the same fact is named too, green or not; the trial's
+        // `air handover` passed on a batch green while `air done` refused for the precheck.
         precheck.require_green = true;
         precheck.green_at_head = true;
         precheck.main_is_ancestor = true;
-        assert!(handover_verdict(&precheck).pass);
+        let v = handover_verdict(&precheck);
+        assert!(!v.pass);
+        assert_eq!(
+            v.missing.iter().map(|m| m.check).collect::<Vec<_>>(),
+            ["precheck"]
+        );
         precheck.green_at_head = false;
         let v = handover_verdict(&precheck);
         assert!(v.missing.iter().any(|m| m.check == "precheck"));
         assert!(v.missing.iter().any(|m| m.check == "verify-green-at-head"));
+    }
+
+    /// air-52u: the precheck verdict is the same under the full gate and under `air done` for
+    /// the same facts: a bead covered by the lane's batch green, a head past it with no green
+    /// of its own and no precheck recorded. The full gate used to pass here, since the batch
+    /// green counted as a green, while `air done` refused.
+    #[test]
+    fn the_full_gate_and_the_done_gate_agree_on_a_missing_precheck() {
+        let mut f = facts();
+        f.green_at_head = false;
+        f.runs_at_head = (0, 0);
+        f.batch_green = Some("c0ffee0123".into());
+        f.under_lane = true;
+        f.precheck_missing = true;
+        let checks = |v: &Verdict| v.missing.iter().map(|m| m.check).collect::<Vec<_>>();
+        let full = handover_verdict(&f);
+        let mut done = f.clone();
+        done.require_green = false;
+        let done = handover_verdict(&done);
+        assert_eq!(checks(&full), ["precheck"], "{}", full.message);
+        assert_eq!(checks(&done), ["precheck"], "{}", done.message);
+        f.precheck_missing = false;
+        assert!(
+            handover_verdict(&f).pass,
+            "{}",
+            handover_verdict(&f).message
+        );
+        f.require_green = false;
+        assert!(handover_verdict(&f).pass);
     }
 
     /// air-gcjp: a bead no commit names does not close on a green head; the refusal names the

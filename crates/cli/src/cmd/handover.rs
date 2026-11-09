@@ -123,20 +123,24 @@ pub fn facts(
     })
     .collect();
     let runs_at_head = ledger.runs_at(&head, Kind::Verify).unwrap_or((0, 0));
-    // air-erii: read only when HEAD has no green, which is when a refusal can name them.
-    let (red_at_head, precheck_missing) = if green_at_head {
-        (None, false)
+    // air-erii: the red log is read only when HEAD has no green, which is when a refusal
+    // can name it.
+    let red_at_head = if green_at_head {
+        None
     } else {
-        let red = ledger
+        ledger
             .latest_run_at_commit(&head, Kind::Verify)
             .ok()
             .flatten()
             .filter(|r| r.verdict() == air_ledger::verify::Verdict::Red)
-            .map(|r| r.log_path);
-        let precheck = super::status::precheck_declared(repo)
-            && !super::green::at(ledger, repo, &head, Kind::Precheck).is_ok_and(|e| e.holds());
-        (red, precheck)
+            .map(|r| r.log_path)
     };
+    // air-52u: the precheck is asked for whatever the green. It used to be read only off a
+    // green head and named only beside a missing green, so `air handover` passed on the
+    // lane's batch green while `air done` refused for it (the 2026-11-09 trial); the cut
+    // wants it at the head whatever a batch covered.
+    let precheck_missing = super::status::precheck_declared(repo)
+        && !super::green::at(ledger, repo, &head, Kind::Precheck).is_ok_and(|e| e.holds());
     Ok(GateFacts {
         require_green: true,
         worker: worker.to_string(),

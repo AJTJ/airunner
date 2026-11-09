@@ -209,7 +209,9 @@ pub fn run(
     let bd = super::claim::bd_for(repo);
     // One process for every id. A partial failure is bd's to report: it names the id it
     // choked on and nothing is written to the ledger, so a re-run is safe.
-    if let Err(e) = bd.close_all(beads, reason, &actor) {
+    // No `--force` (owner, 2026-11-09): the coordinator and the owner close what bd agrees
+    // is theirs to close; the force is the lane's landing's (`land::close_done`, air-52u).
+    if let Err(e) = bd.close_all(beads, reason, &actor, false) {
         let msg = refusal(&e, beads.len(), super::claim::bd_overridden());
         log_event(
             &ledger,

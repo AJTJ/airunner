@@ -12,6 +12,23 @@ of being solved is listed under "Left out" at the end. Adopters are cited as "an
 
 ## Landing and the close gate
 
+**The landing could not close a done bead: beads refused the lane as the actor.**
+Seen: the 2026-11-09 pod trial, at every landing (11 landings, 0 beads closed by a landing, 28
+declarations accepted): `cannot close <bead>: assignee is "worker-N", actor is "lane"; reclaim
+or use --force to override`. Each bead closed only when its worker ran `air done` a second
+time, and the `main moved` notices said "done but waiting" of a head that was on main. The
+done probe's fake beads refused nothing, so it could not see it.
+Fix: the landing's close passes beads' `--force` (`crates/bd/src/lib.rs` `close_argv`,
+`crates/cli/src/cmd/land.rs` `close_done`, air-52u); a close beads refuses even so is reported
+as `done: bd refused to close`, in the notice as `done but refused`, never as waiting; and
+`air handover` names a missing precheck whatever the green, as `air done` does. Tests
+`the_landing_closes_a_held_done_bead_with_force_and_names_a_bd_refusal_apart_from_waiting` and
+`handover_and_done_agree_on_a_missing_precheck_under_a_batch_green` in
+`crates/cli/tests/claim_cli.rs`; the done probe's fake beads now refuses a forceless close by
+another actor.
+Do not: read "could not close" as "not on main"; pass the force anywhere but the landing
+(`air close` and `air reclaim` pass none, owner 2026-11-09).
+
 **A dependent bead was claimable before its dependency's code was on main.**
 Seen: the 2026-11-06 pod trial, the lease scenario: a worker closed its bead on the lane's
 batch green, one batch before the landing, and the bead that depended on it was claimable for
