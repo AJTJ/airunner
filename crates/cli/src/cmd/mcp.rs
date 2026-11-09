@@ -316,6 +316,13 @@ fn tool_defs() -> Vec<Tool> {
                 "drop":{"type":"string"}}}),
         },
         Tool {
+            name: "air_done",
+            description: "Declare beads done with proof and no green (worker or lane). Runs the hand-over gate minus its green checks (the bead's commit, your claim, a precheck where declared) and refuses naming what is missing. Records the proof on each bead as a comment and the head on your claim; the claim stays yours, and `air land` closes the bead once the base branch contains that head. One bd process per id.",
+            schema: json!({"type":"object","required":["bead","reason"],"properties":{
+                "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "reason":{"type":"string"}}}),
+        },
+        Tool {
             name: "air_close",
             description: "Close beads and release their claims. A worker's or the lane's close runs the hand-over gate first and closes nothing if a bead fails it. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
             schema: json!({"type":"object","required":["bead","reason"],"properties":{
@@ -443,19 +450,19 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
                 (None, None) => return Err("give bead or drop".into()),
             }
         }
-        "air_close" => {
+        "air_close" | "air_done" => {
             let beads = list_arg(args, "bead");
             if beads.is_empty() {
                 return Err("bead is required".into());
             }
             let reason = str_arg(args, "reason").ok_or("reason is required")?;
-            argv.push("close".into());
+            argv.push(name.trim_start_matches("air_").into());
             argv.extend(beads);
             argv.extend(["--reason".into(), reason.into()]);
         }
         _ => return Err(format!("unknown tool: {name}")),
     }
-    let ids = if name == "air_close" {
+    let ids = if matches!(name, "air_close" | "air_done") {
         list_arg(args, "bead").len()
     } else {
         1
@@ -505,6 +512,7 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
 ///   `claim_landed`).
 /// - `air release`: `bd show`, then the reopen.
 /// - `air close`: one `bd close` for every id (`close_all`).
+/// - `air done`: one `bd comment` per id, under the id count's budget (air-4xj.1).
 /// - `air triage`: one `bd show` for the bead it points at, under the probe budget, which is
 ///   never larger than the client's.
 /// - `air handover`: the `bd ready` that refreshes the Stop hook's ready list after the verdict.
@@ -515,7 +523,7 @@ fn bd_calls(tool: &str) -> u32 {
     match tool {
         "air_claim" => 6,
         "air_release" => 2,
-        "air_close" | "air_triage" | "air_handover" => 1,
+        "air_close" | "air_done" | "air_triage" | "air_handover" => 1,
         _ => 0,
     }
 }

@@ -567,6 +567,9 @@ pub const BOOKKEEPING: &[&str] = &[
     "claimed-retried",
     "clear",
     "closed",
+    // `air done` recorded the declaration (air-4xj.1): a fact on the claim, deciding nothing;
+    // the refusal is the gate's row.
+    "done",
     "dropped",
     "ended",
     "fail-open",

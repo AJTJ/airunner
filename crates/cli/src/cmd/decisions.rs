@@ -121,6 +121,10 @@ traces! {
     CLOSE_BD_REFUSED = "close" / "bd-refused";
     CLOSE_CLOSED = "close" / "closed";
 
+    DONE_REFUSE = "done" / "refuse";
+    DONE_BD_REFUSED = "done" / "bd-refused";
+    DONE_DONE = "done" / "done";
+
     GC_REPORTED = "gc" / "reported";
     GC_COLLECTED = "gc" / "collected";
 

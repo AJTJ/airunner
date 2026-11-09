@@ -853,10 +853,19 @@ pub fn run(
             }
         }
     }
-    // A worker's bead is never closed here: the worker closes its own with proof before the
-    // branch lands (owner ruling, 2026-08-22). An epic has no worker. Once a landing leaves one
-    // with every child closed, it is closed here (air-92o0, owner 2026-09-28: the coordinator
-    // was not reliable enough to, and an adopter's status listed three such epics on every run).
+    // A worker's bead is closed here only when its worker declared it done (air-4xj.1): the
+    // declaration names the head it judged, and the bead closes once main contains it. A bead
+    // nobody declared done is never closed by a landing (owner ruling, 2026-08-22: the worker
+    // closes its own with proof). An epic has no worker. Once a landing leaves one with every
+    // child closed, it is closed here (air-92o0, owner 2026-09-28: the coordinator was not
+    // reliable enough to, and an adopter's status listed three such epics on every run). The
+    // done beads first, so an epic whose last child closed here closes in the same landing.
+    let mut closed_now: Vec<String> = Vec::new();
+    if let Some(merge) = moved.1.as_deref() {
+        let (more, ids) = close_done(repo, &ledger, &worker, merge, &landed);
+        lines.extend(more);
+        closed_now = ids;
+    }
     if !landed.is_empty() {
         lines.extend(close_finished_epics(repo, &worker));
     }
@@ -897,12 +906,99 @@ pub fn run(
         &serde_json::json!({
             "ok": code == 0,
             "landed": landed,
+            "closed": closed_now,
             "batch_ready": next_ready,
             "log": lines,
         }),
         || msg.clone(),
     );
     code
+}
+
+/// Close every bead its worker declared done whose declared head the base branch now contains
+/// (air-4xj.1), in ONE bd process, and release their claims as `landed`. Returns the lines
+/// for the landing's output and the ids closed. A done bead among `landed` whose head is not
+/// on the base branch yet is named as waiting: its worker declared a later commit than the
+/// one this landing carried.
+///
+/// Every done row is read, not only the beads this landing carried: a bead whose declared
+/// head reaches main inside another branch's landing closes then, and nothing else would
+/// close it.
+fn close_done(
+    repo: &Path,
+    ledger: &air_ledger::Ledger,
+    worker: &str,
+    merge: &str,
+    landed: &[String],
+) -> (Vec<String>, Vec<String>) {
+    use air_bd::WorkLedger;
+    let rows = match ledger.done_claims() {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                vec![format!("done: could not read the ledger: {e}")],
+                Vec::new(),
+            );
+        }
+    };
+    if rows.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let base = super::handover::base_branch(repo);
+    let mut lines = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    let mut proofs: Vec<String> = Vec::new();
+    for r in &rows {
+        let Some(head) = r.done_head.as_deref() else {
+            continue;
+        };
+        let contained = git::is_ancestor(repo, head, &base).unwrap_or(false);
+        if contained {
+            if !ids.contains(&r.bead) {
+                ids.push(r.bead.clone());
+                let first = r
+                    .done_proof
+                    .as_deref()
+                    .and_then(|p| p.lines().next())
+                    .unwrap_or_default();
+                proofs.push(format!("{}: {first}", r.bead));
+            }
+        } else if landed.contains(&r.bead) {
+            lines.push(format!(
+                "waits: {} (done at {}, not yet on {base})",
+                r.bead,
+                head.get(..8).unwrap_or(head)
+            ));
+        }
+    }
+    if ids.is_empty() {
+        return (lines, ids);
+    }
+    let actor = std::env::var("BEADS_ACTOR")
+        .ok()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| worker.to_string());
+    let reason = format!(
+        "landed at {}; {}",
+        merge.get(..8).unwrap_or(merge),
+        proofs.join("; ")
+    );
+    let bd = super::claim::bd_for(repo);
+    if let Err(e) = bd.close_all(&ids, &reason, &actor) {
+        lines.push(format!(
+            "done: could not close {}: {e}; the next landing tries again",
+            ids.join(" ")
+        ));
+        return (lines, Vec::new());
+    }
+    match ledger.release_claims_on(&ids, "landed", &now()) {
+        Ok(_) => lines.push(format!("closed: {}", ids.join(" "))),
+        Err(e) => lines.push(format!(
+            "closed: {}; the ledger release failed: {e}",
+            ids.join(" ")
+        )),
+    }
+    (lines, ids)
 }
 
 /// The open epics a landing may close: bd says every child is closed, and there is at least

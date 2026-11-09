@@ -53,7 +53,7 @@ The workspace has four crates. Line counts are `.rs` lines on 2026-11-07 (`find 
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 4,327 | The SQLite schema (v30), one row type per table, and the event writer. No network, no beads. |
+| ledger | 4,327 | The SQLite schema (v31), one row type per table, and the event writer. No network, no beads. |
 | hooks | 1,361 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
 | bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
 | cli | 60,698 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (14,069 lines, 167 probes). |
@@ -263,7 +263,7 @@ erDiagram
 | runs | One row per `air run`: session, commit, tree, command, exit, times, output size, the target (`local`, or the ssh destination or exec prefix with `:path`), and the machine as the probe read it there (hostname, image, arch, nproc, CPU), and what `--pull` brought back (the paths and their byte total). Not a verify: no green query reads it. | run |
 | batch_cuts | The members a cut merged, keyed by lane and head. | batch cut |
 | offers | The heads the coordinator offered to the lane with `air ready` (v30): worker, commit, time. The batch-ready rule reads it for the coordinator's branch unless `coordinator_autobatch` is set. | ready |
-| claims | Who holds which bead, the files declared, and when and why it let go. | claim, release, close, reclaim |
+| claims | Who holds which bead, the files declared, the head and proof its worker declared it done with (v31, `air done`), and when and why it let go. | claim, done, release, close, land, reclaim |
 | sessions | One row per worker name: role, state, sticky fact, and pid with start time; alive only when that pid runs with that start time. | the hook |
 | edit_journal | Which worker touched which file, and when; deleted when the edit ends. | the hook, holdings, land |
 | landings | Each landing: result, beads, the landing commit. | land |

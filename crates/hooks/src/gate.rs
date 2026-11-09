@@ -8,9 +8,16 @@
 use serde::Serialize;
 
 /// Facts the gate needs. All are observations, none are model text.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GateFacts {
     pub worker: String,
+    /// Whether a green is part of the verdict (air-4xj.1). `air close` asks for one, as it
+    /// always has. `air done` sets this false: a worker declares its bead done with proof and
+    /// no green, and the landing closes the bead once the base branch contains the head it
+    /// declared. With it false the gate skips `verify-green-at-head` and `main-merged`, and
+    /// names a missing precheck whenever one is missing, since no batch comes without it.
+    /// Defaults to true, so a fixture that names nothing keeps the full gate.
+    pub require_green: bool,
     /// The base branch the fleet lands onto (air-h7l): `main` unless `.claude/air.json` sets
     /// `base_branch`. Every "main" below means this branch; the field names keep the word.
     /// Empty reads as `main`, so a fixture that names none is unchanged.
@@ -110,6 +117,44 @@ pub struct GateFacts {
     pub under_lane: bool,
 }
 
+impl Default for GateFacts {
+    /// Every observation absent, and the green REQUIRED: a `bool` would default to false,
+    /// which would turn every fixture built with `..Default::default()` into a done check.
+    fn default() -> Self {
+        Self {
+            worker: String::new(),
+            require_green: true,
+            base: String::new(),
+            beads_without_commit: Vec::new(),
+            head: String::new(),
+            green_at_head: false,
+            tree_green: None,
+            batch_green: None,
+            batch_predates: None,
+            batch_absent: None,
+            batch_absent_fix: None,
+            last_green_sha: None,
+            refused_command: None,
+            main_is_ancestor: false,
+            work_in_main: false,
+            main_sha: String::new(),
+            main_moved: None,
+            bead_claimed_or_carried: false,
+            bead: None,
+            held_beads: Vec::new(),
+            carried_beads: Vec::new(),
+            runs_at_head: (0, 0),
+            red_at_head: None,
+            precheck_missing: false,
+            digest_present: None,
+            digest_untracked: false,
+            digest_dir: None,
+            advisory: false,
+            under_lane: false,
+        }
+    }
+}
+
 /// A landing that moved main (air-4up). The adopter, 2026-08-30: eight refusals in one
 /// round, all four workers, every one caused by a coordinator landing, and the wording
 /// described the worker's tree. Two workers read it as their own defect and merged again
@@ -196,7 +241,9 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     // air-80x.1: a verify lane's batch green counts when it contains main and every commit
     // of the bead. It is a second way to be green, never a way to be less than green.
     let green = f.green_at_head || f.batch_green.is_some();
-    if !green {
+    // air-4xj.1: `air done` asks for no green. The landing closes the bead once the base
+    // branch contains the declared head, and a green is the landing's condition, not this one's.
+    if f.require_green && !green {
         let last = f
             .last_green_sha
             .as_deref()
@@ -267,20 +314,22 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
             // Recording a verify is the lane's job, never the worker's, where one runs.
             flow_dependent: true,
         });
-        // air-erii: "wait for the next batch" read as the worker having nothing to do, when a
-        // branch with no precheck never enters one. The fix is the worker's own.
-        if f.precheck_missing {
-            missing.push(Missing {
-                check: "precheck",
-                detail: format!(
-                    "no precheck recorded at {}, and this repo gates the batch on one",
-                    short(&f.head)
-                ),
-                fix: "`air record precheck -- <the repo's precheck command>` in this worktree"
-                    .to_string(),
-                flow_dependent: false,
-            });
-        }
+    }
+    // air-erii: "wait for the next batch" read as the worker having nothing to do, when a
+    // branch with no precheck never enters one. The fix is the worker's own. Beside a missing
+    // green under the full gate; whenever it is missing under `air done` (air-4xj.1), since a
+    // done bead waits on a batch that a branch without a precheck never joins.
+    if f.precheck_missing && (!f.require_green || !green) {
+        missing.push(Missing {
+            check: "precheck",
+            detail: format!(
+                "no precheck recorded at {}, and this repo gates the batch on one",
+                short(&f.head)
+            ),
+            fix: "`air record precheck -- <the repo's precheck command>` in this worktree"
+                .to_string(),
+            flow_dependent: false,
+        });
     }
     // D1 (0.4.7 trial): judge the bead, not the branch head. When every commit naming the
     // bead is in main (landed) or in a recorded green that contained the main it ran over, the
@@ -293,7 +342,7 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
     // make, and it was said at every close refusal and every Stop. Under a lane the check is
     // reported only when a green at head exists and lacks main.
     let lane_waits = f.under_lane && !f.green_at_head;
-    if !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {
+    if f.require_green && !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {
         // air-4up: the cause is outside the worker's tree, so say so. "main is not an
         // ancestor of HEAD" stays in every form: the adopter's counts refusals by that phrase.
         // The fix is unchanged; this is wording, not behaviour.
@@ -490,11 +539,17 @@ pub fn handover_verdict(f: &GateFacts) -> Verdict {
         } else {
             format!(", {base} at {}", short(&f.main_sha))
         };
-        format!(
-            "handover ok: {} at {}{main}{batch}",
-            f.worker,
-            short(&f.head),
-        )
+        // air-4xj.1: a done check passes on the bead's commit and claim alone, so its line
+        // says what it checked and not that the head is green.
+        if f.require_green {
+            format!(
+                "handover ok: {} at {}{main}{batch}",
+                f.worker,
+                short(&f.head),
+            )
+        } else {
+            format!("done ok: {} at {}{main}", f.worker, short(&f.head))
+        }
     } else {
         // air-kcns: name what was refused. `handover refused` is true of the gate and false
         // of the reader when the command was a `bd close` — the reader's hand-over succeeded,
@@ -618,6 +673,7 @@ mod tests {
     fn facts() -> GateFacts {
         GateFacts {
             worker: "backend-leaning".into(),
+            require_green: true,
             base: String::new(),
             beads_without_commit: Vec::new(),
             refused_command: None,
@@ -646,6 +702,83 @@ mod tests {
             advisory: false,
             under_lane: false,
         }
+    }
+
+    /// air-4xj.1: `air done` asks for no green. With `require_green: false` a head with no
+    /// green, behind main, passes with a `done ok` line; a missing trailer is still refused;
+    /// a missing precheck is named without a green beside it; and the full gate on the same
+    /// facts still refuses, so the two verdicts are the one flag apart.
+    #[test]
+    fn a_done_check_passes_without_a_green_and_still_wants_the_commit() {
+        let mut f = facts();
+        f.require_green = false;
+        f.green_at_head = false;
+        f.runs_at_head = (0, 0);
+        f.last_green_sha = None;
+        f.main_is_ancestor = false;
+        f.refused_command = Some("air done".into());
+        let v = handover_verdict(&f);
+        assert!(v.pass, "{}", v.message);
+        assert!(
+            v.message.starts_with("done ok: backend-leaning at f854145"),
+            "{}",
+            v.message
+        );
+        assert!(!v.message.contains("handover ok"), "{}", v.message);
+        let mut full = f.clone();
+        full.require_green = true;
+        let full = handover_verdict(&full);
+        assert!(!full.pass);
+        assert!(
+            full.missing
+                .iter()
+                .any(|m| m.check == "verify-green-at-head")
+        );
+        assert!(full.missing.iter().any(|m| m.check == "main-merged"));
+
+        let mut none = f.clone();
+        none.beads_without_commit = vec!["zz-o5fi".into()];
+        let v = handover_verdict(&none);
+        assert!(!v.pass);
+        assert_eq!(v.missing.len(), 1);
+        assert_eq!(v.missing[0].check, "bead-commit");
+        assert!(
+            v.message
+                .starts_with("air done refused for backend-leaning at f854145: bead-commit"),
+            "{}",
+            v.message
+        );
+
+        let mut unclaimed = f.clone();
+        unclaimed.bead_claimed_or_carried = false;
+        let v = handover_verdict(&unclaimed);
+        assert_eq!(
+            v.missing.iter().map(|m| m.check).collect::<Vec<_>>(),
+            ["claim"]
+        );
+
+        let mut precheck = f.clone();
+        precheck.precheck_missing = true;
+        let v = handover_verdict(&precheck);
+        assert!(!v.pass);
+        assert_eq!(
+            v.missing.iter().map(|m| m.check).collect::<Vec<_>>(),
+            ["precheck"]
+        );
+        assert!(
+            v.message.contains("no precheck recorded at f854145"),
+            "{}",
+            v.message
+        );
+        // Under the full gate the same fact is named only beside the missing green.
+        precheck.require_green = true;
+        precheck.green_at_head = true;
+        precheck.main_is_ancestor = true;
+        assert!(handover_verdict(&precheck).pass);
+        precheck.green_at_head = false;
+        let v = handover_verdict(&precheck);
+        assert!(v.missing.iter().any(|m| m.check == "precheck"));
+        assert!(v.missing.iter().any(|m| m.check == "verify-green-at-head"));
     }
 
     /// air-gcjp: a bead no commit names does not close on a green head; the refusal names the
