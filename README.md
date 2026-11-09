@@ -37,7 +37,7 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
   - Air reports to workers when a bead is ready to be claimed. The first worker to claim it gets it.
   - Every commit names its bead, so Air knows what each branch contains.
   - A worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures full system integrity.
-  - Air tells a worker when its work passes, fails or lands, and when it clashes with another worker's work. Only on a pass will the worker close its bead.
+  - A worker declares its bead done as soon as the work is committed. Air tells it when its work fails, lands or clashes with another worker's work, and the landing closes the bead.
   - Air warns a worker when another worker is editing the same file.
   - A worker takes a lease on anything only one agent can use at a time, such as a port or a simulator.
 - **Verification lane** (`air lane`)
@@ -59,7 +59,7 @@ flowchart LR
     L -- "green: lands" --> M[main]
     L -- "red or conflict: names the worker" --> W
     M -- "main moved" --> C
-    M -- "batch green: air close" --> W
+    M -- "main moved: closed" --> W
 ```
 
 Air sends the messages on the arrows; nobody polls and nobody relays.
@@ -119,7 +119,8 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Ledger.** One SQLite file with claims, verification runs, leases and landings, plus a daily
   event log.
 - **Hook.** `air hook` records every tool call, warns when two workers edit one file, and
-  nudges an idle worker toward ready beads; `air close` refuses a close that has no passing run.
+  nudges an idle worker toward ready beads; `air done` refuses a declaration whose bead no
+  commit names, and the landing closes the bead.
 - **Channel.** `air mcp` tells the coordinator when something needs attention.
 - **Merge queue.** `air record`, `air batch cut` and `air land`; `air ready` offers the
   coordinator's own branch to the lane.
