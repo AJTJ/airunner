@@ -28,16 +28,18 @@ goes through Claude Code's permission classifier, which reads the conversation a
 refuses a line it judges to be a remote shell write, unless an allow rule on the session's
 settings matches the bare line first. On 2026-11-04 a worker's direct `kubectl exec` was
 refused (air-kzt); on 2026-11-05 a worker's bare `air run -- true` against a pod was refused
-twice, the second time with no reason given (air-tdh). The lane never met the classifier,
-because its `air record` line is on its allow list
+twice, the second time with no reason given (air-tdh).
+
+The lane never met the classifier, because its `air record` line is on its allow list
 (`crates/cli/src/cmd/launch.rs:464` `lane_allow`, from air-8cdh and air-b1h8). Since
 air-nyi (2026-11-05) `air worker` passes the same kind of rule for `air run *` and `air record
 *` (`launch.rs:500` `worker_allow`), so a worker's bare line resolves before the classifier
-too; a session launched before that needs a relaunch to have it. Two rules follow from the
-mechanism: the line must be bare, since a pipe or redirect takes the whole line back to the
-classifier (air-b1h8); and a session Air did not launch has no such rule, so a target for it
-works only from a shell with no classifier, or with an exact allow rule in the project's
-`.claude/settings.json`, which this guide does not recommend.
+too; a session launched before that needs a relaunch to have it.
+
+Two rules follow from the mechanism. The line must be bare, since a pipe or redirect takes the
+whole line back to the classifier (air-b1h8). And a session Air did not launch has no such
+rule, so a target for it works only from a shell with no classifier, or with an exact allow
+rule in the project's `.claude/settings.json`, which this guide does not recommend.
 
 A coordinator that deploys or resizes the machine itself needs the deploy commands in
 `coordinator_allow` in `.claude/air.json` (the table in
@@ -81,16 +83,19 @@ names the check reads, nothing that authenticates.
 
 One entry per session, keyed by the session's name. `exec` is the argv prefix that runs a
 command on the machine with stdin and stdout attached; `path` is the repository directory
-there. The `ssh` short form expands to the prefix `ssh <user>@<host>`. The entry normally
-lives in `.claude/air.local.json`, which is gitignored and whose top-level keys replace the
-committed `.claude/air.json`'s keys of the same name (adopting-air.md, "Configure"): a
-machine's name, the kubeconfig that reaches it and the user's home path then stay out of the
-project's history, and a change takes effect when the file is written, not when a landing
-carries it. The committed file keeps only what Air does, with `targets` absent or a
-placeholder such as the first block below for a reader, and each laptop's own file carries the
-real entries. This repository's own five entries, one per launched session, live in that file
-on the owner's laptop and not in git; its committed file has no `targets` key, so a fresh clone
-on another machine runs locally until its owner writes an overlay of their own:
+there. The `ssh` short form expands to the prefix `ssh <user>@<host>`.
+
+The entry normally lives in `.claude/air.local.json`, which is gitignored and whose top-level
+keys replace the committed `.claude/air.json`'s keys of the same name (adopting-air.md,
+"Configure"). A machine's name, the kubeconfig that reaches it and the user's home path then
+stay out of the project's history, and a change takes effect when the file is written, not
+when a landing carries it. The committed file keeps only what Air does, with `targets` absent
+or a placeholder such as the first block below for a reader, and each laptop's own file
+carries the real entries.
+
+This repository's own five entries, one per launched session, live in that file on the
+owner's laptop and not in git. Its committed file has no `targets` key, so a fresh clone on
+another machine runs locally until its owner writes an overlay of their own:
 
 ```json
 {"targets": {"lane": {"exec": ["kubectl", "exec", "-i", "<pod-or-deploy/name>", "-c", "<container>", "-n", "<namespace>", "--"],
@@ -103,14 +108,15 @@ on another machine runs locally until its owner writes an overlay of their own:
 
 Three things to know before writing it. Both files are read from the main checkout, so the
 overlay is written there, never in a worktree, and `air status` run anywhere shows what it
-set; if you do commit an entry in `.claude/air.json` instead, every word of the prefix goes
+set. If you do commit an entry in `.claude/air.json` instead, every word of the prefix goes
 into the project's history, it takes effect only when the lane lands it after verifying that
 batch on the old target, and a pod name that changes at every redeploy is better named as a
-deployment or resolved when the command runs (step 9). The prefix runs with the session's
-environment, which a launched session keeps small, so anything the tool needs
-(`--kubeconfig <file>`, a `KUBECONFIG` the shell would have set) goes in the prefix. And
-`kubectl exec` runs `sh -c` with the container's PATH, not a login shell's: a toolchain
-installed into a home directory is not on it, and the prefix ends with
+deployment or resolved when the command runs (step 9).
+
+The prefix runs with the session's environment, which a launched session keeps small, so
+anything the tool needs (`--kubeconfig <file>`, a `KUBECONFIG` the shell would have set) goes
+in the prefix. And `kubectl exec` runs `sh -c` with the container's PATH, not a login shell's:
+a toolchain installed into a home directory is not on it, and the prefix ends with
 `"env", "PATH=/home/<user>/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"`
 to put it there (`env` execs the `sh -c` and the push's `git-receive-pack` alike).
 
@@ -180,11 +186,14 @@ while the toolchain in the home is installed once for all of them. `kubectl exec
 resolves to one pod of the deployment, the same one every time, so with that prefix every
 session lands on one replica and the others sit idle. And a pod's name changes at every
 redeploy, so the pod for a session cannot be written into the file; it has to be resolved when
-the command runs. This repository resolves it with `scripts/kube-exec-nth`, which reads the
-deployment's selector, lists its Running pods sorted by name, and runs the command on the Nth:
-the coordinator is 1, the lane 2 and worker-N is N+2, so every session sees the same order
-while the pod set is unchanged. The entry is the script, its arguments, and the `env PATH=` tail of step 5; the
-push and the command both go through it, since git's `ext::` helper runs the prefix as argv.
+the command runs.
+
+This repository resolves it with `scripts/kube-exec-nth`, which reads the deployment's
+selector, lists its Running pods sorted by name, and runs the command on the Nth: the
+coordinator is 1, the lane 2 and worker-N is N+2, so every session sees the same order while
+the pod set is unchanged. The entry is the script, its arguments, and the `env PATH=` tail of
+step 5; the push and the command both go through it, since git's `ext::` helper runs the
+prefix as argv.
 
 ```json
 {"targets": {"worker-1": {"exec": ["<repo>/scripts/kube-exec-nth", "<kubeconfig>", "<namespace>", "<deployment>", "<container>",
