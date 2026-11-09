@@ -12,8 +12,8 @@ project.
 ## The check
 
 The check is the command that decides whether the project is in a good state. Here it is
-`make verify`. A bead can only close, and a batch can only land, after the check passes at that
-commit. Air runs whatever command you give it and records the result:
+`make verify`. A batch can only land after the check passes at that commit, and a bead closes
+when its commit lands. Air runs whatever command you give it and records the result:
 
 ```sh
 air record verify -- make verify

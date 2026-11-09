@@ -1695,10 +1695,10 @@ mod tests {
         ));
         assert!(has("`air land --worker <lane>`"));
         assert!(!has("`air land --all`"));
-        // A close needs no message, and the coordinator hands out no beads by message; the
+        // A done needs no message, and the coordinator hands out no beads by message; the
         // signal-on-close rule (air-03w) is gone on purpose (air-uzh2).
         assert!(!has("Signal the coordinator when you close a bead"));
-        assert!(has("A close needs no message."));
+        assert!(has("A done needs no message."));
         // air-g9dx: the shipped documents are named where every role reads.
         assert!(has(
             "How Air works is in `.air/docs/design.md`, and what has gone wrong before and why is in `.air/docs/solved-issues.md`"
@@ -1724,10 +1724,15 @@ mod tests {
             !has("`bd update <id> -s awaiting_review`"),
             "roles.md must not prescribe a bead-status step"
         );
-        assert!(has("You close your own bead, with proof"));
-        // Owner, 2026-09-26: a worker closes with `air close`, which runs the gate itself; the
-        // text matcher on a raw `bd close` missed a multi-line call in the 0.4.5 live trial.
-        assert!(has("air close <id> --reason-file <proof>"));
+        assert!(has("You declare your own bead done, with proof"));
+        // air-4xj: a worker declares with `air done` and the landing closes; a worker's
+        // `air close` is refused (air-4xj.2). The text matcher on a raw `bd close` missed a
+        // multi-line call in the 0.4.5 live trial, so no bd close is named either.
+        assert!(has("air done <id> --reason-file <proof>"));
+        assert!(!has("air close <id> --reason-file <proof>"));
+        assert!(has(
+            "A landing closes the beads declared done whose head it put on main"
+        ));
         assert!(!has("bd close"));
         assert!(has("You need not merge main to stay batch-ready"));
         // air-6el: no command line in the shipped text hardcodes `main` as the branch. Where a
@@ -1802,9 +1807,10 @@ mod tests {
         assert!(has(
             "A branch that mixes them with anything else needs a trailer"
         ));
-        // Main moving costs landability, never a close (air-9ij); landing does not re-verify,
-        // which holds only for a verify that reads the tree (air-odv).
-        assert!(has("main moving no longer retracts a close"));
+        // Main moving costs landability, never a done (air-9ij, air-4xj); landing does not
+        // re-verify, which holds only for a verify that reads the tree (air-odv).
+        assert!(has("main moving only delays the landing that contains it"));
+        assert!(!has("main moving no longer retracts a close"));
         assert!(has("Air's landing does not re-verify"));
         assert!(has("reads the tree alone and not git history"));
         // The verification lane, under Worker, as facts and refusals. It names no cadence and
@@ -1826,10 +1832,13 @@ mod tests {
         assert!(flat_lane.contains("The lane's loop."));
         assert!(flat_lane.contains("never a sha from a message"));
         assert!(flat_lane.contains("Run `air batch cut` in your worktree"));
-        assert!(flat_lane.contains(
-            "The close gate accepts a green at a verified commit that contains `main` and every \
-             commit carrying the bead's trailer"
-        ));
+        // air-4xj: the landing closes the declared beads; no worker closes on the lane's green.
+        assert!(
+            flat_lane.contains(
+                "the landing closes every bead whose declared done head is now on `main`"
+            )
+        );
+        assert!(!flat_lane.contains("so a worker closes on the lane's green"));
         // Batch-ready does not require main (owner, 2026-09-25).
         assert!(flat_lane.contains("Being behind `main` does not take it out."));
         assert!(

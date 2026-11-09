@@ -12,6 +12,21 @@ of being solved is listed under "Left out" at the end. Adopters are cited as "an
 
 ## Landing and the close gate
 
+**A dependent bead was claimable before its dependency's code was on main.**
+Seen: the 2026-11-06 pod trial, the lease scenario: a worker closed its bead on the lane's
+batch green, one batch before the landing, and the bead that depended on it was claimable for
+the width of that batch while its code was on no branch but the author's. The same gap had
+held every dependent since the lane was introduced on 2026-09-28.
+Fix: a worker declares done instead of closing (`air done`, `crates/cli/src/cmd/done.rs`,
+air-4xj.1); the landing closes every declared bead whose head it put on main
+(`crates/cli/src/cmd/land.rs` `close_done`), a worker's `air close` is refused naming `air done`
+(air-4xj.2), and the `closed-not-landed` condition went with the state it read (air-4xj.3).
+Selftest probe `done: a bead declared done before the lane's green closes at the landing, and a
+dependent is refused until then`; test
+`done_declares_without_a_green_and_the_landing_closes_with_one_bd_process` in
+`crates/cli/tests/claim_cli.rs`.
+Do not: let any state a worker sets stand in for a landing.
+
 **A close in the seconds between the fast-forward and the landing row was refused.**
 Seen: an adopter, 2026-09-26/27 round on 0.4.10: 5 refusals in one day, each right after a
 "close them now" notice, each passing on a retry about 20 s later.

@@ -34,7 +34,7 @@ wrong problem).
 
 ## Sizing (Metis's "scope, not time", with Air's unit)
 
-**The unit is one worker session that ends with `air handover` succeeding.** Not hours, not
+**The unit is one worker session that ends with `air done` accepted.** Not hours, not
 points. Scrum's one sizing rule is that the doers size; here the doer is a fresh session that
 cannot renegotiate scope, so the filer sizes for it and the ledger's single-agent success rate is
 the feedback.

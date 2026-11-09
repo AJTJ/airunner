@@ -2,7 +2,7 @@
 name: beads
 description: Use when working in a repository that uses bd (Beads) for durable task tracking, issue dependencies, blockers, multi-session hand-off, or shared work memory. Trigger when asked to find ready work, claim or close a bead, file follow-up work, inspect blockers, recover project context, or when about to run any `bd` command. Covers the bd 1.2.1 CLI surface, shell-quoting rules, worktree pinning, statuses, and the known bd traps.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Beads
@@ -85,12 +85,14 @@ echo "Why this exists and what needs to be done" \
       --deps discovered-from:<parent-id>
 ```
 
-5. Close completed work with evidence in the reason. In a repo that runs Air, close with
-   `air close`, which runs the hand-over check before it calls bd; a worker's or the lane's raw
-   `bd close` is denied by its launcher.
+5. Declare completed work done with evidence in the proof. In a repo that runs Air, a worker
+   declares with `air done`, which runs the hand-over check and puts the proof on the bead; the
+   landing that carries the commit closes the bead. A worker's or the lane's `air close` is
+   refused and their raw `bd close` is denied by the launcher; the coordinator and the owner
+   close with `air close`.
 
 ```bash
-air close <id> --reason-file <proof>   # the proof: "make verify exit 0 at <sha>; acceptance met: ..."
+air done <id> --reason-file <proof>   # the proof: "cargo test exit 0 at <sha>; acceptance met: ..."
 ```
 
 ## Worktree pinning
@@ -149,8 +151,9 @@ See the `decomposition` skill for how to cut an epic.
 Built-in: `open`, `in_progress`, `blocked`, `deferred`, `closed`, `pinned`, `hooked`. Repos
 may configure custom statuses; Air relies on none.
 
-- There is no `done` or `completed` status. Finish work with `air close <id>` (which calls
-  bd's own close), never `bd update --status closed` or `--status done`.
+- There is no `done` or `completed` status in bd. A worker finishes work with `air done <id>`,
+  and the landing calls bd's own close; the coordinator closes with `air close <id>`. Never
+  `bd update --status closed` or `--status done`.
 - There is no `--resolution` flag on `bd update`. Close reasons go through `--reason` or
   `--reason-file` on the close.
 - Release a claim you cannot progress (`air release <id> --reason <why>`). A stuck claimed bead is
@@ -276,3 +279,5 @@ Each one was measured on a live fleet.
   the adopter's dates kept only where they are the measurement.
 - 2026-09-26: closing moved from `bd close` to `air close`, which runs the hand-over gate itself
   (owner ruling after the 0.4.5 live trial, where a raw `bd close` on its own line escaped it).
+- 2026-11-09 (air-4xj): a worker's close moved to `air done`, which declares with proof and
+  leaves the close to the landing; `air close` is the coordinator's and the owner's.
