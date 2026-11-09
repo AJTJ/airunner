@@ -1849,9 +1849,11 @@ mod tests {
         assert!(!flat_lane.contains("so a worker closes on the lane's green"));
         // Batch-ready does not require main (owner, 2026-09-25).
         assert!(flat_lane.contains("Being behind `main` does not take it out."));
+        // air-7e6: the prose sweep put a blank line between the loop's two halves and the
+        // budget moved from 40 to 44 for that alone; the section still names no cadence.
         assert!(
-            lane.lines().count() < 40,
-            "under 40 lines: {}",
+            lane.lines().count() < 44,
+            "under 44 lines: {}",
             lane.lines().count()
         );
         for word in ["cadence", "every N", "minutes", "hourly", "daily"] {
