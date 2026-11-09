@@ -611,45 +611,48 @@ run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify 46
 
 ### 9.1 The live trial
 
-Every release is tried on a real fleet before it is tagged. `make trial` builds the binary,
-adopts a copy of `examples/minimal` at `$TRIAL_DIR/minimal` with it pinned, and commits the
-scenarios' config (`"verify_lane": true`, `"precheck": true`, the `serve` lease and the
-precheck line in `CLAUDE.md`) so no session has to edit a config file. It then starts the
-fleet with `.air/bin/air coordinator --fleet -- "<request>"`, the text of
-`scripts/trial/request.md` as the coordinator's launch prompt (a copy stays in
-`.air/trial-request.md` as the record), and answers the development-channels prompt in every
-pane with `tmux send-keys Enter` (`scripts/trial/answer-prompts.sh`, tested against stub panes
-in `crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner once it starts (air-fkb: the
-2026-11-05 trial's coordinator, told to read the request from a file, had the read refused by
-the auto-mode classifier and waited hours, air-fzl). `TRIAL_DIR` defaults to one fixed path,
-`$TMPDIR/air-trial`, and `make trial` marks the copy trusted itself: `scripts/trial/trust-copy.py`
-writes the one key Claude Code reads, `projects[<copy>].hasTrustDialogAccepted`, under the
-path's physical form, through a temp file and a rename, with every other key in `~/.claude.json`
-as it was (tested in `crates/cli/tests/trial_trust_copy.rs`; the launcher's refusal before and
-not after is pinned in `install_and_launch.rs`). The trial stopped on that dialog three times
-on 2026-11-05 and 2026-11-06, hours each, and the owner ruled on 2026-11-07 that it needs no step
-at all (air-zau; the research had recommended trusting the path once per machine, air-ekj). The
-launcher still refuses an untrusted repository and never writes the key; the script writes it
-for a directory it has just built from Air's own example. Removed when Claude Code offers a
-session-level flag that pre-trusts a directory. The
-coordinator files the scenarios' beads, and the base-branch scenario's rename and key are its
-own edits in the scratch copy's main checkout, not a step for the owner (air-3hw: the
-2026-11-06 trial stopped for hours at that row waiting to be told). When every bead is closed
-it writes `.air/trial-report.md`, and an observer checks it against the events, git and beads
-and adds the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
-not fixed during the trial. The release is tagged only if every scenario ends as expected.
+Every release is tried on a real fleet before it is tagged. `make trial` builds the binary, adopts
+a copy of `examples/minimal` at `$TRIAL_DIR/minimal` with it pinned, and commits the scenarios'
+config (`"verify_lane": true`, `"precheck": true`, the `serve` lease and the precheck line in
+`CLAUDE.md`) so no session has to edit a config file. It then starts the fleet with `.air/bin/air
+coordinator --fleet -- "<request>"`, the text of `scripts/trial/request.md` as the coordinator's
+launch prompt (a copy stays in `.air/trial-request.md` as the record), and answers the
+development-channels prompt in every pane with `tmux send-keys Enter`
+(`scripts/trial/answer-prompts.sh`, tested against stub panes in
+`crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner once it starts
+(air-fkb: the 2026-11-05 trial's coordinator, told to read the request from a file, had the read
+refused by the auto-mode classifier and waited hours, air-fzl). `TRIAL_DIR` defaults to one fixed
+path, `$TMPDIR/air-trial`, and `make trial` marks the copy trusted itself:
+`scripts/trial/trust-copy.py` writes the one key Claude Code reads,
+`projects[<copy>].hasTrustDialogAccepted`, under the path's physical form, through a temp file and
+a rename, with every other key in `~/.claude.json` as it was (tested in
+`crates/cli/tests/trial_trust_copy.rs`; the launcher's refusal before and not after is pinned in
+`install_and_launch.rs`). The trial stopped on that dialog three times on 2026-11-05 and
+2026-11-06, hours each, and the owner ruled on 2026-11-07 that it needs no step at all (air-zau;
+the research had recommended trusting the path once per machine, air-ekj). The launcher still
+refuses an untrusted repository and never writes the key; the script writes it for a directory it
+has just built from Air's own example. Removed when Claude Code offers a session-level flag that
+pre-trusts a directory. The coordinator files the first wave at once (the happy path, the lease
+epic, precheck and done before green) and every later step on an event the rows name, never a
+timer (air-283: the 2026-11-09 run spent two of its rounds on a scripted two-minute wait and
+per-landing waves), and the base-branch scenario's rename and key are its own edits in the scratch
+copy's main checkout, not a step for the owner (air-3hw: the 2026-11-06 trial stopped for hours at
+that row waiting to be told). When every bead is closed it writes `.air/trial-report.md`, and an
+observer checks it against the events, git and beads and adds the counts from
+`scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and not fixed during
+the trial. The release is tagged only if every scenario ends as expected.
 
 | Scenario | Set up | Expected |
 |---|---|---|
 | Happy path | Three unrelated beads | Batches land, every bead is declared done with proof and closes at its landing, `make verify` passes on main |
-| Conflict | Two beads changing the same line, two workers | Each worker is warned once by the hook that the other holds the file; the cut drops the later-ready branch naming the file; it lands in a later batch |
-| Red batch | Three beads filed together, two that each break a test and one harmless; the coordinator runs `air fleet stop` once all three are claimed and `air fleet resume` once all three are batch-ready, so the lane's one cut has three members (air-67q) | While the stop holds, `air status` leads with `FLEET STOPPED`, the lane's cut is refused naming it and no session is killed; after the resume the batch of three is red and the red reaches all three; `air record` lists all three as not yet verified alone with the first `--only` cut; the lane cuts each alone in turn, the two breakers are red alone and held until their reverts, the harmless one is green alone and lands, the list is empty before anything else is cut, and the reverts land in a later batch |
-| Done before green | A worker runs `air done` before the lane's green, then commits once more for the bead without declaring again | Accepted; the bead stays in progress with the proof as a comment and closes at the landing that contains the declared head; the report records which landing carried the later commit and what named it |
-| Lease | A lease on a command, run by two workers; the three beads are children of one epic | The second is refused until the first releases; the landing of the last child closes the epic and names it |
+| Conflict | Once two branches have landed, two beads changing the same line, two workers | Each worker is warned once by the hook that the other holds the file; the cut drops the later-ready branch naming the file; it lands in a later batch |
+| Red batch | Three beads filed together, two that each break a test and one harmless; the coordinator runs `air fleet stop` once all three are claimed and `air fleet resume` once all three are batch-ready, so the lane's one cut has three members (air-67q); each breaker reverts once Air tells it its branch was red alone, with no timer | While the stop holds, `air status` leads with `FLEET STOPPED`, the lane's cut is refused naming it and no session is killed; after the resume the batch of three is red and the red reaches all three; `air record` lists all three as not yet verified alone with the first `--only` cut; the lane cuts each alone in turn, the two breakers are red alone and held until their reverts, the harmless one is green alone and lands, the list is empty before anything else is cut, and the reverts land in a later batch |
+| Done before green | In the first wave, a worker runs `air done` before the lane's green, then commits once more for the bead without declaring again | Accepted; the bead stays in progress with the proof as a comment and closes at the landing that contains the declared head; the report records which landing carried the later commit and what named it |
+| Lease | A lease on a command (`serve.sh`, 20 s), run by two workers; the three beads are children of one epic, in the first wave | The second is refused until the first releases; the landing of the last child closes the epic and names it |
 | Dependency | A bead depending on one whose worker has declared done but whose landing has not happened | `air claim` refuses naming the dependency and its status and `bd ready` omits it until the landing; then it is offered and claimed. The 2026-11-06 trial's lease scenario never ran as specified because a dependent was claimable one batch early (`.air/trial-report-2026-11-06-pods.md` in the main checkout, its Lease row) |
 | Behind main | A branch still waiting when another batch lands | It stays ready and lands without its worker merging main |
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
-| Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
+| Precheck | `"precheck": true`, a first-wave hand-over without one | Not ready for the lane until `air record precheck` passes |
 | Start-up prompts | The fleet `make trial` started with `air coordinator --fleet -- "<request>"`, the development-channels prompt answered in each pane by `scripts/trial/answer-prompts.sh` (air-fkb) | Every session registers in `air status` and no pane is on a prompt, with nothing typed by the coordinator or the owner (air-z41, air-fkb) |
 | Base branch | The coordinator renames the copy's `main` to `trunk` and sets `"base_branch": "trunk"` itself (air-3hw), one bead | The cut, the green, the done and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
 
