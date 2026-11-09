@@ -4645,7 +4645,10 @@ fn land_prints_acceptance_and_closes_nothing() {
     assert_eq!(code, 0, "{out}{err}");
     assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
     // Every clause, as written, and no verdict on any of them.
-    assert!(out.contains("air land closes no worker's bead"), "{out}");
+    assert!(
+        out.contains("air land closes the beads declared done whose head is now on main"),
+        "{out}"
+    );
     for clause in [
         "    - Verify recorded green at HEAD.",
         "    - docs/rule.md says the rule.",
