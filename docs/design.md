@@ -6,7 +6,7 @@ from memory: which commit passed verification, who is editing which file, who ho
 task, and who holds a shared resource. A worker declares a bead done once a commit names it, and
 the bead closes only when a landing puts that commit on main after the lane's green.
 
-This document describes main at `68b72a87` on 2026-11-09 with the done flow's prose on top:
+This document describes main at `da16bd3e` on 2026-11-09, the end of the done-at-landing round:
 version 0.4.15 (the last release row, `install::RELEASES`), with four notices waiting (240 files
 in `crates/cli/surface.d/` against the row's 236). The statements the 0.4.15 round's 24 commits touch were
 re-checked against that tree on 2026-11-07 (air-0b7), and the done flow (air-4xj) was written into
