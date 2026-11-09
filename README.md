@@ -161,7 +161,7 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
   each shown failing without the check and passing with it
   ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
 - Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
-  coordinator, a lane and three workers work through ten scenarios on a copy of
+  coordinator, a lane and three workers work through eleven scenarios on a copy of
   [examples/minimal](examples/minimal), from a fixed
   [request](scripts/trial/request.md). The coordinator writes a report of what happened,
   including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the

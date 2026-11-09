@@ -635,25 +635,27 @@ not fixed during the trial. The release is tagged only if every scenario ends as
 
 | Scenario | Set up | Expected |
 |---|---|---|
-| Happy path | Three unrelated beads | Batches land, every bead closes with proof, `make verify` passes on main |
-| Conflict | Two beads changing the same line, two workers | The cut drops the later-ready branch naming the file; it lands in a later batch |
-| Red batch | A bead that breaks a test | The batch is reported red by member and nothing lands |
-| Early close | A worker closes before the lane's green | Refused, naming what is missing |
-| Lease | A lease on a command, run by two workers | The second is refused until the first releases |
+| Happy path | Three unrelated beads | Batches land, every bead is declared done with proof and closes at its landing, `make verify` passes on main |
+| Conflict | Two beads changing the same line, two workers | Each worker is warned once by the hook that the other holds the file; the cut drops the later-ready branch naming the file; it lands in a later batch |
+| Red batch | Two beads cut together, one that breaks a test and one harmless; during the breaker's wait the coordinator runs `air fleet stop` and `air fleet resume` | The red reaches both members; the lane splits the batch and the harmless bead lands while the breaker is held; `air status` leads with `FLEET STOPPED` while the stop holds, every refusal names it, no session is killed, and the lane cuts again after the resume |
+| Done before green | A worker runs `air done` before the lane's green, then commits once more for the bead without declaring again | Accepted; the bead stays in progress with the proof as a comment and closes at the landing that contains the declared head; the report records which landing carried the later commit and what named it |
+| Lease | A lease on a command, run by two workers; the three beads are children of one epic | The second is refused until the first releases; the landing of the last child closes the epic and names it |
+| Dependency | A bead depending on one whose worker has declared done but whose landing has not happened | `air claim` refuses naming the dependency and its status and `bd ready` omits it until the landing; then it is offered and claimed. The 2026-11-06 trial's lease scenario never ran as specified because a dependent was claimable one batch early (`.air/trial-report-2026-11-06-pods.md` in the main checkout, its Lease row) |
 | Behind main | A branch still waiting when another batch lands | It stays ready and lands without its worker merging main |
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
 | Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
 | Start-up prompts | The fleet `make trial` started with `air coordinator --fleet -- "<request>"`, the development-channels prompt answered in each pane by `scripts/trial/answer-prompts.sh` (air-fkb) | Every session registers in `air status` and no pane is on a prompt, with nothing typed by the coordinator or the owner (air-z41, air-fkb) |
-| Base branch | The coordinator renames the copy's `main` to `trunk` and sets `"base_branch": "trunk"` itself (air-3hw), one bead | The cut, the green, the close and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
+| Base branch | The coordinator renames the copy's `main` to `trunk` and sets `"base_branch": "trunk"` itself (air-3hw), one bead | The cut, the green, the done and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
 
 The trial of record for 0.4.15 is the pod trial of 2026-11-06. `TRIAL_PODS=1 make trial` built
 the copy at `$TMPDIR/air-trial/minimal` from 429decff, and the lane and the three workers each
 verified on their own replica: 34 verify and precheck rows on four pods, 33 green, and no two
 sessions on one machine (the copy's ledger, `verify_runs` by worker and hostname). Twelve
-beads were filed and closed and eight batches landed. Nine of the ten scenarios ended as
-expected. The lease scenario did not: the second serve run was claimed by another worker
-while `serve.sh` still sat on the first worker's branch, so the take and the release worked
-and no session was ever refused a held lease. The behind-main branch landed without the lane
+beads were filed and closed and eight batches landed. Nine of the ten scenarios of that run
+ended as expected. The lease scenario did not: the second serve run was claimed by another
+worker while `serve.sh` still sat on the first worker's branch, so the take and the release
+worked and no session was ever refused a held lease; the Dependency row above is that
+finding, and the done flow (air-4xj) is its fix. The behind-main branch landed without the lane
 needing anything from its worker, but that worker had merged main itself, so the case was not
 clean. The report is `.air/trial-report.md` in that copy. A hand-built pod copy on 2026-11-05
 (air-fzl) ran five scenarios before its coordinator session ended and found two defects in
