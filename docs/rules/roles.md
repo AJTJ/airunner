@@ -167,8 +167,9 @@ from `air`:
   `air claim <id>`. The first claim wins, and a refused claim names why: taken, blocked,
   unknown, owner, an epic, or closed; take another from `bd ready`.
 - `batch red at <sha> (exit <n>)` names the kept output. Nothing lands on it and the lane
-  splits the batch. Your branch stays out of the next batch until a later green contains your
-  commit or you commit again. If the failure is in your change, fix it with a new commit.
+  verifies each member alone. Your branch stays out of the next batch until a later green
+  contains your commit, the lane verifies it alone, or you commit again. If the failure is in
+  your change, fix it with a new commit.
 - `main moved to <sha>: landed <beads>; files changed: <paths>` (the base branch's name where
   one is set) arrives each time main moves. Merge main only if those files touch your own work.
   When it also says `closed: <beads>`, those beads are closed; `done but waiting: <beads>`
@@ -200,20 +201,20 @@ for anything that is not part of the repo.
 ### Verification lane
 
 A lane is a worker session like any other, started with `air lane` (`AIR_ROLE=lane`). It has the
-worker deny list minus `air land`, and the Stop hook offers it no ready beads. It holds no bead,
-batching or between batches: `air batch cut` resets the lane's branch to the base branch
-before it merges, so work of the lane's own does not survive a cut.
+worker deny list minus `air land`, and the Stop hook offers it no ready beads. It holds no bead:
+`air batch cut` resets the lane's branch to the base branch before it merges, so work of the
+lane's own does not survive a cut.
 
-The lane's loop. Run `air batch cut` in your worktree. It resets your branch to the base
-branch and merges every batch-ready branch at the sha `air status` lists, never a sha from a
-message, refusing while your tree is dirty or your head is a passing batch that could still
-land (one main moved past is re-cut), and drops and names a branch that conflicts with main or
-an earlier member. `--dry-run` merges nothing. Then run the test-state reset, if any, and `air record
-verify -- <verify command>`. A target for your session (`targets`, the overlay included) runs it
-there on the pushed batch commit, the green recorded at your head; `--local` runs it here. Its worker
-resolves a dropped branch, not the lane. A red batch lands nothing; split it with `--without` or
-`--only`. Run these and `air land` bare, with no pipe or redirect: only the bare line is
-allowed, and one classifier refusal can stop later landings.
+The lane's loop. Run `air batch cut` in your worktree. It resets your branch to the base branch and
+merges every batch-ready branch at the sha `air status` lists, never a sha from a message, refusing
+while your tree is dirty or your head is a passing batch that could still land, and drops and names
+a branch that conflicts with main or an earlier member. `--dry-run` merges nothing. Then run the
+test-state reset, if any, and `air record verify -- <verify command>`. A target for your session
+(`targets`, the overlay included) runs it there on the pushed batch commit, the green recorded at
+your head; `--local` runs it here. Its worker resolves a dropped branch, not the lane. A red batch
+lands nothing; `air record` lists the members not yet verified alone and the `--only` cut for the
+next, so cut each until the list is empty. Run these and `air land` bare, with no pipe or redirect:
+only the bare line is allowed, and one classifier refusal can stop later landings.
 
 Air delivers `batch-ready: <worker> at <sha> (<beads>)` into your session when a branch becomes
 batch-ready; when you are not mid-batch, run `air batch cut`. `air land` and a batch's `air

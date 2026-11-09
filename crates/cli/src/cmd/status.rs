@@ -242,8 +242,13 @@ pub struct Snapshot {
     /// How long the lane's loop waited on messages in the last 24 hours (air-1vri.2).
     pub loops: super::loops::LoopTimes,
     /// The newest red verify at a batch head that no later green has superseded (air-80x.4),
-    /// with the members it was recorded with. The lane splits by hand; nothing lands on it.
+    /// with the members it was recorded with. Nothing lands on it; the lane verifies each
+    /// member alone.
     pub red_batch: Option<super::batch::RedBatch>,
+    /// The red batch of several members the lane is splitting, with the members not yet
+    /// verified alone (air-67q). Usually the same batch as `red_batch`; a member cut alone and
+    /// found red is the newer red batch, and this is still the one being split.
+    pub red_split: Option<super::batch::RedSplit>,
     /// The install record is older than this binary (air-d61); the same line `air doctor`
     /// prints, so the coordinator sees it without asking.
     pub install_lag: Option<super::install::InstallLag>,
@@ -2493,6 +2498,7 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         landings_in_flight: landings_in_flight(&ledger),
         tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
+        red_split: super::batch::red_split_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
         idle_sleep_min: None,
         fleet_stop: ledger.fleet_stop().ok().flatten(),
@@ -2980,6 +2986,13 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     // air-80x.4: a red batch stays on the screen until a newer batch supersedes it.
     if let Some(b) = &s.red_batch {
         out.push_str(&format!("{}\n", super::batch::red_batch_line(b)));
+    }
+    // air-67q: while a red batch of several is being split, the members not yet verified alone
+    // and the next `--only` cut; silent once every member has been.
+    if let Some(split) = &s.red_split {
+        for l in super::batch::untested_lines(&split.untested) {
+            out.push_str(&format!("{l}\n"));
+        }
     }
     // air-d61: one line while the record lags; gone the moment `air install --write` runs.
     if let Some(l) = &s.install_lag {

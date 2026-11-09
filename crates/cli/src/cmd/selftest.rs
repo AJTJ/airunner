@@ -2729,6 +2729,7 @@ fn all_probes() -> Vec<Probe> {
         probe_idle_without_claim_silent_while_verifying(),
         probe_idle_without_claim_silent_while_its_tree_is_read(),
         probe_handover_names_a_red_batch_you_are_in(),
+        probe_red_split_lists_the_members_not_yet_verified_alone(),
         probe_epic_count_carries_no_instruction(),
         probe_doctor_names_the_binary_against_the_checkout(),
         probe_overlap_names_only_holders_that_can_collide(),
@@ -4417,6 +4418,145 @@ fn probe_idle_without_claim_silent_while_its_tree_is_read() -> Probe {
 /// told nothing either, and in neither case does the output contain a claim that the worker
 /// was not in a batch — the two silences have different reasons and the same output, which is
 /// the ruling (reading A) and is air-sdjo's to change.
+/// air-67q: after a red batch of several members, Air lists the members not yet verified
+/// alone and the `--only` cut for the first, computed from the runs recorded after the red
+/// (owner ruling 2026-11-09: each member is tested individually). The 2026-11-09 pod trial's
+/// lane cut one member on a guess and never cut the other.
+///
+/// Red: a fresh red of three lists all three with the first's cut; once one is green alone and
+/// one red alone, the third is listed; the lines after a non-green batch carry the list and a
+/// single `next:`, the `--only` one. Green: a green carrying the third empties the list and the
+/// lines are the usual next-cut ones; a run of two members, a run before the red and a member
+/// at another sha test nobody alone; the red line of several never says "by hand".
+fn probe_red_split_lists_the_members_not_yet_verified_alone() -> Probe {
+    use crate::cmd::batch::{RedBatch, red_batch_line, untested_alone, untested_lines};
+    use crate::cmd::record::lines_after_batch;
+    use crate::cmd::status::BatchReady;
+    use air_ledger::landings::Member;
+    use air_ledger::verify::{Kind, VerifyRun};
+
+    let member = |w: &str, sha: &str| Member {
+        worker: w.into(),
+        sha: sha.into(),
+    };
+    let red = RedBatch {
+        sha: "c9d658e4".into(),
+        worker: "lane".into(),
+        at: "2026-11-09T19:22:21Z".into(),
+        members: vec![
+            member("worker-1", "a1a1a1a1"),
+            member("worker-2", "b2b2b2b2"),
+            member("worker-3", "c3c3c3c3"),
+        ],
+        log_path: None,
+    };
+    let run = |sha: &str, exit: i32, at: &str, members: Vec<Member>| VerifyRun {
+        id: sha.into(),
+        worker: "lane".into(),
+        sha: sha.into(),
+        kind: Kind::Verify,
+        exit_code: exit,
+        trigger: "record".into(),
+        failing_step: None,
+        started_at: at.into(),
+        finished_at: at.into(),
+        log_path: None,
+        command: None,
+        duration_ms: None,
+        output_bytes: None,
+        dirty: false,
+        tree: None,
+        members,
+        main_sha: None,
+    };
+    let contains = |g: &str, m: &str| match g {
+        "cut-3" => m == "c3c3c3c3",
+        "all" => true,
+        _ => false,
+    };
+    let workers = |v: &[Member]| v.iter().map(|m| m.worker.clone()).collect::<Vec<_>>();
+
+    let fresh = untested_alone(&red, &[], &contains);
+    let fresh_lines = untested_lines(&fresh);
+    let three_alone = run(
+        "cut-3",
+        0,
+        "2026-11-09T19:22:46Z",
+        vec![member("worker-3", "c3c3c3c3")],
+    );
+    let one_alone = run(
+        "cut-1",
+        2,
+        "2026-11-09T19:23:10Z",
+        vec![member("worker-1", "a1a1a1a1")],
+    );
+    let left = untested_alone(&red, &[one_alone.clone(), three_alone.clone()], &contains);
+    let ready = [BatchReady {
+        worker: "worker-4".into(),
+        head: "d4d4d4d4".into(),
+        beads: vec!["zz-4".into()],
+        closed: vec![],
+    }];
+    let after = lines_after_batch("red: nothing lands".into(), &ready, &left);
+    let red_fires = workers(&fresh) == ["worker-1", "worker-2", "worker-3"]
+        && fresh_lines
+            .first()
+            .is_some_and(|l| l == "not yet verified alone: worker-1@a1a1a1a1")
+        && fresh_lines
+            .last()
+            .is_some_and(|l| l == "next: air batch cut --only worker-1")
+        && workers(&left) == ["worker-2"]
+        && after
+            .iter()
+            .any(|l| l.starts_with("batch-ready: worker-4 at d4d4d4d4"))
+        && after.contains(&"not yet verified alone: worker-2@b2b2b2b2".to_string())
+        && after
+            .last()
+            .is_some_and(|l| l == "next: air batch cut --only worker-2")
+        && after.iter().filter(|l| l.starts_with("next:")).count() == 1;
+
+    let all = run("all", 0, "2026-11-09T19:30:00Z", vec![]);
+    let none = untested_alone(
+        &red,
+        &[all, one_alone.clone(), three_alone.clone()],
+        &contains,
+    );
+    let usual = lines_after_batch("red: nothing lands".into(), &ready, &none);
+    let pair = run(
+        "pair",
+        1,
+        "2026-11-09T19:23:30Z",
+        vec![
+            member("worker-1", "a1a1a1a1"),
+            member("worker-2", "b2b2b2b2"),
+        ],
+    );
+    let before = run(
+        "old",
+        0,
+        "2026-11-09T19:00:00Z",
+        vec![member("worker-2", "b2b2b2b2")],
+    );
+    let moved = run(
+        "cut-2b",
+        0,
+        "2026-11-09T19:23:40Z",
+        vec![member("worker-2", "b2b2b2b2b2")],
+    );
+    let green_passes = none.is_empty()
+        && untested_lines(&none).is_empty()
+        && usual.last().is_some_and(|l| l == "next: air batch cut")
+        && workers(&untested_alone(&red, &[pair, before, moved], &contains))
+            == ["worker-1", "worker-2", "worker-3"]
+        && !red_batch_line(&red).contains("by hand")
+        && red_batch_line(&red).contains("the lane verifies each member alone");
+    Probe {
+        name: "record: after a red batch of several, the members not yet verified alone and the --only cut for the first are listed until each has been",
+        red_fires,
+        green_passes,
+    }
+}
+
 fn probe_handover_names_a_red_batch_you_are_in() -> Probe {
     use crate::cmd::batch::RedBatch;
     use crate::cmd::handover::red_batch_line;

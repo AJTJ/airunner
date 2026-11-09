@@ -176,6 +176,24 @@ Do not: split reopen and unassign into two processes, or drop `--actor`.
 
 ## The lane and batches
 
+**After a red batch the lane cut one member alone on a guess, and the harmless member sat unlanded.**
+Seen: the 2026-11-09 pod trial, Red batch row: batch c9d658e4 of two went red; the lane cut
+`--only worker-2` on a guess (the kept log showed only `make: Error 1`), red again at fa1abdf9,
+and never cut worker-1, whose branch stayed `red-at-head` until its worker committed again
+(`.air/trial-report-2026-11-09-pods.md`). Nothing Air printed said which members had not been
+tested alone, and the split chose among the newest red batch's members only, so once a member
+cut alone had gone red, `--only` could not reach the others. The register has four red-split
+entries in six weeks.
+Fix: owner ruling 2026-11-09, each member of a red batch is verified alone.
+`batch::untested_alone` lists the members of the standing red batch of several that no run since
+has verified alone and no green since carries; `air record` after a non-green batch and
+`air status` print them with `next: air batch cut --only <first>`, and the split chooses among
+every `red-at-head` branch (`batch_cut::red_held_members`). Bead air-67q; tests
+`untested_alone_lists_the_members_no_run_has_verified_on_their_own`,
+`batch_cut_splits_a_red_batch_by_its_members`; probe `record: after a red batch of several, the
+members not yet verified alone and the --only cut for the first are listed until each has been`.
+Do not: pick the member for the lane, and do not hold the split's choice to the newest red batch.
+
 **`air batch cut` refused for good once the lane's green head fell behind main.**
 Seen: 2026-09-28 21:30Z, this repo, after the owner landed a worker by hand; the lane could
 neither cut nor land.

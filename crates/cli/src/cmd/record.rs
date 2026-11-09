@@ -331,6 +331,13 @@ pub fn run(repo: &Path, kind: &str, command: &[String], json: bool, local: bool)
 
 /// What the lane does after recording a batch: land a green one, or, after a red or a kill,
 /// cut again from the branches batch-ready now.
+///
+/// air-67q: after a red of several members, each member is verified alone (owner ruling
+/// 2026-11-09). The members not yet verified alone and the `--only` cut for the first are
+/// printed from the ledger, for this red and for every later batch record while the split is
+/// in progress, since a member cut alone and found red is itself a one-member red batch and
+/// its own text says nothing about the others. The 2026-11-09 pod trial's lane cut one member
+/// on a guess and never cut the other.
 fn after_batch(
     repo: &Path,
     ledger: &air_ledger::Ledger,
@@ -354,10 +361,34 @@ fn after_batch(
          green containing it"
             .to_string()
     } else {
-        "red: nothing lands on this batch; split it by its members, then cut again".to_string()
+        "red: nothing lands on this batch; each member is verified alone, then cut again"
+            .to_string()
     };
+    let split = super::batch::red_split_standing(ledger, repo)
+        .map(|s| s.untested)
+        .unwrap_or_default();
+    lines_after_batch(first, &ready, &split)
+}
+
+/// Pure (air-67q): the lines after a non-green batch. With members still to verify alone, the
+/// batch-ready set is listed as information and the one `next:` is the `--only` cut; with
+/// none, the usual next-cut lines.
+pub fn lines_after_batch(
+    first: String,
+    ready: &[super::status::BatchReady],
+    untested: &[air_ledger::landings::Member],
+) -> Vec<String> {
     let mut v = vec![first];
-    v.extend(super::fanout::next_cut_lines(&ready));
+    if untested.is_empty() {
+        v.extend(super::fanout::next_cut_lines(ready));
+    } else {
+        v.extend(
+            ready
+                .iter()
+                .map(|b| format!("batch-ready: {}", super::fanout::batch_ready_line(b))),
+        );
+        v.extend(super::batch::untested_lines(untested));
+    }
     v
 }
 

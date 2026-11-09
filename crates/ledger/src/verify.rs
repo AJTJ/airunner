@@ -426,6 +426,24 @@ impl Ledger {
         Ok(v)
     }
 
+    /// Every run of `kind` that finished strictly after `at` and was not killed, any verdict,
+    /// newest first (air-67q). The other half of a red batch's split: which members have since
+    /// been verified on their own is read from the runs after the red, with their members, and
+    /// a killed run is no verdict, so it does not count as having tested anything.
+    pub fn runs_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
+        let sql = format!(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND finished_at > ?2 AND {NOT_KILLED} \
+             ORDER BY finished_at DESC"
+        );
+        let mut st = self.conn().prepare(&sql)?;
+        let v = st
+            .query_map(params![kind.as_str(), at], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// Every run of `kind` started at or after `at`, any verdict, newest first (air-06k7): what
     /// the loop measurement reads, instead of the newest 500.
     pub fn runs_started_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
@@ -814,6 +832,30 @@ mod tests {
         );
         // The prune is a write: the dead row is gone for the next reader too.
         assert_eq!(ledger.verifies_in_flight().unwrap().len(), 2);
+    }
+
+    /// air-67q: `runs_since` is every non-killed run finished strictly after `at`, any
+    /// verdict, with its members, newest first.
+    #[rstest]
+    fn runs_since_returns_every_verdict_after_at_except_killed(ledger: Ledger) {
+        let at = "2026-11-09T19:22:21Z";
+        ledger.record_verify(&run("lane", "before", 1, at)).unwrap();
+        let mut alone = run("lane", "cut-a", 2, "2026-11-09T19:22:46Z");
+        alone.members = vec![crate::landings::Member {
+            worker: "w1".into(),
+            sha: "aaaa".into(),
+        }];
+        ledger.record_verify(&alone).unwrap();
+        ledger
+            .record_verify(&run("lane", "green", 0, "2026-11-09T19:23:00Z"))
+            .unwrap();
+        ledger
+            .record_verify(&run("lane", "killed", 143, "2026-11-09T19:24:00Z"))
+            .unwrap();
+        let since = ledger.runs_since(Kind::Verify, at).unwrap();
+        let shas: Vec<&str> = since.iter().map(|r| r.sha.as_str()).collect();
+        assert_eq!(shas, ["green", "cut-a"]);
+        assert_eq!(since.get(1).map(|r| &r.members), Some(&alone.members));
     }
 
     /// air-80x.4: a run's members round-trip, and `latest_runs` returns every verdict newest
