@@ -301,13 +301,13 @@ fn batch_run(sha: &str, exit: i32, members: &[(&str, &str)]) -> air_ledger::veri
 /// batch's result or its drop at once. A command that already printed the batch-ready set
 /// counts as telling the lane.
 ///
-/// Red: a batch-ready branch queues one row for the lane; a green batch gives each named member
-/// "batch green ... Close them now" with its beads, a red one gives the exit and the log path,
-/// a drop gives "dropped from batch" with the other side and the paths; `air land` and a red
-/// batch's `air record` end with the batch-ready set and `next: air batch cut`. Green: the same
-/// branch again, and a branch the lane was already told in a command's output, queue nothing;
-/// a killed batch and a member with no worker name say nothing; an empty set prints "nothing
-/// is batch-ready".
+/// Red: a batch-ready branch queues one row for the lane; a red batch gives each named member
+/// the exit and the log path, a drop gives "dropped from batch" with the other side and the
+/// paths; `air land` and a red batch's `air record` end with the batch-ready set and `next:
+/// air batch cut`. Green: the same branch again, and a branch the lane was already told in a
+/// command's output, queue nothing; a green batch (air-4xj.2: the member declared done and
+/// the landing closes), a killed batch and a member with no worker name say nothing; an empty
+/// set prints "nothing is batch-ready".
 pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
     use crate::cmd::fanout::{
         batch_dropped, batch_ready_to_lane, batch_result_notes, next_cut_lines, told_lane,
@@ -333,8 +333,7 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
         s.batch_ready.push(br("w2", "bbbb2222"));
         let already_told = batch_ready_to_lane(&l, "coordinator", &s, "2026-09-26T00:01:00Z");
 
-        // air-5ynn: a member whose commits name no bead (the coordinator) hears the green
-        // with no close instruction; one with a later commit hears that bead as waiting.
+        // air-5ynn: a member's beads as the batch sees them; a red names them all.
         let beads = |m: &air_ledger::landings::Member| match m.worker.as_str() {
             "coordinator" => crate::cmd::fanout::MemberBeads::default(),
             "w2" => crate::cmd::fanout::MemberBeads {
@@ -382,24 +381,9 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             && rows.iter().any(|d| {
                 d.to_worker == "lane" && d.kind == "batch-ready" && d.key == "w1@aaaa1111"
             })
-            && green.len() == 3
-            && green.first().is_some_and(|n| {
-                n.to == "w1"
-                    && n.kind == "batch-green"
-                    && n.beads == "zz-a"
-                    && n.content.contains("Close them now")
-            })
-            && green
+            && red
                 .iter()
-                .filter(|n| n.to == "coordinator" || n.to == "w2")
-                .all(|n| n.beads.is_empty() && !n.content.contains("air close"))
-            && green
-                .iter()
-                .any(|n| n.to == "w2" && n.content.contains("zz-b has a later commit"))
-            && green_one.first().is_some_and(|n| {
-                n.content
-                    .starts_with("your a1a1a1a1 is green as a batch of one (zz-a). Close them now")
-            })
+                .any(|n| n.to == "w2" && n.content.contains("zz-b"))
             && red_one.first().is_some_and(|n| {
                 n.content.contains("was its only member")
                     && n.content
@@ -427,6 +411,8 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
             && next.iter().any(|x| x.contains("w1 at aaaa1111"));
         let green_half = again == 0
             && already_told == 0
+            && green.is_empty()
+            && green_one.is_empty()
             && killed.is_empty()
             && red.len() == 3
             && none.len() == 1
@@ -435,18 +421,20 @@ pub(super) fn probe_the_lane_and_members_hear_batch_events_at_once() -> Probe {
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "lane: the lane hears each newly batch-ready branch once and members hear a green, red or drop at once; land and a batch record end with the next cut",
+        name: "lane: the lane hears each newly batch-ready branch once and members hear a red or drop at once, and nothing on a green; land and a batch record end with the next cut",
         red_fires: red,
         green_passes: green,
     }
 }
 
-/// air-1vri.2: the two loop times come from rows, and a wait that has not ended is no sample.
+/// air-1vri.2, air-4xj.2: the two loop times come from rows, and a wait that has not ended is
+/// no sample.
 ///
 /// Red: a branch told to the lane at 00:00:00 whose batch verify started at 00:00:40 measures
-/// 40 s, and a member told "batch green" at 00:05:00 who closed at 00:05:55 measures 55 s, and
-/// `air status` prints both medians. Green: a branch never batched and a bead never closed add
-/// no sample, and with no rows at all status prints no loops line.
+/// 40 s, and a bead declared done at 00:05:00 whose landing released the claim at 00:05:55
+/// measures 55 s, and `air status` prints both medians. Green: a branch never batched, a bead
+/// declared and never landed, and a claim released any other way add no sample, and with no
+/// rows at all status prints no loops line.
 pub(super) fn probe_loop_times_are_measured_from_rows() -> Probe {
     use crate::cmd::loops::{line, measure};
     use air_ledger::deliveries::Outgoing;
@@ -486,24 +474,21 @@ pub(super) fn probe_loop_times_are_measured_from_rows() -> Probe {
         .map_err(e)?;
         l.record_verify(&batch_run("g0g0g0g0", 0, &[("w1", "a1a1a1a1a1")]))
             .map_err(e)?;
-        l.record_claim("zz-1", "w1", &[], "2026-09-26T00:00:00Z")
+        for b in ["zz-1", "zz-2", "zz-3"] {
+            l.record_claim(b, "w1", &[], "2026-09-26T00:00:00Z")
+                .map_err(e)?;
+            l.mark_done(b, "w1", "a1a1a1a1a1", "p", "2026-09-26T00:05:00Z")
+                .map_err(e)?;
+        }
+        l.release_claim("zz-1", "w1", "landed", "2026-09-26T00:05:55Z")
             .map_err(e)?;
-        l.record_claim("zz-2", "w1", &[], "2026-09-26T00:00:00Z")
-            .map_err(e)?;
-        q(
-            "w1",
-            "batch-green",
-            "run-g0",
-            "zz-1 zz-2",
-            "2026-09-26T00:05:00Z",
-        )
-        .map_err(e)?;
-        l.release_claim("zz-1", "w1", "closed", "2026-09-26T00:05:55Z")
+        // zz-2 waits for its landing; zz-3 was given back, which ended no such wait.
+        l.release_claim("zz-3", "w1", "abandoned", "2026-09-26T00:06:00Z")
             .map_err(e)?;
         let t = measure(&l, "2026-09-25T00:00:00Z");
         let shown = line(&t).unwrap_or_default();
         let red = t.ready_to_batch == [40]
-            && t.green_to_close == [55]
+            && t.done_to_landed == [55]
             && shown.contains("median 40 s over 1")
             && shown.contains("median 55 s over 1");
         let green = empty.is_none();
@@ -511,7 +496,7 @@ pub(super) fn probe_loop_times_are_measured_from_rows() -> Probe {
     })();
     let (red, green) = res.unwrap_or_else(blocked);
     Probe {
-        name: "loops: batch-ready to its batch and batch green to close are measured from ledger rows; a wait that has not ended is no sample",
+        name: "loops: batch-ready to its batch and done to landed are measured from ledger rows; a wait that has not ended is no sample",
         red_fires: red,
         green_passes: green,
     }

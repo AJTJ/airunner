@@ -284,7 +284,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_handover",
-            description: "Is this worktree ready to hand over? Reports what is missing and the fixing command. Advisory.",
+            description: "Is this worktree ready to hand over? Reports what is missing and the fixing command; a pass names `air done`, the worker's declaration. Advisory.",
             schema: json!({"type":"object","properties":{"bead":{"type":"string"}}}),
         },
         Tool {
@@ -324,7 +324,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_close",
-            description: "Close beads and release their claims. A worker's or the lane's close runs the hand-over gate first and closes nothing if a bead fails it. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
+            description: "Close beads and release their claims: the coordinator's and the owner's. A worker's or the lane's close is refused and names `air done`, which declares with proof; the landing closes. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
             schema: json!({"type":"object","required":["bead","reason"],"properties":{
                 "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
                 "reason":{"type":"string"}}}),

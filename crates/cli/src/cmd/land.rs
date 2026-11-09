@@ -54,9 +54,10 @@ pub fn may_land(role: &str) -> Result<(), String> {
                 .to_string(),
         ),
         _ => Err(
-            "refused: `air land` is not a worker's. Close your own bead instead: `air handover` \
-             names anything missing, then `air close <id> --reason-file <proof>` (owner ruling, \
-             2026-08-22). The role comes from AIR_ROLE, which the launcher sets."
+            "refused: `air land` is not a worker's. Declare your own bead done instead: `air \
+             handover` names anything missing, then `air done <id> --reason-file <proof>`, and \
+             the lane's landing closes it (owner ruling, 2026-08-22; air-4xj.2). The role comes \
+             from AIR_ROLE, which the launcher sets."
                 .to_string(),
         ),
     }
@@ -860,19 +861,30 @@ pub fn run(
     // child closed, it is closed here (air-92o0, owner 2026-09-28: the coordinator was not
     // reliable enough to, and an adopter's status listed three such epics on every run). The
     // done beads first, so an epic whose last child closed here closes in the same landing.
-    let mut closed_now: Vec<String> = Vec::new();
+    let mut done = DoneClosed::default();
     if let Some(merge) = moved.1.as_deref() {
-        let (more, ids) = close_done(repo, &ledger, &worker, merge, &landed);
+        let (more, outcome) = close_done(repo, &ledger, &worker, merge, &landed);
         lines.extend(more);
-        closed_now = ids;
+        done = outcome;
     }
+    let closed_now: Vec<String> = done.closed.iter().map(|(b, _)| b.clone()).collect();
     if !landed.is_empty() {
         lines.extend(close_finished_epics(repo, &worker));
     }
-    // air-1vri.4: every other session hears that main moved, once per landing.
+    // air-1vri.4: every other session hears that main moved, once per landing; a member's
+    // copy names what this landing closed of its own and what still waits (air-4xj.2).
     if let (Some(before), Some(merge)) = (&moved.0, &moved.1) {
         super::fanout::main_moved(
-            repo, &ledger, &worker, role, before, merge, &landed, &moved.2,
+            repo,
+            &ledger,
+            &worker,
+            role,
+            before,
+            merge,
+            &landed,
+            &moved.2,
+            &done.closed,
+            &done.waiting,
         );
         // air-84lz: a holding whose change this landing put in main, in a clean tree, ends.
         super::holdings::expire(&ledger, repo);
@@ -915,11 +927,20 @@ pub fn run(
     code
 }
 
+/// What a landing did with the done declarations (air-4xj.1, air-4xj.2): the `(bead, worker)`
+/// pairs it closed, and the done beads whose declared head the base branch still lacks. Both
+/// go into each member's "main moved" notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DoneClosed {
+    pub closed: Vec<(String, String)>,
+    pub waiting: Vec<(String, String)>,
+}
+
 /// Close every bead its worker declared done whose declared head the base branch now contains
 /// (air-4xj.1), in ONE bd process, and release their claims as `landed`. Returns the lines
-/// for the landing's output and the ids closed. A done bead among `landed` whose head is not
-/// on the base branch yet is named as waiting: its worker declared a later commit than the
-/// one this landing carried.
+/// for the landing's output and what was closed and what waits. A done bead among `landed`
+/// whose head is not on the base branch yet is named in the output as waiting: its worker
+/// declared a later commit than the one this landing carried.
 ///
 /// Every done row is read, not only the beads this landing carried: a bead whose declared
 /// head reaches main inside another branch's landing closes then, and nothing else would
@@ -930,23 +951,24 @@ fn close_done(
     worker: &str,
     merge: &str,
     landed: &[String],
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, DoneClosed) {
     use air_bd::WorkLedger;
     let rows = match ledger.done_claims() {
         Ok(r) => r,
         Err(e) => {
             return (
                 vec![format!("done: could not read the ledger: {e}")],
-                Vec::new(),
+                DoneClosed::default(),
             );
         }
     };
     if rows.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), DoneClosed::default());
     }
     let base = super::handover::base_branch(repo);
     let mut lines = Vec::new();
     let mut ids: Vec<String> = Vec::new();
+    let mut out = DoneClosed::default();
     let mut proofs: Vec<String> = Vec::new();
     for r in &rows {
         let Some(head) = r.done_head.as_deref() else {
@@ -963,16 +985,20 @@ fn close_done(
                     .unwrap_or_default();
                 proofs.push(format!("{}: {first}", r.bead));
             }
-        } else if landed.contains(&r.bead) {
-            lines.push(format!(
-                "waits: {} (done at {}, not yet on {base})",
-                r.bead,
-                head.get(..8).unwrap_or(head)
-            ));
+            out.closed.push((r.bead.clone(), r.worker.clone()));
+        } else {
+            out.waiting.push((r.bead.clone(), r.worker.clone()));
+            if landed.contains(&r.bead) {
+                lines.push(format!(
+                    "waits: {} (done at {}, not yet on {base})",
+                    r.bead,
+                    head.get(..8).unwrap_or(head)
+                ));
+            }
         }
     }
     if ids.is_empty() {
-        return (lines, ids);
+        return (lines, out);
     }
     let actor = std::env::var("BEADS_ACTOR")
         .ok()
@@ -989,7 +1015,9 @@ fn close_done(
             "done: could not close {}: {e}; the next landing tries again",
             ids.join(" ")
         ));
-        return (lines, Vec::new());
+        // Not closed, so still waiting, for the notice as for the next landing.
+        out.waiting.append(&mut out.closed);
+        return (lines, out);
     }
     match ledger.release_claims_on(&ids, "landed", &now()) {
         Ok(_) => lines.push(format!("closed: {}", ids.join(" "))),
@@ -998,7 +1026,7 @@ fn close_done(
             ids.join(" ")
         )),
     }
-    (lines, ids)
+    (lines, out)
 }
 
 /// The open epics a landing may close: bd says every child is closed, and there is at least
