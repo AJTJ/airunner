@@ -440,6 +440,15 @@ did not record.
 
 ## Sessions and liveness
 
+**`air status` showed the coordinator's model as Opus while it ran Fable.**
+Seen: the 2026-11-09 pod trial: the model column came from the first transcript line carrying
+the `model` key, whatever the record's kind, and a request-shape record that quoted a model id in
+a tool schema came first; a `/model` switch after launch never showed.
+Fix: only an assistant record counts, and the newest one wins (`crates/cli/src/cmd/hook.rs`
+`model_in_transcript`, `model_of`; the next hook of each session rewrites the recorded model).
+Bead air-ius, SURFACE `model-from-assistant-records`.
+Do not: read a session's model from any record kind but an assistant one, or from the first.
+
 **A dead registration with a reused pid read as alive and got most of the ready notices.**
 Seen: an adopter, 2026-09-27: a pid from 2026-08-31 was a `<defunct>` process; that row was
 flagged idle 39,000+ min on all 252 status runs and received 62 of 65 "beads are ready"
