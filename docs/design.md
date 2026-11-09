@@ -152,7 +152,7 @@ the launchers and `air fleet`; Air refuses `air land` to every launched role but
 | Command | What it does |
 |---|---|
 | air inbox, air triage | Lists open captures; resolves one by linking the filed bead (checked against beads) or dropping it with a reason. |
-| air land | The lane's landing; see §6.3. It lists each landed bead with its acceptance text, closes each bead declared done whose head is now on main (one beads process, the claims released as landed), closes each epic beads reports with all children closed, tells every other session that main moved, naming each member's closed and waiting beads, and prints the batch-ready set and the next command. |
+| air land | The lane's landing; see §6.3. It lists each landed bead with its acceptance text, closes each bead declared done whose head is now on main (one beads process with beads' `--force`, since the landing's actor is the lane and the assignee is the worker; the claims released as landed; a close beads refuses even so is named as refused, apart from a bead still waiting for its head), closes each epic beads reports with all children closed, tells every other session that main moved, naming each member's closed, waiting and refused beads, and prints the batch-ready set and the next command. |
 | air reclaim | Takes back a gone worker's bead with `bd reclaim`, once beads' five-minute claim lease has run out; never `--force`. |
 | air worker, air lane, air coordinator | Start a session (or `--print` its command); `--model` picks the model, `-- <text>` gives the session its first prompt, and `air worker` and `air lane` take `--tmux` and `--task`. `air coordinator` first asks whether to start the fleet; `--fleet` or `--no-fleet` answers in advance, and with no terminal the answer is no. `air worker` refuses while install's output is uncommitted; `air worker <name> --remove` removes a worktree that holds nothing. |
 | air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. `--model <m>` sets the model for that launch over `model` and `lane_model` in `.claude/air.json`. |
@@ -317,7 +317,7 @@ stateDiagram-v2
 | batch-red | a new commit | committed: the new head was in no red batch | `status::red_held` |
 | batch-red | a later green contains the head (the lane's split) | batch-ready again | `status::red_held` |
 | batch-green | `air land --worker lane` | landed | `land::check`: green at head, head contains main |
-| landed | `air land`, the same command | closed: every bead whose declared head main now contains, in one beads process, its claim released as landed | `land::close_done` |
+| landed | `air land`, the same command | closed: every bead whose declared head main now contains, in one beads process with beads' `--force` (the lane is not the assignee), its claim released as landed; a close beads refuses leaves the bead done, named refused rather than waiting, for the next landing | `land::close_done` |
 | batch-green | main moves first | stale: cannot land, and the next cut resets past it | `batch_cut::land_first` |
 | done | main moves before the landing | still done, still batch-ready | `status::batch_ready_rule` |
 | claimed | `air release` | open again | `claim::release` |
@@ -384,7 +384,8 @@ the bead closes at once, since no landing is ahead of it. A refusal names a miss
 a missing trailer, or a bead the caller does not hold, and it stamps the claim's attempt
 counter, which `done refused` reads and a pass clears. A bead that no commit names, on the
 branch or on main, is refused, and the refusal names the fix: commit the result with its
-`Bead:` trailer. `air handover` reports the same facts with the green beside them: a green is a
+`Bead:` trailer. `air handover` reports the same facts with the green beside them, and names a missing
+precheck whatever the green, so it and `air done` agree on it: a green is a
 successful run at the exact commit, or at any commit with the same tree when `verify_key` is
 `tree`, and a bead is covered when a recorded green contains every commit naming it and the
 main that run was recorded over (`batch::cover`). The coordinator and the owner close with
@@ -417,8 +418,11 @@ and main is untouched. Air adopts an identity of its own only when an adopter re
 hitting that. The row is written after
 main moves, carrying the machine (hostname, image, arch, nproc, CPU) of the green it stands on
 (air-2w6), and the notice after the row. Every bead declared done whose head the landing put
-on main is closed in one beads process and its claim released as landed; a declared bead whose
-head is still missing waits for a later landing, and a bead nobody declared is left to the
+on main is closed in one beads process, with beads' `--force` because the landing's actor is
+the lane and the bead's assignee is its worker (beads 1.3.0 refuses the close otherwise, and did
+at every landing of the 2026-11-09 trial), and its claim released as landed; a declared bead
+whose head is still missing waits for a later landing, a close beads refuses even so is named
+as refused and tried at the next landing, and a bead nobody declared is left to the
 coordinator or the owner. Epics whose children are all closed are closed. `--despite-inflight`
 lands over a running verify and records it.
 
@@ -453,7 +457,7 @@ is repeated unchanged.
 | batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
 | batch red | `air record` at a batch head | each member, with the exit and the kept output; a green says nothing to members, since the landing closes their declared beads (air-4xj.2) |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |
-| main moved | `air land` | every session but the lane and the one that landed; a member's copy names the beads of its own the landing closed and any done bead still waiting for its head |
+| main moved | `air land` | every session but the lane and the one that landed; a member's copy names the beads of its own the landing closed, any done bead still waiting for its head, and any beads refused to close |
 | capture from | `air capture` | the coordinator |
 | the ready queue is empty | `air claim`, `air release`, `air close`, `air done`, and the tick, once per emptying | the coordinator |
 | bd server was down | the tick's check of the Dolt port | the coordinator, once per outage |

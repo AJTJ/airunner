@@ -172,7 +172,9 @@ from `air`:
 - `main moved to <sha>: landed <beads>; files changed: <paths>` (the base branch's name where
   one is set) arrives each time main moves. Merge main only if those files touch your own work.
   When it also says `closed: <beads>`, those beads are closed; `done but waiting: <beads>`
-  closes at a later landing, since the head you declared is not on main yet. It needs no reply.
+  closes at a later landing, since the head you declared is not on main yet; `done but
+  refused: <beads>` means bd refused the close with the head on main, and the next landing
+  tries again. It needs no reply.
 - `dropped from batch: ... conflicts with <other> at <sha> in <paths>` means the lane left your
   branch out. Resolve the conflict in your worktree and commit; the branch is then batch-ready
   again.
