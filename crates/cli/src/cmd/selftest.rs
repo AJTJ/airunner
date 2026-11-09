@@ -499,22 +499,6 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
-    // air-gazh. The anchor widens the ledger half from "bd said this bead is CLOSED" to "the
-    // claim ended somehow", which is the failure that would make this condition worthless
-    // rather than absent: every landed bead has a released claim, so the line would fire on
-    // ordinary completed work and a reader would learn to skip it. It compiles, the condition
-    // still renders, and the quiet case is still quiet — only the discrimination goes, which
-    // is the rule the probe names.
-    // Anchor taken from the file AFTER rustfmt, per air-gei.
-    (
-        "status: a closed bead whose commits reached no tree but its author's worktree is named, and a claim that merely ended is not",
-        Mutation {
-            file: "crates/ledger/src/claims.rs",
-            from: "WHERE release_reason = 'closed' ORDER BY released_at DESC",
-            to: "WHERE released_at IS NOT NULL ORDER BY released_at DESC",
-            also_red: &[],
-        },
-    ),
     // air-45pw. The anchor truncates the file route at 500 chars — a generous command line, and
     // exactly the shape of the bug: the capture is still filed, still long, still reads as a
     // capture. A probe asserting "non-empty" or "long enough" stays green here, which is why the
@@ -1517,8 +1501,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // Collapse by throwing claims away instead of by naming them: one line, but it
             // reports one bead of three. The probe's red half asks for all three by name.
             file: "crates/cli/src/cmd/status.rs",
-            from: ".filter(|c| c.handover_attempts > 0)\n                .collect()",
-            to: ".filter(|c| c.handover_attempts > 0)\n                .take(1)\n                .collect()",
+            from: ".filter(|c| c.handover_attempts > 0)\n            .collect()",
+            to: ".filter(|c| c.handover_attempts > 0)\n            .take(1)\n            .collect()",
             also_red: &[],
         },
     ),
@@ -2728,7 +2712,6 @@ fn all_probes() -> Vec<Probe> {
         probe_acceptance_budget_scales_with_ids(),
         probe_mcp_tool_budget_and_group_kill(),
         probe_land_names_a_branch(),
-        probe_closed_bead_not_landed_is_named(),
         probe_capture_records_where_it_was_written(),
         probe_capture_takes_a_file_whole(),
         probe_close_with_proof_sequence(),
@@ -2814,7 +2797,7 @@ fn probe_change_only_push() -> Probe {
     };
     let queue = |attempts: usize, mins: i64| Attention {
         worker: "beta".to_string(),
-        kind: "handover-not-green",
+        kind: "done-refused",
         detail: format!("{attempts} attempt(s), oldest {mins} min"),
         for_minutes: mins,
         fingerprint: format!("attempts:{attempts}"),
@@ -2846,8 +2829,9 @@ fn probe_change_only_push() -> Probe {
     }
 }
 
-/// air-8goe: two `closed-not-landed` beads on one worker, polled for twenty ticks, are pushed
-/// once each, and `air audit` over what the ticks wrote reads pushed <= evaluated. An adopter's
+/// air-8goe: two subjects of one kind on one worker (`landable` here; the reported kind was
+/// `closed-not-landed`, deleted by air-4xj.3), polled for twenty ticks, are pushed once each,
+/// and `air audit` over what the ticks wrote reads pushed <= evaluated. An adopter's
 /// coordinator was pushed that condition 417 times in a day against 11 evaluations, because
 /// both beads shared one (worker, kind) key and each overwrote the other's fingerprint.
 ///
@@ -2868,8 +2852,8 @@ fn probe_one_push_per_subject_audited() -> Probe {
         let day = crate::cmd::today();
         let cnl = |bead: &str, head: &str| Attention {
             worker: "w1".into(),
-            kind: kinds::CLOSED_NOT_LANDED,
-            detail: format!("{bead} is closed but its commits are in no tree but w1's"),
+            kind: kinds::LANDABLE,
+            detail: format!("{bead} is landable at {head}"),
             for_minutes: 0,
             fingerprint: format!("{bead}/{head}"),
             subject: bead.into(),
@@ -2890,7 +2874,7 @@ fn probe_one_push_per_subject_audited() -> Probe {
             );
         }
         let audit = crate::cmd::audit::gather(&dir, &day);
-        let row = audit.rows.iter().find(|r| r.id == "closed-not-landed");
+        let row = audit.rows.iter().find(|r| r.id == "landable");
         let green = sent == 2 && row.is_some_and(|r| r.pushes == 2 && r.pushes <= r.evaluations);
         let snap = Snapshot {
             at: format!("{day}T10:30:00Z"),
@@ -2948,7 +2932,7 @@ fn probe_conditions_logged_on_change_only() -> Probe {
         };
         let waiting = |mins: i64| Attention {
             worker: "beta".to_string(),
-            kind: "handover-not-green",
+            kind: "done-refused",
             detail: format!("4 attempts, oldest {mins} min"),
             for_minutes: mins,
             fingerprint: "attempts:4".to_string(),
@@ -3344,7 +3328,7 @@ fn probe_audit_registry() -> Probe {
     use crate::cmd::mechanisms::Removal;
 
     let events = concat!(
-        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
+        r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["done-refused:alpha"]},"decision":"attention"}"#,
         "\n",
     );
     let a = gather_from(
@@ -3373,7 +3357,7 @@ fn probe_audit_registry() -> Probe {
         .any(|r| r.id == "idle-without-claim" && r.defect.is_none())
         && a.rows
             .iter()
-            .any(|r| r.id == "handover-not-green" && r.evaluations == 1 && r.last_fired.is_some());
+            .any(|r| r.id == "done-refused" && r.evaluations == 1 && r.last_fired.is_some());
     Probe {
         name: "audit: a mechanism with no recorded removal condition is a defect; one with a condition counts",
         red_fires: red,
@@ -3476,100 +3460,6 @@ fn probe_capture_takes_a_file_whole() -> Probe {
     .unwrap_or_else(blocked);
     Probe {
         name: "capture: --file files the finding whole, byte for byte, and passing both routes or neither is refused naming both",
-        red_fires: res.0,
-        green_passes: res.1,
-    }
-}
-
-/// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
-/// An adopter had six at once, derived independently by their coordinator and their worker from
-/// different joins — same six — and there is no error anywhere in how they got there: closed on
-/// a batch green, main moved, the batch stopped containing main, later cuts redded or were
-/// killed. Bead closed, branch green, tree clean. `landable` needs a branch containing main so
-/// it goes quiet the moment main moves; `landed-not-closed` needs a landing. Nothing joined
-/// closed ∩ NOT landed.
-///
-/// **Both halves are pinned deliberately**, per the bead: the value of this line is that it
-/// fires rarely, so a version that fires on a landed bead or on an open one is worse than
-/// nothing. A landed bead cannot reach the join at all — `select` drops a branch already in
-/// main — so the half this probe has to prove is the OPEN one, which reaches the join and must
-/// be rejected there.
-///
-/// Red: a closed bead on a branch that has not landed is named, with its worker and head.
-/// Green: an open bead on the same unlanded branch produces nothing, and neither does a closed
-/// bead whose claim was released for any other reason — the join reads the `closed` release
-/// reason and not merely "the claim ended".
-fn probe_closed_bead_not_landed_is_named() -> Probe {
-    use crate::cmd::status::{Snapshot, Thresholds, attention, kinds};
-
-    let res = (|| -> Result<(bool, bool), String> {
-        let l = Ledger::open_in_memory().map_err(|e| e.to_string())?;
-        // Three beads on one worker's unlanded branch, released three ways. Only the one the
-        // reconcile marked `closed` is this condition's subject.
-        for (bead, reason) in [
-            ("zz-closed", "closed"),
-            ("zz-landed", "landed"),
-            ("zz-abandoned", "abandoned"),
-        ] {
-            l.record_claim(bead, "alpha", &[], "t0")
-                .map_err(|e| e.to_string())?;
-            l.release_claim(bead, "alpha", reason, "t1")
-                .map_err(|e| e.to_string())?;
-        }
-        // ...and one still open, which is the ordinary state of work in flight.
-        l.record_claim("zz-open", "alpha", &[], "t0")
-            .map_err(|e| e.to_string())?;
-
-        let closed: std::collections::BTreeSet<String> = l
-            .closed_claims()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|c| c.bead)
-            .collect();
-        // The ledger half: `closed` alone, not "the claim ended". Released-as-landed and
-        // released-as-abandoned are both claim endings and neither is this.
-        let reads_the_reason = closed.len() == 1 && closed.contains("zz-closed");
-
-        // The join half, through the real condition. A `Snapshot` with these beads on an
-        // unlanded branch is what `select` produces for a branch behind main.
-        let snap = Snapshot {
-            closed_not_landed: vec![crate::cmd::status::ClosedNotLanded {
-                bead: "zz-closed".into(),
-                worker: "alpha".into(),
-                head: "abcdef1234".into(),
-                blocked: Some("refused: branch does not contain main".into()),
-                not_batch_ready: None,
-            }],
-            ..Default::default()
-        };
-        let att = attention(&snap, "2026-09-07T00:00:00Z", Thresholds::default());
-        let named: Vec<_> = att
-            .iter()
-            .filter(|a| a.kind == kinds::CLOSED_NOT_LANDED)
-            .collect();
-        let names_it = named.len() == 1
-            && named.first().is_some_and(|a| {
-                a.worker == "alpha"
-                    && a.detail.contains("zz-closed")
-                    && a.detail.contains("abcdef12")
-                    && a.detail.contains("does not contain main")
-            });
-
-        // An empty join says nothing at all: the quiet case is the common one and must stay
-        // silent, or the line stops being worth reading when it does fire.
-        let quiet = attention(
-            &Snapshot::default(),
-            "2026-09-07T00:00:00Z",
-            Thresholds::default(),
-        )
-        .iter()
-        .all(|a| a.kind != kinds::CLOSED_NOT_LANDED);
-
-        Ok((reads_the_reason && names_it, quiet))
-    })()
-    .unwrap_or_else(blocked);
-    Probe {
-        name: "status: a closed bead whose commits reached no tree but its author's worktree is named, and a claim that merely ended is not",
         red_fires: res.0,
         green_passes: res.1,
     }
@@ -6098,9 +5988,10 @@ fn probe_idle_without_claim_needs_a_live_session() -> Probe {
     }
 }
 
-/// air-0j4: a worker's HEAD is one sha, so every claim it holds is not-green for the same
-/// reason and the same fix. The adopter's `air status` printed eleven `handover-not-green` lines
-/// for one worker — one fact, eleven times.
+/// air-0j4: a worker's claims are all refused for what one worktree lacks, the same fix each.
+/// The adopter's `air status` printed eleven `handover-not-green` lines for one worker — one
+/// fact, eleven times. The condition is `done-refused` since air-4xj.3, keyed on the same
+/// counter, with no green in it.
 ///
 /// Red: three stuck claims on one worker produce ONE line, and it names all three with a total.
 /// Green: a single claim keeps its original wording, unchanged.
@@ -6161,7 +6052,7 @@ fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
         name: "attention: three stuck claims on one worker are one line, not three",
         red_fires: three.len() == 1
             && three.first().is_some_and(|a| {
-                a.kind == "handover-not-green"
+                a.kind == "done-refused"
                     && ["zz-1", "zz-2", "zz-3"]
                         .iter()
                         .all(|b| a.detail.contains(b))
@@ -6170,7 +6061,7 @@ fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
         green_passes: one.len() == 1
             && one
                 .first()
-                .is_some_and(|a| a.detail.starts_with("zz-1 handed over 1 time(s)")),
+                .is_some_and(|a| a.detail.starts_with("air done refused 1 time(s) for zz-1")),
     }
 }
 

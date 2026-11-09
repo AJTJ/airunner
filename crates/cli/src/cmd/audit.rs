@@ -520,11 +520,17 @@ fn fired<'a>(m: &Mechanism, e: &'a Ev) -> Option<&'a str> {
     }
 }
 
-/// Condition kinds whose mechanism was deleted, so a firing recorded before the deletion is
-/// history rather than an unregistered mechanism. Each is written up in `mechanisms.rs`'s
-/// deleted list. Removed, kind by kind, once the audit window no longer reaches its last
-/// firing; for `landed-not-closed` (air-cizz) that is one window after 2026-09-28.
-pub const DELETED_KINDS: &[&str] = &["landed-not-closed"];
+/// Condition kinds whose mechanism was deleted or renamed, so a firing recorded before the
+/// change is history rather than an unregistered mechanism. Each is written up in
+/// `mechanisms.rs`'s deleted list or on its row. Removed, kind by kind, once the audit window
+/// no longer reaches its last firing; for `landed-not-closed` (air-cizz) that is one window
+/// after 2026-09-28, and for `closed-not-landed` and `handover-not-green` (air-4xj.3, deleted
+/// and renamed `done-refused`) one window after 2026-11-09.
+pub const DELETED_KINDS: &[&str] = &[
+    "landed-not-closed",
+    "closed-not-landed",
+    "handover-not-green",
+];
 
 /// Decisions that record what happened rather than a mechanism acting on someone: an event
 /// was observed, a check passed, a claim was written.
@@ -1477,25 +1483,21 @@ mod tests {
     /// nothing landed. The audit reproduces that ratio from the event log alone.
     ///
     /// The original fixture used `review-waiting`, the condition that produced the ratio.
-    /// air-okc deleted it, so this uses `handover-not-green`, which has the same per-subject
+    /// air-okc deleted it, so this uses `done-refused`, which has the same per-subject
     /// shape; the arithmetic under test is the audit's, not the condition's.
     #[test]
     fn reproduces_the_repeat_ratio_and_finds_never_fired() {
         let mut lines: Vec<String> = Vec::new();
         for i in 0..40 {
             lines.push(format!(
-                r#"{{"at":"2026-08-22T0{}:00:00Z","worker":"main","command":"status.attention","inputs":{{"conditions":["handover-not-green:alpha","handover-not-green:beta"]}},"decision":"attention"}}"#,
+                r#"{{"at":"2026-08-22T0{}:00:00Z","worker":"main","command":"status.attention","inputs":{{"conditions":["done-refused:alpha","done-refused:beta"]}},"decision":"attention"}}"#,
                 i % 10
             ));
         }
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let a = gather_from(&[day("2026-08-22", &refs)], "2026-08-22");
 
-        let rw = a
-            .rows
-            .iter()
-            .find(|r| r.id == "handover-not-green")
-            .unwrap();
+        let rw = a.rows.iter().find(|r| r.id == "done-refused").unwrap();
         // 40 events x 2 beads = 80 firings about 2 subjects: 78 of them repeats.
         assert_eq!((rw.evaluations, rw.subjects, rw.repeats), (80, 2, 78));
         // air-cmn restated the condition as a counter. It used to be a Judgement nothing
@@ -1543,7 +1545,7 @@ mod tests {
 
         // The rendered form names the mechanism and its counts.
         let text = render(&a);
-        assert!(text.contains("handover-not-green"), "{text}");
+        assert!(text.contains("done-refused"), "{text}");
     }
 
     /// air-5uz: a push and an evaluation are different facts and are counted apart. The
@@ -1556,18 +1558,14 @@ mod tests {
             &[day(
                 "2026-08-22",
                 &[
-                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
-                    r#"{"at":"2026-08-22T01:00:01Z","worker":"main","command":"channel.push","inputs":{"conditions":["handover-not-green:beta"],"for_minutes":5},"decision":"pushed"}"#,
-                    r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["done-refused:beta"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:01Z","worker":"main","command":"channel.push","inputs":{"conditions":["done-refused:beta"],"for_minutes":5},"decision":"pushed"}"#,
+                    r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"status.attention","inputs":{"conditions":["done-refused:beta"]},"decision":"attention"}"#,
                 ],
             )],
             "2026-08-22",
         );
-        let r = a
-            .rows
-            .iter()
-            .find(|r| r.id == "handover-not-green")
-            .unwrap();
+        let r = a.rows.iter().find(|r| r.id == "done-refused").unwrap();
         assert_eq!((r.evaluations, r.pushes), (2, 1));
         // And the push does not read as a mechanism nobody registered.
         assert!(a.unregistered.is_empty(), "{:?}", a.unregistered);
@@ -1601,34 +1599,26 @@ mod tests {
             day(
                 "2026-08-20",
                 &[
-                    r#"{"at":"2026-08-20T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["handover-not-green:alpha"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-20T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["done-refused:alpha"]},"decision":"attention"}"#,
                 ],
             ),
             day(
                 "2026-08-22",
                 &[
-                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["handover-not-green:beta"]},"decision":"attention"}"#,
+                    r#"{"at":"2026-08-22T01:00:00Z","worker":"main","command":"status","inputs":{"conditions":["done-refused:beta"]},"decision":"attention"}"#,
                     r#"{"at":"2026-08-22T02:00:00Z","worker":"main","command":"land","decision":"landed"}"#,
                 ],
             ),
         ];
         let a = gather_from(&days, "2026-08-22");
-        let rw = a
-            .rows
-            .iter()
-            .find(|r| r.id == "handover-not-green")
-            .unwrap();
+        let rw = a.rows.iter().find(|r| r.id == "done-refused").unwrap();
         assert_eq!(rw.evaluations, 1);
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
 
         // A window after every recorded day: no firings counted, but last_fired still sees
         // the older ones, which is what makes "never fired" mean never.
         let older = gather_from(&days, "2026-08-23");
-        let rw = older
-            .rows
-            .iter()
-            .find(|r| r.id == "handover-not-green")
-            .unwrap();
+        let rw = older.rows.iter().find(|r| r.id == "done-refused").unwrap();
         assert_eq!((rw.evaluations, rw.subjects), (0, 0));
         assert_eq!(rw.last_fired.as_deref(), Some("2026-08-22T01:00:00Z"));
     }

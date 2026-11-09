@@ -224,9 +224,11 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
                 // The list is the conditions that EXIST, checked against `status::kinds::ALL`
                 // rather than against memory. `review-waiting` left with air-okc,
-                // `owner-decision-waiting` with air-uef. A surface describing something
-                // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, idle-without-claim, silent-with-claim, gone-with-claim, handover-not-green, landable, rewound-and-carried, closed-not-landed, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
+                // `owner-decision-waiting` with air-uef, `closed-not-landed` with air-4xj.3,
+                // which also renamed `handover-not-green` to `done-refused`. A surface
+                // describing something untrue is air-ha8's defect, and an MCP instructions
+                // string is a surface.
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, idle-without-claim, silent-with-claim, gone-with-claim, done-refused, landable, rewound-and-carried, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -710,7 +712,8 @@ fn deliver_loop(repo: &Path, out: &Out, every: Duration) {
 ///
 /// It was keyed by (worker, kind). Two beads of one kind on one worker then overwrote each
 /// other's fingerprint, so each looked changed on every tick: an adopter's coordinator was
-/// pushed `closed-not-landed` 417 times in a day for two beads, evaluated 11 times.
+/// pushed `closed-not-landed` (a condition since deleted, air-4xj.3) 417 times in a day for
+/// two beads, evaluated 11 times.
 pub type Pushed = BTreeMap<(&'static str, String), PushedAs>;
 
 #[derive(Debug, Clone)]
@@ -978,7 +981,7 @@ mod tests {
     fn two_subjects_of_one_kind_on_one_worker_push_once_each() {
         let cnl = |bead: &str| Attention {
             worker: "w1".into(),
-            kind: "closed-not-landed",
+            kind: "landable",
             detail: String::new(),
             for_minutes: 0,
             fingerprint: format!("{bead}/abc"),
