@@ -6,48 +6,66 @@ Multi-agent accountability and verification system. Lighter than air.
 
 ## Philosophy
 
-Do less. 
+Do less.
 
-Most agentic systems try to do too much and end up interfering with a constantly evolving AI.
+Most agentic systems try to do too much. They end up in the way of models that keep getting
+better at the work.
 
-The models know how to do the work and they keep getting better at it.
+The models know how to do the work. Air gives them the facts they lack and stays out of the
+rest.
 
-Our goals are practical: 
-- Offer a framework for transforming objectives into tasks that are as isolated as possible to facilitate concurrent work.
-- Offer the user one agent (the coordinator) as a less cluttered interface for development.
-- Ease spinning up multiple harnesses (a fleet) each with a specific role.
-- Offer a merge queue following simple git principles to avoid merge conflicts, and facilitate continued development.
-- Help keep the fleet running through limit resets, interruptions, crashes etc...
+Our goals are practical:
+
+- Turn objectives into tasks that are as isolated as possible, so several agents can work at
+  once.
+- Give you one agent, the coordinator, as an uncluttered interface for development.
+- Make it easy to start several harnesses, a fleet, each with one role.
+- Offer a merge queue on plain git principles, so conflicts are rare and work keeps landing.
+- Keep the fleet running through limit resets, interruptions and crashes.
 
 ## The roles
 
-A fleet is three kinds of sessions. Each session is a full Claude Code harness (support for other harnesses incoming), and each has one job.
+A fleet is three kinds of sessions. Each is a full Claude Code harness with one job.
 
-- **Coordinator** (`air coordinator`)
-  - The coordinator is intended to be the session you talk to. It does not write code itself and remains uncluttered and free to talk to you.
-  - It is the only harness that turns goals and tasks into [beads](https://github.com/gastownhall/beads). It splits large work into small beads with the [decomposition skill](.claude/skills/decomposition/SKILL.md), and sets their priority.
-  - Through the coordinator you can start and pause the workers and the verification lane.
-  - Air tells the coordinator when a worker is stuck or has gone away, and when work is ready to land.
-  - When a worker is blocked, the worker sends the coordinator a note. The coordinator turns the note into a bead or drops it.
-  - It asks you only about decisions that are yours to make. It files each question as a bead for you to answer.
-  - Where `.claude/air.json` sets `heartbeat_minutes`, it checks in on that interval, so it carries on after a pause or an account limit.
-- **Workers** (`air worker`)
-  - A worker works on one bead at a time through its own git worktree, so workers never edit each other's files.
-  - There are three workers by default. Practically, adding more than three offers little gains on a regular machine.
-  - Air reports to workers when a bead is ready to be claimed. The first worker to claim it gets it.
-  - Every commit names its bead, so Air knows what each branch contains.
-  - A worker does not run the full test suite. It can run localized tests and picks up new work while the lane ensures full system integrity.
-  - A worker declares its bead done as soon as the work is committed. Air tells it when its work fails, lands or clashes with another worker's work, and the landing closes the bead.
-  - Air warns a worker when another worker is editing the same file.
-  - A worker takes a lease on anything only one agent can use at a time, such as a port or a simulator.
-- **Verification lane** (`air lane`)
-  - The lane is the only session that changes `main` (or the branch `base_branch` in `.claude/air.json` names; `main` below means that branch).
-  - Air tells the lane whenever a worker's branch is ready.
-  - Your project defines the check: one command that exits 0 when the project is good, such as `make verify`.
-  - The lane merges every ready branch into one batch and runs the check once for the whole batch. With growing test suites, this costs far less than testing each branch on its own.
-  - If the check passes, the lane puts the batch on `main`. So `main` only ever holds work that passed.
-  - If the check fails, nothing goes on `main`. The lane splits the batch to find the branch that broke it.
-  - When a branch clashes with another, the lane leaves it out and Air tells its worker.
+**The coordinator** (`air coordinator`) is the session you talk to. It writes no code, so it
+stays free to think and to answer you. It is the only session that turns goals into
+[beads](https://github.com/gastownhall/beads), splitting large work into small beads with the
+[decomposition skill](.claude/skills/decomposition/SKILL.md) and setting their priority. A
+decision that is yours to make becomes a bead labelled `owner`, and workers never pick those
+up. Through the coordinator you start, stop and resume the fleet.
+
+**The workers** (`air worker`) each take one bead at a time in a git worktree of their own, so
+no two workers edit the same checkout. There are three by default, and more than three gains
+little on one machine. Every commit names its bead, so Air knows what each branch holds. A
+worker declares its bead done as soon as the work is committed, and under a lane it runs no
+full check of its own. A worker takes a lease on anything only one agent may use at a time,
+such as a port or a simulator.
+
+**The verification lane** (`air lane`) is the merge queue, and the only session that changes
+`main`. It merges every ready branch into one batch and runs your check once for the whole
+batch, which costs far less than testing each branch alone as a test suite grows. If the check
+passes, the batch lands, so `main` only ever holds work that passed. If it fails, nothing
+lands, and the lane verifies each member alone to find the one that broke it. A branch that
+conflicts with another is left out, and its worker is told.
+
+Your project defines the check: one command that exits 0 when the project is good, such as
+`make verify`. If `.claude/air.json` names a `base_branch`, that branch plays the part of
+`main` throughout.
+
+### What Air tells each role
+
+Nobody polls and nobody relays. Air delivers these facts into each session as they happen.
+
+- The coordinator hears when a worker is stuck or gone, when a worker is blocked and has left
+  it a note, and when work is ready to land. Where `heartbeat_minutes` is set, it also checks
+  in on that interval, so it carries on after a pause or an account limit.
+- A worker hears when beads are ready to claim, and the first claim wins. It hears when its
+  batch went red, when its branch was dropped for a conflict, when `main` moved and which of
+  its beads that landing closed, and when another worker is editing a file it has open.
+- The lane hears when a branch is ready to cut.
+
+The full list, and what each message asks of its reader, is in
+[docs/rules/roles.md](docs/rules/roles.md).
 
 ## How it works
 
@@ -55,79 +73,87 @@ A fleet is three kinds of sessions. Each session is a full Claude Code harness (
 flowchart LR
     C[Coordinator<br/>files beads] --> Q[(beads)]
     Q -- "beads are ready" --> W[Workers<br/>one worktree each]
-    W -- "hand over a branch" --> L[Lane<br/>cuts a batch, runs the check]
+    W -- "declares a bead done" --> L[Lane<br/>cuts a batch, runs the check]
     L -- "green: lands" --> M[main]
     L -- "red or conflict: names the worker" --> W
     M -- "main moved" --> C
     M -- "main moved: closed" --> W
 ```
 
-Air sends the messages on the arrows; nobody polls and nobody relays.
+Air sends the messages on the arrows.
 
-The sessions can also message each other directly, and sometimes that is the right way to
-coordinate. Air's aim is to make it rarely necessary: when the facts arrive on their own, the
-fleet spends its time on the work instead of on talking.
+Sessions can still message each other directly, and sometimes that is the right way to
+coordinate. Air's aim is to make it rarely necessary, so the fleet spends its time on the work.
 
-## How to install it
+## Install
 
-Needs git, tmux, Claude Code, [beads](https://github.com/gastownhall/beads/releases/tag/v1.3.0)
-(`bd` 1.3.0) and, for a new project, [Dolt](https://github.com/dolthub/dolt/releases/tag/v2.3.5)
-2.3.5. Homebrew only has the latest of each, so install these versions from their releases.
+Air needs git, tmux, Claude Code,
+[beads](https://github.com/gastownhall/beads/releases/tag/v1.3.0) (`bd` 1.3.0) and, for a new
+project, [Dolt](https://github.com/dolthub/dolt/releases/tag/v2.3.5) 2.3.5. Homebrew only has
+the latest of each, so install these versions from their releases.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AJTJ/airunner/releases/latest/download/air-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/AJTJ/airunner/releases/latest/download/air-installer.sh | sh
 cd /path/to/your/repo
 air init --write
 ```
 
-The installer puts a prebuilt `air` (macOS or Linux) in `~/.cargo/bin`. The binaries are also
-on the [releases page](https://github.com/AJTJ/airunner/releases), and `cargo install --path
-crates/cli` builds one from a checkout.
+The installer puts a prebuilt `air` for macOS or Linux in `~/.cargo/bin`. The binaries are also
+on the [releases page](https://github.com/AJTJ/airunner/releases), and
+`cargo install --path crates/cli` builds one from a checkout.
 
-`air init` finds your check (a Makefile `verify` or `test` target, `cargo test`, or `npm test`)
-and prints the next steps: commit, run `air record verify --` with that check, and run `air
-coordinator`. If it finds no check, it writes a `make verify` that fails until you fill it in. If
-agents share a port or a device, list the commands that use it under `leases` in
+`air init` looks for your check: a Makefile `verify` or `test` target, `cargo test`, or
+`npm test`. It then prints the next steps: commit, record one green with
+`air record verify -- <your check>`, and run `air coordinator`. If it finds no check, it
+writes a `make verify` that fails until you fill it in.
+
+If agents share a port or a device, list the commands that use it under `leases` in
 `.claude/air.json`.
 
 [examples/minimal](examples/minimal) is a three-file project after `air init`. It shows a check
 and every file Air adds.
 
-## How you use it
+## Use
 
 ```sh
 air coordinator
 ```
 
 Say yes to starting the fleet. Air creates the worktrees, starts the beads server and opens a
-tmux session per role. The launcher refuses, naming the fix, until Claude Code has been
-trusted in the main checkout once, and it pre-answers the prompts Claude Code documents an
-answer for. One prompt is left on each new session, whether to load the Air channel ("I am
-using this for local development"); the coordinator offers to answer it for you, or you accept
-it in each pane. Then tell the coordinator what to build; it runs everything from there.
+tmux session per role.
+
+Two prompts are not Air's to answer. Claude Code has to have been trusted in the main checkout
+once, and the launcher refuses, naming the fix, until it has. Each new session also asks
+whether to load the Air channel. The coordinator offers to answer that for you, or you accept
+it in each pane.
+
+Then tell the coordinator what to build. It runs everything from there.
 
 You rarely need these, but they are there:
 
-- `air fleet stop` and `air fleet resume`.
-- `tmux attach -t <project>-worker-1`: watch or type into any session.
+- `air fleet stop` and `air fleet resume` pause and resume all work.
+- `tmux attach -t <project>-worker-1` lets you watch or type into any session.
 
 ## The pieces
 
 Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 
-- **Launchers.** `air coordinator`, `air worker` and `air lane` start sessions in their worktrees.
+- **Launchers.** `air coordinator`, `air worker` and `air lane` start sessions in their
+  worktrees.
 - **Ledger.** One SQLite file with claims, verification runs, leases and landings, plus a daily
   event log.
-- **Hook.** `air hook` records every tool call, warns when two workers edit one file, and
-  nudges an idle worker toward ready beads; `air done` refuses a declaration whose bead no
-  commit names, and the landing closes the bead.
-- **Channel.** `air mcp` tells the coordinator when something needs attention.
-- **Merge queue.** `air record`, `air batch cut` and `air land`; `air ready` offers the
+- **Hook.** `air hook` records every tool call, warns when two workers edit one file, and nudges
+  an idle worker toward ready beads.
+- **Done.** `air done` declares a bead done with proof, and refuses when no commit names the
+  bead. The landing closes it.
+- **Channel.** `air mcp` delivers Air's messages into each session and tells the coordinator
+  when something needs attention.
+- **Merge queue.** `air record`, `air batch cut` and `air land`. `air ready` offers the
   coordinator's own branch to the lane.
 - **Remote runner.** `air run -- <command>` runs a command on the machine `targets` names for
-  the session (in `.claude/air.json`, or in the gitignored `.claude/air.local.json` laid over
-  it), pushing the branch there first; `air record` runs the check there the same way, and
-  `--pull` brings result files back.
+  the session, pushing the branch there first. `air record` runs the check there the same way,
+  and `--pull` brings result files back.
 - **Diagnostics.**
   - `air status` shows the whole fleet on one screen.
   - `air audit` shows how often each rule fired, so rules that never fire can be removed.
@@ -137,9 +163,9 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 ## Upcoming
 
 - Support for [Pi](https://github.com/earendil-works/pi) and other open-source harnesses.
-- Sessions on other machines. Today a session's commands and checks can run elsewhere, through
-  `air run` and `air record` on a target reached by ssh or any command prefix such as
-  `kubectl exec`, while every session is still local.
+- Sessions on other machines. Today every session is local, and only its commands and checks
+  can run elsewhere, through `air run` and `air record` on a target reached by ssh or a command
+  prefix such as `kubectl exec`.
 
 ## Inspired by
 
@@ -157,27 +183,29 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 
 ## How Air is tested
 
-- `make verify` runs the unit tests and then `air selftest`: one probe per check Air makes,
-  each shown failing without the check and passing with it
-  ([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
-- Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial): a
-  coordinator, a lane and three workers work through eleven scenarios on a copy of
-  [examples/minimal](examples/minimal), from a fixed
-  [request](scripts/trial/request.md). The coordinator writes a report of what happened,
-  including every workaround, and [scripts/trial/count.py](scripts/trial/count.py) counts the
-  messages and refusals the run needed.
+`make verify` runs the formatter, clippy, the tests and then `air selftest`. The self-test
+is one probe per check Air makes, each shown firing on the failure and passing without it
+([crates/cli/src/cmd/selftest.rs](crates/cli/src/cmd/selftest.rs)).
+
+Before a release, a real fleet runs the [live trial](docs/design.md#91-the-live-trial). A
+coordinator, a lane and three workers work through eleven scenarios on a copy of
+[examples/minimal](examples/minimal), from a fixed [request](scripts/trial/request.md). The
+coordinator writes a report of what happened, including every workaround, and
+[scripts/trial/count.py](scripts/trial/count.py) counts the messages and refusals the run
+needed.
 
 ## Docs
 
 - [Design](docs/design.md): the whole system as it is today, kept current with the code.
 - [Roles](docs/rules/roles.md): what each role does, shipped to adopters as `.air/roles.md`.
-- [Adopting Air](docs/rules/adopting-air.md)
-- [Verifying on another machine](docs/rules/remote-verify.md): the setup guide for a `targets` entry, from the first entry to the first green.
+- [Adopting Air](docs/rules/adopting-air.md): install, configure and upgrade Air in a repo.
+- [Verifying on another machine](docs/rules/remote-verify.md): a `targets` entry, from the
+  first entry to the first green.
 
 ## Status
 
-In use on two repositories. Commands still change between releases, and `air install` tells an
-installed repository what changed.
+In use on two repositories. Commands still change between releases, and `air install` tells
+an installed repository what changed.
 
 ## License
 
