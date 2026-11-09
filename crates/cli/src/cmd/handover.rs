@@ -885,7 +885,7 @@ pub fn red_batch_line(batch: Option<&crate::cmd::batch::RedBatch>, worker: &str)
         "you were its only member, so your branch is batch-ready again after a new commit or a \
          later green containing it"
     } else {
-        "the lane splits by hand"
+        "the lane verifies each member alone"
     };
     Some(format!(
         "batch: your branch at {mine} was in the RED batch {} cut by {} at {}; nothing lands \

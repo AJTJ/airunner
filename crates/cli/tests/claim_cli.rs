@@ -3409,11 +3409,22 @@ fn batch_cut_splits_a_red_batch_by_its_members() {
         )
     };
 
-    // The batch of both goes red.
+    // The batch of both goes red. air-67q: the record lists both members as not yet verified
+    // alone and its one `next:` is the `--only` cut for the first.
     let (code, v, text) = cut(&[]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(members(&v), ["alpha", "beta"], "{text}");
-    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "false"]).0, 1);
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "false"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        out.contains("not yet verified alone: alpha@")
+            && out.contains("not yet verified alone: beta@"),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("next: air batch cut --only ") && !out.contains("next: air batch cut\n"),
+        "{out}{err}"
+    );
 
     // air-vdst, unchanged: a bare cut offers neither member.
     let (code, v, text) = cut(&["--dry-run"]);
@@ -3450,6 +3461,33 @@ fn batch_cut_splits_a_red_batch_by_its_members() {
         row.contains(&heads["alpha"]) && !row.contains(&heads["beta"]),
         "{row}"
     );
+
+    // air-67q: alpha alone goes red. That one-member red is now the newest red batch; the
+    // record still lists beta as the member not yet verified alone, and `--only beta` still
+    // finds it (before, the split chose among the newest red batch's members only, so this cut
+    // had nothing to merge).
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "false"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        out.contains("not yet verified alone: beta@")
+            && !out.contains("not yet verified alone: alpha@"),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("next: air batch cut --only beta"),
+        "{out}{err}"
+    );
+    let (code, v, text) = cut(&["--dry-run", "--only", "beta"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{text}");
+    // Beta green alone: every member has been verified alone, and the list is gone.
+    let (code, v, text) = cut(&["--only", "beta"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{text}");
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "true"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (_, out, err) = air(&lane, &bd, &["status"]);
+    assert!(!out.contains("not yet verified alone"), "{out}{err}");
 }
 
 #[test]

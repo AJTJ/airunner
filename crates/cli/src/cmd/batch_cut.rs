@@ -532,22 +532,18 @@ pub fn select(
     (kept, out.into_iter().map(|b| b.worker).collect())
 }
 
-/// The members of the newest standing red batch that are still at the head the red took, as
-/// the batch-ready rule would list them with the red set aside (air-jk2).
-fn red_held_members(ledger: &air_ledger::Ledger, not_ready: &[NotBatchReady]) -> Vec<BatchReady> {
-    let newest = ledger
-        .latest_red_batch(air_ledger::verify::Kind::Verify)
-        .ok()
-        .flatten()
-        .map(|r| r.members)
-        .unwrap_or_default();
+/// The members of a red batch that are still at the head the red took, as the batch-ready
+/// rule would list them with the red set aside (air-jk2): every `red-at-head` branch whose
+/// `if_split` the rule filled.
+///
+/// air-67q: any red batch, not only the newest. Once the lane has cut one member alone and
+/// found it red, that one-member red is the newest red batch, and choosing among its members
+/// alone left every other member of the batch being split out of reach of `--only`, the cut
+/// Air itself prints next.
+fn red_held_members(not_ready: &[NotBatchReady]) -> Vec<BatchReady> {
     not_ready
         .iter()
-        .filter(|n| {
-            newest
-                .iter()
-                .any(|m| m.worker == n.worker && m.sha == n.head)
-        })
+        .filter(|n| n.check == "red-at-head")
         .filter_map(|n| n.if_split.as_deref().cloned())
         .collect()
 }
@@ -657,7 +653,7 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
         eprintln!("air batch cut: {e}");
     }
     let ready: Vec<BatchReady> = ready.into_iter().filter(|b| b.worker != lane).collect();
-    let red_held = red_held_members(&ledger, &not_ready);
+    let red_held = red_held_members(&not_ready);
     let (ready, left_out) = select(ready, red_held, without, only);
     let taken: Vec<String> = ready.iter().map(|b| b.worker.clone()).collect();
     let mut cands = Vec::new();

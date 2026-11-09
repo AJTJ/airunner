@@ -395,7 +395,7 @@ pub fn lanes(s: &Snapshot) -> Vec<String> {
     v
 }
 
-fn batch_ready_line(b: &BatchReady) -> String {
+pub fn batch_ready_line(b: &BatchReady) -> String {
     // air-ch9p: the coordinator's branch carries no bead, and printed `()`.
     let beads = if b.beads.is_empty() {
         "no bead".to_string()
@@ -592,10 +592,10 @@ pub fn batch_result_notes(
             } else {
                 format!(
                     "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
-                     Output: {output}. Nothing lands on it and the lane splits the batch. \
-                     Your branch is out of the next batch until a later green contains your \
-                     commit (the split proves it) or you commit again; if the failure is in \
-                     your change, fix it with a new commit.",
+                     Output: {output}. Nothing lands on it and the lane verifies each member \
+                     alone. Your branch is out of the next batch until a later green contains \
+                     your commit, the lane verifies it alone, or you commit again; if the \
+                     failure is in your change, fix it with a new commit.",
                     short(&run.sha),
                     run.exit_code,
                     short(&m.sha),
