@@ -283,6 +283,15 @@ named in a message is still any worker's to take. Put the craft notes on the bea
 message: `bd comment <id> --file <notes>`. Whoever claims it gets them, and they outlive your
 session.
 
+Something for a bead a worker holds now has two shapes. An addition to the bead is a bead,
+filed as usual, plus a `SendMessage` to the holder naming it, so the worker can fold it into
+the branch it is on if it has not moved on; the bead stays claimable either way.
+A correction (the bead is doing something wrong) goes as a `SendMessage` first, because
+the next commit may be cut before a bead is read, and you check that it arrived: a reply, or
+the next commit showing it. A correction not seen to arrive becomes a bead that names what to
+undo. On 2026-11-09 a hold sent as a message arrived a minute after the commit it was meant
+to hold, and the lane had already cut the sha.
+
 Ask the owner only for a genuine edge case: a blocker only they can clear, a product or design
 decision only they can make, or a resource conflict. File it as a bead labelled `owner` with
 your recommendation in its description, never as a question prompt (see Every role). An unclear acceptance is not an owner question; rewrite
