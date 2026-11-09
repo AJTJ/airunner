@@ -1594,12 +1594,49 @@ fn a_pinned_repo_hands_every_air_to_its_pin() {
 
     // A real copy as the pin: it runs the command itself rather than handing it on again.
     std::fs::copy(env!("CARGO_BIN_EXE_air"), &pin).unwrap();
-    assert!(run(&wt, &["--version"]).starts_with("air "));
-    let events = std::fs::read_dir(repo.join(".air/events"))
+    let run_both = |cwd: &Path, args: &[&str]| {
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
+            .args(args)
+            .current_dir(cwd)
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        (
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        )
+    };
+    // air-2dg: when the pin cannot open the ledger, it says so on stderr with the cause and
+    // still runs the command; a lane batch once read the missing event as a product failure
+    // with nothing to say which step had failed. The ledger path as a directory is one
+    // deterministic cause.
+    std::fs::create_dir_all(repo.join(".air/ledger.db")).unwrap();
+    let (out, err) = run_both(&wt, &["--version"]);
+    assert!(out.starts_with("air "), "{out}");
+    assert!(
+        err.contains("air: delegated event not written: ") && err.contains("ledger.db"),
+        "stderr: {err}"
+    );
+    std::fs::remove_dir(repo.join(".air/ledger.db")).unwrap();
+    let (out, err) = run_both(&wt, &["--version"]);
+    assert!(out.starts_with("air "), "{out}");
+    assert!(err.is_empty(), "stderr: {err}");
+    // The assertion carries the pin's stderr, so a failure here names the cause.
+    let dir = std::fs::read_dir(repo.join(".air/events"));
+    assert!(
+        dir.is_ok(),
+        "no .air/events: {:?}; pin stderr: {err}",
+        dir.as_ref().err()
+    );
+    let events = dir
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .collect::<String>();
-    assert!(events.contains("\"decision\":\"delegated\""), "{events}");
+    assert!(
+        events.contains("\"decision\":\"delegated\""),
+        "{events}; pin stderr: {err}"
+    );
 }
 
 /// air-z41: a launch reads the printed command line for the flags that pre-answer start-up
