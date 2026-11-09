@@ -34,15 +34,17 @@ pub mod kinds {
     pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
     pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
     pub const GONE_WITH_CLAIM: &str = "gone-with-claim";
-    pub const HANDOVER_NOT_GREEN: &str = "handover-not-green";
+    /// air-4xj.3: `handover-not-green` until the declaration stopped needing a green; the
+    /// counter it reads is the one `air done` stamps on a refusal.
+    pub const DONE_REFUSED: &str = "done-refused";
     pub const LANDABLE: &str = "landable";
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
     // `landed-not-closed` was here (air-ayp; DELETED by air-cizz, owner 2026-09-28): 7 of 8
     // firings at an adopter were paths an acceptance clause only mentioned. See mechanisms.rs.
-    /// air-gazh: closed ∩ NOT landed, which nothing else in this list covers — `landable`
-    /// needs a branch containing main so it goes quiet the moment main moves.
-    pub const CLOSED_NOT_LANDED: &str = "closed-not-landed";
+    // `closed-not-landed` was here (air-gazh; DELETED by air-4xj.3, 2026-11-09): its input,
+    // a worker's close before the landing, no longer arrives, since a worker declares done
+    // and the landing closes. See mechanisms.rs.
     // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
     // Its subject was the owner capture queue, which is gone: the owner's queue is beads
     // labelled `owner`, counted on the `ready:` line of `air status`.
@@ -55,10 +57,9 @@ pub mod kinds {
         IDLE_WITHOUT_CLAIM,
         SILENT_WITH_CLAIM,
         GONE_WITH_CLAIM,
-        HANDOVER_NOT_GREEN,
+        DONE_REFUSED,
         LANDABLE,
         REWOUND_AND_CARRIED,
-        CLOSED_NOT_LANDED,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
     ];
@@ -160,11 +161,6 @@ pub struct Snapshot {
     /// `lease_take` records a want only when it was refused by a HEALTHY lease, so a name in
     /// here is someone who asked and was told to wait.
     pub lease_wants: BTreeMap<String, Vec<String>>,
-    /// air-gazh: Beads bd has closed whose commits are in no tree but their
-    /// author's worktree. Joined from two things already computed — `landable` (which names
-    /// every bead on a branch not yet in main, blocked or not) and the ledger's `closed`
-    /// release reason — so it costs no git walk and no bd call of its own.
-    pub closed_not_landed: Vec<ClosedNotLanded>,
     /// Every session row (two sessions in one checkout are two entries; the per-worker view
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
@@ -348,7 +344,7 @@ pub struct Attention {
     /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
-    /// idle-with-claim | silent-with-claim | handover-not-green |
+    /// idle-with-claim | silent-with-claim | done-refused |
     /// lease-held-by-dead-session | lease-stale | idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
     /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
@@ -997,43 +993,6 @@ pub fn beads_suffix(beads: &[String]) -> String {
     } else {
         format!(" ({})", beads.join(" "))
     }
-}
-
-/// A bead bd has closed whose commits have not reached main (air-gazh).
-///
-/// **How this state is reached with no error anywhere.** A worker closes on a batch green,
-/// legitimately: the close gate passes. The coordinator then commits to main, so that batch no
-/// longer contains main and stops being landable. The lane folds the members into the next cut;
-/// that one reds, the one after is killed, the one after lands different workers. The branch has
-/// simply not landed — no refusal, no red, nothing wrong locally. From inside the worktree the
-/// bead reads closed, the branch is green and the tree is clean, so **the party best placed to
-/// notice is the last who will**: every local signal is correct. An adopter had six at once,
-/// found by their coordinator while answering an unrelated question, and derived independently
-/// by their worker from a different join — same six.
-///
-/// **Removal condition, and it is not "when it stops firing"** (air-gazh is explicit): this
-/// state becomes unreachable when landing stops depending on a branch containing main at the
-/// moment someone looks — that is, when a green recorded for a tree can be landed after main
-/// moves without a re-merge, so a closed bead's commits cannot be stranded by main moving
-/// underneath them. Delete it then. Until then a quiet round is the mechanism working, not
-/// evidence against it: this repo had zero on 2026-09-07 only because its coordinator landed
-/// every branch within minutes of its close, and a fleet that batches leaves this residue
-/// whenever a batch stops being landable.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClosedNotLanded {
-    pub bead: String,
-    pub worker: String,
-    pub head: String,
-    /// Why the branch is not landable right now, when that is known — the same sentence
-    /// `landable` shows. `None` when the branch could land as it stands and simply has not.
-    pub blocked: Option<String>,
-    /// Why the lane would not cut the branch either, when it is not batch-ready: the first
-    /// fact it lacks, as `not_batch_ready` names it (air-zni). `None` when the branch is
-    /// batch-ready, so the lane's next cut takes it. A worker in the 2026-11-06 trial closed
-    /// on its own verify with no precheck at its head; the notice said only "does not contain
-    /// main", the lane waited, and the coordinator found `no-precheck` in `air status`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_batch_ready: Option<String>,
 }
 
 /// A branch that is not landable, and why. Never silent (air-6u5).
@@ -1767,21 +1726,21 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             }
             None => {}
         }
-        // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
-        // every claim it holds is not-green for the SAME reason and the same fix; the adopter's
-        // status printed eleven lines for one worker, which is one fact eleven times. The
-        // single-claim wording is unchanged, because that is the case that reads well already.
+        // One line per worker, not one per claim (air-0j4). The adopter's status printed
+        // eleven lines for one worker, which is one fact eleven times. The single-claim
+        // wording is unchanged, because that is the case that reads well already.
+        //
+        // The counter is `handover_attempts`, which `air done`'s gate stamps on a refusal and
+        // clears on a pass (air-4xj.3; `close::gate` did the same until air-4xj.2). A green at
+        // the head no longer enters into it: the declaration needs none.
         //
         // Removal: when no worker ever holds two claims at once, this collapses nothing and
         // the loop above can go back to pushing per claim.
-        let red: Vec<&Claim> = if w.green_at_head == Some(false) {
-            w.claims
-                .iter()
-                .filter(|c| c.handover_attempts > 0)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let red: Vec<&Claim> = w
+            .claims
+            .iter()
+            .filter(|c| c.handover_attempts > 0)
+            .collect();
         // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
         // one, and the beads read in the order they have been waiting.
         let oldest = red
@@ -1789,16 +1748,21 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             .filter_map(|c| c.last_handover_at.as_deref())
             .min()
             .unwrap_or(now);
+        // The refusal's reason is on the event line `air done` wrote and on no row, so the
+        // line names the command that says it again rather than quoting a copy.
         let detail = match red.as_slice() {
             [] => None,
             [c] => Some(format!(
-                "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
-                c.bead,
+                "air done refused {} time(s) for {}; last attempt {}; `air handover --bead {}` \
+                 names what the declaration needs",
                 c.handover_attempts,
-                c.last_handover_at.as_deref().unwrap_or(now)
+                c.bead,
+                c.last_handover_at.as_deref().unwrap_or(now),
+                c.bead
             )),
             many => Some(format!(
-                "{} beads handed over without green verify at HEAD ({}); {} attempts in total; oldest {}",
+                "air done refused for {} beads ({}); {} attempts in total; oldest {}; `air \
+                 handover --bead <id>` names what each needs",
                 many.len(),
                 many.iter()
                     .map(|c| c.bead.as_str())
@@ -1811,7 +1775,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         if let Some(detail) = detail {
             out.push(Attention {
                 worker: w.worker.clone(),
-                kind: kinds::HANDOVER_NOT_GREEN,
+                kind: kinds::DONE_REFUSED,
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
@@ -1928,39 +1892,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             // The commit and who holds it is the whole fact; its age is not a change.
             fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
             subject: r.merge_commit.clone(),
-        });
-    }
-    // air-gazh: a bead closed and not landed, the state no other condition reaches.
-    // `landable` goes quiet the moment main moves. A bead
-    // closed on a batch green whose batch then stopped containing main satisfies neither, and
-    // an adopter had six of them at once with no error anywhere in how they got there.
-    //
-    // It is a CONDITION rather than only a printed line because the reporting incident is
-    // exactly a coordinator who had the fleet view and was not looking: theirs surfaced while
-    // answering an unrelated question. A line nobody reads is what this already had.
-    for c in &s.closed_not_landed {
-        let (bead, worker) = (&c.bead, &c.worker);
-        let short = c.head.get(..8).unwrap_or(&c.head);
-        let mut why = match &c.blocked {
-            Some(b) => format!("that branch cannot land as it stands: {b}"),
-            None => "that branch could land as it stands and has not".to_string(),
-        };
-        // air-zni: and why the lane will not cut it either, when it will not. The landing
-        // reason alone sent a worker merging main while the lane waited on its precheck.
-        if let Some(n) = &c.not_batch_ready {
-            why.push_str(&format!("; the lane will not cut it: {n}"));
-        }
-        out.push(Attention {
-            worker: worker.clone(),
-            kind: kinds::CLOSED_NOT_LANDED,
-            // air-ch9p: facts only. It claimed the branch was green and clean, which nothing
-            // here checks, and its continuation lines carried runs of literal spaces.
-            detail: format!(
-                "{bead} is closed; its commits are only on {worker}'s branch, at {short}: {why}"
-            ),
-            for_minutes: 0,
-            fingerprint: format!("{bead}/{}", c.head),
-            subject: bead.clone(),
         });
     }
     out
@@ -2586,7 +2517,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.
-        closed_not_landed: closed_not_landed(&ledger, &selection.landings, &batch.1),
         landable: selection.landings,
         land_skipped: selection.skipped,
         land_errors: selection.errors,
@@ -2608,51 +2538,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             (false, false) => "live",
         },
     })
-}
-
-/// Beads bd has closed whose commits are in no tree but their author's worktree (air-gazh).
-///
-/// **This is a join, not a scan.** `landable` already names every bead on a worktree branch that
-/// is not yet in main — `select` drops a branch already in main through its one silent exit, so
-/// a landed bead cannot appear here at all — and the ledger already records `closed` as a
-/// release reason when the reconcile saw bd say so. Both halves existed and nothing joined them.
-/// A second git walk was the obvious shape and would have been a second implementation of
-/// `select`'s predicate, which is what air-y3v was.
-///
-/// The closed set is read once and used as a set, so this is O(landable) with no per-bead
-/// lookup: the beads of unlanded branches are few and the closed rows are one query.
-fn closed_not_landed(
-    ledger: &Ledger,
-    landable: &[Landing],
-    not_batch_ready: &[NotBatchReady],
-) -> Vec<ClosedNotLanded> {
-    let closed: std::collections::BTreeSet<String> = match ledger.closed_claims() {
-        Ok(v) => v.into_iter().map(|c| c.bead).collect(),
-        // A failed lookup is not a fact about any bead (air-x1ha). Reporting nothing here is
-        // reporting "nothing found", which is why the error path stays empty rather than
-        // guessing: `gather` already surfaces ledger failures on its own errors list.
-        Err(_) => return Vec::new(),
-    };
-    let mut out: Vec<ClosedNotLanded> = Vec::new();
-    for l in landable {
-        // A journal-only branch carries `None` and closes no bead (air-kexg).
-        let Some(bead) = &l.bead else { continue };
-        if !closed.contains(bead) {
-            continue; // open on an unlanded branch is the normal state, and says nothing
-        }
-        out.push(ClosedNotLanded {
-            bead: bead.clone(),
-            worker: l.worker.clone(),
-            head: l.head.clone(),
-            blocked: l.blocked.clone(),
-            not_batch_ready: not_batch_ready
-                .iter()
-                .find(|n| n.worker == l.worker && n.head == l.head)
-                .map(|n| n.detail.clone()),
-        });
-    }
-    out.sort_by(|a, b| (&a.worker, &a.bead).cmp(&(&b.worker, &b.bead)));
-    out
 }
 
 /// The ancestor-deadlock scan (air-btz), and what it costs, gated so the common repo pays one
@@ -3134,24 +3019,6 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 .trim_start_matches("refused: "),
             l.command
         ));
-    }
-    // air-gazh: printed as well as pushed. The condition is the part that matters — the
-    // reporting incident is a coordinator with the fleet view not looking — but a reader who
-    // runs `air status` after the push has gone quiet still needs to see the state.
-    for c in &s.closed_not_landed {
-        out.push_str(&format!(
-            "closed, not landed: {} ({}) at {} — {}\n",
-            c.worker,
-            c.bead,
-            c.head.get(..8).unwrap_or(&c.head),
-            c.blocked
-                .as_deref()
-                .unwrap_or("could land as it stands")
-                .trim_start_matches("refused: "),
-        ));
-        if let Some(n) = &c.not_batch_ready {
-            out.push_str(&format!("  not cut by the lane: {n}\n"));
-        }
     }
     // air-80x.3: what the verify lane merges next. A fact, printed where the lane reads it;
     // the reasons a branch is absent are in `--json` (`not_batch_ready`).
@@ -3704,56 +3571,6 @@ mod tests {
         assert!(batch_ready_rule(&w).is_ok());
     }
 
-    /// air-zni: a closed bead on a branch the lane will not cut says why, with the fix, in the
-    /// same `closed-not-landed` detail; a batch-ready branch reads as before; and the
-    /// fingerprint is still (bead, head), so the richer text is pushed once per head.
-    #[test]
-    fn a_closed_bead_the_lane_will_not_cut_names_the_cut_reason_once() {
-        use crate::cmd::mcp::{Pushed, select_new};
-        let row = |not: Option<&str>| ClosedNotLanded {
-            bead: "zz-2".into(),
-            worker: "beta".into(),
-            head: "abcdef1234567890".into(),
-            blocked: Some("refused: branch does not contain main".into()),
-            not_batch_ready: not.map(str::to_string),
-        };
-        let fired = |c: ClosedNotLanded| -> Attention {
-            let snap = Snapshot {
-                closed_not_landed: vec![c],
-                ..Default::default()
-            };
-            attention(&snap, "2026-11-07T00:00:00Z", Thresholds::default())
-                .into_iter()
-                .find(|a| a.kind == kinds::CLOSED_NOT_LANDED)
-                .unwrap()
-        };
-        let plain = fired(row(None));
-        assert!(
-            plain.detail.ends_with("branch does not contain main"),
-            "{}",
-            plain.detail
-        );
-        assert!(!plain.detail.contains("the lane will not cut it"));
-        let held = fired(row(Some(
-            "beta at abcdef12: no green precheck at this head, and this repo gates the batch \
-             on one (`precheck` in .claude/air.json); run `air record precheck -- <the repo's \
-             precheck command>` in beta's worktree",
-        )));
-        assert!(
-            held.detail
-                .contains("; the lane will not cut it: beta at abcdef12: no green precheck"),
-            "{}",
-            held.detail
-        );
-        assert!(held.detail.contains("run `air record precheck --"));
-        assert_eq!(held.fingerprint, "zz-2/abcdef1234567890");
-        assert_eq!(held.fingerprint, plain.fingerprint);
-        // Pushed once for that (bead, head); a second poll with the same row pushes nothing.
-        let mut p = Pushed::new();
-        assert_eq!(select_new(&mut p, std::slice::from_ref(&held)).len(), 1);
-        assert!(select_new(&mut p, std::slice::from_ref(&held)).is_empty());
-    }
-
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds
     /// later and dropped again. Like a red at the head, a recorded drop holds the head out
     /// until it moves; the worker's next commit is a new head and is ready as before.
@@ -4071,7 +3888,7 @@ mod tests {
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
-                ("red", "handover-not-green"),
+                ("red", "done-refused"),
             ]
         );
         assert_eq!(att[0].for_minutes, past_every_line_min());
@@ -4087,7 +3904,7 @@ mod tests {
         };
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
-        assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+        assert_eq!(kinds, vec!["gone-with-claim", "done-refused"]);
     }
 
     /// air-3eu: the claim on a handed-over bead stays open so the coordinator still sees the
@@ -4116,7 +3933,7 @@ mod tests {
                 .iter()
                 .map(|a| a.kind)
                 .collect::<Vec<_>>(),
-            vec!["idle-with-claim", "handover-not-green"]
+            vec!["idle-with-claim", "done-refused"]
         );
     }
 

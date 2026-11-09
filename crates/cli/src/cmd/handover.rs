@@ -936,12 +936,12 @@ pub fn run(repo: &Path, bead: Option<&str>, enforce: bool, json: bool) -> i32 {
     }
     // NOT stamped here (air-eiv). `air handover` is documented as the way to find what is
     // missing, and it used to increment `handover_attempts` on the claim -- the same counter
-    // `handover-not-green` reads -- so running the diagnostic raised the alarm and the
-    // coordinator went after a worker who was doing exactly what the docs say. A query does
-    // not count as an attempt. `air close` stamps, in `close::gate`, because there a close is
-    // actually being made.
+    // `done-refused` reads -- so running the diagnostic raised the alarm and the coordinator
+    // went after a worker who was doing exactly what the docs say. A query does not count as
+    // an attempt. `air done` stamps, in `done::gate`, because there a declaration is actually
+    // being made.
     //
-    // Removal: when nothing counts hand-over attempts, the stamp in `close::gate` goes.
+    // Removal: when nothing counts hand-over attempts, the stamp in `done::gate` goes.
     // A stop usually follows a hand-over: refresh the ready list the Stop hook reads
     // (air-09i). One bd call, outside any hook budget.
     let _ = crate::cmd::ready_cache::refresh(
