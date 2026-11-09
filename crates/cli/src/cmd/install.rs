@@ -677,6 +677,11 @@ pub const RELEASES: &[(&str, u32, usize)] = &[
     // 2026-11-07: targets as argv prefixes, the config overlay, pull by unpack, one pod per
     // session in the trial, the trial trusts its own copy; 0.4.14 was never tagged.
     ("0.4.15", 45, 236),
+    // 2026-11-09: a worker declares done with `air done` and the landing closes the bead
+    // (with bd's --force, the lane's only); after a red batch the members not yet verified
+    // alone are listed; the model is read from assistant records. Trial on pods, rerun after
+    // the three fixes the first run found.
+    ("0.4.16", 46, 243),
 ];
 
 /// Pure: may `make verify` pass with `len` notices against a last row that says `last`?
