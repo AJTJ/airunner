@@ -138,6 +138,7 @@ pub fn facts(
         (red, precheck)
     };
     Ok(GateFacts {
+        require_green: true,
         worker: worker.to_string(),
         base,
         beads_without_commit,

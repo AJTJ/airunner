@@ -151,8 +151,9 @@ pub const MECHANISMS: &[Mechanism] = &[
         id: "handover-gate",
         class: "refusal",
         what: "A worker's or the lane's close needs a recorded green that contains main and \
-               the bead's commits. `air close` runs it; `hook.PreToolUse / refuse` is the \
-               matcher on raw `bd close` deleted 2026-09-26, kept so older days attribute.",
+               the bead's commits. `air close` runs it; `air done` runs it without the green \
+               checks (air-4xj.1); `hook.PreToolUse / refuse` is the matcher on raw `bd close` \
+               deleted 2026-09-26, kept so older days attribute.",
         added: "2026-08-22 (air-i59); in `air close` 2026-09-26",
         source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/close.rs, gate",
         // `hook.handover` is what the first slice called the same gate before hook events
@@ -168,6 +169,9 @@ pub const MECHANISMS: &[Mechanism] = &[
             // this line was `close-refusal`, the role refusal of a worker's `air close`, which
             // that ruling removed.
             ("close", "refuse"),
+            // A worker's `air done` refused by the same gate without its green checks
+            // (air-4xj.1): the bead's commit, its claim and a missing precheck.
+            ("done", "refuse"),
         ]),
         removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
     },

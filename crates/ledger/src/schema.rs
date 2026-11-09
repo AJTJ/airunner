@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 30;
+pub const CURRENT_VERSION: i64 = 31;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -440,6 +440,16 @@ CREATE TABLE IF NOT EXISTS offers (
 );
 "#;
 
+/// v31 (2026-11-09, air-4xj.1): a worker's "done" declaration on its open claim. `air done`
+/// writes the head it judged (the bead's newest trailer commit), the proof and the time; the
+/// claim stays open, and `air land` closes the bead once the base branch contains `done_head`.
+/// NULL on every claim nobody declared done, which a landing never closes.
+const V31: &str = r#"
+ALTER TABLE claims ADD COLUMN done_at TEXT;
+ALTER TABLE claims ADD COLUMN done_head TEXT;
+ALTER TABLE claims ADD COLUMN done_proof TEXT;
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -455,7 +465,7 @@ CREATE TABLE IF NOT EXISTS offers (
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25, V26, V27, V28, V29, V30,
+    V22, V23, V24, V25, V26, V27, V28, V29, V30, V31,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.

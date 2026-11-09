@@ -14,6 +14,7 @@ pub mod close;
 pub mod decisions;
 pub mod delegate;
 pub mod doctor;
+pub mod done;
 pub mod fanout;
 pub mod fleet;
 pub mod gc;

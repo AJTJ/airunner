@@ -223,6 +223,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-4xj.1: the landing no longer closes a declared bead whose head main contains.
+    // Seen red 2026-11-09.
+    (
+        "done: a bead declared done before the lane's green closes at the landing, and a dependent is refused until then",
+        Mutation {
+            file: "crates/cli/src/cmd/land.rs",
+            from: "        let contained = git::is_ancestor(repo, head, &base).unwrap_or(false);",
+            to: "        let contained = false;",
+            also_red: &[],
+        },
+    ),
     // air-1vri.3: the want is kept after the worker was told. Seen red 2026-09-26.
     (
         "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
@@ -1170,7 +1181,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             // matched nothing and this mutation had been BROKEN, silently, ever since. The
             // probe kept passing and kept having no evidence behind it.
             file: "crates/hooks/src/gate.rs",
-            from: "    if !green {",
+            // Re-anchored 2026-11-09 (air-4xj.1): `air done` runs the gate without this check.
+            from: "    if f.require_green && !green {",
             to: "    if false {",
             // The enforced-gate and close-with-proof probes drive the same refusal end to end,
             // and so does the env-delivery probe, which runs the real hook (air-9dg).
@@ -1191,7 +1203,8 @@ const MUTATIONS: &[(&str, Mutation)] = &[
         "gate: main-merged",
         Mutation {
             file: "crates/hooks/src/gate.rs",
-            from: "if !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {",
+            // Re-anchored 2026-11-09 (air-4xj.1): `air done` runs the gate without this check.
+            from: "if f.require_green && !f.main_is_ancestor && !f.work_in_main && !bead_covered && !lane_waits {",
             to: "if false {",
             also_red: &[
                 // Its red half is this refusal, with the next bead's commit on top.
@@ -2736,6 +2749,7 @@ fn all_probes() -> Vec<Probe> {
         probe_overlap_names_only_holders_that_can_collide(),
         probe_refusal_names_the_command_it_refused(),
         probe_worker_close_runs_the_gate(),
+        probe_done_closes_at_the_landing(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -4907,6 +4921,208 @@ fn probe_worker_close_runs_the_gate() -> Probe {
     }
 }
 
+/// air-4xj.1: a worker declares its bead done with proof and no green, the bead stays open and
+/// its dependents stay refused, and the lane's landing closes it. The real binary against a
+/// real repo with a stateful fake bd: one bead open, a second blocked by it.
+///
+/// Red: after `air done` and before the landing, the proof is on the bead as a comment, the
+/// head is on the claim, bd was asked to close nothing, and `air claim` on the dependent is
+/// refused naming the blocker. Green: the lane records a green at its batch and lands; the
+/// landing closes the bead in bd, releases the claim as `landed`, and the dependent claims.
+fn probe_done_closes_at_the_landing() -> Probe {
+    let res = (|| -> Result<(bool, bool), String> {
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        let main = root.join("main");
+        std::fs::create_dir_all(&main).map_err(|e| e.to_string())?;
+        let main = main.canonicalize().map_err(|e| e.to_string())?;
+        let g = |cwd: &Path, args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .envs(GIT_IDENTITY)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&main, &["init", "-q", "-b", "main"])?;
+        std::fs::create_dir_all(main.join(".claude")).map_err(|e| e.to_string())?;
+        std::fs::write(
+            main.join(".claude/air.json"),
+            r#"{"verify_command": "true"}"#,
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            main.join(".gitignore"),
+            ".air/
+bd*
+closed.*
+",
+        )
+        .map_err(|e| e.to_string())?;
+        g(&main, &["add", "-A"])?;
+        g(&main, &["commit", "-q", "-m", "a"])?;
+        let wt = |name: &str| -> Result<std::path::PathBuf, String> {
+            let p = root.join(name);
+            g(
+                &main,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &format!("worktree-{name}"),
+                    &p.display().to_string(),
+                ],
+            )?;
+            p.canonicalize().map_err(|e| e.to_string())
+        };
+        let w1 = wt("w1")?;
+        let lane = wt("lane")?;
+        // A fake bd that remembers a close: zz-2 is blocked by zz-1 until zz-1 is closed.
+        let script = main.join("bd");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+d='__DIR__'
+echo "$@" >> "$d/bd.log"
+case "$1" in
+  --version) echo 'bd version 1.3.0'; exit 0;;
+  show) shift; out=''; s1=open; [ -f "$d/closed.zz-1" ] && s1=closed
+    for id in "$@"; do case "$id" in --*) continue;; esac
+      case "$id" in
+        zz-1) row="{\"id\":\"zz-1\",\"status\":\"$s1\",\"labels\":[]}";;
+        zz-2) row="{\"id\":\"zz-2\",\"status\":\"open\",\"labels\":[],\"dependencies\":[{\"id\":\"zz-1\",\"status\":\"$s1\",\"dependency_type\":\"blocks\"}]}";;
+        *) row="{\"id\":\"$id\",\"status\":\"open\",\"labels\":[]}";;
+      esac
+      out="$out${out:+,}$row"
+    done
+    printf '%s
+' "[$out]"; exit 0;;
+  close) shift; for id in "$@"; do case "$id" in --*) break;; esac; : > "$d/closed.$id"; done; exit 0;;
+  list|ready|epic) echo '[]'; exit 0;;
+  *) exit 0;;
+esac
+"#
+            .replace("__DIR__", &main.display().to_string()),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let air =
+            |cwd: &Path, role: Option<&str>, args: &[&str]| -> Result<(i32, String), String> {
+                let mut c = air_command(&exe, cwd);
+                c.args(args)
+                    .env("AIR_BD_BIN", &script)
+                    .env("AIR_BD_TIMEOUT_MS", "120000")
+                    .env("BEADS_ACTOR", "probe");
+                if let Some(r) = role {
+                    c.env("AIR_ROLE", r);
+                }
+                let out = c.output().map_err(|e| e.to_string())?;
+                Ok((
+                    out.status.code().unwrap_or(-1),
+                    format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    ),
+                ))
+            };
+        let log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
+        let claim_row = || -> Option<(Option<String>, Option<String>, Option<String>)> {
+            rusqlite::Connection::open(main.join(".air").join("ledger.db"))
+                .ok()?
+                .query_row(
+                    "SELECT done_head, released_at, release_reason FROM claims WHERE bead='zz-1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .ok()
+        };
+
+        let (code, out) = air(&w1, Some("worker"), &["claim", "zz-1"])?;
+        if code != 0 {
+            return Err(format!("claim zz-1: {out}"));
+        }
+        std::fs::write(
+            w1.join("work.txt"),
+            "the work
+",
+        )
+        .map_err(|e| e.to_string())?;
+        g(&w1, &["add", "work.txt"])?;
+        g(
+            &w1,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "the work
+
+Bead: zz-1
+",
+            ],
+        )?;
+        let head = g(&w1, &["rev-parse", "HEAD"])?;
+        let (code, out) = air(
+            &w1,
+            Some("worker"),
+            &["done", "zz-1", "--reason", "selftest: it works"],
+        )?;
+        if code != 0 {
+            return Err(format!("air done: {out}"));
+        }
+        // RED: declared, not closed, and the dependent still refused on the blocker.
+        let commented = log().contains(&format!("comment zz-1 done at {head}: selftest: it works"));
+        let not_closed = !log().lines().any(|l| l.starts_with("close "))
+            && !main.join("closed.zz-1").exists()
+            && claim_row()
+                .is_some_and(|(h, released, _)| h == Some(head.clone()) && released.is_none());
+        let (code, out) = air(&w1, Some("worker"), &["claim", "zz-2"])?;
+        let dependent_refused = code == 2 && out.contains("blocked by zz-1");
+        let red = commented && not_closed && dependent_refused;
+
+        // GREEN: the lane's batch goes green and lands.
+        g(
+            &lane,
+            &["merge", "-q", "--no-ff", "worktree-w1", "-m", "batch"],
+        )?;
+        let (code, out) = air(&lane, Some("lane"), &["record", "verify", "--", "true"])?;
+        if code != 0 {
+            return Err(format!("record verify: {out}"));
+        }
+        let (code, out) = air(&main, None, &["land", "--worker", "lane"])?;
+        if code != 0 {
+            return Err(format!("air land: {out}"));
+        }
+        let landing_closed = out.contains("closed: zz-1")
+            && main.join("closed.zz-1").exists()
+            && log().lines().filter(|l| l.starts_with("close ")).count() == 1
+            && claim_row().is_some_and(|(_, released, why)| {
+                released.is_some() && why.as_deref() == Some("landed")
+            });
+        let (code, _) = air(&w1, Some("worker"), &["claim", "zz-2"])?;
+        let green = landing_closed && code == 0;
+        let _ = std::fs::remove_dir_all(&root);
+        Ok((red, green))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "done: a bead declared done before the lane's green closes at the landing, and a dependent is refused until then",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can
 /// observe a merge conflict.
 ///
@@ -5732,6 +5948,9 @@ fn probe_attention() -> Probe {
                 handover_attempts: 0,
                 released_at: None,
                 release_reason: None,
+                done_at: None,
+                done_head: None,
+                done_proof: None,
             }],
             session: Some(Session {
                 session_id: "s".into(),
@@ -5950,6 +6169,9 @@ fn probe_handover_not_green_is_one_line_per_worker() -> Probe {
         handover_attempts: 1,
         released_at: None,
         release_reason: None,
+        done_at: None,
+        done_head: None,
+        done_proof: None,
     };
     let snap = |claims: Vec<Claim>| Snapshot {
         workers: vec![WorkerView {
@@ -6974,6 +7196,7 @@ fn probe_base_branch_is_the_branch_the_fleet_lands_onto() -> Probe {
 
 fn base_facts() -> GateFacts {
     GateFacts {
+        require_green: true,
         worker: "probe".into(),
         base: String::new(),
         beads_without_commit: Vec::new(),
@@ -8714,6 +8937,9 @@ fn probe_no_session_reads_stuck() -> Probe {
             handover_attempts: 0,
             released_at: None,
             release_reason: None,
+            done_at: None,
+            done_head: None,
+            done_proof: None,
         };
         let view = |worker: &str, state: &str| WorkerView {
             worker: worker.into(),
@@ -8881,6 +9107,7 @@ fn probe_mcp_tool_budget_and_group_kill() -> Probe {
         let harness = Duration::from_secs(300);
         let bd_tools = [
             "air_close",
+            "air_done",
             "air_triage",
             "air_release",
             "air_claim",
@@ -11157,6 +11384,7 @@ fn probe_an_untracked_digest_is_not_proof() -> Probe {
 
         // The refusal a worker actually meets, from the real gate.
         let facts = GateFacts {
+            require_green: true,
             worker: "w1".into(),
             head: "0123456789abcdef".into(),
             green_at_head: true,
@@ -12707,6 +12935,7 @@ fn probe_no_flow_dependent_fix_asserts_a_forbidden_repair() -> Probe {
     use air_hooks::gate::{GateFacts, MainMove, handover_verdict};
 
     let base = || GateFacts {
+        require_green: true,
         worker: "w1".into(),
         head: "687ebe1aaaa".into(),
         main_sha: "ca4fe04bbbb".into(),

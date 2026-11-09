@@ -3913,6 +3913,9 @@ mod tests {
             handover_attempts: attempts,
             released_at: None,
             release_reason: None,
+            done_at: None,
+            done_head: None,
+            done_proof: None,
         }
     }
 

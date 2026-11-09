@@ -292,6 +292,22 @@ enum Cmd {
         #[arg(long)]
         reason_file: Option<PathBuf>,
     },
+    /// Declare a bead done with proof, without a green (worker or lane; air-4xj.1). Runs the
+    /// hand-over gate minus its green checks: the bead's commit, your claim, a precheck where
+    /// the repo declares one. Records the proof on the bead as a comment and the head on your
+    /// claim, and keeps the claim: `air land` closes the bead once the base branch contains
+    /// that head, and closes it at once when it already does.
+    Done {
+        #[arg(required = true)]
+        bead: Vec<String>,
+        /// The proof; bd records it on every id. Exactly one of this or --reason-file.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Read the proof from this file instead, whole and untruncated. Exactly one of this or
+        /// --reason.
+        #[arg(long)]
+        reason_file: Option<PathBuf>,
+    },
     /// Offer this branch's head to the lane (coordinator only; air-m8u). With
     /// `"coordinator_autobatch"` absent or false in `.claude/air.json`, the coordinator's branch
     /// is batch-ready only at a head offered this way; a later commit needs a new offer. With
@@ -707,6 +723,25 @@ fn main() -> ExitCode {
             );
             if code == 0 {
                 cmd::fanout::after_change(&repo, true);
+            }
+            code
+        }
+        Cmd::Done {
+            bead,
+            reason,
+            reason_file,
+        } => {
+            let code = cmd::done::run(
+                &repo,
+                &bead,
+                reason.as_deref(),
+                reason_file.as_deref(),
+                cli.json,
+            );
+            if code == 0 {
+                // A done releases no claim and changes bd's ready list not at all, so the
+                // list is not re-read; the tick still tells the lane what became batch-ready.
+                cmd::fanout::after_change(&repo, false);
             }
             code
         }

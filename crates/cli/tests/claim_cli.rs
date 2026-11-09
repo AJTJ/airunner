@@ -5726,3 +5726,279 @@ fn the_fleet_lands_onto_the_configured_base_branch() {
         .unwrap_or_default();
     assert_eq!(w["role"], "owner", "{snap}");
 }
+
+/// air-4xj.1: `air done` passes the gate without a green, leaves the bead open in bd with the
+/// proof as a comment and the head on the claim, and `air land` closes it in one bd process
+/// once main contains that head, releasing the claim as `landed`. Nobody but a worker, the
+/// lane or the owner declares; an unclaimed bead is refused with nothing written.
+#[test]
+fn done_declares_without_a_green_and_the_landing_closes_with_one_bd_process() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let head = git(&alpha, &["rev-parse", "HEAD"]);
+    // The fake bd logs beside the worktree the command ran in.
+    let log = || std::fs::read_to_string(alpha.join("bd.log")).unwrap_or_default();
+    let main_log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
+    let row = || -> (Option<String>, Option<String>, Option<String>) {
+        rusqlite::Connection::open(main.join(".air/ledger.db"))
+            .unwrap()
+            .query_row(
+                "SELECT done_head, released_at, release_reason FROM claims WHERE bead='zz-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    };
+
+    // Refused: the coordinator; a bead this worker does not hold; both proof routes.
+    let (code, out, _) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "p"],
+        &[("AIR_ROLE", "coordinator")],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("coordinator closes landed work"), "{out}");
+    let (code, out, _) = air_env(&alpha, &bd, &["done", "zz-7", "--reason", "p"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("zz-7: alpha holds no open claim"), "{out}");
+    let (code, out, _) = air_env(&alpha, &bd, &["done", "zz-1"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--reason-file"), "{out}");
+    assert!(!log().contains("comment"), "nothing written: {}", log());
+    assert_eq!(row().0, None);
+
+    // No green anywhere: `air close` refuses on the green, `air done` passes.
+    let (code, out, _) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "p"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("verify-green-at-head"), "{out}");
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "cargo test: ok\nsecond line"],
+        worker,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!("done: zz-1 at {}", &head[..7])),
+        "{out}"
+    );
+    assert!(
+        log().contains(&format!("comment zz-1 done at {head}: cargo test: ok")),
+        "{}",
+        log()
+    );
+    assert!(!log().lines().any(|l| l.starts_with("close")), "{}", log());
+    assert_eq!(row(), (Some(head.clone()), None, None));
+
+    // The lane's batch goes green and lands: one `bd close`, the claim released as landed,
+    // the reason quoting the proof's first line.
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["--json", "land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["closed"], serde_json::json!(["zz-1"]), "{out}");
+    assert!(
+        v["log"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l == "closed: zz-1"),
+        "{out}"
+    );
+    let closes: Vec<String> = main_log()
+        .lines()
+        .filter(|l| l.starts_with("close "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(closes.len(), 1, "{}", main_log());
+    assert!(
+        closes[0].starts_with("close zz-1 --reason landed at ")
+            && closes[0].contains("zz-1: cargo test: ok")
+            && !closes[0].contains("second line"),
+        "{}",
+        closes[0]
+    );
+    let (done_head, released_at, reason) = row();
+    assert_eq!(done_head, Some(head));
+    assert!(released_at.is_some());
+    assert_eq!(reason.as_deref(), Some("landed"));
+}
+
+/// air-4xj.1: a second `air done` after a later commit for the bead moves the declared head,
+/// and a landing that carries only the earlier commit says the bead waits rather than closing
+/// it; the landing that carries the later one closes it.
+#[test]
+fn done_again_after_a_later_commit_moves_the_head_and_the_earlier_landing_waits() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let c1 = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        air_env(&alpha, &bd, &["done", "zz-1", "--reason", "first"], worker).0,
+        0
+    );
+    let done_head = || -> Option<String> {
+        rusqlite::Connection::open(main.join(".air/ledger.db"))
+            .unwrap()
+            .query_row(
+                "SELECT done_head FROM claims WHERE bead='zz-1' AND released_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+    };
+    assert_eq!(done_head(), Some(c1.clone()));
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 1"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    // The worker commits more for the same bead and declares again, before the landing.
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let c2 = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        air_env(&alpha, &bd, &["done", "zz-1", "--reason", "second"], worker).0,
+        0
+    );
+    assert_eq!(done_head(), Some(c2.clone()));
+
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed lane (zz-1)"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "waits: zz-1 (done at {}, not yet on main)",
+            &c2[..8]
+        )),
+        "{out}"
+    );
+    assert!(!out.contains("closed: zz-1"), "{out}");
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(!log.lines().any(|l| l.starts_with("close ")), "{log}");
+    assert_eq!(done_head(), Some(c2.clone()));
+
+    // The next batch carries the later commit; that landing closes it. The lane's cut
+    // resets to main first, as `air batch cut` does.
+    git(&lane, &["merge", "-q", "main", "-m", "catch up"]);
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 2"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1"), "{out}");
+    assert_eq!(done_head(), None);
+}
+
+/// air-4xj.1: a landing closes nothing nobody declared done, and `air done` on work main
+/// already holds closes the bead at once, since no landing ahead would carry it.
+#[test]
+fn done_on_work_main_already_holds_closes_at_once_and_an_undeclared_bead_is_left_open() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed lane (zz-1)"), "{out}");
+    assert!(!out.contains("closed:"), "{out}");
+    let log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
+    assert!(!log().lines().any(|l| l.starts_with("close ")), "{}", log());
+
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "late proof"],
+        worker,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1 (already on main at "), "{out}");
+    let closes: Vec<String> = std::fs::read_to_string(alpha.join("bd.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("close "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert!(closes[0].contains("--reason landed at ") && closes[0].contains("late proof"));
+    let reason: Option<String> = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT release_reason FROM claims WHERE bead='zz-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason.as_deref(), Some("landed"));
+}

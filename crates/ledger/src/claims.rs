@@ -18,6 +18,11 @@ pub struct Claim {
     pub handover_attempts: i64,
     pub released_at: Option<String>,
     pub release_reason: Option<String>,
+    /// `air done` (air-4xj.1): when the worker declared the bead done, the head it judged
+    /// and the proof. All `None` until it does; the claim stays open until the landing.
+    pub done_at: Option<String>,
+    pub done_head: Option<String>,
+    pub done_proof: Option<String>,
 }
 
 /// Release reasons the ledger accepts (measurement spec §2.3; plan 0001 §2 row 3).
@@ -38,7 +43,8 @@ pub const RELEASE_REASONS: &[&str] = &[
 ];
 
 const COLS: &str = "bead, worker, claimed_at, declared_files, first_handover_at, \
-                    last_handover_at, handover_attempts, released_at, release_reason";
+                    last_handover_at, handover_attempts, released_at, release_reason, \
+                    done_at, done_head, done_proof";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Claim> {
     let files: Option<String> = r.get(3)?;
@@ -54,6 +60,9 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Claim> {
         handover_attempts: r.get(6)?,
         released_at: r.get(7)?,
         release_reason: r.get(8)?,
+        done_at: r.get(9)?,
+        done_head: r.get(10)?,
+        done_proof: r.get(11)?,
     })
 }
 
@@ -116,7 +125,8 @@ impl Ledger {
             "INSERT INTO claims (bead, worker, claimed_at, declared_files) VALUES (?1,?2,?3,?4) \
              ON CONFLICT(bead, worker) DO UPDATE SET claimed_at=excluded.claimed_at, \
              declared_files=excluded.declared_files, first_handover_at=NULL, \
-             last_handover_at=NULL, handover_attempts=0, released_at=NULL, release_reason=NULL",
+             last_handover_at=NULL, handover_attempts=0, released_at=NULL, release_reason=NULL, \
+             done_at=NULL, done_head=NULL, done_proof=NULL",
             params![bead, worker, at, files],
         )?;
         Ok(())
@@ -173,6 +183,40 @@ impl Ledger {
             params![bead, worker, at],
         )?;
         Ok(n > 0)
+    }
+
+    /// The worker declared the bead done (air-4xj.1): stamp the head it judged, the proof and
+    /// the time on its open claim. A second declaration overwrites the first, so a later
+    /// commit for the bead moves the head the landing waits for. The claim stays open: it is
+    /// the row `air land` reads to close the bead. False without an open claim by this worker.
+    pub fn mark_done(
+        &self,
+        bead: &str,
+        worker: &str,
+        head: &str,
+        proof: &str,
+        at: &str,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE claims SET done_at=?3, done_head=?4, done_proof=?5 \
+             WHERE bead=?1 AND worker=?2 AND released_at IS NULL",
+            params![bead, worker, at, head, proof],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Every open claim its worker has declared done, oldest declaration first (air-4xj.1).
+    /// One row per open claim on the bead; `air land` closes the bead when the base branch
+    /// contains the row's `done_head`, and a bead with no row here is never closed by a landing.
+    pub fn done_claims(&self) -> Result<Vec<Claim>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM claims WHERE done_head IS NOT NULL AND released_at IS NULL \
+             ORDER BY done_at"
+        ))?;
+        let v = st
+            .query_map([], row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
     }
 
     /// Close every open claim on these beads with one reason, in ONE transaction, whoever
@@ -250,6 +294,36 @@ mod tests {
         l.record_claim("zz-1", "w1", &[], "t6").unwrap();
         let c = l.open_claim("zz-1").unwrap().unwrap();
         assert_eq!((c.handover_attempts, c.claimed_at.as_str()), (0, "t6"));
+    }
+
+    /// air-4xj.1: a done declaration stamps the open claim and leaves it open; a second one
+    /// moves the head; a release takes the row out of `done_claims`; a worker with no open
+    /// claim stamps nothing.
+    #[test]
+    fn mark_done_stamps_the_open_claim_and_a_release_ends_it() {
+        let l = Ledger::open_in_memory().unwrap();
+        l.record_claim("zz-1", "w1", &[], "t0").unwrap();
+        assert!(l.done_claims().unwrap().is_empty());
+        assert!(!l.mark_done("zz-1", "w2", "aaaa", "proof", "t1").unwrap());
+        assert!(l.mark_done("zz-1", "w1", "aaaa", "proof", "t1").unwrap());
+        let c = l.open_claim("zz-1").unwrap().unwrap();
+        assert_eq!(
+            (
+                c.done_at.as_deref(),
+                c.done_head.as_deref(),
+                c.done_proof.as_deref()
+            ),
+            (Some("t1"), Some("aaaa"), Some("proof"))
+        );
+        assert!(l.mark_done("zz-1", "w1", "bbbb", "more", "t2").unwrap());
+        let d = l.done_claims().unwrap();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].done_head.as_deref(), Some("bbbb"));
+        assert!(l.release_claim("zz-1", "w1", "landed", "t3").unwrap());
+        assert!(l.done_claims().unwrap().is_empty());
+        // A re-claim starts clean.
+        l.record_claim("zz-1", "w1", &[], "t4").unwrap();
+        assert!(l.open_claim("zz-1").unwrap().unwrap().done_head.is_none());
     }
 
     /// air-3eu: the status reconcile marks, it does not release, and a second tick is a no-op.
