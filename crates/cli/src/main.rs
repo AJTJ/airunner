@@ -609,15 +609,19 @@ fn main() -> ExitCode {
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        if let Ok((ledger, me)) = cmd::open(&repo) {
-            cmd::log_event(
+        match cmd::open(&repo) {
+            Ok((ledger, me)) => cmd::log_event(
                 &ledger,
                 &me,
                 cmd::decisions::PIN_DELEGATED,
                 &serde_json::json!({"from": from}),
                 "this repo is pinned; the air a shell found handed the command to the pin",
                 "1 invocation",
-            );
+            ),
+            // air-2dg: still fail open, and say why. A lane batch once read the missing
+            // event as a product failure with nothing to say which step (the git spawn or
+            // the ledger open) had failed. Stderr only: `--json` callers read stdout.
+            Err(e) => eprintln!("air: delegated event not written: {e}"),
         }
     }
     // air-dwq5: before anything that needs a repo, because "what binary is this" is a question
