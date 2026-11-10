@@ -329,7 +329,11 @@ mod tests {
         let (status, _, body) = get(addr, "GET /api/feed?since=7 HTTP/1.1");
         assert_eq!(status, 200);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["next_offset"], 7, "{body}");
+        // air-o6x.6: a bare number tails today; the offset is day-scoped text.
+        assert!(
+            v["next_offset"].as_str().is_some_and(|o| o.ends_with(":0")),
+            "{body}"
+        );
         assert_eq!(get(addr, "GET /nope HTTP/1.1").0, 404);
         assert_eq!(get(addr, "GET /api/nope HTTP/1.1").0, 404);
         assert_eq!(get(addr, "POST /api/fleet HTTP/1.1").0, 405);
@@ -438,7 +442,7 @@ mod tests {
                 "landed"
             ])
         );
-        let fd = serde_json::to_value(feed::feed(None, Path::new("/m/.air"), at, 0)).unwrap();
+        let fd = serde_json::to_value(feed::feed(None, Path::new("/m/.air"), at, None)).unwrap();
         assert_eq!(keys(&fd), sorted(["at", "next_offset", "items"]));
         let item = serde_json::to_value(feed::Item {
             at: at.into(),
@@ -465,10 +469,16 @@ mod tests {
                 "lease_wants"
             ])
         );
-        assert_eq!(feed::since(Some("since=12")), 12);
-        assert_eq!(feed::since(Some("x=1&since=5")), 5);
-        assert_eq!(feed::since(Some("since=bad")), 0);
-        assert_eq!(feed::since(None), 0);
+        assert_eq!(
+            feed::since(Some("since=12")),
+            None,
+            "a bare number tails today"
+        );
+        assert_eq!(
+            feed::since(Some("x=1&since=2026-11-10%3A5")).map(|o| o.text()),
+            Some("2026-11-10:5".to_string())
+        );
+        assert_eq!(feed::since(None), None);
     }
 
     /// air-o6x.4: the embedded page is HTML that names each endpoint path exactly once (the
