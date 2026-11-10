@@ -6,28 +6,34 @@ into the repo and gives every session at start. This file does not restate it.
 
 ## Install
 
-You need git 2.38 or later, tmux, Claude Code, bd 1.3.0, and, for a new repo, Dolt 2.3.5. Homebrew only has the
-latest of each, so install these versions from their releases: for bd, the archive for your
-platform from https://github.com/gastownhall/beads/releases/tag/v1.3.0, with `bd` put on your
-PATH; for Dolt, `curl -L https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh |
-sudo bash`. Build Air from its checkout with `cargo install --path crates/cli` and check that
-`which air` is that binary. Then run `air doctor`: it compares bd, and Dolt when bd runs in server mode, against the pinned versions,
-checks that `bd list --json` answers, and exits 2 when it does not. Fix bd before going on.
+You need git 2.38 or later, tmux, Claude Code, bd 1.3.0, and, for a new repo, Dolt 2.3.5.
+Homebrew only has the latest of each, so install these versions from their releases. For bd,
+take the archive for your platform from
+https://github.com/gastownhall/beads/releases/tag/v1.3.0 and put `bd` on your PATH. For Dolt,
+run `curl -L https://github.com/dolthub/dolt/releases/download/v2.3.5/install.sh | sudo bash`.
+
+Build Air from its checkout with `cargo install --path crates/cli` and check that `which air`
+is that binary. Then run `air doctor`. It compares bd, and Dolt when bd runs in server mode,
+against the pinned versions, checks that `bd list --json` answers, and exits 2 when it does
+not. Fix bd before going on.
 
 In a new repo, run `air init` to see what it would do and `air init --write` to do it. It runs
-`git init` if needed, starts a Dolt server for bd on a free port in 3400..3900 (data in
-`.air/dolt/`, a background process whose pid is in `.air/dolt/server.pid`), and runs
-`bd init --server --skip-agents
---skip-hooks` against it, which names the bead prefix after the directory unless you pass
-`--prefix`. The port goes in `.beads/dolt-server.port`, which is not committed. From then on
-`air fleet up` and the launchers start the server when it does not answer, `air bd-server up`
-does the same by hand, and the coordinator's channel restarts it if it stops. A repo that
-already has `.beads/` keeps whatever mode it is in; `air doctor` and `air status` print it. It adds `.air/` to `.gitignore` and writes
-`.claude/air.json` with the directory name as `project`, `metis` set to whether Metis is
-installed, and deny patterns proposed from a scan of the repo. It also writes the hooks,
-`.mcp.json`, `.air/roles.md`, `.air/docs/`, the `air-*` skills, a `.worktreeinclude`, and a
-`CLAUDE.md` stub.
-It creates each only when absent and never edits one, so re-running it is safe.
+`git init` if needed. It starts a Dolt server for bd on a free port in 3400..3900, with the data
+in `.air/dolt/` and the pid of that background process in `.air/dolt/server.pid`. Then it runs
+`bd init --server --skip-agents --skip-hooks` against that server, which names the bead prefix
+after the directory unless you pass `--prefix`. The port goes in `.beads/dolt-server.port`,
+which is not committed.
+
+From then on `air fleet up` and the launchers start the server when it does not answer,
+`air bd-server up` does the same by hand, and the coordinator's channel restarts it if it
+stops. A repo that already has `.beads/` keeps whatever mode it is in; `air doctor` and
+`air status` print it.
+
+`air init --write` also adds `.air/` to `.gitignore` and writes `.claude/air.json` with the
+directory name as `project`, `metis` set to whether Metis is installed, and deny patterns
+proposed from a scan of the repo. It writes the hooks, `.mcp.json`, `.air/roles.md`,
+`.air/docs/`, the `air-*` skills, a `.worktreeinclude`, and a `CLAUDE.md` stub. It creates
+each only when absent and never edits one, so re-running it is safe.
 
 `air init` prints the verify command it proposes. It uses the first of these it finds: a
 Makefile `verify` target, a Makefile `test` target, `cargo test` for a `Cargo.toml` at the root,
@@ -40,13 +46,16 @@ stub names the command, and so does the last thing `air init --write` prints:
       air record verify -- <the proposed command>   # the first green
       air coordinator                               # its own worktree and tmux session
 
-In a repo that already has its own setup, run `air install` to read what it would do and `air
-install --write` to apply it. It merges `air hook` into every hook event in
+In a repo that already has its own setup, run `air install` to read what it would do and
+`air install --write` to apply it. It merges `air hook` into every hook event in
 `.claude/settings.json`, adds the `air` server to `.mcp.json`, and writes `.air/roles.md`, the
-`air-*` skills, and `.air/docs/` (Air's design doc, its register of solved issues, and this
-guide, as the binary was built with them; `air doctor` names a copy that differs). Add `.air/` to `.gitignore` yourself. Commit `.claude/settings.json`,
-`.mcp.json` and the `air-*` skills on main: every session runs in a worktree, which gets only
-committed files, and `air worker` and `air lane` refuse while they are uncommitted.
+`air-*` skills, and `.air/docs/`. That directory holds Air's design doc, its register of solved
+issues, and this guide, as the binary was built with them; `air doctor` names a copy that
+differs. Add `.air/` to `.gitignore` yourself.
+
+Commit `.claude/settings.json`, `.mcp.json` and the `air-*` skills on main. Every session runs
+in a worktree, which gets only committed files, and `air worker` and `air lane` refuse while
+they are uncommitted.
 
 Air does not install bd's agent setup, because `bd prime` tells agents to run commands Air
 denies. If `air install` prints `STALE HOOK` for a `bd prime --hook-json` entry, run
@@ -97,17 +106,22 @@ its verify detached.
 Optionally, the repo also provides:
 
 - a precheck command, which workers run under a lane with `air record precheck -- <cmd>`;
+
 - a test-state reset the lane runs after a cut;
+
 - `"leases"` in `.claude/air.json` for commands that need a shared resource;
-- `"targets"`, normally in the gitignored `.claude/air.local.json` beside `.claude/air.json`
-  (see Configure), a machine per session that `air run -- <command>` pushes the session's
-  branch to and runs the command on, for work the local machine cannot do;
-  `air record` runs the check there the same way. The machine is reached by whatever argv
-  prefix runs a command on it, `ssh` or `kubectl exec` alike; the setup, from the first
-  entry to the first green, is `docs/rules/remote-verify.md` in Air's repository (not shipped
-  into `.air/docs/`);
+
+- `"targets"`, a machine per session that `air run -- <command>` pushes the session's branch
+  to and runs the command on, for work the local machine cannot do; `air record` runs the
+  check there the same way. It normally lives in the gitignored `.claude/air.local.json`
+  beside `.claude/air.json` (see Configure). The machine is reached by whatever argv prefix
+  runs a command on it, `ssh` or `kubectl exec` alike. The setup, from the first entry to the
+  first green, is `docs/rules/remote-verify.md` in Air's repository, which is not shipped
+  into `.air/docs/`;
+
 - a `.worktreeinclude` in gitignore syntax, naming untracked files (such as `.env`) that Air
-  copies into each new worktree.
+  copies into each new worktree;
+
 - bead sections bd must see before it files a bead, under `lint: sections:` in
   `.beads/config.yaml`. The installed `air-decomposition` skill's "Bead shape" section lists
   every part of a bead, who reads it, and the setting.
@@ -150,14 +164,16 @@ one machine's own values: `targets`, which name a pod or a host and the kubeconf
 that reaches it, and the allow lists for the commands that reach them. Its top-level keys
 replace the committed file's keys of the same name, whole; a `targets` in the overlay
 replaces the committed `targets` and is not merged into it one session at a time. Every other
-key comes from the committed file. The committed file then says what Air does on this
-repository, and each machine's own file says where, with no commit and no landing in between:
-a change there takes effect the moment it is written, where a committed `targets` took effect
-only when the lane landed it, after verifying that very batch on the old target (twice on
-2026-11-05). You add the `.gitignore` line for `.claude/air.local.json` yourself (`air init` adds only `.air/`);
-`air status` warns once if git tracks the file, names a key set there that the binary does not
-read with the file, and says once when the file does not parse, in which case the committed
-file is read alone.
+key comes from the committed file.
+
+The committed file then says what Air does on this repository, and each machine's own file
+says where, with no commit and no landing in between. A change there takes effect the moment
+it is written, where a committed `targets` took effect only when the lane landed it, after
+verifying that very batch on the old target (twice on 2026-11-05). You add the `.gitignore`
+line for `.claude/air.local.json` yourself; `air init` adds only `.air/`. `air status` warns
+once if git tracks the file, names a key set there that the binary does not read with the
+file, and says once when the file does not parse, in which case the committed file is read
+alone.
 
 | Key | What it does | Default |
 |---|---|---|
@@ -187,14 +203,16 @@ file is read alone.
 `worker_allow` and `coordinator_allow` are the allow side of the same two lists. The launcher
 puts the patterns on that role's `--settings` under `permissions.allow`, beside the rules Air
 passes itself, so a matching line resolves before auto mode's classifier judges it. They are
-for the commands that reach the adopter's own machines, which Air does not know about. A repo
-whose coordinator deploys a Kubernetes pod sets `"coordinator_allow": ["Bash(kubectl *)",
+for the commands that reach the adopter's own machines, which Air does not know about.
+
+A repo whose coordinator deploys a Kubernetes pod sets `"coordinator_allow": ["Bash(kubectl *)",
 "Bash(gh workflow run *)"]`; one whose machine is a plain VM sets `"coordinator_allow":
 ["Bash(ssh *)", "Bash(doctl *)"]` or `"Bash(hcloud *)"`. The list is whatever the adopter's
-machine commands are, and nothing in Air names a provider. Two facts hold for every allow rule.
-It matches only the bare line, since a pipe or redirect sends the whole line to the classifier.
-The deny list wins, so a pattern in both lists stays denied. A session launched before the key
-was set needs a relaunch to have it.
+machine commands are, and nothing in Air names a provider.
+
+Two facts hold for every allow rule. It matches only the bare line, since a pipe or redirect
+sends the whole line to the classifier. The deny list wins, so a pattern in both lists stays
+denied. A session launched before the key was set needs a relaunch to have it.
 Sources: Claude Code permissions reference, "Rules are evaluated in order: deny, then ask, then
 allow" (https://code.claude.com/docs/en/permissions.md, accessed 2026-11-05); air-b1h8; air-xji.
 
@@ -233,10 +251,13 @@ hooks and sessions run `.air/bin/air` and only the re-pin replaces that copy, so
 there is the commit and the restart.
 
 1. In the Air checkout, `cargo install --path crates/cli`, then check `which air`.
+
 2. `air selftest`, then `air doctor`.
+
 3. In the repo's main checkout, run `air install`. It writes nothing and prints the surface
    diff against `.air/installed.json`, each change with what to do. Changes marked `!!` alter
    behaviour without an error; read those first.
+
 4. `air install --write`. It merges into `.claude/settings.json` and `.mcp.json`, and
    overwrites `.air/roles.md`, `.air/docs/`, `.claude/skills/air-*/SKILL.md` and
    `.air/installed.json`. A line the repo added to an `air-*` skill is lost here, so a repo
@@ -249,18 +270,21 @@ there is the commit and the restart.
    To run a different build in one repo without replacing the `air` on `PATH`, use
    `air install --write --pin`. It copies the binary being run to `.air/bin/air` and points the
    hooks and the channel at that copy by absolute path. Air's launchers put `.air/bin` first on
-   `PATH` in every session they start, and `air status` and `air doctor` name the pin. Because a
-   shell may re-order that `PATH`, any other `air` run in the repo hands the command to the pin
-   before running it, so a bare `air` runs the pin as long as the one found is new enough to do
-   that; `air install` is the exception, so re-pinning runs the new build. `air
-   install --write --unpin` goes back to the `air` on `PATH`. A pinned repo refuses a plain
-   `--write` until one of the two flags says which binary it should run. The hook commands
-   hold an absolute path, so a pin suits a scratch copy or one machine rather than a repo
-   others clone.
+   `PATH` in every session they start, and `air status` and `air doctor` name the pin.
+
+   A shell may re-order that `PATH`, so any other `air` run in the repo hands the command to
+   the pin before running it. A bare `air` then runs the pin as long as the one found is new
+   enough to do that; `air install` is the exception, so re-pinning runs the new build.
+   `air install --write --unpin` goes back to the `air` on `PATH`. A pinned repo refuses a
+   plain `--write` until one of the two flags says which binary it should run. The hook
+   commands hold an absolute path, so a pin suits a scratch copy or one machine rather than a
+   repo others clone.
+
 5. Commit `.claude/settings.json`, `.mcp.json` and `.claude/skills/air-*` on main. In a fleet
    repo this is the owner's commit in the main checkout, since no launched session works
    there. A new worktree gets only committed files, so `air worker`, `air lane` and `air fleet
    up` refuse, naming the files, while any of them is uncommitted in the main checkout.
+
 6. Restart every session. For a tmux fleet that means, in each `<project>-<name>` session,
    ending `claude` and running the launcher again, or `air fleet up` once the old sessions
    have exited, since it leaves a running session alone. A session reads `.air/roles.md` from
@@ -273,6 +297,7 @@ there is the commit and the restart.
    `launch-caffeinate` (the `caffeinate -i` wrapper on a Mac), `coordinator-send-keys-allow`
    (the coordinator's `tmux send-keys` allow rule) and `worker-run-record-allow` (a worker's
    `air run` and `air record` allow rules).
+
 7. Grep the repo for what it built on top of Air, which Air cannot see: `air ` in the Makefile,
    scripts and `CLAUDE.md`, and in `docs/`, `.claude/skills/` and the root notes the phrases
    of notices that changed meaning or went away (`batch green`, `beads are ready`,
