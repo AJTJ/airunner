@@ -149,8 +149,13 @@ pub struct Issue {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShownDep {
+    /// `id` in `bd show --json`; `depends_on_id` in `bd list --json`, whose edge objects name
+    /// the bead by that key and carry no status (air-o6x.3: the board reads one list call).
+    #[serde(alias = "depends_on_id")]
     pub id: String,
     pub status: String,
+    /// `dependency_type` in `bd show --json`; `type` in `bd list --json`.
+    #[serde(alias = "type")]
     pub dependency_type: String,
 }
 
@@ -629,6 +634,25 @@ impl WorkLedger for BdCli {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    /// air-o6x.3: the edge objects of `bd list --json` name the bead as `depends_on_id` and the
+    /// edge as `type`; `bd show --json` says `id` and `dependency_type`. One struct reads both.
+    #[test]
+    fn a_shown_dependency_reads_the_list_shape_and_the_show_shape() {
+        let list: super::ShownDep = serde_json::from_str(
+            r#"{"issue_id":"zz-5","depends_on_id":"zz-2","type":"blocks","created_at":"t"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (list.id.as_str(), list.dependency_type.as_str()),
+            ("zz-2", "blocks")
+        );
+        let show: super::ShownDep = serde_json::from_str(
+            r#"{"id":"zz-2","status":"open","dependency_type":"blocks","title":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!((show.id.as_str(), show.status.as_str()), ("zz-2", "open"));
+    }
+
     use super::*;
 
     /// air-bp0: one id through `show_all` gets bd's single-object answer, which is one issue.
