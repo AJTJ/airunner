@@ -135,6 +135,9 @@ You rarely need these, but they are there:
 - `air fleet stop` and `air fleet resume` pause and resume all work.
 - `tmux attach -t <project>-worker-1` lets you watch or type into any session.
 
+To watch the fleet in a browser, run `air ui` in the main checkout and open the URL it prints.
+The page is read-only and answers on 127.0.0.1 only.
+
 ## The pieces
 
 Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
@@ -154,6 +157,8 @@ Air is one Rust binary, `air`, plus the files it keeps in `.air/`.
 - **Remote runner.** `air run -- <command>` runs a command on the machine `targets` names for
   the session, pushing the branch there first. `air record` runs the check there the same way,
   and `--pull` brings result files back.
+- **Live view.** `air ui` serves a read-only page of the fleet on loopback: the sessions and
+  what each is doing, the board, the lane, what needs attention, and Air's decisions as a feed.
 - **Diagnostics.**
   - `air status` shows the whole fleet on one screen.
   - `air audit` shows how often each rule fired, so rules that never fire can be removed.
