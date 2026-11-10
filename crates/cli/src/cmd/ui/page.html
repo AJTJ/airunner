@@ -35,6 +35,7 @@
   .card .title { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
   .card .title b { font-weight: 600; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0; }
+  .held .chips { margin: 0 0 0.6rem; }
   .chip { background: var(--chip); border-radius: 999px; padding: 0 0.55rem; font-size: 12px; line-height: 1.6;
           font-family: ui-monospace, Menlo, Consolas, monospace; }
   .red { color: var(--red); } .amber { color: var(--amber); } .green { color: var(--green); }
@@ -72,7 +73,9 @@
 <div id="stop" class="banner" hidden></div>
 
 <section id="fleet"><h2>Fleet <span class="age"></span></h2><div class="cards"></div></section>
-<section id="beads"><h2>Beads <span class="age"></span></h2><div class="columns"></div></section>
+<section id="beads">
+  <h2>Beads <span class="age"></span></h2><div class="held"></div><div class="columns"></div>
+</section>
 <section id="lane"><h2>Lane <span class="age"></span></h2><div class="body"></div></section>
 <section id="attention"><h2>Attention <span class="age"></span></h2><div class="body"></div></section>
 <section id="feedsec">
@@ -256,6 +259,11 @@ const COLUMNS = [['ready', 'ready'], ['in_progress', 'in progress'], ['done_wait
 function renderBeads() {
   const box = document.querySelector('#beads .columns');
   const b = state.beads || {};
+  // bd lists epics and owner beads as ready; no worker may claim them, so they are chips
+  // above the board, not cards in the ready column (air-o6x.8).
+  const held = (b.not_claimable || []).map(x =>
+    el('span', { class: 'chip muted', title: x.title }, (x.type === 'epic' ? 'epic ' : 'owner ') + x.id));
+  replace(document.querySelector('#beads .held'), held.length ? el('span', { class: 'chips' }, held) : null);
   replace(box, COLUMNS.map(([key, label]) => {
     const list = b[key] || [];
     return el('div', { class: 'column' }, el('h3', {}, label + ' (' + list.length + ')'),
