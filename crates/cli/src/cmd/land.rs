@@ -892,9 +892,11 @@ pub fn run(
         super::holdings::expire(&ledger, repo);
     }
     // air-1vri.2: the lane's next step, as of this landing. It ran the command, so it learns
-    // here and the channel does not tell it again.
+    // here and the channel does not tell it again. Every landing that moved main ends with it,
+    // bead or no bead (air-jkk): a coordinator's or journal-only branch lands carrying none, and
+    // the lane was left to poll `air status` for what it does next.
     let mut next_ready = Vec::new();
-    if !landed.is_empty() {
+    if moved.1.is_some() {
         let (ready, _, _) = super::status::batch_ready_for(&ledger, repo);
         next_ready = ready.into_iter().filter(|b| b.worker != worker).collect();
         if role == "lane" {
