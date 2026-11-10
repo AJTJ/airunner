@@ -75,6 +75,7 @@ pub fn recipients(repo: &Path, me: &str) -> Vec<String> {
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(p, _)| air_ledger::paths::worker_name_for(&p).ok())
+        // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
         .filter(|n| n != "main" && n != me)
         .collect();
     v.sort();

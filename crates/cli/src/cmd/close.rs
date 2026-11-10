@@ -6,27 +6,23 @@
 //! --reason <r>` (`bd close --help`, read 2026-08-22); Air never used it. This does, and
 //! closes the matching ledger claims in one transaction.
 //!
-//! A worker or the lane closes here too, and for them the close runs the hand-over gate first
-//! (owner ruling, 2026-09-26). Until then workers closed with raw `bd close`, and the gate
-//! recognised that close by reading the command text. In the 0.4.5 live trial a worker ran a
-//! commit and `bd close <id> …` on separate lines of one Bash call; the matcher missed it and
-//! the bead closed with no green containing its commits. The same matcher refused a heredoc
-//! that only mentioned `bd close`. Here the check runs when the close runs, however the command
-//! line is written. The text matcher was deleted the same day: a worker's and the lane's bd
-//! writes are denied by their launchers instead.
-//!
-//! `AIR_ENFORCE` does not apply here: a worker's `air close` refuses on a failed gate whether or
-//! not it is set. Advisory mode exists for the text matcher, which can misfire on a command
-//! that only looks like a close; this command cannot, and every launched worker and lane has
-//! `AIR_ENFORCE=1` anyway, so the two paths refuse the same closes in a launched session.
-//! Removed when bd can run a check before it closes (a pre-close hook), at which point the
-//! gate moves there and raw `bd close` is safe again.
+//! A worker's or the lane's close is refused here and names `air done` (air-4xj.2): a worker
+//! declares its bead done with proof as soon as the work is committed, and the landing that
+//! puts that commit on the base branch closes the bead (`done.rs`, `land.rs`). Until
+//! 2026-09-26 workers closed with raw `bd close`, and the gate recognised that close by reading
+//! the command text; in the 0.4.5 live trial a worker ran a commit and `bd close <id> …` on
+//! separate lines of one Bash call, the matcher missed it, and the bead closed with no green
+//! containing its commits. From then until air-4xj.2 a worker's `air close` ran the hand-over
+//! gate with its green checks, so a bead closed one batch after its work and every dependent
+//! waited that batch (the 2026-11-06 pod trial, the lease scenario). The refusal is in the
+//! command, whatever the command line looks like; a worker's and the lane's bd writes are
+//! denied by their launchers. `AIR_ENFORCE` does not apply: the refusal holds whether or not
+//! it is set. Removed when bd can run a check before it closes (a pre-close hook), at which
+//! point `air done`'s gate moves there and raw `bd close` is safe again.
 
 use std::path::Path;
 
 use air_bd::{BdError, WorkLedger};
-use air_hooks::handover_verdict;
-use air_ledger::Ledger;
 
 use crate::cmd::{emit, log_event, now, open};
 
@@ -67,38 +63,25 @@ pub fn resolve_reason(reason: Option<&str>, file: Option<&Path>) -> Result<Strin
     )
 }
 
-/// Whether this caller's close runs through the hand-over gate: a worker or the lane, by the
-/// launcher's `AIR_ROLE`. The coordinator and the owner close what has already landed, and
-/// the gate is about a worker's own branch, so it would be checking the wrong tree for them.
+/// Whether this caller is refused the close: a worker or the lane, by the launcher's
+/// `AIR_ROLE`. The coordinator and the owner close what has already landed; a worker declares
+/// done and the landing closes (air-4xj.2).
 pub fn gated(role: &str) -> bool {
     super::is_worker_like(role)
 }
 
-/// The hand-over gate over a worker's close, for every bead named: the same facts and the same
-/// verdict `air handover` computes, never advisory. `Err` carries the gate's
-/// refusal for each bead that fails, one per line, and then nothing is closed. Stamps and clears
-/// the hand-over attempt counter, since this is a real attempt.
-pub fn gate(ledger: &Ledger, worker: &str, repo: &Path, beads: &[String]) -> Result<(), String> {
-    let mut refusals = Vec::new();
-    for b in beads {
-        let mut f = super::handover::facts(ledger, worker, repo, Some(b), false)?;
-        f.refused_command = Some("air close".to_string());
-        let v = handover_verdict(&f);
-        if v.pass {
-            let _ = ledger.clear_handover_attempts(b, worker);
-        } else {
-            let _ = ledger.stamp_handover(b, worker, &now());
-            refusals.push(format!("{b}: {}", v.message));
-        }
+/// The refusal a worker's or the lane's `air close` gets, naming the command that replaces it,
+/// or `None` for a role that closes here. Pure over the role, so the probe needs no repo.
+pub fn worker_refusal(role: &str) -> Option<String> {
+    if !gated(role) {
+        return None;
     }
-    if refusals.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{}\nNothing was closed. `air handover --bead <id>` names each check and what it needs.",
-            refusals.join("\n")
-        ))
-    }
+    Some(format!(
+        "refused: a {role} declares done with `air done <id> --reason-file <proof>`; the bead \
+         closes when the landing puts that head on the base branch. `air handover --bead <id>` \
+         names anything the declaration still needs. The coordinator and the owner close landed \
+         work with `air close`."
+    ))
 }
 
 /// What `air close` says when bd did not close. A timeout names the id count, the budget and
@@ -205,21 +188,15 @@ pub fn run(
     let role = super::caller_role();
     let inputs =
         serde_json::json!({"beads": beads, "reason": reason, "role": role, "repo_worker": worker});
-    if gated(role)
-        && let Err(msg) = gate(&ledger, &worker, repo, beads)
-    {
-        // An id bd does not have is the refusal, not whatever the gate made of it.
-        let msg = match check_known(repo, beads) {
-            Err(unknown) => format!("air close: {unknown}; nothing was closed"),
-            Ok(()) => msg,
-        };
+    // Before anything else (air-4xj.2): a worker's close is not a close, whatever it names.
+    if let Some(msg) = worker_refusal(role) {
         log_event(
             &ledger,
             &worker,
             super::decisions::CLOSE_REFUSE,
             &inputs,
             &msg,
-            &format!("{} bead(s), 4 checks each", beads.len()),
+            &format!("{} bead(s), role", beads.len()),
         );
         emit(
             json,
@@ -228,15 +205,13 @@ pub fn run(
         );
         return 2;
     }
-    // A worker's close is recorded under its own name when the launcher's actor is missing.
-    let actor = match std::env::var("BEADS_ACTOR").unwrap_or_default() {
-        a if a.is_empty() && gated(role) => worker.clone(),
-        a => a,
-    };
+    let actor = std::env::var("BEADS_ACTOR").unwrap_or_default();
     let bd = super::claim::bd_for(repo);
     // One process for every id. A partial failure is bd's to report: it names the id it
     // choked on and nothing is written to the ledger, so a re-run is safe.
-    if let Err(e) = bd.close_all(beads, reason, &actor) {
+    // No `--force` (owner, 2026-11-09): the coordinator and the owner close what bd agrees
+    // is theirs to close; the force is the lane's landing's (`land::close_done`, air-52u).
+    if let Err(e) = bd.close_all(beads, reason, &actor, false) {
         let msg = refusal(&e, beads.len(), super::claim::bd_overridden());
         log_event(
             &ledger,
@@ -255,8 +230,7 @@ pub fn run(
     }
     // One transaction for every claim these beads carried, whoever held them.
     let at = now();
-    let why = if gated(role) { "closed" } else { "landed" };
-    let released = match ledger.release_claims_on(beads, why, &at) {
+    let released = match ledger.release_claims_on(beads, "landed", &at) {
         Ok(v) => v,
         Err(e) => {
             eprintln!(
@@ -305,7 +279,21 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::malformed_ids;
+    use super::{malformed_ids, worker_refusal};
+
+    /// air-4xj.2: the refusal names `air done`, and only a worker or the lane gets one.
+    #[test]
+    fn a_worker_and_the_lane_are_refused_naming_air_done_and_the_others_are_not() {
+        for role in ["worker", "lane"] {
+            let msg = worker_refusal(role).unwrap_or_default();
+            assert!(
+                msg.contains("`air done <id> --reason-file <proof>`"),
+                "{role}: {msg}"
+            );
+        }
+        assert_eq!(worker_refusal("coordinator"), None);
+        assert_eq!(worker_refusal("owner"), None);
+    }
 
     /// air-a8ra: a bead id and a filename passed as one argument is not an id.
     #[test]

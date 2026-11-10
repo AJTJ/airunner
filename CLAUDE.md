@@ -48,7 +48,10 @@ Index items are 1–3 lines; detail lives behind the link.
   Added, Changed, Removed and Fixed, written as the round's work lands. A bead writes its line
   as a fragment, `changelog.d/<bead-id>.md`, never into `CHANGELOG.md` itself: every bead
   editing one heading conflicted every landing (air-be6d). `make changelog` folds them in at
-  round end; `changelog.d/README.md` has the format.
+  round end; `changelog.d/README.md` has the format. **A surface notice is a file too**,
+  `crates/cli/surface.d/<ordinal>-<id>.rs`, folded into `install::SURFACE` by `build.rs` at
+  every build, never an entry appended to the array (air-38q: four lane drops in one session,
+  all two beads appending at the same line); `crates/cli/surface.d/README.md` has the format.
   **Before tagging, run the live trial** (`docs/design.md` §9.1): a real fleet works through
   every scenario on a copy of `examples/minimal`, and the release is tagged only if each ends
   as expected (owner, 2026-09-25). Defects the trial finds go to the owner with a suggested fix,
@@ -60,7 +63,7 @@ Index items are 1–3 lines; detail lives behind the link.
   five row collisions in one day was the cost of checking at every verify. Never edit a row;
   append. A parity sweep (a bead titled "Parity sweep ...") lands after the round's last change to
   `crates/` or `docs/rules/`; `air release-check` refuses until it has (owner, 2026-09-29: what ships in
-  `.air/docs/` is kept current with every version). **Appending the row is not the whole round-end duty; two things go with it, both the
+  `.air/docs/` is kept current with every version). **The release-row commit carries the sweep bead's `Bead:` trailer**: the row is itself a change to `crates/`, and `air release-check` exempts only commits naming the sweep (`install.rs` `parity_facts`). A row committed without it refused the 0.4.14 release until a second commit named the sweep (2026-11-03). **Appending the row is not the whole round-end duty; two things go with it, both the
   coordinator's and both earned on 2026-09-07** (air-wt1v, air-ilh4). **Sweep every landing of the
   round against `install::SURFACE`** and append what is missing. Two populations, two numbers,
   both from 2026-09-07 and neither interchangeable: a sweep of **66 landings** found twelve gaps
@@ -99,8 +102,9 @@ Index items are 1–3 lines; detail lives behind the link.
   constraint (in-memory SQLite, temp git repos, no sleeps, no network, parallel-safe).
 - **Talking to the owner.** Short, in complete ordinary sentences; the voice is the
   `plain-language` skill. Lead with the thing the owner has to know or
-  do; stop there. Default is five lines or fewer. No tables, no headers, no bold-label lists,
-  no bead ids unless the owner has to act on one. Do not report each agent finishing each task;
+  do; stop there. Default is five lines or fewer. No tables, no headers, no bead ids unless the owner has to act on one. The
+  `user-summary` shape is for a decision the owner has to make or a roadblock only they can clear, and a status, an answer or a set
+  of commands is plain prose (owner, 2026-11-05: the labels on two facts and two shell lines were "really weird"). Do not report each agent finishing each task;
   report when a round ends, when something is blocked, or when asked. Detail is available on
   request and is not volunteered. If the answer is "nothing needed", say that and stop. Owner,
   2026-08-22, after a status report they refused to read.
@@ -118,7 +122,12 @@ Index items are 1–3 lines; detail lives behind the link.
   neither checked, plausibly *because* the other had said it.
   **The same rule pointed inward is the `project-diligence` skill**: invoke it before stating a
   number about this repo, before claiming a mechanism fires or is shipped, and before saying what
-  the installed `air` does (owner, 2026-08-29, air-476).
+  the installed `air` does (owner, 2026-08-29, air-476). **And before summarising anything:
+  a summary cites the file, command or bead it was read from, and nothing is described from a
+  compaction summary, a trial report's findings list or memory when the source is one `Read`
+  away** (owner, 2026-11-06: four wrong statements in one exchange, a bead described without
+  opening it, one trial event reported as two findings, a fix ranked and then shelved without
+  reading `claim.rs`; each corrected only when the file was opened).
 - **This file** is rules + indexes + essentials only. What is still to build goes in `docs/design.md`
   §10, technology choices in its §11, standing rulings in its §8.1, and the dated history of rulings
   and framing in `private/decisions.md`, which the owner keeps and does not publish (owner, 2026-09-26).
@@ -127,7 +136,7 @@ Index items are 1–3 lines; detail lives behind the link.
 
 | Read when | Document |
 |---|---|
-| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans or research directory; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
+| What Air is today: components, interfaces, data, flows, invariants, failure model, operations, the TODO list in §10 and the technology decisions in §11 (the one design record: there is no plans directory, and `docs/research/` holds only the sourced output of research beads, each cited from a §11 row, 2026-11-03; edit it in the same change that alters what it describes, skill `design-doc`) | [`docs/design.md`](docs/design.md) |
 | Orienting in `docs/` | [`docs/README.md`](docs/README.md) |
 | Every problem Air has hit and demonstrably solved, with the fix and what would regress it; read before changing a mechanism (only landed fixes with a recorded incident; nothing planned) | [`docs/solved-issues.md`](docs/solved-issues.md) |
 | Changing the fleet's shape (who merges, which checkout a role works in, how branches reach main, what each role may do) | the target shape and its open rulings are `docs/design.md` §10 |
@@ -135,10 +144,12 @@ Index items are 1–3 lines; detail lives behind the link.
 | Working with `bd`: versions, the ready and claim semantics, the dependency guard, whether to replace it | skill `beads`; `.claude/skills/beads/references/bd-facts.md` |
 | The findings Air's rules rest on: guardrails as throttles, corpus principles, verified numbers and claims not to repeat | `.claude/skills/do-less/references/evidence.md` |
 | Integrating Air into a target repo: install, configure (`.claude/air.json`), upgrade | [`docs/rules/adopting-air.md`](docs/rules/adopting-air.md) |
+| Giving a session a machine of its own for `air run` and `air record` (a `targets` entry): the machine, the gitignored files, the overlay entry, the first run, the machine gone, one machine per session | [`docs/rules/remote-verify.md`](docs/rules/remote-verify.md) |
 | Which role an agent is and what it may do (shipped to adopters as `.air/roles.md`) | [`docs/rules/roles.md`](docs/rules/roles.md) |
 | Decomposing a feature, sizing beads | skill `decomposition` |
 | Porting or writing a skill | [`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md); every skill carries a `## Provenance` footer |
 | Writing prose, docs, commits, PRs, tests, reviews | skill `plain-language` owns voice; `/code-review` for reviewing a change |
+| Asking the owner to decide, or naming a roadblock only they can clear (a status or an answer is plain prose) | skill `user-summary` (the shape; voice is `plain-language`) |
 | Explaining a defect, a finding, a red, a refusal or a capture, or proposing a fix | skill `defect` (seven parts, from the ground up, backed by `docs/design.md` §6 and `docs/solved-issues.md`) |
 | About to state a number, a rate, or what the installed `air` does | skill `project-diligence` |
 | What a round left behind (session journals and round logs; records, not reading) | `.air/journal/` in the main checkout (gitignored) |
@@ -150,12 +161,12 @@ One line each; `docs/design.md` §3 to §6 is the full description and is the on
 | System | One line |
 |---|---|
 | `crates/ledger` (`air-ledger`) | SQLite WAL ledger at the main checkout (`.air/ledger.db`) plus NDJSON events (`.air/events/`). Rows have no time-based expiry. |
-| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, the edit journal; `air hook` dispatches every harness event, fails open, and writes one event line per invocation. `air close` runs the hand-over gate and refuses regardless of `AIR_ENFORCE`; in the hook, `AIR_ENFORCE=1` turns lease advice into refusal. |
+| `crates/hooks` (`air-hooks`) + `air hook` | Hook I/O types, the pure hand-over gate, the edit journal; `air hook` dispatches every harness event, fails open, and writes one event line per invocation. `air done` runs the hand-over gate without its green and refuses regardless of `AIR_ENFORCE`, and a worker's `air close` is refused outright; in the hook, `AIR_ENFORCE=1` turns lease advice into refusal. |
 | `crates/bd` (`air-bd`) | The `WorkLedger` trait over `bd --json`; never called from a hook path. |
 | `crates/cli` (`air`) | Every command (`air --help`), the MCP server, the launchers, install and init, status and its attention conditions, landing, audit, and the self-test. |
 | `air mcp` | One stdio MCP server per session: Air's channel. It delivers Air's notices into every launched session (ready beads, batch results, fleet stop) and attention conditions to the coordinator, plus tools that invoke the CLI with `--json`. |
 | Launchers `air worker <name>` / `air coordinator` | Interactive `claude` in a worktree Air made (`.claude/worktrees/coordinator` for the coordinator), roles prose appended, a deny list that holds in every permission mode, role env on the process, a named tmux session on request. |
-| Hand-over gate | Closing a bead needs a commit carrying its `Bead:` trailer, a recorded green at a commit containing `main` and every such commit, a claim or trailer, and a digest where `digests` or `digest_dir` is set (this repo sets neither). A worker's or the lane's `air close` runs it; their launchers deny raw `bd close`. Never blocks a prompt or a WIP commit. |
+| Hand-over gate | A worker declares a bead done with `air done`, which needs a commit carrying its `Bead:` trailer, the caller's own claim, a green precheck where declared and a digest where `digests` or `digest_dir` is set (this repo sets neither); the landing that puts that commit on `main` closes the bead. A worker's or the lane's `air close` is refused; their launchers deny raw `bd close`. Never blocks a prompt or a WIP commit. |
 | Coordinator (human-facing session) | Steers, triages captures, files and prioritises beads. Informed by the channel, with a recurring heartbeat as the failsafe (roles.md). `SendMessage` is the agent-to-agent channel and every message is recorded. |
 
 ## This repo's work flow

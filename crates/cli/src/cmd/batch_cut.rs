@@ -58,7 +58,7 @@ use serde::Serialize;
 use air_ledger::Ledger;
 use air_ledger::verify::{Kind, Verdict};
 
-use super::status::{self, BatchReady};
+use super::status::{self, BatchReady, NotBatchReady};
 use super::worktree::{GIT_BUDGET, git_status};
 use crate::git;
 
@@ -104,8 +104,11 @@ pub fn order(v: &mut [Candidate]) {
 ///
 /// `conflict(ours, theirs)` answers one pair: the conflicting paths, empty when clean, `Err`
 /// when the question could not be asked (which stops the cut rather than dropping anybody).
+///
+/// `base` is the base branch's name (air-h7l), which is what a drop against it is named by.
 pub fn pre_check<F>(
     mut cands: Vec<Candidate>,
+    base: &str,
     main_sha: &str,
     mut conflict: F,
 ) -> Result<(Vec<Candidate>, Vec<Dropped>), String>
@@ -116,7 +119,7 @@ where
     let mut accepted: Vec<Candidate> = Vec::new();
     let mut dropped = Vec::new();
     'member: for c in cands {
-        let mut against: Vec<(&str, &str)> = vec![("main", main_sha)];
+        let mut against: Vec<(&str, &str)> = vec![(base, main_sha)];
         against.extend(
             accepted
                 .iter()
@@ -164,6 +167,9 @@ pub fn has_merge_tree(version_line: &str) -> bool {
 pub struct Cut {
     pub dry_run: bool,
     pub lane: String,
+    /// The base branch's name (air-h7l): `main` unless `base_branch` is set.
+    pub base: String,
+    /// The base's sha the cut started from. The key keeps its name.
     pub main: String,
     /// The lane's head after the cut; `None` on a dry run or when nothing was merged.
     pub head: Option<String>,
@@ -186,16 +192,18 @@ fn short(s: &str) -> &str {
 }
 
 pub fn render(c: &Cut) -> String {
+    // Empty reads as `main`, so a fixture that names no base renders as before.
+    let base = if c.base.is_empty() { "main" } else { &c.base };
     let mut out = String::new();
     if c.dry_run {
         out.push_str(&format!(
-            "dry run, nothing changed: {} would start from main at {} and merge:\n",
+            "dry run, nothing changed: {} would start from {base} at {} and merge:\n",
             c.lane,
             short(&c.main)
         ));
     } else if let Some(h) = &c.head {
         out.push_str(&format!(
-            "batch cut: {} at {} (main {} and {} member(s))\n",
+            "batch cut: {} at {} ({base} {} and {} member(s))\n",
             c.lane,
             short(h),
             short(&c.main),
@@ -203,7 +211,7 @@ pub fn render(c: &Cut) -> String {
         ));
     } else {
         out.push_str(&format!(
-            "no batch cut: nothing to merge onto main at {}\n",
+            "no batch cut: nothing to merge onto {base} at {}\n",
             short(&c.main)
         ));
     }
@@ -226,25 +234,25 @@ pub fn render(c: &Cut) -> String {
             d.paths.join(", "),
             d.stage
         ));
-        out.push_str(&format!("    {}\n", drop_advice(d)));
+        out.push_str(&format!("    {}\n", drop_advice(d, base)));
     }
     if let (Some(r), Some(over)) = (&c.reset_from, &c.stale_over) {
         out.push_str(&format!(
-            "  stale: head {} was green over {}; main is at {}, so that batch is stale and is \
+            "  stale: head {} was green over {}; {base} is at {}, so that batch is stale and is \
              re-cut\n",
             short(r),
             if over.is_empty() {
-                "an unrecorded main"
+                format!("an unrecorded {base}")
             } else {
-                short(over)
+                short(over).to_string()
             },
             short(&c.main)
         ));
     }
     if let Some(r) = &c.reset_from {
         out.push_str(&format!(
-            "  reset: the lane's branch {} {} to main; its commits not in main are not in this \
-             batch\n",
+            "  reset: the lane's branch {} {} to {base}; its commits not in {base} are not in \
+             this batch\n",
             if c.dry_run {
                 "would move from"
             } else {
@@ -280,10 +288,10 @@ pub fn render(c: &Cut) -> String {
 /// main` now. Against a peer's branch or the batch so far, the conflicting side is NOT on main
 /// yet: the notice used to say "merge main" for both, and a worker resolved by merging the
 /// peer's unlanded branch instead.
-pub fn drop_advice(d: &Dropped) -> String {
-    if d.against == "main" {
+pub fn drop_advice(d: &Dropped, base: &str) -> String {
+    if d.against == base {
         return format!(
-            "Resolve it in your worktree: `git merge main`, fix the conflict in {}, commit, and \
+            "Resolve it in your worktree: `git merge {base}`, fix the conflict in {}, commit, and \
              your branch is batch-ready again.",
             d.paths.join(", ")
         );
@@ -294,9 +302,9 @@ pub fn drop_advice(d: &Dropped) -> String {
         format!("{}'s branch", d.against)
     };
     format!(
-        "{side} at {} is not on main yet. Wait until it lands (you will hear `main moved`), \
-         then `git merge main` and resolve the conflict in {}; if it never lands, resolve \
-         against main instead. Commit, and your branch is batch-ready again.",
+        "{side} at {} is not on {base} yet. Wait until it lands (you will hear `{base} moved`), \
+         then `git merge {base}` and resolve the conflict in {}; if it never lands, resolve \
+         against {base} instead. Commit, and your branch is batch-ready again.",
         short(&d.against_sha),
         d.paths.join(", ")
     )
@@ -336,6 +344,7 @@ pub fn land_first(
 pub fn lane_start(
     repo: &Path,
     ledger: &Ledger,
+    base: &str,
     main: &str,
     dry_run: bool,
 ) -> Result<LaneStart, String> {
@@ -355,7 +364,7 @@ pub fn lane_start(
         let (code, _, err) = git_status(repo, &["reset", "--hard", main], GIT_BUDGET)?;
         if code != 0 {
             return Err(format!(
-                "could not reset the lane's branch to main at {}: {}",
+                "could not reset the lane's branch to {base} at {}: {}",
                 short(main),
                 err.trim()
             ));
@@ -499,18 +508,44 @@ pub fn failure_reason(
     format!("{err} [{lock}: {held}]")
 }
 
-/// Which batch-ready branches this cut takes (air-5fo5): all of them, all but `without`, or only
-/// `only`, and the workers left out, so a split after a red batch is an ordinary recorded cut
-/// rather than a hand merge Air has to guess the members of. Pure.
+/// Which branches this cut takes (air-5fo5): all of the batch-ready ones, all but `without`,
+/// or only `only`, and the workers left out, so a split after a red batch is an ordinary
+/// recorded cut rather than a hand merge Air has to guess the members of. Pure.
+///
+/// air-jk2: a split (`without` or `only` given) chooses among the batch-ready branches AND
+/// `red_held`, the members of the newest standing red batch at their red-held heads. That is
+/// what a split is for: the red took every member out of the batch-ready set (air-vdst), and
+/// the lane names by hand which of them to verify apart. A bare cut never sees `red_held`.
 pub fn select(
     ready: Vec<BatchReady>,
+    red_held: Vec<BatchReady>,
     without: &[String],
     only: &[String],
 ) -> (Vec<BatchReady>, Vec<String>) {
-    let (kept, out): (Vec<_>, Vec<_>) = ready.into_iter().partition(|b| {
+    let split = !without.is_empty() || !only.is_empty();
+    let candidates = ready
+        .into_iter()
+        .chain(if split { red_held } else { vec![] });
+    let (kept, out): (Vec<_>, Vec<_>) = candidates.partition(|b| {
         !without.contains(&b.worker) && (only.is_empty() || only.contains(&b.worker))
     });
     (kept, out.into_iter().map(|b| b.worker).collect())
+}
+
+/// The members of a red batch that are still at the head the red took, as the batch-ready
+/// rule would list them with the red set aside (air-jk2): every `red-at-head` branch whose
+/// `if_split` the rule filled.
+///
+/// air-67q: any red batch, not only the newest. Once the lane has cut one member alone and
+/// found it red, that one-member red is the newest red batch, and choosing among its members
+/// alone left every other member of the batch being split out of reach of `--only`, the cut
+/// Air itself prints next.
+fn red_held_members(not_ready: &[NotBatchReady]) -> Vec<BatchReady> {
+    not_ready
+        .iter()
+        .filter(|n| n.check == "red-at-head")
+        .filter_map(|n| n.if_split.as_deref().cloned())
+        .collect()
 }
 
 pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json: bool) -> i32 {
@@ -571,7 +606,8 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
     }
     if lane == "main" {
         // The worktree is named by `air lane`, not by `verify_lane`, which is only the switch
-        // for the closing sequence (air-rr98).
+        // for the closing sequence (air-rr98). `main` is the SESSION name of the primary
+        // checkout, not the base branch (air-h7l).
         return refuse(
             "air batch cut: refused in the main checkout. A cut merges into the branch it runs \
              on, and main moves only by `air land`. Run it in the lane's worktree (`air lane` \
@@ -587,9 +623,10 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
             version.trim()
         ));
     }
-    let main = match git::main_tip(repo) {
+    let base = super::handover::base_branch(repo);
+    let main = match git::base_tip(repo) {
         Ok(m) => m,
-        Err(e) => return fail(format!("git rev-parse main: {e}")),
+        Err(e) => return fail(format!("git rev-parse {base}: {e}")),
     };
     if !dry_run {
         match git_status(
@@ -616,7 +653,9 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
         eprintln!("air batch cut: {e}");
     }
     let ready: Vec<BatchReady> = ready.into_iter().filter(|b| b.worker != lane).collect();
-    let (ready, left_out) = select(ready, without, only);
+    let red_held = red_held_members(&not_ready);
+    let (ready, left_out) = select(ready, red_held, without, only);
+    let taken: Vec<String> = ready.iter().map(|b| b.worker.clone()).collect();
     let mut cands = Vec::new();
     for BatchReady {
         worker,
@@ -636,18 +675,19 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
             ready_at,
         });
     }
-    let (accepted, mut dropped) = match pre_check(cands, &main, |a, b| merge_tree(repo, a, b)) {
-        Ok(x) => x,
-        Err(e) => return fail(e.to_string()),
-    };
+    let (accepted, mut dropped) =
+        match pre_check(cands, &base, &main, |a, b| merge_tree(repo, a, b)) {
+            Ok(x) => x,
+            Err(e) => return fail(e.to_string()),
+        };
 
     // Every batch starts from main (0.4.8 trial): a red batch's merges never carry forward.
-    let (reset_from, stale_over) = match lane_start(repo, &ledger, &main, dry_run) {
+    let (reset_from, stale_over) = match lane_start(repo, &ledger, &base, &main, dry_run) {
         Ok(LaneStart::Reset { from, stale_over }) => (from, stale_over),
         Ok(LaneStart::LandFirst { head }) => {
             return refuse(format!(
                 "air batch cut: refused: {lane}'s head {} is a batch that passed (a green is \
-                 recorded there) and main does not contain it. Land it first: `air land \
+                 recorded there) and {base} does not contain it. Land it first: `air land \
                  --worker {lane}`. Nothing was changed.",
                 short(&head)
             ));
@@ -657,11 +697,12 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
     let mut cut = Cut {
         dry_run,
         lane: lane.clone(),
+        base: base.clone(),
         main: main.clone(),
         reset_from,
         held: not_ready
             .iter()
-            .filter(|n| n.worker != lane)
+            .filter(|n| n.worker != lane && !taken.contains(&n.worker))
             .map(|n| n.detail.clone())
             .collect(),
         stale_over,
@@ -717,7 +758,7 @@ pub fn run(repo: &Path, dry_run: bool, without: &[String], only: &[String], json
     for d in &cut.dropped {
         // air-1vri.2: the dropped worker hears it now. A dry run drops nothing.
         if !dry_run {
-            super::fanout::batch_dropped(&ledger, &lane, d);
+            super::fanout::batch_dropped(&ledger, &lane, &base, d);
         }
         super::log_event(
             &ledger,
@@ -843,7 +884,7 @@ mod tests {
 
     #[test]
     fn drop_advice_names_the_unlanded_branch_and_says_to_wait() {
-        let peer = drop_advice(&dropped("w1"));
+        let peer = drop_advice(&dropped("w1"), "main");
         assert!(
             peer.starts_with("w1's branch at d7bc5106 is not on main yet."),
             "{peer}"
@@ -855,12 +896,12 @@ mod tests {
             "{peer}"
         );
         assert!(!peer.contains("merge w1's branch"), "{peer}");
-        let batch = drop_advice(&dropped("batch"));
+        let batch = drop_advice(&dropped("batch"), "main");
         assert!(
             batch.starts_with("the lane's batch at d7bc5106 is not on main yet."),
             "{batch}"
         );
-        let main = drop_advice(&dropped("main"));
+        let main = drop_advice(&dropped("main"), "main");
         assert!(
             main.starts_with("Resolve it in your worktree: `git merge main`"),
             "{main}"

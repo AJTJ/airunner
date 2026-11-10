@@ -89,6 +89,12 @@ case "$1" in
   ready) if [ -f "$d/bd.ready.json" ]; then cat "$d/bd.ready.json"; exit 0; fi; echo "[]"; exit 0;;
   epic) if [ -f "$d/bd.epics.json" ]; then cat "$d/bd.epics.json"; exit 0; fi; echo "[]"; exit 0;;
   update) [ -e "$d/bd.fail" ] && exit 1
+          # air-52u: with bd.assignee_check, a claim records its actor as the assignee bd
+          # would keep, and `close` below refuses another actor without --force, as bd 1.3.0.
+          case "$*" in *--claim*) if [ -f "$d/bd.assignee_check" ]; then
+            actor="$BEADS_ACTOR"; prev=""
+            for a in "$@"; do [ "$prev" = "--actor" ] && actor="$a"; prev="$a"; done
+            printf '%s' "$actor" > "$d/assignee.$2"; fi;; esac
           # air-0kk: `-s open -a ""` is the one write a release makes; mirror it into the
           # issue `show` answers from, so a later claim by another actor sees what bd would.
           case "$*" in *"-s open -a"*)
@@ -103,6 +109,18 @@ case "$1" in
             printf '%s' "{\"id\":\"$2\",\"status\":\"open\",\"assignee\":\"\",\"labels\":[]}" > "$d/bd.issue.json";;
           esac
           exit 0;;
+  close) [ -e "$d/bd.close_fail" ] && { echo "the close failed for a reason of bd's own" >&2; exit 1; }
+         if [ -f "$d/bd.assignee_check" ]; then
+           actor="$BEADS_ACTOR"; prev=""; force=no
+           for a in "$@"; do [ "$prev" = "--actor" ] && actor="$a"; [ "$a" = "--force" ] && force=yes; prev="$a"; done
+           shift; for id in "$@"; do case "$id" in --*) break;; esac
+             if [ -f "$d/assignee.$id" ] && [ "$(cat "$d/assignee.$id")" != "$actor" ] && [ "$force" = no ]; then
+               echo "cannot close $id: assignee is \"$(cat "$d/assignee.$id")\", actor is \"$actor\"; reclaim or use --force to override" >&2; exit 1
+             fi
+           done
+           for id in "$@"; do case "$id" in --*) break;; esac; : > "$d/closed.$id"; done
+         fi
+         exit 0;;
   reclaim) # bd 1.3.0: exit 0 either way; count 0 while the lease is live (bd.lease_live).
           if [ -f "$d/bd.lease_live" ]; then echo '{"count":0,"reclaimed":null,"scoped":true}'; exit 0; fi
           printf '%s' "{\"id\":\"$3\",\"status\":\"open\",\"labels\":[]}" > "$d/bd.issue.json"
@@ -866,7 +884,8 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("bd: median"), "{out}");
 
-    // A worker's close runs the hand-over gate.
+    // A worker's close is refused naming `air done` (air-4xj.2), and `air done` runs the
+    // gate without the green.
     let wt = repo.join("wt-w");
     let g = common::command("git")
         .args([
@@ -886,23 +905,29 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     let (code, out, err) = air_env(&wt, &bd, &["claim", "zz-11"], &worker);
     assert_eq!(code, 0, "{out}{err}");
     std::fs::write(wt.join("bd.log"), "").unwrap();
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("air close refused for"), "{out}");
-    assert!(out.contains("verify-green-at-head"), "{out}");
-    // A refusal closes nothing. It asks bd, once, whether the id exists (air-a8ra), so an
-    // unknown id is named instead of the gate's advice.
-    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
-    assert!(!log.contains("close"), "{log}");
-    assert!(log.lines().count() <= 1, "{log}");
+    for role in ["worker", "lane"] {
+        let (code, out, _) = air_env(
+            &wt,
+            &bd,
+            &["close", "zz-11", "--reason", "x"],
+            &[("AIR_ROLE", role)],
+        );
+        assert_eq!(code, 2, "{role}: {out}");
+        assert!(
+            out.contains("`air done <id> --reason-file <proof>`"),
+            "{role}: {out}"
+        );
+        assert!(!out.contains("verify-green-at-head"), "{role}: {out}");
+    }
+    // A refusal closes nothing and asks bd nothing: the role is enough.
+    assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
 
-    // air-a8ra: an id and a filename as one argument is refused before bd or the gate, and
-    // an id bd does not have is named rather than advised about.
-    std::fs::write(wt.join("bd.log"), "").unwrap();
+    // air-a8ra, on `air done` now: an id and a filename as one argument is refused before bd
+    // or the gate, and an id bd does not have is named rather than advised about.
     let (code, out, _) = air_env(
         &wt,
         &bd,
-        &["close", "zz-11 notes.md", "--reason", "x"],
+        &["done", "zz-11 notes.md", "--reason", "x"],
         &worker,
     );
     assert_eq!(code, 2, "{out}");
@@ -910,7 +935,7 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert!(!out.contains("Bead:"), "{out}");
     assert_eq!(std::fs::read_to_string(wt.join("bd.log")).unwrap(), "");
     std::fs::write(wt.join("bd.unknown"), "zz-99\n").unwrap();
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-99", "--reason", "x"], &worker);
+    let (code, out, _) = air_env(&wt, &bd, &["done", "zz-99", "--reason", "x"], &worker);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("bd has no bead zz-99"), "{out}");
     let (code, out, err) = air_env(&wt, &bd, &["handover", "--bead", "zz-99"], &worker);
@@ -918,26 +943,37 @@ fn ten_closes_are_one_bd_process_and_carry_bd_ms() {
     assert!(out.contains("bd has no bead zz-99"), "{out}");
     std::fs::remove_file(wt.join("bd.unknown")).unwrap();
 
-    // air-gcjp: a green head is not enough while no commit names the bead.
+    // air-gcjp: a green head is not enough while no commit names the bead; with the
+    // commit, the declaration passes with no green at all.
     let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
-    let (code, out, _) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    let (code, out, _) = air_env(&wt, &bd, &["done", "zz-11", "--reason", "x"], &worker);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("bead-commit"), "{out}");
     assert!(out.contains("`Bead: zz-11`"), "{out}");
     std::fs::write(wt.join("zz-11.md"), "done\n").unwrap();
     git(&wt, &["add", "zz-11.md"]);
     git(&wt, &["commit", "-q", "-m", &bead_trailer("zz-11")]);
-    let (code, out, err) = air_env(&wt, &bd, &["record", "verify", "--", "true"], &worker);
+    std::fs::write(wt.join("bd.log"), "").unwrap();
+    let (code, out, err) = air_env(&wt, &bd, &["done", "zz-11", "--reason", "x"], &worker);
     assert_eq!(code, 0, "{out}{err}");
-    let (code, out, err) = air_env(&wt, &bd, &["close", "zz-11", "--reason", "x"], &worker);
+    let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
+    assert!(log.contains("comment zz-11 done at "), "{log}");
+    assert!(!log.contains("close"), "{log}");
+    // The coordinator's close is unchanged, and ends the worker's claim.
+    let (code, out, err) = air_env(
+        &wt,
+        &bd,
+        &["close", "zz-11", "--reason", "x"],
+        &[("AIR_ROLE", "coordinator")],
+    );
     assert_eq!(code, 0, "{out}{err}");
     let log = std::fs::read_to_string(wt.join("bd.log")).unwrap();
     assert!(log.contains("close zz-11 --reason x"), "{log}");
     assert!(
         claims(&repo)
             .iter()
-            .any(|c| c.0 == "zz-11" && c.2.as_deref() == Some("closed")),
+            .any(|c| c.0 == "zz-11" && c.2.as_deref() == Some("landed")),
         "{:?}",
         claims(&repo)
     );
@@ -1245,10 +1281,11 @@ fn lease_take_deny_break_across_worktrees_and_owner_queue() {
 }
 
 /// air-eiv: `air handover` is documented as the way to find what is missing, and it used to
-/// increment the very counter `handover-not-green` reads. So the documented diagnostic raised
-/// the alarm, and the coordinator chased a worker who was following the docs.
+/// increment the very counter `done-refused` reads (`handover-not-green` until air-4xj.3). So
+/// the documented diagnostic raised the alarm, and the coordinator chased a worker who was
+/// following the docs.
 ///
-/// N direct invocations produce no condition; one refused `air close` produces one.
+/// N direct invocations produce no condition; one refused `air done` produces one.
 #[test]
 fn air_handover_is_a_query_and_a_refused_close_is_the_attempt() {
     let dir = scratch_repo();
@@ -1263,7 +1300,7 @@ fn air_handover_is_a_query_and_a_refused_close_is_the_attempt() {
             "WORKERS: {}",
             serde_json::to_string(&v["snapshot"]["workers"]).unwrap()
         );
-        out.matches("handover-not-green").count()
+        out.matches("done-refused").count()
     };
     // bd keeps holding ad-1 in_progress, so `air status`'s reconcile leaves the claim open and
     // the only thing that can move the counter is a hand-over.
@@ -1278,16 +1315,17 @@ fn air_handover_is_a_query_and_a_refused_close_is_the_attempt() {
     }
     assert_eq!(alarms(), 0, "a query must not raise the alarm");
 
-    // A worker's actual close, refused because there is no green at HEAD. THAT is a
-    // hand-over attempt, and it is the one the coordinator should see.
+    // A worker's actual declaration, refused because no commit names the bead. THAT is a
+    // hand-over attempt, and it is the one the coordinator should see (air-4xj.2: `air done`
+    // runs the gate; a worker's `air close` is refused before it).
     let (code, out, err) = air_env(
         &repo,
         &bd,
-        &["close", "zz-1", "--reason", "done"],
+        &["done", "zz-1", "--reason", "done"],
         &[("AIR_ROLE", "worker")],
     );
     assert_ne!(code, 0, "the gate must refuse: {out}{err}");
-    assert_eq!(alarms(), 1, "the close must raise it exactly once");
+    assert_eq!(alarms(), 1, "the declaration must raise it exactly once");
 }
 
 /// Digest gate: configured via .claude/air.json; absent → missing; present and newer → pass.
@@ -1659,19 +1697,21 @@ fn handover_and_close_name_a_red_at_head_and_a_missing_precheck() {
     assert_ne!(code, 0);
     for args in [
         &["handover", "--bead", "zz-e"][..],
-        &["close", "zz-e", "--reason", "x"][..],
+        &["done", "zz-e", "--reason", "x"][..],
     ] {
         let (code, out, err) = air_env(&repo, &bd, args, w);
         let text = format!("{out}{err}");
-        // `air handover` reports and exits 0; `air close` refuses.
-        if args[0] == "close" {
+        // `air handover` reports and exits 0; `air done` refuses on the precheck alone,
+        // since it reads no verify (air-4xj.2).
+        if args[0] == "done" {
             assert_ne!(code, 0, "{text}");
+        } else {
+            assert!(
+                text.contains("a red verify is recorded at this head, output: ")
+                    && text.contains(".air/logs/"),
+                "{args:?}: {text}"
+            );
         }
-        assert!(
-            text.contains("a red verify is recorded at this head, output: ")
-                && text.contains(".air/logs/"),
-            "{args:?}: {text}"
-        );
         assert!(
             text.contains("precheck: no precheck recorded at")
                 && text.contains("`air record precheck -- <the repo's precheck command>`"),
@@ -1976,7 +2016,7 @@ fn install_reports_a_stale_bd_prime_hook() {
 }
 
 /// air-80x.3, end to end: alpha claims ad-1, commits with the trailer, merges main: batch-ready.
-/// A green at its head: gone, reason `green-at-head`. main moves past it: batch-ready again.
+/// A green at its head: still batch-ready (air-757). main moves past it: batch-ready still.
 #[test]
 fn status_lists_batch_ready_branches_as_a_fact() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -2006,22 +2046,15 @@ fn status_lists_batch_ready_branches_as_a_fact() {
         "{text}"
     );
 
-    // Green at the head: landable on its own, so not for a batch.
+    // Green at the head: landable on its own, and still batch-ready, so a worker's stray
+    // verify cannot leave it closed and unlanded under a lane (air-757).
     assert_eq!(air(&alpha, &bd, &["record", "verify", "--", "true"]).0, 0);
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
     let s = read(&out);
-    assert!(s["batch_ready"].as_array().unwrap().is_empty(), "{out}");
-    assert!(
-        s["not_batch_ready"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n["worker"] == "alpha" && n["check"] == "green-at-head"),
-        "{out}"
-    );
+    assert_eq!(s["batch_ready"][0]["worker"], "alpha", "{out}");
+    assert_eq!(s["batch_ready"][0]["head"], head, "{out}");
 
-    // main moves: the green branch is no longer landable, and it is batch-ready again without
-    // re-merging, because the lane merges main forward at the cut (an adopter's fleet protocol, 2026-09-25).
+    // main moves: it is batch-ready without re-merging, because the lane merges main forward at the cut (an adopter's fleet protocol, 2026-09-25).
     std::fs::write(main.join("README"), "b\n").unwrap();
     git(&main, &["commit", "-q", "-am", "docs: readme"]);
     let (_, out, _) = air(&main, &bd, &["--json", "status"]);
@@ -2032,8 +2065,7 @@ fn status_lists_batch_ready_branches_as_a_fact() {
 
 /// Precheck (2026-09-25), end to end: where `.claude/air.json` declares `"precheck": true`, a branch is
 /// batch-ready only once `air record precheck` is green at its head, and that green is never a
-/// verify green: the branch contains main, so a verify green would make it landable and take it
-/// out of the batch (`green-at-head`), and the close gate would stop naming the missing verify.
+/// verify green: the branch contains main, so a verify green would make it landable, and the close gate would stop naming the missing verify.
 #[test]
 fn a_declared_precheck_gates_batch_ready_and_is_not_a_verify() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -2812,8 +2844,9 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
     assert!(out.contains("batch-ready: delta at"), "{out}");
     assert!(out.trim_end().ends_with("next: air batch cut"), "{out}");
 
-    // Each member heard the green and the landing. The owner ran this landing, so the lane
-    // was not told delta by its output and the channel still will.
+    // No member heard the green (air-4xj.2: nothing to do on one); each heard the landing.
+    // The owner ran this landing, so the lane was not told delta by its output and the
+    // channel still will.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
     let told: Vec<(String, String)> = conn
         .prepare("SELECT to_worker, kind FROM deliveries ORDER BY id")
@@ -2822,12 +2855,7 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    for (name, _) in &workers {
-        assert!(
-            told.contains(&(name.clone(), "batch-green".to_string())),
-            "{name} batch-green: {told:?}"
-        );
-    }
+    assert!(!told.iter().any(|(_, k)| k == "batch-green"), "{told:?}");
     // air-4lci: the lane's own `air record` queues batch-ready for the members that were
     // batch-ready then; what this guards is that the owner's landing told the lane nothing
     // about delta, which the channel still will.
@@ -2865,8 +2893,11 @@ fn a_lane_batch_lands_once_with_every_bead_and_its_members_recorded() {
         .unwrap();
     assert!(text.starts_with("main moved to "), "{text}");
     assert!(text.contains("files changed: "), "{text}");
-    assert!(text.contains("close any of those beads"), "{text}");
-    assert!(text.contains("No reply needed."), "{text}");
+    assert!(text.contains(" is in it. No reply needed."), "{text}");
+    assert!(
+        !text.contains("close any"),
+        "no bead to go and close: {text}"
+    );
 
     // One landing row, every bead once, every member head recorded.
     let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
@@ -3010,8 +3041,9 @@ fn a_precheck_that_makes_a_branch_batch_ready_tells_the_lane_with_no_poll() {
     assert_eq!(queued(&main, "lane", "batch-ready"), 1);
 }
 
-/// air-4lci: a worker's close of its last claim tells it the beads that are ready, with no
-/// poll running.
+/// air-4lci: the close that ends a worker's last claim tells it the beads that are ready,
+/// with no poll running. The close is the coordinator's since air-4xj.2 (a worker's is
+/// refused); what is measured is the claim ending.
 #[test]
 fn closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll() {
     let (_tmp, main, alpha) = land_repo("true");
@@ -3033,7 +3065,12 @@ fn closing_the_last_claim_tells_the_worker_what_is_ready_with_no_poll() {
     let (code, out, err) = air_env(&alpha, &bd, &["record", "verify", "--", "true"], &worker);
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(queued(&main, "alpha", "beads-ready"), 0);
-    let (code, out, err) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "x"], &worker);
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["close", "zz-1", "--reason", "x"],
+        &[("AIR_ROLE", "coordinator"), ("BEADS_ACTOR", "coordinator")],
+    );
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(queued(&main, "alpha", "beads-ready"), 1);
     // Another command over the same state adds nothing.
@@ -3097,12 +3134,24 @@ fn killing_air_record_mid_run_leaves_an_interrupted_run() {
         .spawn()
         .unwrap();
     // The in-flight row is written just before the check starts: once it is there, the
-    // handlers are installed and the check is running.
+    // handlers are installed and the check is running. air-6y5: one connection and a short
+    // sleep per poll, with a 60 s deadline. The loop used to open a connection per iteration
+    // and spin, and in a lane batch on a loaded machine the row took over 20 s to appear
+    // (one red verify, 2026-11-03). An idle tree still passes in about 2 s.
     let db = main.join(".air/ledger.db");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    // `air record` makes `.air/` itself, so the file is there only once it has started.
+    let mut conn: Option<rusqlite::Connection> = None;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
-        let n: i64 = rusqlite::Connection::open(&db)
-            .and_then(|c| c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0)))
+        if conn.is_none() {
+            conn = rusqlite::Connection::open(&db).ok();
+        }
+        let n: i64 = conn
+            .as_ref()
+            .and_then(|c| {
+                c.query_row("SELECT count(*) FROM verify_inflight", [], |r| r.get(0))
+                    .ok()
+            })
             .unwrap_or(0);
         if n > 0 {
             break;
@@ -3111,7 +3160,7 @@ fn killing_air_record_mid_run_leaves_an_interrupted_run() {
             std::time::Instant::now() < deadline,
             "the run never started"
         );
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let killed = common::command("kill")
         .args(["-TERM", &child.id().to_string()])
@@ -3234,13 +3283,17 @@ fn batch_cut_splits_with_without_and_only() {
         heads.insert(*name, git(wt, &["rev-parse", "HEAD"]));
     }
     std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    // air-lij: no unwrap here, so a cut that failed (empty JSON) reaches the assertion and its
+    // message, which carries the command's stderr.
     let members = |v: &serde_json::Value| -> Vec<String> {
         let mut m: Vec<String> = v["members"]
             .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["worker"].as_str().unwrap().to_string())
-            .collect();
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["worker"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
         m.sort();
         m
     };
@@ -3257,12 +3310,12 @@ fn batch_cut_splits_with_without_and_only() {
 
     let (code, v, text) = cut(&["--dry-run", "--without", "gamma"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
-    assert_eq!(v["left_out"], serde_json::json!(["gamma"]), "{v}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
+    assert_eq!(v["left_out"], serde_json::json!(["gamma"]), "{text}");
 
     let (code, v, text) = cut(&["--dry-run", "--only", "beta"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["beta"], "{v}");
+    assert_eq!(members(&v), ["beta"], "{text}");
 
     // Everyone left out: an empty cut, which exits 1 as any memberless cut does.
     let (code, _, text) = cut(&["--without", "alpha,beta,gamma"]);
@@ -3277,7 +3330,7 @@ fn batch_cut_splits_with_without_and_only() {
     // The split for real: recorded in batch_cuts like any cut.
     let (code, v, text) = cut(&["--without", "gamma"]);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(members(&v), ["alpha", "beta"], "{v}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
     let head = git(&lane, &["rev-parse", "HEAD"]);
     let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
         .unwrap()
@@ -3292,6 +3345,149 @@ fn batch_cut_splits_with_without_and_only() {
         "{row}"
     );
     assert!(!row.contains(&heads["gamma"]), "{row}");
+}
+
+/// air-jk2: after a red batch of several members, `--only` and `--without` choose among the
+/// red batch's members at their red-held heads, so the innocent one is split back in without
+/// a content-free commit. A bare cut still offers no red member (air-vdst), and the guilty
+/// member a split leaves out stays held.
+#[test]
+fn batch_cut_splits_a_red_batch_by_its_members() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let root = main.parent().unwrap().to_path_buf();
+    git(&main, &["config", "user.name", "air"]);
+    git(&main, &["config", "user.email", "air@example.invalid"]);
+    for name in ["beta", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+    }
+    let beta = root.join("beta").canonicalize().unwrap();
+    let lane = root.join("lane").canonicalize().unwrap();
+    let mut heads = std::collections::BTreeMap::new();
+    for (name, wt, bead) in [("alpha", &alpha, "zz-1"), ("beta", &beta, "zz-2")] {
+        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
+        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0, "{name}");
+        std::fs::write(wt.join(format!("{name}.txt")), "work\n").unwrap();
+        git(wt, &["add", &format!("{name}.txt")]);
+        git(wt, &["commit", "-q", "-m", &bead_trailer(bead)]);
+        heads.insert(name, git(wt, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    // air-lij: no unwrap here, so a cut that failed (empty JSON) reaches the assertion and its
+    // message, which carries the command's stderr.
+    let members = |v: &serde_json::Value| -> Vec<String> {
+        let mut m: Vec<String> = v["members"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["worker"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        m.sort();
+        m
+    };
+    let cut = |args: &[&str]| -> (i32, serde_json::Value, String) {
+        let mut a = vec!["--json", "batch", "cut"];
+        a.extend_from_slice(args);
+        let (code, out, err) = air(&lane, &bd, &a);
+        (
+            code,
+            serde_json::from_str(&out).unwrap_or_default(),
+            format!("{out}{err}"),
+        )
+    };
+
+    // The batch of both goes red. air-67q: the record lists both members as not yet verified
+    // alone and its one `next:` is the `--only` cut for the first.
+    let (code, v, text) = cut(&[]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha", "beta"], "{text}");
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "false"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        out.contains("not yet verified alone: alpha@")
+            && out.contains("not yet verified alone: beta@"),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("next: air batch cut --only ") && !out.contains("next: air batch cut\n"),
+        "{out}{err}"
+    );
+
+    // air-vdst, unchanged: a bare cut offers neither member.
+    let (code, v, text) = cut(&["--dry-run"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(members(&v).is_empty(), "{text}");
+    let held = v["held"].to_string();
+    assert!(held.contains("alpha") && held.contains("beta"), "{text}");
+
+    // The split takes the named member at its red-held head and names the other as left out.
+    let (code, v, text) = cut(&["--dry-run", "--only", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha"], "{text}");
+    assert_eq!(v["left_out"], serde_json::json!(["beta"]), "{text}");
+    assert!(!v["held"].to_string().contains("alpha"), "{text}");
+    let (code, v, text) = cut(&["--dry-run", "--without", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{text}");
+
+    // For real: a recorded cut of main plus alpha at the sha the red took.
+    let (code, v, text) = cut(&["--only", "alpha"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["alpha"], "{text}");
+    assert_eq!(v["members"][0]["head"], heads["alpha"], "{text}");
+    let head = git(&lane, &["rev-parse", "HEAD"]);
+    let row: String = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT members FROM batch_cuts WHERE head=?1",
+            [&head],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        row.contains(&heads["alpha"]) && !row.contains(&heads["beta"]),
+        "{row}"
+    );
+
+    // air-67q: alpha alone goes red. That one-member red is now the newest red batch; the
+    // record still lists beta as the member not yet verified alone, and `--only beta` still
+    // finds it (before, the split chose among the newest red batch's members only, so this cut
+    // had nothing to merge).
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "false"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        out.contains("not yet verified alone: beta@")
+            && !out.contains("not yet verified alone: alpha@"),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("next: air batch cut --only beta"),
+        "{out}{err}"
+    );
+    let (code, v, text) = cut(&["--dry-run", "--only", "beta"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{text}");
+    // Beta green alone: every member has been verified alone, and the list is gone.
+    let (code, v, text) = cut(&["--only", "beta"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(members(&v), ["beta"], "{text}");
+    let (code, out, err) = air(&lane, &bd, &["record", "verify", "--", "true"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (_, out, err) = air(&lane, &bd, &["status"]);
+    assert!(!out.contains("not yet verified alone"), "{out}{err}");
 }
 
 #[test]
@@ -3383,34 +3579,33 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     assert!(out.contains("refused in the main checkout"), "{out}");
 
     let lane_before = git(&lane, &["rev-parse", "HEAD"]);
-    let check_drops = |v: &serde_json::Value| {
-        let d = v["dropped"].as_array().unwrap();
-        assert_eq!(d.len(), 2, "{v}");
+    // air-lij: the command's stderr rides along, so a git error behind an empty set is named.
+    let check_drops = |v: &serde_json::Value, err: &str| {
+        let d = v["dropped"].as_array().cloned().unwrap_or_default();
+        assert_eq!(d.len(), 2, "{v}\n{err}");
         assert!(
             d.iter().any(|d| d["worker"] == "beta"
                 && d["against"] == "gamma"
                 && d["against_sha"] == heads["gamma"].as_str()
                 && d["paths"] == serde_json::json!(["shared.txt"])),
-            "{v}"
+            "{v}\n{err}"
         );
         assert!(
             d.iter().any(|d| d["worker"] == "delta"
                 && d["against"] == "main"
                 && d["paths"] == serde_json::json!(["m.txt"])),
-            "{v}"
+            "{v}\n{err}"
         );
         let kept: Vec<&str> = v["members"]
             .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["worker"].as_str().unwrap())
-            .collect();
-        assert_eq!(kept, ["gamma", "alpha"], "oldest ready first: {v}");
+            .map(|a| a.iter().filter_map(|m| m["worker"].as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(kept, ["gamma", "alpha"], "oldest ready first: {v}\n{err}");
     };
 
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut", "--dry-run"]);
     assert_eq!(code, 0, "{out}{err}");
-    check_drops(&serde_json::from_str(&out).unwrap());
+    check_drops(&serde_json::from_str(&out).unwrap(), &err);
     assert_eq!(
         git(&lane, &["rev-parse", "HEAD"]),
         lane_before,
@@ -3420,9 +3615,9 @@ fn batch_cut_drops_by_the_order_rule_and_merges_the_rest() {
     let (code, out, err) = air(&lane, &bd, &["--json", "batch", "cut"]);
     assert_eq!(code, 0, "{out}{err}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    check_drops(&v);
+    check_drops(&v, &err);
     let head = git(&lane, &["rev-parse", "HEAD"]);
-    assert_eq!(v["head"], head.as_str(), "{v}");
+    assert_eq!(v["head"], head.as_str(), "{v}\n{err}");
     assert!(
         v["next"]
             .as_str()
@@ -3879,126 +4074,23 @@ fn a_landing_is_recorded_before_main_moves_and_survives_a_kill() {
         .unwrap();
     // 0.4.8 trial: one row, the verified green copied to the landing commit; nothing ran.
     assert_eq!(land_verifies, 1, "landing re-verifies nothing");
-}
-
-/// air-gazh: a bead closed with proof whose commits are in no tree but its author's worktree.
-///
-/// Through the real path, because the join is the thing that did not exist — both halves were
-/// already computed and nothing put them together. The probe pins the ledger half and the
-/// rendering; this pins that `select` and the closed set actually meet.
-///
-/// The setup IS the reported incident, minus the lane: two green landable branches, one lands,
-/// which moves main and leaves the other behind it through nobody's error. Then that worker's
-/// bead closes. Nothing is wrong locally — bead closed, branch green, tree clean — and the
-/// commits exist in exactly one worktree.
-#[test]
-fn a_closed_bead_on_a_branch_behind_main_is_named_and_an_open_one_is_not() {
-    let (_tmp, main, alpha) = land_repo("true");
-    let root = main.parent().unwrap().to_path_buf();
-    let beta = root.join("beta");
-    git(
-        &main,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "worktree-beta",
-            beta.to_str().unwrap(),
-        ],
-    );
-    let bd = fake_bd(&main);
-
-    for (wt, bead, file) in [(&alpha, "zz-1", "a.txt"), (&beta, "zz-2", "b.txt")] {
-        std::fs::write(main.join("bd.in_progress"), format!("{bead}\n")).unwrap();
-        assert_eq!(air(wt, &bd, &["claim", bead]).0, 0);
-        std::fs::write(wt.join(file), "work\n").unwrap();
-        git(wt, &["add", file]);
-        git(
-            wt,
-            &[
-                "commit",
-                "-q",
-                "-m",
-                &format!("feat: work\n\nBead: {bead}\n"),
-            ],
-        );
-        git(wt, &["merge", "-q", "main", "-m", "merge main"]);
-        assert_eq!(air(wt, &bd, &["record", "verify", "--", "true"]).0, 0);
-    }
-
-    let stranded = |out: &str| -> Vec<(String, String)> {
-        let v: serde_json::Value = serde_json::from_str(out).unwrap();
-        v["snapshot"]["closed_not_landed"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .map(|c| {
-                (
-                    c["bead"].as_str().unwrap_or_default().to_string(),
-                    c["worker"].as_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect()
+    // air-2w6: the copy carries the machine the green was recorded on. The machine is
+    // stamped beside the row, so a struct copy left every machine column empty on the
+    // landed sha while the lane's row named the pod (2026-11-05).
+    let machine = |trigger: &str| -> (String, String, i64, String) {
+        conn.query_row(
+            "SELECT hostname, arch, nproc, cpu FROM verify_runs WHERE trigger=?1",
+            [trigger],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
     };
-
-    // Land zz-1. Main moves, so beta is now behind it — no error anywhere.
-    std::fs::write(main.join("bd.in_progress"), "zz-2\n").unwrap();
-    let (code, out, err) = air(&main, &bd, &["land", "zz-1"]);
-    assert_eq!(code, 0, "{out}{err}");
-
-    // zz-2 is OPEN on that unlanded branch, which is the ordinary state of work in flight and
-    // must say nothing. Pinned through the real path, not asserted of the join alone: this is
-    // the half that reaches the join and has to be rejected there.
-    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
-    assert!(stranded(&out).is_empty(), "{out}{err}");
-
-    // Now zz-2 closes. bd no longer holds it in progress and reports it closed, which is what
-    // the reconcile reads; nothing about beta's tree or branch changes.
-    std::fs::write(main.join("bd.in_progress"), "").unwrap();
-    std::fs::write(
-        main.join("bd.issue.json"),
-        r#"[{"id":"zz-2","status":"closed","labels":[]}]"#,
-    )
-    .unwrap();
-
-    let (_c, out, err) = air(&main, &bd, &["--json", "status"]);
+    let source = machine("record");
+    assert!(!source.0.is_empty(), "the verify was stamped: {source:?}");
     assert_eq!(
-        stranded(&out),
-        vec![("zz-2".to_string(), "beta".to_string())],
-        "{out}{err}"
-    );
-    // zz-1 is closed AND landed, and produces nothing: its branch is in main, so it never
-    // reaches the join at all.
-    assert!(
-        !stranded(&out).iter().any(|(b, _)| b == "zz-1"),
-        "{out}{err}"
-    );
-
-    // It is a CONDITION, not only a printed line (air-gazh): the reporting incident is a
-    // coordinator with the fleet view who was not looking.
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let fired: Vec<String> = v["attention"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter(|a| a["kind"] == "closed-not-landed")
-        .map(|a| a["detail"].as_str().unwrap_or_default().to_string())
-        .collect();
-    assert_eq!(fired.len(), 1, "{out}{err}");
-    let detail = fired.first().map(String::as_str).unwrap_or_default();
-    assert!(
-        detail.contains("zz-2") && detail.contains("beta"),
-        "{detail}"
-    );
-
-    // And the printed surface says it too, for a reader arriving after the push went quiet.
-    let (_c, out, err) = air(&main, &bd, &["status"]);
-    assert!(
-        out.contains("closed, not landed: beta (zz-2)"),
-        "{out}{err}"
+        machine("land"),
+        source,
+        "the landed row names the same machine"
     );
 }
 
@@ -4553,7 +4645,10 @@ fn land_prints_acceptance_and_closes_nothing() {
     assert_eq!(code, 0, "{out}{err}");
     assert_ne!(git(&main, &["rev-parse", "HEAD"]), before);
     // Every clause, as written, and no verdict on any of them.
-    assert!(out.contains("air land closes no worker's bead"), "{out}");
+    assert!(
+        out.contains("air land closes the beads declared done whose head is now on main"),
+        "{out}"
+    );
     for clause in [
         "    - Verify recorded green at HEAD.",
         "    - docs/rule.md says the rule.",
@@ -5123,6 +5218,60 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     assert!(out.contains("beta"), "{out}");
 }
 
+/// air-jkk: a landing that carries no bead still ends with the lane's next step. The lane landed
+/// the coordinator's research doc with the 0.4.16 binary and got two lines and no next step,
+/// because the block ran only when the range named a bead; it ran `air status` to learn that
+/// nothing was batch-ready.
+#[test]
+fn a_landing_with_no_bead_ends_with_the_lanes_next_step() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "journal_dir": "docs/journal"}"#,
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "chore: journal dir"]);
+    let scribe = main.parent().unwrap().join("scribe");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-scribe",
+            scribe.to_str().unwrap(),
+        ],
+    );
+    let scribe = scribe.canonicalize().unwrap();
+    std::fs::create_dir_all(scribe.join("docs/journal")).unwrap();
+    std::fs::write(scribe.join("docs/journal/scribe.md"), "what I hit\n").unwrap();
+    git(&scribe, &["add", "docs/journal"]);
+    git(
+        &scribe,
+        &["commit", "-q", "-m", "docs(journal): scribe, entries"],
+    );
+    assert_eq!(
+        air_env(&scribe, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "scribe"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("landed scribe () at"),
+        "no bead carried: {out}"
+    );
+    let last = out.trim_end().lines().last().unwrap_or_default();
+    assert!(
+        last == "next: air batch cut" || last.starts_with("nothing is batch-ready"),
+        "the landing ends with the lane's next step: {out}"
+    );
+}
+
 /// air-kexg, end to end: a branch whose only commits are session-journal entries lands with no
 /// bead, and one that mixes them with anything else still needs a trailer.
 ///
@@ -5375,4 +5524,657 @@ fn a_lane_batch_of_only_the_coordinators_commits_lands_with_no_bead() {
         )
         .unwrap();
     assert_eq!(greens, 1, "{out}");
+}
+
+/// air-h7l: `base_branch` in `.claude/air.json` is the branch the fleet lands onto. A repo
+/// whose only branch is `trunk` claims, cuts, verifies, closes and lands onto it, every
+/// message naming `trunk`; the session named `main` (the primary checkout) still reads as the
+/// owner, so `air land` runs there as before.
+#[test]
+fn the_fleet_lands_onto_the_configured_base_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "trunk"]);
+    std::fs::create_dir_all(main.join(".claude")).unwrap();
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_lane": true, "base_branch": "trunk"}"#,
+    )
+    .unwrap();
+    std::fs::write(main.join("README"), "a\n").unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "a"]);
+    let main = main.canonicalize().unwrap();
+    let root = main.parent().unwrap().to_path_buf();
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    // The close gate runs for a worker; the owner's shell closes without it.
+    let worker = &[
+        ("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z"),
+        ("AIR_ROLE", "worker"),
+    ];
+    for name in ["alpha", "lane"] {
+        let wt = root.join(name);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("worktree-{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+    }
+    let alpha = root.join("alpha").canonicalize().unwrap();
+    let lane = root.join("lane").canonicalize().unwrap();
+    let json = |out: &str| -> serde_json::Value { serde_json::from_str(out).unwrap() };
+
+    // The worker's bead, claimed and committed; no `main` branch exists anywhere.
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], dead).0, 0);
+    std::fs::write(alpha.join("a.txt"), "a\n").unwrap();
+    git(&alpha, &["add", "a.txt"]);
+    git(&alpha, &["commit", "-q", "-m", &bead_trailer("zz-1")]);
+    let work = git(&alpha, &["rev-parse", "HEAD"]);
+
+    // `air status` names the base and lists the branch as batch-ready.
+    let (code, out, err) = air_env(&main, &bd, &["--json", "status"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    let snap = &json(&out)["snapshot"];
+    assert_eq!(snap["base_branch"], "trunk", "{out}");
+    assert!(
+        snap["batch_ready"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["worker"] == "alpha"),
+        "{out}"
+    );
+    let (_, text, _) = air_env(&main, &bd, &["status"], dead);
+    assert!(text.contains("base branch: trunk"), "{text}");
+
+    // The gate names trunk, not main, while the branch waits for the lane; the worker's
+    // declaration says which branch the landing has to reach (air-4xj.2).
+    let (code, out, err) = air_env(&alpha, &bd, &["handover", "--bead", "zz-1"], worker);
+    assert_eq!(code, 0, "{out}{err}");
+    let text = format!("{out}{err}");
+    assert!(text.contains("trunk") && !text.contains("main"), "{text}");
+    let (code, out, err) = air_env(&alpha, &bd, &["done", "zz-1", "--reason", "early"], worker);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("`air land` closes it once trunk contains that commit"),
+        "{out}"
+    );
+
+    // The cut resets to trunk and merges the branch; the green lands by fast-forwarding trunk.
+    let (code, out, err) = air_env(&lane, &bd, &["batch", "cut"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("(trunk "), "{out}");
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+    let before = git(&main, &["rev-parse", "trunk"]);
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "lane"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1"), "{out}");
+    let after = git(&main, &["rev-parse", "trunk"]);
+    assert_ne!(after, before);
+    assert_eq!(
+        git(&main, &["merge-base", "--is-ancestor", &work, "trunk"]),
+        ""
+    );
+    assert_eq!(git(&main, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
+
+    // The notice names the base, and the landing closed the declared bead, so the worker's
+    // copy names it closed.
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let moved: String = conn
+        .query_row(
+            "SELECT content FROM deliveries WHERE kind = 'main-moved' AND to_worker = 'alpha'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(moved.starts_with("trunk moved to"), "{moved}");
+    assert!(moved.contains("closed: zz-1."), "{moved}");
+
+    // The session named `main` is the primary checkout, whatever the base is called.
+    let w = snap["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["worker"] == "main")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(w["role"], "owner", "{snap}");
+}
+
+/// air-4xj.1: `air done` passes the gate without a green, leaves the bead open in bd with the
+/// proof as a comment and the head on the claim, and `air land` closes it in one bd process
+/// once main contains that head, releasing the claim as `landed`. Nobody but a worker, the
+/// lane or the owner declares; an unclaimed bead is refused with nothing written.
+#[test]
+fn done_declares_without_a_green_and_the_landing_closes_with_one_bd_process() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let head = git(&alpha, &["rev-parse", "HEAD"]);
+    // The fake bd logs beside the worktree the command ran in.
+    let log = || std::fs::read_to_string(alpha.join("bd.log")).unwrap_or_default();
+    let main_log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
+    let row = || -> (Option<String>, Option<String>, Option<String>) {
+        rusqlite::Connection::open(main.join(".air/ledger.db"))
+            .unwrap()
+            .query_row(
+                "SELECT done_head, released_at, release_reason FROM claims WHERE bead='zz-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    };
+
+    // Refused: the coordinator; a bead this worker does not hold; both proof routes.
+    let (code, out, _) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "p"],
+        &[("AIR_ROLE", "coordinator")],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("coordinator closes landed work"), "{out}");
+    let (code, out, _) = air_env(&alpha, &bd, &["done", "zz-7", "--reason", "p"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("zz-7: alpha holds no open claim"), "{out}");
+    let (code, out, _) = air_env(&alpha, &bd, &["done", "zz-1"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--reason-file"), "{out}");
+    assert!(!log().contains("comment"), "nothing written: {}", log());
+    assert_eq!(row().0, None);
+
+    // No green anywhere: `air close` is refused naming `air done` (air-4xj.2), and `air
+    // done` passes.
+    let (code, out, _) = air_env(&alpha, &bd, &["close", "zz-1", "--reason", "p"], worker);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("`air done <id> --reason-file <proof>`"),
+        "{out}"
+    );
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "cargo test: ok\nsecond line"],
+        worker,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!("done: zz-1 at {}", &head[..7])),
+        "{out}"
+    );
+    assert!(
+        log().contains(&format!("comment zz-1 done at {head}: cargo test: ok")),
+        "{}",
+        log()
+    );
+    assert!(!log().lines().any(|l| l.starts_with("close")), "{}", log());
+    assert_eq!(row(), (Some(head.clone()), None, None));
+
+    // The lane's batch goes green and lands: one `bd close`, the claim released as landed,
+    // the reason quoting the proof's first line.
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["--json", "land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["closed"], serde_json::json!(["zz-1"]), "{out}");
+    assert!(
+        v["log"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l == "closed: zz-1"),
+        "{out}"
+    );
+    let closes: Vec<String> = main_log()
+        .lines()
+        .filter(|l| l.starts_with("close "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(closes.len(), 1, "{}", main_log());
+    assert!(
+        closes[0].starts_with("close zz-1 --reason landed at ")
+            && closes[0].contains("zz-1: cargo test: ok")
+            && !closes[0].contains("second line"),
+        "{}",
+        closes[0]
+    );
+    let (done_head, released_at, reason) = row();
+    assert_eq!(done_head, Some(head));
+    assert!(released_at.is_some());
+    assert_eq!(reason.as_deref(), Some("landed"));
+}
+
+/// air-4xj.1: a second `air done` after a later commit for the bead moves the declared head,
+/// and a landing that carries only the earlier commit says the bead waits rather than closing
+/// it; the landing that carries the later one closes it.
+#[test]
+fn done_again_after_a_later_commit_moves_the_head_and_the_earlier_landing_waits() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let c1 = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        air_env(&alpha, &bd, &["done", "zz-1", "--reason", "first"], worker).0,
+        0
+    );
+    let done_head = || -> Option<String> {
+        rusqlite::Connection::open(main.join(".air/ledger.db"))
+            .unwrap()
+            .query_row(
+                "SELECT done_head FROM claims WHERE bead='zz-1' AND released_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+    };
+    assert_eq!(done_head(), Some(c1.clone()));
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 1"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    // The worker commits more for the same bead and declares again, before the landing.
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let c2 = git(&alpha, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        air_env(&alpha, &bd, &["done", "zz-1", "--reason", "second"], worker).0,
+        0
+    );
+    assert_eq!(done_head(), Some(c2.clone()));
+
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed lane (zz-1)"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "waits: zz-1 (done at {}, not yet on main)",
+            &c2[..8]
+        )),
+        "{out}"
+    );
+    assert!(!out.contains("closed: zz-1"), "{out}");
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    assert!(!log.lines().any(|l| l.starts_with("close ")), "{log}");
+    assert_eq!(done_head(), Some(c2.clone()));
+
+    // The next batch carries the later commit; that landing closes it. The lane's cut
+    // resets to main first, as `air batch cut` does.
+    git(&lane, &["merge", "-q", "main", "-m", "catch up"]);
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 2"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1"), "{out}");
+    assert_eq!(done_head(), None);
+}
+
+/// air-52u: bd 1.3.0 refuses `bd close` when the bead's assignee is not the actor unless
+/// `--force` is given, and the lane's landing closes as `lane` what a worker holds. Every
+/// landing of the 2026-11-09 trial was refused that way. The landing passes `--force`, and
+/// the fake refuses the forceless close so the landing is not green for want of the rule.
+/// When bd refuses even so, the landing names bd's refusal under its own line, not under
+/// `waits:`, and the member's notice says refused, not waiting.
+#[test]
+fn the_landing_closes_a_held_done_bead_with_force_and_names_a_bd_refusal_apart_from_waiting() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    std::fs::write(main.join("bd.assignee_check"), "").unwrap();
+    let main_dir = main.to_str().unwrap();
+    // One bd state for every command, whichever worktree runs it, and the actors bd sees.
+    let worker = &[
+        ("AIR_ROLE", "worker"),
+        ("BEADS_ACTOR", "worker-1"),
+        ("FAKE_BD_DIR", main_dir),
+    ];
+    let lane_env = &[("BEADS_ACTOR", "lane"), ("FAKE_BD_DIR", main_dir)];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(main.join("assignee.zz-1")).unwrap(),
+        "worker-1"
+    );
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    assert_eq!(
+        air_env(
+            &alpha,
+            &bd,
+            &["done", "zz-1", "--reason", "it works"],
+            worker
+        )
+        .0,
+        0
+    );
+
+    // bd 1.3.0's rule, in the fake, exercised directly: a close by the lane without --force
+    // is refused while the worker holds the bead.
+    let forceless = std::process::Command::new("sh")
+        .arg(&bd)
+        .args(["close", "zz-1", "--reason", "x", "--actor", "lane"])
+        .env("FAKE_BD_DIR", &main)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&forceless.stderr).to_string();
+    assert_eq!(forceless.status.code(), Some(1), "{err}");
+    assert!(
+        err.contains("cannot close zz-1: assignee is \"worker-1\", actor is \"lane\""),
+        "{err}"
+    );
+    assert!(!main.join("closed.zz-1").exists());
+
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 1"],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], lane_env).0,
+        0
+    );
+    let (code, out, err) = air_env(
+        &main,
+        &bd,
+        &["--json", "land", "--worker", "lane"],
+        lane_env,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["closed"], serde_json::json!(["zz-1"]), "{out}");
+    assert!(main.join("closed.zz-1").exists(), "{out}");
+    let log = std::fs::read_to_string(main.join("bd.log")).unwrap();
+    let closes: Vec<&str> = log
+        .lines()
+        .filter(|l| l.starts_with("close ") && l.contains("--force"))
+        .collect();
+    assert_eq!(closes.len(), 1, "{log}");
+    assert!(
+        closes[0].starts_with("close zz-1 --reason landed at ")
+            && closes[0].ends_with("--actor lane --force"),
+        "{}",
+        closes[0]
+    );
+
+    // bd refuses the forced close too (a server fault, a pinned bead): the landing names
+    // bd's refusal, the bead is not among the waiting, the claim keeps its head for the
+    // next landing, and the member's notice says refused rather than waiting.
+    std::fs::write(main.join("bd.in_progress"), "zz-2\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-2"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-2")],
+    );
+    assert_eq!(
+        air_env(
+            &alpha,
+            &bd,
+            &["done", "zz-2", "--reason", "it works too"],
+            worker
+        )
+        .0,
+        0
+    );
+    git(&lane, &["merge", "-q", "main", "-m", "catch up"]);
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 2"],
+    );
+    assert_eq!(
+        air_env(&lane, &bd, &["record", "verify", "--", "true"], lane_env).0,
+        0
+    );
+    std::fs::write(main.join("bd.close_fail"), "").unwrap();
+    let (code, out, err) = air_env(
+        &main,
+        &bd,
+        &["--json", "land", "--worker", "lane"],
+        lane_env,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["closed"], serde_json::json!([]), "{out}");
+    assert_eq!(v["refused"], serde_json::json!(["zz-2"]), "{out}");
+    let lines: Vec<String> = v["log"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("done: bd refused to close zz-2: ")
+                && l.contains("the close failed for a reason of bd's own")
+                && l.ends_with("; the next landing tries again")),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.starts_with("waits:")), "{lines:?}");
+    assert!(!main.join("closed.zz-2").exists());
+    let conn = rusqlite::Connection::open(main.join(".air/ledger.db")).unwrap();
+    let (done_head, released): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT done_head, released_at FROM claims WHERE bead='zz-2'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(done_head.is_some() && released.is_none());
+    let notice: String = conn
+        .query_row(
+            "SELECT content FROM deliveries WHERE to_worker='alpha' AND kind='main-moved' \
+             ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        notice.contains(
+            "done but refused: zz-2 (bd refused the close; the next landing tries again)"
+        ),
+        "{notice}"
+    );
+    assert!(!notice.contains("waiting"), "{notice}");
+}
+
+/// air-52u, from the 2026-11-09 trial: a worker's `air handover --bead` said the done would
+/// pass while `air done` refused for the precheck. The bead's commit was in the lane's green
+/// batch, a later commit had moved the head, and no precheck was recorded there: the full
+/// gate named the precheck only beside a missing green, and the batch green counted as one.
+/// The two give the same verdict, and both pass once the precheck is recorded.
+#[test]
+fn handover_and_done_agree_on_a_missing_precheck_under_a_batch_green() {
+    let (_tmp, main, alpha) = land_repo("true");
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "precheck": true, "verify_lane": true}"#,
+    )
+    .unwrap();
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch 1"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    // The head moves past the covered commit, for other work, with no precheck at it.
+    git(&alpha, &["commit", "-q", "--allow-empty", "-m", "journal"]);
+
+    let (h_code, h_out, h_err) = air_env(&alpha, &bd, &["handover", "--bead", "zz-1"], worker);
+    let (d_code, d_out, d_err) = air_env(&alpha, &bd, &["done", "zz-1", "--reason", "p"], worker);
+    // `air handover` is advisory without --enforce, so its verdict is its text, not its exit.
+    let h_pass = h_code == 0 && h_out.contains("the done would pass");
+    assert_eq!(
+        (h_pass, h_out.contains("no precheck recorded")),
+        (d_code == 0, d_out.contains("no precheck recorded")),
+        "handover: {h_out}{h_err}\ndone: {d_out}{d_err}"
+    );
+    assert_ne!(d_code, 0, "{d_out}{d_err}");
+
+    assert_eq!(
+        air_env(&alpha, &bd, &["record", "precheck", "--", "true"], worker).0,
+        0
+    );
+    let (h_code, h_out, h_err) = air_env(&alpha, &bd, &["handover", "--bead", "zz-1"], worker);
+    assert_eq!(h_code, 0, "{h_out}{h_err}");
+    assert!(h_out.contains("the done would pass"), "{h_out}");
+    let (d_code, d_out, d_err) = air_env(&alpha, &bd, &["done", "zz-1", "--reason", "p"], worker);
+    assert_eq!(d_code, 0, "{d_out}{d_err}");
+}
+
+/// air-4xj.1: a landing closes nothing nobody declared done, and `air done` on work main
+/// already holds closes the bead at once, since no landing ahead would carry it.
+#[test]
+fn done_on_work_main_already_holds_closes_at_once_and_an_undeclared_bead_is_left_open() {
+    let (_tmp, main, alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let worker = &[("AIR_ROLE", "worker")];
+    std::fs::write(main.join("bd.in_progress"), "zz-1\n").unwrap();
+    assert_eq!(air_env(&alpha, &bd, &["claim", "zz-1"], worker).0, 0);
+    std::fs::write(main.join("bd.in_progress"), "").unwrap();
+    git(
+        &alpha,
+        &["commit", "-q", "--allow-empty", "-m", &bead_trailer("zz-1")],
+    );
+    let lane = main.parent().unwrap().join("lane");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-lane",
+            lane.to_str().unwrap(),
+        ],
+    );
+    git(
+        &lane,
+        &["merge", "-q", "--no-ff", "worktree-alpha", "-m", "batch"],
+    );
+    assert_eq!(air(&lane, &bd, &["record", "verify", "--", "true"]).0, 0);
+    let (code, out, err) = air(&main, &bd, &["land", "--worker", "lane"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("landed lane (zz-1)"), "{out}");
+    assert!(!out.contains("closed:"), "{out}");
+    let log = || std::fs::read_to_string(main.join("bd.log")).unwrap_or_default();
+    assert!(!log().lines().any(|l| l.starts_with("close ")), "{}", log());
+
+    let (code, out, err) = air_env(
+        &alpha,
+        &bd,
+        &["done", "zz-1", "--reason", "late proof"],
+        worker,
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("closed: zz-1 (already on main at "), "{out}");
+    let closes: Vec<String> = std::fs::read_to_string(alpha.join("bd.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("close "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert!(closes[0].contains("--reason landed at ") && closes[0].contains("late proof"));
+    let reason: Option<String> = rusqlite::Connection::open(main.join(".air/ledger.db"))
+        .unwrap()
+        .query_row(
+            "SELECT release_reason FROM claims WHERE bead='zz-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason.as_deref(), Some("landed"));
 }

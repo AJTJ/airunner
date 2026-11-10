@@ -7,7 +7,7 @@
 //!
 //! **The check is per bead, not per HEAD** (owner, 2026-09-05). A worker keeps committing after
 //! the batch is cut, so "the batch contains HEAD" would refuse a bead the batch fully covered.
-//! The fact that closes a bead: every commit in [`BRANCH_RANGE`] whose `Bead:` trailer names it
+//! The fact that closes a bead: every commit in [`branch_range`] whose `Bead:` trailer names it
 //! is an ancestor of a verified commit C, and C contains **the main it was recorded over**.
 //! Recorded by any worker: the lane is not the author.
 //!
@@ -33,7 +33,7 @@ use serde::Serialize;
 
 use crate::git;
 
-/// One commit in [`BRANCH_RANGE`] that carries the bead's trailer.
+/// One commit in [`branch_range`] that carries the bead's trailer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeadCommit {
     pub sha: String,
@@ -71,7 +71,7 @@ pub struct Scanned {
     pub with_main: usize,
     /// Of those, the ones containing at least one commit of the bead.
     pub touching: usize,
-    /// The bead's commits in [`BRANCH_RANGE`].
+    /// The bead's commits in [`branch_range`].
     pub commits: usize,
 }
 
@@ -144,14 +144,22 @@ pub fn cover(candidates: &[Candidate], commits: &[BeadCommit]) -> Batch {
 /// evidence, because nothing reaches main without the landing gate's green. What was wrong
 /// was reading an EMPTY result as "this bead has no commits" when it also means "every commit
 /// of this bead is already in main"; [`for_bead`] now tells the two apart.
-pub const BRANCH_RANGE: &str = "main..HEAD";
+///
+/// air-h7l: `<base>..HEAD`, where the base is `main` unless `.claude/air.json` sets
+/// `base_branch`; a function, since the name is read from the repo.
+pub fn branch_range(repo: &Path) -> String {
+    format!("{}..HEAD", super::handover::base_branch(repo))
+}
 
-/// The commits of `bead` in [`BRANCH_RANGE`], newest first, by their `Bead:` trailer only.
+/// The commits of `bead` in [`branch_range`], newest first, by their `Bead:` trailer only.
 /// Empty when the bead has no commit here, which includes the case where it has landed —
 /// [`for_bead`] is what distinguishes them, never this.
 pub fn bead_commits(repo: &Path, bead: &str) -> Vec<BeadCommit> {
-    let text =
-        git::run(repo, &["log", "--format=%H%x1f%s%x1f%B%x1e", BRANCH_RANGE]).unwrap_or_default();
+    let text = git::run(
+        repo,
+        &["log", "--format=%H%x1f%s%x1f%B%x1e", &branch_range(repo)],
+    )
+    .unwrap_or_default();
     text.split('\u{1e}')
         .filter_map(|rec| {
             let mut it = rec.trim_start_matches('\n').splitn(3, '\u{1f}');
@@ -192,7 +200,7 @@ fn greens_for(
 
 /// The newest commit on main whose `Bead:` trailer names `bead`, if any (air-5ynn).
 ///
-/// **When a bead has no commit in [`BRANCH_RANGE`] and main has one naming it, every commit of
+/// **When a bead has no commit in [`branch_range`] and main has one naming it, every commit of
 /// the bead is in main, and the close passes.** Main moves only through a landing, and `air
 /// land` refuses a branch without a recorded green at a head containing main, so being in main
 /// is the proof by itself. (The owner landing by hand is the owner's call.)
@@ -211,7 +219,7 @@ pub fn in_main(repo: &Path, bead: &str) -> Option<String> {
             "--format=%H%x1f%B%x1e",
             "-F",
             &format!("--grep={bead}"),
-            "main",
+            &super::handover::base_branch(repo),
         ],
     )
     .ok()?;
@@ -231,7 +239,7 @@ fn landed_by(ledger: &Ledger, repo: &Path, bead: &str) -> Option<(String, String
         let merge = l.merge_commit.clone()?;
         (l.landed()
             && l.beads.iter().any(|b| b == bead)
-            && git::is_ancestor(repo, &merge, "main").unwrap_or(false))
+            && git::is_ancestor(repo, &merge, &super::handover::base_branch(repo)).unwrap_or(false))
         .then_some((merge, l.worker))
     })
 }
@@ -261,7 +269,10 @@ pub fn for_bead(ledger: &Ledger, repo: &Path, bead: &str) -> Result<Batch, Strin
             // green that contained main when it ran goes on containing it; main moving is a
             // fact about main. Rows written before v19 have no `main_sha` and fall back to
             // the old question, which is the only answer available for them.
-            let against = g.main_sha.clone().unwrap_or_else(|| "main".to_string());
+            let against = g
+                .main_sha
+                .clone()
+                .unwrap_or_else(|| super::handover::base_branch(repo));
             let contains_main = git::is_ancestor(repo, &against, &g.sha).unwrap_or(false);
             let contains = if contains_main {
                 commits
@@ -376,7 +387,8 @@ pub fn members_of(
     for (path, _) in git::worktrees(repo).unwrap_or_default() {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // Every branch but the lane's own and the main checkout: the coordinator's branch is
-        // a batch member like a worker's (air-jc2p.1).
+        // a batch member like a worker's (air-jc2p.1). `main` here is the SESSION name of the
+        // primary checkout, not the base branch (air-h7l).
         if worker == own || worker == "main" {
             continue;
         }
@@ -481,11 +493,12 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         .iter()
         .map(|m| format!("{}@{}", m.worker, short(&m.sha)))
         .collect();
-    // air-ch9p: a batch of one has nothing to split.
+    // air-ch9p: a batch of one has nothing to split. air-67q: a batch of more is verified
+    // member by member, and the members still to verify are listed beside this line.
     let then = if b.members.len() == 1 {
         "its only member is batch-ready again after a new commit or a later green containing it"
     } else {
-        "the lane splits by hand"
+        "the lane verifies each member alone"
     };
     format!(
         "batch red at {} ({}): members {}; nothing lands on it, {then}",
@@ -493,6 +506,83 @@ pub fn red_batch_line(b: &RedBatch) -> String {
         b.worker,
         members.join(", ")
     )
+}
+
+/// Pure (air-67q): the members of `red` not yet verified on their own. A member is verified
+/// alone once a run finished after the red whose members are exactly that member at that sha,
+/// whatever its verdict: green and it is landable, red and it is the breaker waiting for a
+/// commit. A member a later green contains is out as well, whether that green was a split of
+/// one or a batch. `contains(green_sha, member_sha)` is git's ancestry question, passed in so
+/// the function and its tests run with no repository. Killed runs are no verdict and must not
+/// be in `runs_since`; the ledger's `runs_since` leaves them out.
+///
+/// Owner ruling 2026-11-09: when a whole batch is red, each member is tested individually. The
+/// 2026-11-09 pod trial's lane cut one member on a guess, saw it red, and never cut the other,
+/// because nothing Air printed said which members had not been tested alone.
+pub fn untested_alone(
+    red: &RedBatch,
+    runs_since: &[air_ledger::verify::VerifyRun],
+    contains: &dyn Fn(&str, &str) -> bool,
+) -> Vec<air_ledger::landings::Member> {
+    red.members
+        .iter()
+        .filter(|m| {
+            let alone = runs_since
+                .iter()
+                .filter(|r| r.finished_at > red.at && !r.is_killed())
+                .any(|r| r.members.len() == 1 && r.members.first() == Some(*m));
+            let carried = runs_since
+                .iter()
+                .filter(|r| r.finished_at > red.at && r.is_green())
+                .any(|r| contains(&r.sha, &m.sha));
+            !alone && !carried
+        })
+        .cloned()
+        .collect()
+}
+
+/// The red batch the lane is splitting (air-67q): the newest red batch of more than one member
+/// that no later green has superseded, with the members not yet verified alone. `None` when
+/// no such batch stands. Read by `air record` after a batch and by `air status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RedSplit {
+    pub batch: RedBatch,
+    pub untested: Vec<air_ledger::landings::Member>,
+}
+
+/// The split in progress, if any: see [`RedSplit`]. The newest standing red batch may be a
+/// member cut alone and found red; the batch it came from still stands until a green carries
+/// every member, and it is the one whose remaining members the lane needs listed.
+pub fn red_split_standing(ledger: &Ledger, repo: &Path) -> Option<RedSplit> {
+    let runs = ledger.red_batches(Kind::Verify).ok()?;
+    let red = red_batches_of(&runs)
+        .into_iter()
+        .filter(|b| b.members.len() > 1)
+        .find(|b| {
+            let greens = ledger.greens_since(Kind::Verify, &b.at).unwrap_or_default();
+            !superseded_by(repo, b, &greens)
+        })?;
+    let since = ledger.runs_since(Kind::Verify, &red.at).unwrap_or_default();
+    let contains = |g: &str, m: &str| git::is_ancestor(repo, m, g).unwrap_or(false);
+    let untested = untested_alone(&red, &since, &contains);
+    Some(RedSplit {
+        batch: red,
+        untested,
+    })
+}
+
+/// The lines `air record` and `air status` print for a split in progress: one per member not
+/// yet verified alone, then the `--only` cut for the first. Nothing when every member has been
+/// verified alone, so the ok path is silent.
+pub fn untested_lines(untested: &[air_ledger::landings::Member]) -> Vec<String> {
+    let mut v: Vec<String> = untested
+        .iter()
+        .map(|m| format!("not yet verified alone: {}@{}", m.worker, short(&m.sha)))
+        .collect();
+    if let Some(first) = untested.first() {
+        v.push(format!("next: air batch cut --only {}", first.worker));
+    }
+    v
 }
 
 /// The two sentences the gate carries (air-80x.1): the ok line when every bead in `beads`
@@ -518,10 +608,10 @@ pub struct Described {
 /// Pure over the counts, so a probe drives every branch without a ledger or a repo. The order
 /// is narrowest-cause-first: a bead with no commits here is not a verify problem at all, and a
 /// scan with no greens to look at is not a coverage problem.
-pub fn why_absent(bead: &str, s: &Scanned) -> String {
+pub fn why_absent(bead: &str, base: &str, s: &Scanned) -> String {
     if s.commits == 0 {
         return format!(
-            "no commit in `{BRANCH_RANGE}` carries a `Bead: {bead}` trailer, and no landing \
+            "no commit in `{base}..HEAD` carries a `Bead: {bead}` trailer, and no landing \
              carries it either, so there is nothing for a green to cover"
         );
     }
@@ -534,20 +624,20 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
     }
     if s.with_main == 0 {
         return format!(
-            "{} recorded green(s) checked, and none contains the main it was recorded over, so \
+            "{} recorded green(s) checked, and none contains the {base} it was recorded over, so \
              none can stand for {bead}",
             s.candidates
         );
     }
     if s.touching == 0 {
         return format!(
-            "{} green(s) contain main, and none contains any of the {} commit(s) of {bead}: \
+            "{} green(s) contain {base}, and none contains any of the {} commit(s) of {bead}: \
              every one was recorded before this work",
             s.with_main, s.commits
         );
     }
     format!(
-        "{} green(s) contain main and touch {bead}, none covering all {} of its commit(s)",
+        "{} green(s) contain {base} and touch {bead}, none covering all {} of its commit(s)",
         s.with_main, s.commits
     )
 }
@@ -558,7 +648,7 @@ pub fn why_absent(bead: &str, s: &Scanned) -> String {
 /// Each states what must become TRUE rather than which command makes it so (air-155w): under a
 /// lane the worker runs no verify, and a fix naming one is followed successfully by the wrong
 /// worker.
-pub fn fix_absent(bead: &str, s: &Scanned) -> String {
+pub fn fix_absent(bead: &str, base: &str, s: &Scanned) -> String {
     if s.commits == 0 {
         // The green stays the subject: with no lane, a green at this head is the fix, and a
         // probe caught the version that named only the trailer. air-ch9p: under a lane it is
@@ -570,14 +660,16 @@ pub fn fix_absent(bead: &str, s: &Scanned) -> String {
         );
     }
     if s.candidates == 0 {
-        return "a green containing main and your commits; none is recorded since your oldest \
-                commit, and `air handover` names what your flow needs to produce one"
-            .to_string();
+        return format!(
+            "a green containing {base} and your commits; none is recorded since your oldest \
+             commit, and `air handover` names what your flow needs to produce one"
+        );
     }
     if s.with_main == 0 {
-        return "a green whose run contained main; where a lane runs, that is the next batch \
-                that merges main before it verifies"
-            .to_string();
+        return format!(
+            "a green whose run contained {base}; where a lane runs, that is the next batch \
+             that merges {base} before it verifies"
+        );
     }
     "a green recorded at or after your commits: the ones on record are all older, so where a \
      lane runs it is the next batch rather than this one"
@@ -585,6 +677,7 @@ pub fn fix_absent(bead: &str, s: &Scanned) -> String {
 }
 
 pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
+    let base = super::handover::base_branch(repo);
     let mut covered: Vec<String> = Vec::new();
     let mut out = Described::default();
     for bead in beads {
@@ -593,12 +686,12 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             // air-9ij: nothing of this bead is outstanding, so there is no green to look for.
             covered.push(match m.landing {
                 Some((merge, worker)) => format!(
-                    "every commit of {bead} is already in main, landed at {} (branch by \
-                     {worker}), which required a green containing main",
+                    "every commit of {bead} is already in {base}, landed at {} (branch by \
+                     {worker}), which required a green containing {base}",
                     short(&merge)
                 ),
                 None => format!(
-                    "every commit of {bead} is already in main (newest {})",
+                    "every commit of {bead} is already in {base} (newest {})",
                     short(&m.newest)
                 ),
             });
@@ -620,8 +713,8 @@ pub fn describe(ledger: &Ledger, repo: &Path, beads: &[String]) -> Described {
             }
             (None, None) => {
                 // air-hgi9: the state that used to be silent. The counts say which it is.
-                out.absent = Some(why_absent(bead, &b.scanned));
-                out.absent_fix = Some(fix_absent(bead, &b.scanned));
+                out.absent = Some(why_absent(bead, &base, &b.scanned));
+                out.absent_fix = Some(fix_absent(bead, &base, &b.scanned));
                 return out;
             }
         }
@@ -809,5 +902,118 @@ mod tests {
         // count says the candidate was reached rather than filtered out.
         let s = cover(&[cand("z", true, &[false, true])], &commits).scanned;
         assert_eq!((s.with_main, s.touching), (1, 1));
+    }
+
+    /// air-67q: a red batch of three; one green alone, one red alone, the third is what is
+    /// left; a green carrying it empties the list. A two-member run tests nobody alone, and a
+    /// killed run would be no verdict, but the ledger never hands one in.
+    #[test]
+    fn untested_alone_lists_the_members_no_run_has_verified_on_their_own() {
+        use air_ledger::landings::Member;
+        use air_ledger::verify::{Kind, VerifyRun};
+        let member = |w: &str, sha: &str| Member {
+            worker: w.into(),
+            sha: sha.into(),
+        };
+        let red = RedBatch {
+            sha: "batch000".into(),
+            worker: "lane".into(),
+            at: "2026-11-09T19:22:21Z".into(),
+            members: vec![
+                member("a", "aaaa"),
+                member("b", "bbbb"),
+                member("c", "cccc"),
+            ],
+            log_path: None,
+        };
+        let run = |sha: &str, exit: i32, at: &str, members: Vec<Member>| VerifyRun {
+            id: sha.into(),
+            worker: "lane".into(),
+            sha: sha.into(),
+            kind: Kind::Verify,
+            exit_code: exit,
+            trigger: "record".into(),
+            failing_step: None,
+            started_at: at.into(),
+            finished_at: at.into(),
+            log_path: None,
+            command: None,
+            duration_ms: None,
+            output_bytes: None,
+            dirty: false,
+            tree: None,
+            members,
+            main_sha: None,
+        };
+        // Containment as a table: a green's sha names the member shas it carries.
+        let contains = |g: &str, m: &str| match g {
+            "cut-c" => m == "cccc",
+            "big" => matches!(m, "aaaa" | "bbbb" | "cccc"),
+            _ => false,
+        };
+        let names = |v: Vec<Member>| v.into_iter().map(|m| m.worker).collect::<Vec<_>>();
+
+        // Fresh red: nobody has been tested alone.
+        assert_eq!(names(untested_alone(&red, &[], &contains)), ["a", "b", "c"]);
+        // A run before the red, and a run of two members, test nobody alone.
+        let before = run("old", 0, "2026-11-09T19:00:00Z", vec![member("a", "aaaa")]);
+        let pair = run(
+            "pair",
+            1,
+            "2026-11-09T19:23:00Z",
+            vec![member("a", "aaaa"), member("b", "bbbb")],
+        );
+        assert_eq!(
+            names(untested_alone(&red, &[pair, before], &contains)),
+            ["a", "b", "c"]
+        );
+        // c green alone and a red alone: b is what is left, whatever the order of the rows.
+        let c_green = run(
+            "cut-c",
+            0,
+            "2026-11-09T19:24:00Z",
+            vec![member("c", "cccc")],
+        );
+        let a_red = run(
+            "cut-a",
+            2,
+            "2026-11-09T19:25:00Z",
+            vec![member("a", "aaaa")],
+        );
+        let since = vec![a_red.clone(), c_green.clone()];
+        assert_eq!(names(untested_alone(&red, &since, &contains)), ["b"]);
+        // A green that carries b (a later batch of everything) empties the list.
+        let big = run("big", 0, "2026-11-09T19:30:00Z", vec![]);
+        assert!(untested_alone(&red, &[big, a_red, c_green], &contains).is_empty());
+        // A member at a different sha is a different member.
+        let moved = run(
+            "cut-b2",
+            0,
+            "2026-11-09T19:26:00Z",
+            vec![member("b", "b2b2")],
+        );
+        assert_eq!(
+            names(untested_alone(&red, &[moved], &contains)),
+            ["a", "b", "c"]
+        );
+
+        // The lines: one per member, then the first's cut; nothing for an empty list.
+        let lines = untested_lines(&[member("b", "bbbbbbbbcccc"), member("c", "cccc")]);
+        assert_eq!(
+            lines,
+            [
+                "not yet verified alone: b@bbbbbbbb",
+                "not yet verified alone: c@cccc",
+                "next: air batch cut --only b",
+            ]
+        );
+        assert!(untested_lines(&[]).is_empty());
+        // The red line of a batch of several says what the lane does, and never "by hand".
+        let line = red_batch_line(&red);
+        assert!(
+            line.contains("the lane verifies each member alone"),
+            "{line}"
+        );
+        assert!(!line.contains("by hand"), "{line}");
     }
 }

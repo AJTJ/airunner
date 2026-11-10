@@ -13,10 +13,6 @@ fn scratch_repo() -> tempfile::TempDir {
             .arg("-C")
             .arg(dir.path())
             .args(args)
-            .env("GIT_AUTHOR_NAME", "air")
-            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-            .env("GIT_COMMITTER_NAME", "air")
-            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
         assert!(
@@ -42,6 +38,28 @@ fn scratch_repo() -> tempfile::TempDir {
     dir
 }
 
+/// A `CLAUDE_CONFIG_DIR` whose `.claude.json` records folder trust for `repo` (air-z41): the
+/// launchers refuse to start a session in a repo Claude Code has not been trusted in. Air never
+/// writes this file; the test does.
+fn trusted_config(repo: &Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let projects: serde_json::Map<String, serde_json::Value> = [repo.to_path_buf()]
+        .iter()
+        .map(|p| {
+            (
+                p.display().to_string(),
+                serde_json::json!({"hasTrustDialogAccepted": true}),
+            )
+        })
+        .collect();
+    std::fs::write(
+        dir.path().join(".claude.json"),
+        serde_json::json!({ "projects": projects }).to_string(),
+    )
+    .unwrap();
+    dir
+}
+
 /// None of the tests using `air()` are about bd; a missing binary fails in microseconds where
 /// a real `bd` in a non-beads directory cost 0.25 to 0.5 s per call (air-4vu, 2026-08-22).
 /// Tests that need a bd (doctor, init) build their own fake and set `AIR_BD_BIN` themselves.
@@ -51,6 +69,9 @@ fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, Stri
         .arg(repo)
         .args(args)
         .env("AIR_BD_BIN", "/nonexistent/bd")
+        // air-1ye: on a Mac the launchers wrap claude in `caffeinate -i`; the print tests here
+        // read the claude line itself, and the wrapper has its own test.
+        .env("AIR_CAFFEINATE_BIN", "")
         .current_dir(repo);
     if let Some(p) = path_env {
         c.env("PATH", p);
@@ -61,6 +82,34 @@ fn air(repo: &Path, path_env: Option<&str>, args: &[&str]) -> (i32, String, Stri
         String::from_utf8_lossy(&out.stdout).to_string(),
         String::from_utf8_lossy(&out.stderr).to_string(),
     )
+}
+
+/// air-fkb: `make trial` hands the trial coordinator its request as the launch prompt
+/// (`air coordinator -- "<text>"`), so the session starts on it rather than on a file read the
+/// auto-mode classifier can refuse. The positional leads claude's argv, where a worker's task
+/// prompt goes (air-2ct); appended, it would be one more `--disallowed-tools` value.
+#[test]
+fn the_coordinators_positional_is_its_launch_prompt() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let text = "File the trial's beads now.";
+    let (code, out, err) = air(&repo, None, &["coordinator", "--print", "--", text]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains(
+            " -- claude 'File the trial'\\''s beads now.' --dangerously-load-development-channels "
+        ),
+        "{out}"
+    );
+    // With a configured model the prompt still leads and the model flag follows.
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(repo.join(".claude/air.json"), r#"{"model": "opus"}"#).unwrap();
+    let (code, out, _) = air(&repo, None, &["coordinator", "--print", "--", "hello"]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(" -- claude hello --dangerously") && out.contains(" --model opus"),
+        "{out}"
+    );
 }
 
 /// air-e07q: removing a hook that contradicts Air is a command, not a hand edit. Without the
@@ -218,10 +267,6 @@ fn install_dry_run_then_refuses_then_writes_idempotently() {
             .arg("-C")
             .arg(&repo)
             .args(args)
-            .env("GIT_AUTHOR_NAME", "air")
-            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-            .env("GIT_COMMITTER_NAME", "air")
-            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");
@@ -464,6 +509,38 @@ fn repo_deny_rules_are_appended_from_claude_air_json() {
     let (_, out, _) = air(&repo, None, &["coordinator", "--print"]);
     assert!(out.contains("'Bash(rm -rf *)'"), "{out}");
     assert!(!out.contains("deploy"), "{out}");
+}
+
+/// air-xji: `worker_allow` and `coordinator_allow` reach the role's `--settings` allow list,
+/// the lane taking the worker's, beside the rules the launcher already passes.
+#[test]
+fn repo_allow_rules_reach_the_settings_from_claude_air_json() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"worker_allow": ["Bash(ssh *)"], "coordinator_allow": ["Bash(kubectl *)"]}"#,
+    )
+    .unwrap();
+    let (_, out, _) = air(&repo, None, &["worker", "w", "--print"]);
+    assert!(
+        out.contains(r#""Bash(ssh *)""#) && out.contains(r#""Bash(air run *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("kubectl"), "{out}");
+    let (_, out, _) = air(&repo, None, &["lane", "--print"]);
+    assert!(
+        out.contains(r#""Bash(ssh *)""#) && out.contains(r#""Bash(air land *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("kubectl"), "{out}");
+    let (_, out, _) = air(&repo, None, &["coordinator", "--print"]);
+    assert!(
+        out.contains(r#""Bash(kubectl *)""#) && out.contains(r#""Bash(tmux send-keys *)""#),
+        "{out}"
+    );
+    assert!(!out.contains("ssh"), "{out}");
 }
 
 #[test]
@@ -726,10 +803,7 @@ fn init_gates_then_builds_a_project_from_nothing() {
         "roles.md must not promise a landing verify that no longer runs (air-odv)"
     );
     // air-arq: the coordinator's failsafe when the channel is quiet.
-    assert!(
-        roles.contains("A 5-minute heartbeat runs for the whole round."),
-        "{roles}"
-    );
+    assert!(roles.contains("The heartbeat is opt-in."), "{roles}");
     assert!(
         proj.join(".claude/skills/air-decomposition/SKILL.md")
             .exists()
@@ -800,6 +874,7 @@ fn worker_with_task_and_no_tty_starts_a_detached_tmux_session() {
         .arg(&repo)
         .args(["worker", "w", "--task", "hello there"])
         .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
         .env("AIR_CLAUDE_BIN", &stub)
         .env("AIR_TMUX_SOCKET", &socket)
         .stdin(std::process::Stdio::null())
@@ -888,6 +963,163 @@ fn worker_print_with_no_tty_shows_the_tmux_command() {
         "{stdout}"
     );
     assert!(!stdout.contains("--tmux"), "{stdout}");
+}
+
+/// air-xdc: a top-level key in `.claude/air.json` this binary does not read is named once in
+/// `air status` and carried in `--json`; a config of known keys adds nothing. The lane ran a
+/// 0.4.13 binary against a `targets` key for a day and nothing said so.
+#[test]
+fn status_names_a_config_key_this_binary_does_not_read() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let status = |json: bool| -> String {
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
+        c.arg("--repo").arg(&repo);
+        if json {
+            c.arg("--json");
+        }
+        let out = c
+            .arg("status")
+            .current_dir(&repo)
+            .env("AIR_BD_BIN", "/nonexistent-bd")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "verify_lane": true, "tragets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: \"tragets\" is not read by this binary (air ")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(out.contains("); upgrade or remove it"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(
+        v["snapshot"]["unknown_config_keys"],
+        serde_json::json!(["tragets"])
+    );
+
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "verify_lane": true, "targets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let out = status(false);
+    assert!(!out.contains("config: "), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["unknown_config_keys"], serde_json::json!([]));
+}
+
+/// air-aei: `.claude/air.local.json` lays its top-level keys over `.claude/air.json` for
+/// every command (here the `model` `air status` reports), an unknown key set there is named
+/// with its file, an overlay that does not parse is reported and the committed file read
+/// alone, and git tracking the overlay is warned about once. Twice on 2026-11-05 a `targets`
+/// change was a landing whose own batch verified on the old target.
+#[test]
+fn status_reads_the_config_overlay_and_names_what_it_set_or_broke() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let status = |json: bool| -> String {
+        let mut c = common::command(env!("CARGO_BIN_EXE_air"));
+        c.arg("--repo").arg(&repo);
+        if json {
+            c.arg("--json");
+        }
+        let out = c
+            .arg("status")
+            .current_dir(&repo)
+            .env("AIR_BD_BIN", "/nonexistent-bd")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"project": "zz", "model": "committed", "targets": {"lane": {}}}"#,
+    )
+    .unwrap();
+    let overlay = repo.join(".claude/air.local.json");
+    std::fs::write(&overlay, r#"{"model": "mine", "zzz": 1}"#).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "mine", "{v}");
+    assert_eq!(
+        v["snapshot"]["config_overlay"],
+        serde_json::json!({"keys": ["model", "zzz"], "invalid": null})
+    );
+    assert_eq!(v["snapshot"]["config_overlay_tracked"], false);
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: \"zzz\" is not read by this binary (air ")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(
+        out.contains("; set in .claude/air.local.json); upgrade"),
+        "{out}"
+    );
+    assert!(!out.contains("is tracked by git"), "{out}");
+
+    std::fs::write(&overlay, "{\"model\": ").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "committed", "{v}");
+    assert_eq!(
+        v["snapshot"]["config_overlay"]["keys"],
+        serde_json::json!([])
+    );
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: .claude/air.local.json is not used (")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(!out.contains("\"zzz\""), "{out}");
+
+    std::fs::write(&overlay, r#"{"model": "mine"}"#).unwrap();
+    let g = |args: &[&str]| {
+        let out = common::command("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    g(&["add", "-f", ".claude/air.local.json"]);
+    g(&["commit", "-q", "-m", "tracked by mistake"]);
+    let out = status(false);
+    assert_eq!(
+        out.matches("config: .claude/air.local.json is tracked by git")
+            .count(),
+        1,
+        "{out}"
+    );
+    assert!(
+        out.contains("git rm --cached .claude/air.local.json"),
+        "{out}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["config_overlay_tracked"], true);
+
+    std::fs::remove_file(&overlay).unwrap();
+    g(&["rm", "-q", "--cached", ".claude/air.local.json"]);
+    let out = status(false);
+    assert!(!out.contains("config: "), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&status(true)).unwrap();
+    assert_eq!(v["snapshot"]["model_setting"], "committed", "{v}");
 }
 
 /// air-5lg: `tmux ls` is machine-wide, so `air status` is where the owner goes from a lane to
@@ -989,6 +1221,7 @@ fn fleet_up_starts_the_lane_and_workers_once() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    let trust = trusted_config(&repo);
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = common::command(env!("CARGO_BIN_EXE_air"))
             .arg("--repo")
@@ -996,6 +1229,8 @@ fn fleet_up_starts_the_lane_and_workers_once() {
             .args(args)
             .current_dir(&repo)
             .env("PATH", &path)
+            .env("CLAUDE_CONFIG_DIR", trust.path())
+            .env("AIR_CAFFEINATE_BIN", "")
             .env("AIR_BD_BIN", "/nonexistent/bd")
             .env_remove("AIR_TMUX_SOCKET")
             .stdin(std::process::Stdio::null())
@@ -1013,6 +1248,44 @@ fn fleet_up_starts_the_lane_and_workers_once() {
     let (code, out, err) = run(&["fleet", "up", "--print"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(out.lines().count(), 3, "{out}");
+    assert!(!out.contains("--model"), "no key, no flag: {out}");
+
+    // air-ap1: `--model` on `fleet up` reaches every session; the file's `model` and
+    // `lane_model` apply when the command line gives none.
+    let (code, out, err) = run(&["fleet", "up", "--print", "--model", "mx"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out.lines().filter(|l| l.contains("--model mx")).count(),
+        3,
+        "{out}"
+    );
+    std::fs::write(
+        repo.join(".claude/air.json"),
+        r#"{"workers": 2, "model": "mf", "lane_model": "ml"}"#,
+    )
+    .unwrap();
+    let (code, out, err) = run(&["fleet", "up", "--print"]);
+    assert_eq!(code, 0, "{err}");
+    let lane_line = out.lines().find(|l| l.contains("-s zz-lane ")).unwrap();
+    assert!(lane_line.contains("--model ml"), "{lane_line}");
+    for s in ["zz-worker-1", "zz-worker-2"] {
+        let l = out
+            .lines()
+            .find(|l| l.contains(&format!("-s {s} ")))
+            .unwrap();
+        assert!(l.contains("--model mf"), "{l}");
+    }
+    let (_, out, _) = run(&["fleet", "up", "--print", "--model", "mx"]);
+    assert_eq!(
+        out.lines().filter(|l| l.contains("--model mx")).count(),
+        3,
+        "the command line wins over the file: {out}"
+    );
+    assert!(
+        !out.contains("--model mf") && !out.contains("--model ml"),
+        "{out}"
+    );
+    std::fs::write(repo.join(".claude/air.json"), r#"{"workers": 2}"#).unwrap();
     for s in ["zz-lane", "zz-worker-1", "zz-worker-2"] {
         assert!(
             out.contains(&format!("new-session -d -s {s} ")),
@@ -1237,6 +1510,7 @@ fn pin_runs_this_repo_on_its_own_copy_and_unpin_goes_back() {
         .arg(&repo)
         .args(["worker", "w"])
         .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
         .env("PATH", &path)
         .env("AIR_BD_BIN", "/nonexistent/bd")
         .env("AIR_CLAUDE_BIN", stub_dir.join("claude"))
@@ -1320,10 +1594,245 @@ fn a_pinned_repo_hands_every_air_to_its_pin() {
 
     // A real copy as the pin: it runs the command itself rather than handing it on again.
     std::fs::copy(env!("CARGO_BIN_EXE_air"), &pin).unwrap();
-    assert!(run(&wt, &["--version"]).starts_with("air "));
-    let events = std::fs::read_dir(repo.join(".air/events"))
+    let run_both = |cwd: &Path, args: &[&str]| {
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
+            .args(args)
+            .current_dir(cwd)
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        (
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        )
+    };
+    // air-2dg: when the pin cannot open the ledger, it says so on stderr with the cause and
+    // still runs the command; a lane batch once read the missing event as a product failure
+    // with nothing to say which step had failed. The ledger path as a directory is one
+    // deterministic cause.
+    std::fs::create_dir_all(repo.join(".air/ledger.db")).unwrap();
+    let (out, err) = run_both(&wt, &["--version"]);
+    assert!(out.starts_with("air "), "{out}");
+    assert!(
+        err.contains("air: delegated event not written: ") && err.contains("ledger.db"),
+        "stderr: {err}"
+    );
+    std::fs::remove_dir(repo.join(".air/ledger.db")).unwrap();
+    let (out, err) = run_both(&wt, &["--version"]);
+    assert!(out.starts_with("air "), "{out}");
+    assert!(err.is_empty(), "stderr: {err}");
+    // The assertion carries the pin's stderr, so a failure here names the cause.
+    let dir = std::fs::read_dir(repo.join(".air/events"));
+    assert!(
+        dir.is_ok(),
+        "no .air/events: {:?}; pin stderr: {err}",
+        dir.as_ref().err()
+    );
+    let events = dir
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .collect::<String>();
-    assert!(events.contains("\"decision\":\"delegated\""), "{events}");
+    assert!(
+        events.contains("\"decision\":\"delegated\""),
+        "{events}; pin stderr: {err}"
+    );
+}
+
+/// air-z41: a launch reads the printed command line for the flags that pre-answer start-up
+/// prompts, and refuses before starting anything when the main checkout is not trusted.
+#[test]
+fn launchers_pre_answer_prompts_and_refuse_without_folder_trust() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    for args in [
+        &["worker", "w", "--print"][..],
+        &["lane", "--print"],
+        &["coordinator", "--print"],
+    ] {
+        let (code, out, err) = air(&repo, None, args);
+        assert_eq!(code, 0, "{err}");
+        let add = format!("--add-dir {}", repo.display());
+        assert!(out.contains(&add), "{args:?}: {out}");
+        assert!(out.contains("--permission-mode auto"), "{args:?}: {out}");
+        assert!(out.contains("skipAutoPermissionPrompt"), "{args:?}: {out}");
+    }
+    let (_, out, _) = air(&repo, None, &["fleet", "up", "--print"]);
+    assert_eq!(out.matches("--permission-mode auto").count(), 4, "{out}");
+
+    // Trust absent: every launcher refuses, names the key and the fix, and starts nothing.
+    let empty = tempfile::tempdir().unwrap();
+    std::fs::write(empty.path().join(".claude.json"), r#"{"projects":{}}"#).unwrap();
+    for args in [
+        &["worker", "w"][..],
+        &["lane"],
+        &["coordinator", "--no-fleet"],
+        &["fleet", "up"],
+    ] {
+        let out = common::command(env!("CARGO_BIN_EXE_air"))
+            .arg("--repo")
+            .arg(&repo)
+            .args(args)
+            .current_dir(&repo)
+            .env("CLAUDE_CONFIG_DIR", empty.path())
+            .env("AIR_BD_BIN", "/nonexistent/bd")
+            .env("AIR_CLAUDE_BIN", "/nonexistent/claude")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {err}");
+        assert!(
+            err.contains("hasTrustDialogAccepted") && err.contains("Run `claude` once"),
+            "{args:?}: {err}"
+        );
+        assert!(!repo.join(".claude/worktrees").exists(), "{args:?}");
+    }
+
+    // air-zau: `make trial` writes the key for its own scratch copy with
+    // `scripts/trial/trust-copy.py`; the launcher is unchanged and reads what it wrote, so the
+    // same launch is no longer refused on trust (it fails later, on the absent claude). The
+    // config directory is the test's own temp one, never the real file.
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/trial/trust-copy.py");
+    let wrote = common::command("python3")
+        .arg(&script)
+        .arg(&repo)
+        .env("CLAUDE_CONFIG_DIR", empty.path())
+        .output()
+        .unwrap();
+    assert!(
+        wrote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["coordinator", "--no-fleet"])
+        .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", empty.path())
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .env("AIR_CLAUDE_BIN", "/nonexistent/claude")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("hasTrustDialogAccepted"), "{err}");
+}
+
+/// air-1ye: on a Mac the launched session is `caffeinate -i`'s child, so the machine does not
+/// idle-sleep under an hour-long command, and the assertion ends with the session: nothing is
+/// left running after it. Covered on the real binary, which is why this is macOS only.
+#[cfg(target_os = "macos")]
+#[test]
+fn launcher_holds_the_mac_awake_with_caffeinate_until_the_session_exits() {
+    if common::command("tmux").arg("-V").output().is_err() {
+        eprintln!("SKIP: tmux not installed; detached launch cannot be exercised");
+        return;
+    }
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    let stub = repo.join("claude-stub.sh");
+    // The stub records its parent's command line, which is what holds the assertion.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nps -o command= -p $PPID > \"$d/parent.tmp\"\nmv \"$d/parent.tmp\" \"$d/parent.txt\"\nexec sleep 30\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let socket = format!("air-test-caf-{}", std::process::id());
+    let out = common::command(env!("CARGO_BIN_EXE_air"))
+        .arg("--repo")
+        .arg(&repo)
+        .args(["worker", "w", "--task", "hello"])
+        .current_dir(&repo)
+        .env("CLAUDE_CONFIG_DIR", trusted_config(&repo).path())
+        .env("AIR_CLAUDE_BIN", &stub)
+        .env("AIR_TMUX_SOCKET", &socket)
+        .env_remove("AIR_CAFFEINATE_BIN")
+        .env("AIR_BD_BIN", "/nonexistent/bd")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parent_path = repo.join("parent.txt");
+    let mut parent = String::new();
+    let waited = std::time::Instant::now();
+    while waited.elapsed() < std::time::Duration::from_secs(60) {
+        if let Ok(s) = std::fs::read_to_string(&parent_path)
+            && !s.is_empty()
+        {
+            parent = s;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    common::command("tmux")
+        .args(["-L", &socket, "kill-server"])
+        .output()
+        .unwrap();
+    assert!(
+        parent.contains("caffeinate -i") && parent.contains("claude-stub.sh"),
+        "the session's parent is not caffeinate: {parent:?}"
+    );
+    // Gone with the session: no caffeinate naming this stub survives the kill.
+    let pattern = format!("caffeinate -i {}", stub.display());
+    let gone = std::time::Instant::now();
+    let mut left = String::new();
+    while gone.elapsed() < std::time::Duration::from_secs(10) {
+        let o = common::command("pgrep")
+            .args(["-f", &pattern])
+            .output()
+            .unwrap();
+        left = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if left.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(left.is_empty(), "caffeinate left behind: pids {left}");
+}
+
+/// air-1ye: `air status` prints the Mac's idle-sleep setting when it is under ten minutes and
+/// nothing otherwise, read from whatever `pmset` is on PATH, so a fake one drives both cases.
+#[test]
+fn status_names_a_short_idle_sleep_from_pmset_and_nothing_otherwise() {
+    let dir = scratch_repo();
+    let repo = dir.path().canonicalize().unwrap();
+    for (minutes, expect) in [("1", true), ("30", false), ("0", false)] {
+        let fake = tempfile::tempdir().unwrap();
+        let pmset = fake.path().join("pmset");
+        std::fs::write(
+            &pmset,
+            format!(
+                "#!/bin/sh\nprintf 'System-wide power settings:\\nCurrently in use:\\n disksleep            10\\n sleep                {minutes} (sleep prevented by x)\\n displaysleep         10\\n'\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&pmset, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            fake.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let (code, out, err) = air(&repo, Some(&path), &["status"]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out.contains(&format!("idle sleep: {minutes} min")),
+            expect,
+            "pmset sleep {minutes}: {out}"
+        );
+    }
 }

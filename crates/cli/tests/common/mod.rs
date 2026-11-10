@@ -11,6 +11,13 @@
 //! live process, air-4n5t) is removed; a test sets what it needs on the
 //! returned `Command`. Removed when the launchers stop passing identity through the
 //! environment.
+//!
+//! The process also gets a git identity of its own and no global git config (air-xiu). The
+//! landing tests build their commit with `git commit-tree`, which takes the identity from
+//! the environment or the config and refuses with exit 128 without one. The owner's macOS has
+//! a global config, so the fixtures never set one; the dev pod has none, and twelve landing
+//! tests were red on every pod verify. With the global config pointed at `/dev/null` a test
+//! passes and fails the same on every host.
 
 use std::ffi::OsStr;
 use std::process::Command;
@@ -24,5 +31,10 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
             c.env_remove(k);
         }
     }
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "air")
+        .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
+        .env("GIT_COMMITTER_NAME", "air")
+        .env("GIT_COMMITTER_EMAIL", "air@example.invalid");
     c
 }

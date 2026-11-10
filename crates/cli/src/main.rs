@@ -84,10 +84,12 @@ enum BatchOp {
         /// Read the set and run the pre-check only; merges nothing and needs no clean tree.
         #[arg(long)]
         dry_run: bool,
-        /// Leave these workers' branches out of this cut (a split after a red batch).
+        /// Leave these workers' branches out of this cut: a split after a red batch, which
+        /// may take the red batch's members at their red-held heads.
         #[arg(long, value_delimiter = ',', num_args = 1.., conflicts_with = "only")]
         without: Vec<String>,
-        /// Cut only these workers' branches (a split after a red batch).
+        /// Cut only these workers' branches: a split after a red batch, which may take the red
+        /// batch's members at their red-held heads.
         #[arg(long, value_delimiter = ',', num_args = 1..)]
         only: Vec<String>,
     },
@@ -103,6 +105,11 @@ enum FleetOp {
         /// Print each launch instead of running it; writes nothing.
         #[arg(long)]
         print: bool,
+        /// Model for every session of this launch, over `model` and `lane_model` in
+        /// `.claude/air.json` (air-ap1). Omitted, each launcher reads the file; with no key
+        /// there either, the session inherits the harness's model.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Stop all work (coordinator and owner only): `air claim`, `air batch cut` and `air land`
     /// refuse, naming the stop, until `air fleet resume`. Every session is told through its
@@ -146,9 +153,48 @@ enum Cmd {
     },
     /// Run a check command and record its exit for the current HEAD, e.g.
     /// `air record verify -- make verify`.
+    ///
+    /// With a target for this session in `.claude/air.json` or the `.claude/air.local.json`
+    /// overlay (`"targets"`, see `air run`) the
+    /// command runs there on the pushed HEAD and the result is recorded at the local HEAD as
+    /// usual, with the machine beside it; a dirty tree is refused, since the target holds only
+    /// commits. `--local` runs it here whatever the config says.
     Record {
         /// verify | docs-check | fitness | precheck
         kind: String,
+        /// Run here even when this session has a target.
+        #[arg(long)]
+        local: bool,
+        /// The command to run (after `--`).
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Run a command on this session's target, or here when it has none.
+    ///
+    /// `"targets"` in `.claude/air.json`, or in the gitignored `.claude/air.local.json` laid
+    /// over it, names one target per session: an `exec` list, the
+    /// argv prefix that runs a command on the machine with stdin and stdout attached, and the
+    /// repository `path` there: `{"targets": {"worker-1": {"exec": ["kubectl", "exec", "-i",
+    /// "<pod>", "-c", "<container>", "-n", "<ns>", "--"], "path": "~/air/proj"}}}`. The short
+    /// form `{"kind": "ssh", "host": "box", "user": "me", "path": "~/air/proj"}` is the prefix
+    /// `["ssh", "me@box"]`. With no entry for this session the command runs in this worktree
+    /// with the same exit code and nothing added. With one, Air initialises a repository at
+    /// `path` on the machine once, pushes HEAD to `refs/air/<session>` there (the session's
+    /// own ref, forced, through the same prefix as git's `ext::` remote), checks that commit
+    /// out detached, and runs the command in `path` as `<prefix> sh -c '<line>'`, output
+    /// streamed back, exit code passed through. The push goes to the target only, never to a
+    /// remote in `.git/config`.
+    ///
+    /// `--pull <glob>` (repeatable) brings declared result paths back: after the command exits,
+    /// the paths under the target's checkout that match come back as one tar stream over the
+    /// same prefix and are unpacked into this worktree at the same relative paths, overwriting.
+    /// Nothing comes back without `--pull`; a glob that matches nothing is reported and is not
+    /// an error. The run's row names the pulled paths and their byte total.
+    Run {
+        /// A glob, relative to the target's checkout, whose matches come back after the run
+        /// (e.g. `--pull 'results/*.json'`); repeat for more.
+        #[arg(long = "pull", value_name = "GLOB")]
+        pull: Vec<String>,
         /// The command to run (after `--`).
         #[arg(last = true, required = true)]
         command: Vec<String>,
@@ -246,6 +292,28 @@ enum Cmd {
         #[arg(long)]
         reason_file: Option<PathBuf>,
     },
+    /// Declare a bead done with proof, without a green (worker or lane; air-4xj.1). Runs the
+    /// hand-over gate minus its green checks: the bead's commit, your claim, a precheck where
+    /// the repo declares one. Records the proof on the bead as a comment and the head on your
+    /// claim, and keeps the claim: `air land` closes the bead once the base branch contains
+    /// that head, and closes it at once when it already does.
+    Done {
+        #[arg(required = true)]
+        bead: Vec<String>,
+        /// The proof; bd records it on every id. Exactly one of this or --reason-file.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Read the proof from this file instead, whole and untruncated. Exactly one of this or
+        /// --reason.
+        #[arg(long)]
+        reason_file: Option<PathBuf>,
+    },
+    /// Offer this branch's head to the lane (coordinator only; air-m8u). With
+    /// `"coordinator_autobatch"` absent or false in `.claude/air.json`, the coordinator's branch
+    /// is batch-ready only at a head offered this way; a later commit needs a new offer. With
+    /// it true every commit main lacks is batch-ready and this only records the offer. Refused
+    /// to workers and the lane.
+    Ready,
     /// The lane: land a green branch on main. The one allowed path onto main; it pushes
     /// nothing. Refused to workers and the coordinator; the owner's own shell may land too.
     ///
@@ -273,8 +341,9 @@ enum Cmd {
     /// merge carries or what the landing records (air-dnr). A bead no green branch names is
     /// still refused.
     ///
-    /// It closes no worker's bead: the worker closes its own with proof before the branch lands
-    /// (owner ruling, 2026-08-22). It closes an epic once every one of its children is closed
+    /// It closes each bead its worker declared done whose head it put on main (air-4xj.1),
+    /// with bd's `--force` since the lane is not the assignee (air-52u), and never a bead
+    /// nobody declared. It closes an epic once every one of its children is closed
     /// (air-92o0). It prints every bead in the merge beside its
     /// acceptance criteria and Air's verdict on each clause — the only external check on that.
     /// Air discharges a clause only by lookup: a green verify recorded at the landed sha, or a
@@ -306,6 +375,14 @@ enum Cmd {
     },
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
+    /// A read-only view of the fleet for a browser, on 127.0.0.1 only (air-o6x.1). It opens
+    /// the ledger read-only, writes nothing, and runs from `/` so it is no worktree's reader.
+    /// Prints the URL once; Ctrl-C stops it.
+    Ui {
+        /// The port on 127.0.0.1; 7311 by default, 0 takes a free one.
+        #[arg(long, default_value_t = cmd::ui::DEFAULT_PORT)]
+        port: u16,
+    },
     /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
     /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills, and the
     /// empty-but-ready scaffold (a failing Makefile verify target, .worktreeinclude, and a
@@ -359,8 +436,9 @@ enum Cmd {
         /// Initial task for the worker, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
-        /// Model to launch on, e.g. `claude-opus-5`. Omitted, the session inherits whatever the
-        /// harness gives it, and the ledger records what it actually got (air-air).
+        /// Model to launch on, e.g. `claude-opus-5`. Omitted, `model` in `.claude/air.json`
+        /// applies (air-ap1); with no key either the session inherits whatever the harness
+        /// gives it, and the ledger records what it actually got (air-air).
         #[arg(long)]
         model: Option<String>,
         /// Print the command instead of running it.
@@ -382,7 +460,8 @@ enum Cmd {
         /// Initial task, as its first prompt (implies --tmux).
         #[arg(long)]
         task: Option<String>,
-        /// Model to launch on; inherited when omitted.
+        /// Model to launch on; omitted, `lane_model` then `model` in `.claude/air.json`
+        /// (air-ap1), else inherited.
         #[arg(long)]
         model: Option<String>,
         /// Print the command instead of running it.
@@ -398,8 +477,12 @@ enum Cmd {
     ///
     /// Before it starts, it asks on the terminal whether to start the fleet (`air fleet up`).
     /// `--fleet` or `--no-fleet` answers in advance; with no terminal the answer is no.
+    ///
+    /// `air coordinator -- "<text>"` starts the session on `<text>` as its first prompt (air-fkb);
+    /// flags after `--` are passed to `claude`.
     Coordinator {
-        /// Model to launch on (air-air); inherited when omitted.
+        /// Model to launch on (air-air); omitted, `model` in `.claude/air.json` (air-ap1),
+        /// else inherited.
         #[arg(long)]
         model: Option<String>,
         /// Start the lane and the workers too, without asking.
@@ -410,6 +493,7 @@ enum Cmd {
         no_fleet: bool,
         #[arg(long)]
         print: bool,
+        /// A first prompt, then extra arguments passed to `claude` (after `--`).
         #[arg(last = true)]
         extra: Vec<String>,
     },
@@ -533,15 +617,19 @@ fn main() -> ExitCode {
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        if let Ok((ledger, me)) = cmd::open(&repo) {
-            cmd::log_event(
+        match cmd::open(&repo) {
+            Ok((ledger, me)) => cmd::log_event(
                 &ledger,
                 &me,
                 cmd::decisions::PIN_DELEGATED,
                 &serde_json::json!({"from": from}),
                 "this repo is pinned; the air a shell found handed the command to the pin",
                 "1 invocation",
-            );
+            ),
+            // air-2dg: still fail open, and say why. A lane batch once read the missing
+            // event as a product failure with nothing to say which step (the git spawn or
+            // the ledger open) had failed. Stderr only: `--json` callers read stdout.
+            Err(e) => eprintln!("air: delegated event not written: {e}"),
         }
     }
     // air-dwq5: before anything that needs a repo, because "what binary is this" is a question
@@ -580,11 +668,16 @@ fn main() -> ExitCode {
         } => cmd::batch_cut::run(&repo, dry_run, &without, &only, cli.json),
         // air-4lci: the command that changed the fact queues the notices about it, so they do
         // not wait on the coordinator's channel poll.
-        Cmd::Record { kind, command } => {
-            let code = cmd::record::run(&repo, &kind, &command, cli.json);
+        Cmd::Record {
+            kind,
+            local,
+            command,
+        } => {
+            let code = cmd::record::run(&repo, &kind, &command, cli.json, local);
             cmd::fanout::after_change(&repo, false);
             code
         }
+        Cmd::Run { pull, command } => cmd::run::run(&repo, &command, &pull, cli.json),
         Cmd::Handover { bead, enforce } => {
             cmd::handover::run(&repo, bead.as_deref(), enforce, cli.json)
         }
@@ -646,6 +739,26 @@ fn main() -> ExitCode {
             }
             code
         }
+        Cmd::Done {
+            bead,
+            reason,
+            reason_file,
+        } => {
+            let code = cmd::done::run(
+                &repo,
+                &bead,
+                reason.as_deref(),
+                reason_file.as_deref(),
+                cli.json,
+            );
+            if code == 0 {
+                // A done releases no claim and changes bd's ready list not at all, so the
+                // list is not re-read; the tick still tells the lane what became batch-ready.
+                cmd::fanout::after_change(&repo, false);
+            }
+            code
+        }
+        Cmd::Ready => cmd::ready::run(&repo, cli.json),
         Cmd::Land {
             bead,
             worker,
@@ -654,6 +767,7 @@ fn main() -> ExitCode {
         } => cmd::land::run(&repo, &bead, &worker, all, despite_inflight, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
+        Cmd::Ui { port } => cmd::ui::run(&repo, port, cli.json),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
         Cmd::Install {
             write,
@@ -722,8 +836,8 @@ fn main() -> ExitCode {
             },
         ),
         Cmd::Fleet {
-            op: FleetOp::Up { print },
-        } => cmd::launch::fleet_up(&repo, print),
+            op: FleetOp::Up { print, model },
+        } => cmd::launch::fleet_up(&repo, print, model.as_deref()),
         Cmd::Fleet {
             op: FleetOp::Stop { reason },
         } => cmd::fleet::stop(&repo, reason.as_deref(), cli.json),

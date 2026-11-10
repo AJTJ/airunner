@@ -18,7 +18,9 @@ pub mod fleet;
 pub mod landings;
 pub mod leases;
 pub mod messages;
+pub mod offers;
 pub mod paths;
+pub mod runs;
 pub mod schema;
 pub mod verify;
 
@@ -65,6 +67,24 @@ impl Ledger {
         let conn = Connection::open(&db_path)?;
         configure(&conn)?;
         schema::migrate(&conn)?;
+        Ok(Self {
+            conn,
+            dir: air_dir.to_path_buf(),
+        })
+    }
+
+    /// Open an existing ledger read-only (air-o6x.1): `SQLITE_OPEN_READ_ONLY`, no migration,
+    /// the same busy handler as `open_in`. For a long-lived reader beside the fleet, such as
+    /// `air ui`: `open_in` would migrate the file under an older binary, and `immutable=1`
+    /// skips change detection on a live file (https://sqlite.org/uri.html §3.3). A missing
+    /// file is an error, never created.
+    pub fn open_read_only(air_dir: &Path) -> Result<Self> {
+        let db_path = air_dir.join("ledger.db");
+        let conn = Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_handler(Some(busy))?;
         Ok(Self {
             conn,
             dir: air_dir.to_path_buf(),
@@ -301,6 +321,25 @@ fn configure(conn: &Connection) -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod emission_tests {
     use super::Ledger;
+
+    /// air-o6x.1: a read-only open reads what the writer wrote, refuses a write, and never
+    /// creates a file.
+    #[test]
+    fn a_read_only_open_reads_and_refuses_writes_and_never_creates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let air = tmp.path().join(".air");
+        assert!(Ledger::open_read_only(&air).is_err());
+        assert!(!air.join("ledger.db").exists());
+        let w = Ledger::open_in(&air).unwrap();
+        w.record_claim("zz-1", "w1", &[], "t0").unwrap();
+        let r = Ledger::open_read_only(&air).unwrap();
+        let n: i64 = r
+            .conn()
+            .query_row("SELECT count(*) FROM claims", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(r.record_claim("zz-2", "w1", &[], "t1").is_err());
+    }
 
     #[test]
     fn conditions_open_touch_and_clear() {

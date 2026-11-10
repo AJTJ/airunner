@@ -1,0 +1,58 @@
+#!/bin/sh
+# Run a command on the Nth Running pod of a deployment: the program of a target prefix in
+# the gitignored .claude/air.local.json (or .claude/air.json), one entry per session.
+#
+# Usage: kube-exec-nth KUBECONFIG NAMESPACE DEPLOYMENT CONTAINER N SESSION COMMAND...
+#
+# `kubectl exec deploy/<name>` resolves to one pod of the deployment, the same one every time,
+# so four replicas gave the fleet one pod (air-oep, 2026-11-05). A pod's name changes at every
+# redeploy, so the pod is resolved here, when the command runs: the deployment's own selector,
+# its Running pods sorted by name, the Nth of them. The coordinator is 1, the lane 2 and
+# worker-N is N+2, so the order is the same from every session while the pod set is unchanged. An N past the count
+# fails with one line naming SESSION and the count; a session never falls through to another
+# session's pod. COMMAND... goes to kubectl exec unchanged: `air run` passes
+# `env PATH=... sh -c '<line>'`, and its push passes `git-receive-pack <path>` through git's
+# ext:: helper, which runs these words as argv with no shell between.
+#
+# This is this repository's configuration, not Air's. A target is an argv prefix and a path,
+# and Air knows nothing of kubectl (docs/rules/remote-verify.md, "One machine per session").
+set -u
+
+if [ $# -lt 6 ]; then
+    echo "usage: kube-exec-nth KUBECONFIG NAMESPACE DEPLOYMENT CONTAINER N SESSION COMMAND..." >&2
+    exit 2
+fi
+kubeconfig=$1
+ns=$2
+deploy=$3
+container=$4
+n=$5
+session=$6
+shift 6
+
+case $n in
+    '' | *[!0-9]* | 0*)
+        echo "kube-exec-nth: session $session: N must be a whole number from 1, not '$n'" >&2
+        exit 2
+        ;;
+esac
+
+selector=$(kubectl --kubeconfig "$kubeconfig" -n "$ns" get deployment "$deploy" \
+    -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}') || {
+    echo "kube-exec-nth: session $session: cannot read deployment $deploy in namespace $ns" >&2
+    exit 2
+}
+selector=${selector%,}
+pods=$(kubectl --kubeconfig "$kubeconfig" -n "$ns" get pods -l "$selector" \
+    --field-selector=status.phase=Running -o name) || {
+    echo "kube-exec-nth: session $session: cannot list the pods of $deploy in namespace $ns" >&2
+    exit 2
+}
+pods=$(printf '%s\n' "$pods" | sort)
+count=$(printf '%s\n' "$pods" | grep -c .)
+pod=$(printf '%s\n' "$pods" | sed -n "${n}p")
+if [ -z "$pod" ]; then
+    echo "kube-exec-nth: session $session wants replica $n of $deploy; Running pods: $count" >&2
+    exit 2
+fi
+exec kubectl --kubeconfig "$kubeconfig" -n "$ns" exec -i "$pod" -c "$container" -- "$@"

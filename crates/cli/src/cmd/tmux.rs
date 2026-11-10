@@ -120,6 +120,17 @@ fn tmux(args: &[String]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The pane's text, `tmux capture-pane -p -t <target>`: a read of the server's buffer that
+/// touches no process in the pane (air-o6x.2). None when tmux is absent or the target is not.
+pub fn capture_pane(target: &str) -> Option<String> {
+    tmux(&[
+        "capture-pane".into(),
+        "-p".into(),
+        "-t".into(),
+        target.into(),
+    ])
+}
+
 /// Live tmux session names. Empty when tmux is absent or no server is running.
 pub fn sessions() -> Vec<String> {
     tmux(&[

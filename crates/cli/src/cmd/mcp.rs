@@ -224,9 +224,11 @@ fn handle(ctx: &Ctx, msg: &Value) -> Option<Value> {
                 "serverInfo": {"name": "air", "version": env!("CARGO_PKG_VERSION")},
                 // The list is the conditions that EXIST, checked against `status::kinds::ALL`
                 // rather than against memory. `review-waiting` left with air-okc,
-                // `owner-decision-waiting` with air-uef. A surface describing something
-                // untrue is air-ha8's defect, and an MCP instructions string is a surface.
-                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, idle-without-claim, silent-with-claim, gone-with-claim, handover-not-green, landable, rewound-and-carried, closed-not-landed, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
+                // `owner-decision-waiting` with air-uef, `closed-not-landed` with air-4xj.3,
+                // which also renamed `handover-not-green` to `done-refused`. A surface
+                // describing something untrue is air-ha8's defect, and an MCP instructions
+                // string is a surface.
+                "instructions": "Air: hub and referee for the fleet. Tools mirror the `air` CLI. On the coordinator's session the channel delivers attention conditions (idle-with-claim, idle-without-claim, silent-with-claim, gone-with-claim, done-refused, landable, rewound-and-carried, lease-held-by-dead-session, lease-stale) as they arise. On every session Air launched, it also delivers the messages Air addresses to that session (meta from=\"air\"); .air/roles.md says what each one means for your role."
             }),
         ),
         "ping" => result(id, json!({})),
@@ -284,7 +286,7 @@ fn tool_defs() -> Vec<Tool> {
         },
         Tool {
             name: "air_handover",
-            description: "Is this worktree ready to hand over? Reports what is missing and the fixing command. Advisory.",
+            description: "Is this worktree ready to hand over? Reports what is missing and the fixing command; a pass names `air done`, the worker's declaration. Advisory.",
             schema: json!({"type":"object","properties":{"bead":{"type":"string"}}}),
         },
         Tool {
@@ -316,8 +318,15 @@ fn tool_defs() -> Vec<Tool> {
                 "drop":{"type":"string"}}}),
         },
         Tool {
+            name: "air_done",
+            description: "Declare beads done with proof and no green (worker or lane). Runs the hand-over gate minus its green checks (the bead's commit, your claim, a precheck where declared) and refuses naming what is missing. Records the proof on each bead as a comment and the head on your claim; the claim stays yours, and `air land` closes the bead once the base branch contains that head. One bd process per id.",
+            schema: json!({"type":"object","required":["bead","reason"],"properties":{
+                "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "reason":{"type":"string"}}}),
+        },
+        Tool {
             name: "air_close",
-            description: "Close beads and release their claims. A worker's or the lane's close runs the hand-over gate first and closes nothing if a bead fails it. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
+            description: "Close beads and release their claims: the coordinator's and the owner's. A worker's or the lane's close is refused and names `air done`, which declares with proof; the landing closes. Every id goes in ONE bd process, and bd costs about 1.4 s per process however many ids it is given, so close a landing pass in one call, not one call per bead.",
             schema: json!({"type":"object","required":["bead","reason"],"properties":{
                 "bead":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
                 "reason":{"type":"string"}}}),
@@ -443,19 +452,19 @@ fn call_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<(String, bool), Stri
                 (None, None) => return Err("give bead or drop".into()),
             }
         }
-        "air_close" => {
+        "air_close" | "air_done" => {
             let beads = list_arg(args, "bead");
             if beads.is_empty() {
                 return Err("bead is required".into());
             }
             let reason = str_arg(args, "reason").ok_or("reason is required")?;
-            argv.push("close".into());
+            argv.push(name.trim_start_matches("air_").into());
             argv.extend(beads);
             argv.extend(["--reason".into(), reason.into()]);
         }
         _ => return Err(format!("unknown tool: {name}")),
     }
-    let ids = if name == "air_close" {
+    let ids = if matches!(name, "air_close" | "air_done") {
         list_arg(args, "bead").len()
     } else {
         1
@@ -505,6 +514,7 @@ fn read_resource(ctx: &Ctx, uri: &str) -> Result<String, String> {
 ///   `claim_landed`).
 /// - `air release`: `bd show`, then the reopen.
 /// - `air close`: one `bd close` for every id (`close_all`).
+/// - `air done`: one `bd comment` per id, under the id count's budget (air-4xj.1).
 /// - `air triage`: one `bd show` for the bead it points at, under the probe budget, which is
 ///   never larger than the client's.
 /// - `air handover`: the `bd ready` that refreshes the Stop hook's ready list after the verdict.
@@ -515,7 +525,7 @@ fn bd_calls(tool: &str) -> u32 {
     match tool {
         "air_claim" => 6,
         "air_release" => 2,
-        "air_close" | "air_triage" | "air_handover" => 1,
+        "air_close" | "air_done" | "air_triage" | "air_handover" => 1,
         _ => 0,
     }
 }
@@ -702,7 +712,8 @@ fn deliver_loop(repo: &Path, out: &Out, every: Duration) {
 ///
 /// It was keyed by (worker, kind). Two beads of one kind on one worker then overwrote each
 /// other's fingerprint, so each looked changed on every tick: an adopter's coordinator was
-/// pushed `closed-not-landed` 417 times in a day for two beads, evaluated 11 times.
+/// pushed `closed-not-landed` (a condition since deleted, air-4xj.3) 417 times in a day for
+/// two beads, evaluated 11 times.
 pub type Pushed = BTreeMap<(&'static str, String), PushedAs>;
 
 #[derive(Debug, Clone)]
@@ -970,7 +981,7 @@ mod tests {
     fn two_subjects_of_one_kind_on_one_worker_push_once_each() {
         let cnl = |bead: &str| Attention {
             worker: "w1".into(),
-            kind: "closed-not-landed",
+            kind: "landable",
             detail: String::new(),
             for_minutes: 0,
             fingerprint: format!("{bead}/abc"),

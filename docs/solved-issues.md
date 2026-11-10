@@ -12,6 +12,38 @@ of being solved is listed under "Left out" at the end. Adopters are cited as "an
 
 ## Landing and the close gate
 
+**The landing could not close a done bead: beads refused the lane as the actor.**
+Seen: the 2026-11-09 pod trial, at every landing (11 landings, 0 beads closed by a landing, 28
+declarations accepted): `cannot close <bead>: assignee is "worker-N", actor is "lane"; reclaim
+or use --force to override`. Each bead closed only when its worker ran `air done` a second
+time, and the `main moved` notices said "done but waiting" of a head that was on main. The
+done probe's fake beads refused nothing, so it could not see it.
+Fix: the landing's close passes beads' `--force` (`crates/bd/src/lib.rs` `close_argv`,
+`crates/cli/src/cmd/land.rs` `close_done`, air-52u); a close beads refuses even so is reported
+as `done: bd refused to close`, in the notice as `done but refused`, never as waiting; and
+`air handover` names a missing precheck whatever the green, as `air done` does. Tests
+`the_landing_closes_a_held_done_bead_with_force_and_names_a_bd_refusal_apart_from_waiting` and
+`handover_and_done_agree_on_a_missing_precheck_under_a_batch_green` in
+`crates/cli/tests/claim_cli.rs`; the done probe's fake beads now refuses a forceless close by
+another actor.
+Do not: read "could not close" as "not on main"; pass the force anywhere but the landing
+(`air close` and `air reclaim` pass none, owner 2026-11-09).
+
+**A dependent bead was claimable before its dependency's code was on main.**
+Seen: the 2026-11-06 pod trial, the lease scenario: a worker closed its bead on the lane's
+batch green, one batch before the landing, and the bead that depended on it was claimable for
+the width of that batch while its code was on no branch but the author's. The same gap had
+held every dependent since the lane was introduced on 2026-09-28.
+Fix: a worker declares done instead of closing (`air done`, `crates/cli/src/cmd/done.rs`,
+air-4xj.1); the landing closes every declared bead whose head it put on main
+(`crates/cli/src/cmd/land.rs` `close_done`), a worker's `air close` is refused naming `air done`
+(air-4xj.2), and the `closed-not-landed` condition went with the state it read (air-4xj.3).
+Selftest probe `done: a bead declared done before the lane's green closes at the landing, and a
+dependent is refused until then`; test
+`done_declares_without_a_green_and_the_landing_closes_with_one_bd_process` in
+`crates/cli/tests/claim_cli.rs`.
+Do not: let any state a worker sets stand in for a landing.
+
 **A close in the seconds between the fast-forward and the landing row was refused.**
 Seen: an adopter, 2026-09-26/27 round on 0.4.10: 5 refusals in one day, each right after a
 "close them now" notice, each passing on a retry about 20 s later.
@@ -161,6 +193,24 @@ Do not: split reopen and unassign into two processes, or drop `--actor`.
 
 ## The lane and batches
 
+**After a red batch the lane cut one member alone on a guess, and the harmless member sat unlanded.**
+Seen: the 2026-11-09 pod trial, Red batch row: batch c9d658e4 of two went red; the lane cut
+`--only worker-2` on a guess (the kept log showed only `make: Error 1`), red again at fa1abdf9,
+and never cut worker-1, whose branch stayed `red-at-head` until its worker committed again
+(`.air/trial-report-2026-11-09-pods.md`). Nothing Air printed said which members had not been
+tested alone, and the split chose among the newest red batch's members only, so once a member
+cut alone had gone red, `--only` could not reach the others. The register has four red-split
+entries in six weeks.
+Fix: owner ruling 2026-11-09, each member of a red batch is verified alone.
+`batch::untested_alone` lists the members of the standing red batch of several that no run since
+has verified alone and no green since carries; `air record` after a non-green batch and
+`air status` print them with `next: air batch cut --only <first>`, and the split chooses among
+every `red-at-head` branch (`batch_cut::red_held_members`). Bead air-67q; tests
+`untested_alone_lists_the_members_no_run_has_verified_on_their_own`,
+`batch_cut_splits_a_red_batch_by_its_members`; probe `record: after a red batch of several, the
+members not yet verified alone and the --only cut for the first are listed until each has been`.
+Do not: pick the member for the lane, and do not hold the split's choice to the newest red batch.
+
 **`air batch cut` refused for good once the lane's green head fell behind main.**
 Seen: 2026-09-28 21:30Z, this repo, after the owner landed a worker by hand; the lane could
 neither cut nor land.
@@ -235,9 +285,79 @@ Fix: `permissions.allow: Bash(air land *)` on the lane's settings. Commit 32bfee
 **The lane piped `air land` into `tail`, the classifier refused it, and the session refused every later landing.**
 Seen: 2026-09-28 21:34Z, this repo; nothing landed for 45 minutes and the owner landed from a
 shell.
-Fix: the lane's whole loop is allowed bare (`crates/cli/src/cmd/launch.rs:413` `lane_allow`) and
+Fix: the lane's whole loop is allowed bare (`crates/cli/src/cmd/launch.rs:464` `lane_allow`) and
 roles.md tells it to run the commands with no pipe or redirect. Commit 7292918 (air-b1h8).
 Do not: add a pipe to a lane command; the allow rule matches only the bare line.
+
+**A worker's `air run` against a target was refused by the auto-mode classifier.**
+Seen: 2026-11-04, a worker's direct `kubectl exec` (air-kzt); 2026-11-05, a worker's bare
+`air run -- true` against a pod, twice, the second time with no reason given (air-tdh). A
+target for a worker was worth nothing, and each refusal cost a capture and a triage.
+Fix: the lane is the session that runs on a target, through its allowed `air record` line
+(`crates/cli/src/cmd/launch.rs:464` `lane_allow`); `air worker` passes the same kind of rule
+for `air run *` and `air record *` (`launch.rs:500` `worker_allow`, air-nyi), which a session
+launched before it gets on relaunch. The setup guide `docs/rules/remote-verify.md` says which
+session gets the target and why (air-mwj).
+Do not: give a target to a session that has no allow rule for the line and expect it to run;
+do not pipe or chain the line, which takes it back to the classifier.
+
+**Every `--pull` through `kubectl exec` was reported failed and recorded empty though the file arrived.**
+Seen: 2026-11-06, the pod trial (air-fzl), both pulls; reproduced from a worktree.
+Fix: the unpack is the verdict, as `kubectl cp`'s is: a sender killed by SIGPIPE after a good
+unpack (signal 13, or exit 141 from a shell) is the normal end, since the local tar stops at the
+end-of-archive marker and closes the pipe while the prefix writes the padding; a sender that
+exits with any other code is the target's `tar` failing and is reported with the code, because
+bsdtar exits 0 on an empty stream (GNU tar refuses one) (`crates/cli/src/cmd/run.rs` `pull::sender_failure`; air-b50,
+from `docs/research/pull-over-exec.md`). Tests: `a_sender_killed_by_sigpipe_is_not_a_failure_and_an_exit_code_is`,
+`the_unpack_is_the_verdict_and_a_sender_dying_of_sigpipe_is_the_normal_end` (a sender exiting
+141, one dying of signal 13, one exiting 2 with nothing sent, one stream cut mid-member).
+Do not: read a transport's exit as a pipeline's verdict after the receiver has finished.
+
+**A `targets` change was a landing, and the lane verified that very batch on the old target.**
+Seen: 2026-11-05, twice. The lane's first pod entry (air-tdh) landed in a batch the lane had to
+record `--local`, because the installed binary read `targets` from the main checkout and the
+entry was not there yet; the PATH fix to the same entry that evening went the same way. The
+committed entry also carried a user name, a kubeconfig path under one laptop's home and the
+pod's home path into the project's history.
+Fix: `.claude/air.local.json`, gitignored by the adopter, is read beside `.claude/air.json`
+from the main checkout and its top-level keys replace the committed file's
+(`crates/cli/src/cmd/handover.rs` `air_json`, `read_config`; air-aei). A machine's `targets`
+and allow lists live there and take effect when written. `air status` names an unknown key
+set there with the file, says once when the overlay does not parse (the committed file is read
+alone), and warns once if git tracks the overlay.
+Do not: write the overlay in a worktree, which is never read; commit the overlay, which lands
+one laptop's values; expect a nested merge, since a key replaces the committed key whole.
+
+**A run's output stayed in the target checkout and blocked the next checkout there.**
+Seen: the pod trial, 2026-11-06 (air-fzl). A worker's `air run --pull` wrote `out-1.txt` on its
+pod, the worker committed the pulled file, and its `air record precheck` for that commit
+failed at the checkout step on the pod: git refused to overwrite the untracked file the
+commit now tracked, and nothing was recorded. Under a precheck gate the bead was stuck; with
+no precheck, the lane's verify of any batch holding that commit would fail the same way.
+Fix: `prepare_target` runs `git clean -qfd` and a forced detached checkout before the command
+(`crates/cli/src/cmd/run.rs`, air-32u), so the target holds only commits; no `-x`, so ignored
+files (a build directory, the gitignored files the setup guide has the adopter copy there)
+stay. The test in `run_cli.rs` writes a result, commits it, and runs again at that commit.
+Do not: keep unignored, untracked state on a target between runs, which is removed; put the
+gitignored files the check reads anywhere but under an ignore rule, which is what keeps them.
+
+**The row `air land` wrote at the landed sha carried no machine while the green it copied named the pod.**
+Seen: 2026-11-05, rows 01M6MWQ7WQ8PJ2KT3CH9R4G3Z0 and 01M6MWRMFZDE5ZFAWK2PFJM5J5: the machine is
+stamped beside a verify row, not held in it, so the struct copy left hostname, image, arch,
+nproc and cpu empty.
+Fix: the landing reads the machine of the green it selected, never the newest row at that
+head, and stamps it on the new row (`crates/cli/src/cmd/land.rs` `record_landing_green`;
+air-2w6). The landing test in `claim_cli.rs` asserts the two machines are equal. SURFACE
+`landing-row-names-the-machine`.
+Do not: take the machine from the newest row at the head, which may be a red on another machine.
+
+**The run row's CPU column was empty on arm64 Linux.**
+Seen: 2026-11-05, the first full pod verify (aarch64, Neoverse-V2): `/proc/cpuinfo` has no
+`model name` line there, so the probe stored an empty cpu and the run test was red on the pod.
+Fix: the probe's CPU field falls back from `model name` to `lscpu`'s `Model name:`, then to
+`CPU implementer` and `CPU part` joined, then to macOS `sysctl` (`crates/cli/src/cmd/run.rs`
+`PROBE`; air-c14), still one `sh -c` argument and five lines. SURFACE `machine-probe-arm64-linux`.
+Do not: read one `/proc/cpuinfo` key as the CPU model; the line set differs by architecture.
 
 **`idle-without-claim` offered the lane 58 beads 945 s into a batch verify.**
 Seen: an adopter's lane, 2026-09-06.
@@ -259,6 +379,17 @@ or closed (ledger `closed_claims`, no bd); `air status` prints `<id>: closed, wa
 lane`. Commit cba816b (air-voeb); test `a_closed_bead_not_on_main_is_batch_ready_and_named`;
 SURFACE `closed-bead-batch-ready`.
 Do not: require a held claim for a branch whose commits name a closed, unlanded bead.
+
+**Under a lane, a worker's own green took its branch out of the batch, and nothing landed it.**
+Seen: an adopter, 2026-10-28: a worker ran `air record verify` anyway, its branch became landable
+(green at a head containing main), `batch_ready_rule` exited on `green-at-head`, the lane got no
+notice, and `air land` is refused to workers and the coordinator under a lane. The bead sat closed
+and unlanded until the coordinator told the lane to land it by hand.
+Fix: the `green-at-head` exit is gone from `batch_ready_rule` (`crates/cli/src/cmd/status.rs`), so
+a green worker branch is batched like any other. A landed head, a head in a running batch, and a
+red or dropped head still leave the set, so nothing is cut twice. Commit: air-757; test
+`status_lists_batch_ready_branches_as_a_fact`; SURFACE `green-branch-batch-ready`.
+Do not: take a worker branch out of the batch for being green.
 
 **Every bead's `CHANGELOG.md` line conflicted with every other branch's: nine lane drops in one day.**
 Seen: 2026-09-28, this repo; each drop cost the worker a merge, a resolve and a re-verify, and
@@ -292,7 +423,31 @@ by cut or by hand, frees the good member and the red one waits for a commit. Com
 the model test covers the ordering.
 Do not: offer a member of a red batch again before it moves or a green carries it.
 
+**A red batch could not be split: its members were already out of the set the split chose from.**
+Seen: 2026-11-03, this repo: batch a2bb0ea8 (worker-1, worker-2) went red on worker-2's merge
+resolution; the lane ran `air batch cut --only worker-1` and was refused, "nothing to merge ...
+held: worker-1 ... was in a batch that went red". `select` (air-5fo5) filtered the batch-ready
+list, and `red_held` (air-vdst) had already taken every member out of it; the two landed the same
+day and were never run together. The innocent worker made a content-free commit to get back in.
+Fix: a split (`--only` or `--without` given) chooses among the batch-ready branches plus the
+members of the newest standing red batch at their red-held heads (`red_held_members` in
+`crates/cli/src/cmd/batch_cut.rs`, from `NotBatchReady.if_split`, which `status::batch_ready_for`
+fills for a `red-at-head` head by asking the rule again with the red set aside). A bare cut sees
+none of them. Commit: air-jk2; test `batch_cut_splits_a_red_batch_by_its_members`; SURFACE
+`split-takes-red-members`.
+Do not: let a bare `air batch cut` offer a red member; do not let a split take a head the red
+did not record.
+
 ## Sessions and liveness
+
+**`air status` showed the coordinator's model as Opus while it ran Fable.**
+Seen: the 2026-11-09 pod trial: the model column came from the first transcript line carrying
+the `model` key, whatever the record's kind, and a request-shape record that quoted a model id in
+a tool schema came first; a `/model` switch after launch never showed.
+Fix: only an assistant record counts, and the newest one wins (`crates/cli/src/cmd/hook.rs`
+`model_in_transcript`, `model_of`; the next hook of each session rewrites the recorded model).
+Bead air-ius, SURFACE `model-from-assistant-records`.
+Do not: read a session's model from any record kind but an assistant one, or from the first.
 
 **A dead registration with a reused pid read as alive and got most of the ready notices.**
 Seen: an adopter, 2026-09-27: a pid from 2026-08-31 was a `<defunct>` process; that row was
@@ -306,8 +461,8 @@ Do not: decide liveness from pid existence.
 **`STOPPED at <t>` stuck 16.5 h after the session resumed; a 6 h permission prompt showed running; 491 SubagentStop events flipped the parent idle; ages read negative.**
 Seen: an adopter, 0.4.10 round.
 Fix: a sticky fact holds only until the session's next own event
-(`crates/cli/src/cmd/status.rs:2678` `sticky_holds`); `waiting for the person since <t>` after a
-prompt notification (`hook.rs:537` `is_waiting_kind`); subagent hooks never change the parent;
+(`crates/cli/src/cmd/status.rs:2830` `sticky_holds`); `waiting for the person since <t>` after a
+prompt notification (`hook.rs:549` `is_waiting_kind`); subagent hooks never change the parent;
 one clock read. Commit cb7489b (air-n9f3); test `sticky_facts_yield_to_the_sessions_next_own_event`.
 Do not: let whichever hook fires last write the session state.
 
@@ -347,7 +502,7 @@ for the owner is a bead labelled `owner`. Commit 101bb44 (air-jcfb).
 **The model column showed `[?]` for every launched session.**
 Seen: 2026-09-28, checked on the coordinator's own transcript: the first assistant line was past
 the 64 KB the reader stopped at.
-Fix: `model_of` reads to the first model line (`crates/cli/src/cmd/hook.rs:1057`). Commit
+Fix: `model_of` reads to the first model line (`crates/cli/src/cmd/hook.rs:1086`). Commit
 a4830c0 (air-06k7); test `the_model_is_found_past_the_first_64_kb`.
 
 **A hook fired from a fixture wrote a session row that raised channel conditions.**
@@ -374,6 +529,39 @@ Fix: with no tty, Air spawns `tmux new-session -d` itself. Commit 1c01f66 (air-t
 Seen: 0.4.1 live trial, 2026-09-25.
 Fix: each launch approves the `air` server in its own settings (`enabledMcpjsonServers`).
 Commit 3a9a9ba (air-oe9k).
+
+**The trial coordinator, told to read its request from a file, waited hours on the refused read.**
+Seen: 2026-11-05, the pod trial (air-fzl): the auto-mode classifier refused its `cat
+.air/trial-request.md`, and the pane sat with the owner's answer typed and unsent. The
+2026-11-03 trial needed the owner at launch too.
+Fix: `make trial` passes the request text as the coordinator's launch prompt, `air coordinator
+-- "<text>"`, a positional that now leads argv the way a worker's task prompt does (air-2ct;
+`crates/cli/src/cmd/launch.rs` `leading_prompt`), answers the development-channels prompt in
+each pane with the recorded Enter, and takes a fixed `TRIAL_DIR` the owner trusts once
+(`scripts/trial.sh`; air-fkb).
+Do not: make a launched session's first step a file read; the classifier judges it like any
+other command.
+
+**The trial stopped on the folder-trust dialog, three times in two days.**
+Seen: 2026-11-05 (air-fzl) and twice on 2026-11-06: the launcher refused the untrusted copy, or
+five panes sat on the dialog, until the owner ran `claude` there and accepted; hours each.
+Fix: `make trial` marks its scratch copy trusted itself before any session starts
+(`scripts/trial/trust-copy.py`: one key, `projects[<copy>].hasTrustDialogAccepted`, under the
+path's physical form, every other key as it was, temp file and rename; air-zau, owner ruling
+2026-11-07). The launcher still refuses an untrusted repository and never writes the key.
+Do not: have the launcher or `air fleet up` write trust for a directory the coordinator was
+pointed at; the key is written only for a directory the trial script built from Air's example.
+
+**The trial coordinator waited hours at the base-branch row for the owner to rename `main`.**
+Seen: 2026-11-06, the pod trial: ten scenarios closed untouched, then the request's last row
+said "ask the owner" to rename the copy's `main` to `trunk` and set `base_branch`, and the
+coordinator refused to edit "the owner's checkout" and asked.
+Fix: the row says the copy is scratch and its main checkout is the coordinator's to edit, and
+gives the three commands; `git branch -m main trunk` from the coordinator's worktree moves the
+main checkout's `HEAD` with it, and `air status` prints `base branch: trunk` once the key is
+committed there (`scripts/trial/request.md`; air-3hw).
+Do not: write a step for a person into the trial request; `make trial` is meant to reach
+`.air/trial-report.md` with nobody typing (air-fkb).
 
 **`air fleet up` started a second claude in every worker's worktree after the project name changed.**
 Seen: twice on 2026-09-28 (22:15Z and 23:59Z), this repo: `"project": "ai_runner"` landed, the
@@ -406,7 +594,7 @@ one worker (air-fd8p).
 **A worker that joined, or finished its claim, while beads were already ready was never told.**
 Seen: 2026-09-28 (air-oerm); the notice went out only when the set changed.
 Fix: a worker newly without a claim is told the set as it stands, once
-(`crates/cli/src/cmd/fanout.rs:128` `fan_out_ready`). Commit fbe623d.
+(`crates/cli/src/cmd/fanout.rs:87` `fan_out_ready`). Commit fbe623d.
 
 **Three idle workers all tried the same first bead.**
 Seen: 0.4.9 live trial, 2026-09-26.
@@ -417,6 +605,16 @@ Fix: the list is rotated within each priority group by the recipient's position.
 Seen: 0.4.10 live trial.
 Fix: the notice and the peer-held refusal say the list is a snapshot and point at `bd ready`.
 Commit ced8a06 (air-0blv).
+
+**The ready notice still listed beads a peer already held, and workers claimed from it.**
+Seen: 2026-11-06 trial: worker-1 lost three claim races and worker-2 two on ids the notice
+carried, with the snapshot sentence above it; each refusal was clear and cost one call.
+Fix: the notice carries a count and `bd ready`, never ids (`crates/cli/src/cmd/fanout.rs`
+`beads_ready_text`, air-bcg); `bd ready` answers in about 0.12 s. The per-recipient rotation
+of the list (the entry two above) went with the list, since there is nothing to rotate.
+Do not: put a bead id in a notice that is read later than it is sent. Watch: refused claims on
+the first bead of `bd ready` in `air audit`; if a round brings the 0.4.9 race back, the spread
+returns as a start position, not as a list.
 
 **Only the coordinator had a channel, so the lane and workers learned things on their 5-minute wakes.**
 Seen: 2026-09-26 live trial: a bead waited minutes between done and closed; the coordinator
@@ -467,6 +665,17 @@ Seen: an adopter: 156 deliveries in a day, 247 `no-precheck` lines over 162 head
 while the precheck was already running.
 Fix: the notice and the event line are deleted; `air status` still names `no-precheck`. Commit
 a5f8666 (air-aepb).
+
+**`closed-not-landed` named the landing reason while the lane was waiting on a precheck.**
+Seen: 2026-11-06 pod trial: a worker closed on its own verify with no green precheck at its
+head, the notice said "does not contain main", the worker merged main, the lane cut nothing,
+and the coordinator found `no-precheck` in `air status` and messaged the worker; about 5
+minutes.
+Fix: the same condition's detail carries the first batch-ready fact the branch lacks, with its
+fix, when there is one (`crates/cli/src/cmd/status.rs` `ClosedNotLanded::not_batch_ready`,
+air-zni). The key stays (bead, head), so it is pushed once per head, not per cut.
+Do not: push the precheck reason per cut (the entry above), and do not add a notice to the
+worker for it; the lane says nothing and the coordinator reads one line.
 
 **The `landable` condition was raised for the lane's own branch and offered `air land --all`.**
 Seen: 0.4.8 live trial, 2026-09-26.
@@ -535,6 +744,17 @@ Fix: the gate distinguishes Missing, Untracked and Tracked. Commit 9024929 (air-
 Seen: 0.4.6 live trial, 2026-09-26, D4.
 Fix: redirections are stripped before matching. SURFACE `lease-sees-redirects`.
 
+**The lease gate refused `air lease take X --reason "..." && <cmd>` as a whole.**
+Seen: the 0.4.7 and 0.4.8 live trials, and again on 2026-11-06 (worker-1 and worker-2, two
+`lease-needed` refusals in `air audit`). Each worker read the advice and split the line, so the
+cost was one retry per worker, in three trials.
+Fix: a take of the same resource earlier on the line, joined to the command by `&&` all the way,
+counts as holding it: a refused take stops the chain before the command runs. A `;`, `||`, `|`
+or newline between them, a take for another resource, or a second uncovered run of the command
+is still refused (`crates/cli/src/cmd/lease.rs` `needs`, `taken_before`). SURFACE
+`lease-take-on-the-line` (air-643).
+Do not: refuse a line for what it reads before the take has run, when the take itself decides.
+
 **The peer warning dated nothing, so a live edit and a fortnight-old one read the same.**
 Seen: 2026-09-06.
 Fix: `is also journaled by w3 (14 d ago)`. Commit 1654748 (air-et0o).
@@ -578,6 +798,8 @@ come from `bd_cache` and one line says they are stale. Commit 713e411 (air-19u).
 **A grandchild holding the pipe open turned a 2 s budget into a 25 s wait.**
 Seen: 2026-08-21, in the full test run.
 Fix: drain threads are not joined after a timed-out bd is killed. Commit 008fa85 (air-19u).
+The git path (`crates/cli/src/git.rs` `wait_drained_with`) keeps the join and records the same
+shape as a known gap with its condition (air-dj7); no git call has been recorded stalling this way.
 
 **A child writing more than 64 KB blocked against `wait_timeout` and was killed as a hang.**
 Seen: 2026-08-20: `git status` on a busy worktree, `air status --json` on a full ledger.
@@ -713,7 +935,9 @@ Fix: each failed launch is named and the event reads `fleet / incomplete`. Commi
 **Tests that spawn `air` inherited the launcher's `AIR_ROLE`, so verify was red from every fleet session and nothing could land.**
 Seen: 2026-09-28, found by the lane: every batch, including main's own tree, red on `mcp_stdio`.
 Fix: one helper strips `AIR_*` and `BEADS_ACTOR` from every spawn
-(`crates/cli/tests/common/mod.rs:17` `command`). Commit 4312544 (air-8o59).
+(`crates/cli/tests/common/mod.rs:25` `command`), and since air-xiu gives every spawn a git identity of
+its own with no global git config, so a test passes and fails the same on every host. Commits
+4312544 (air-8o59), d82ad16 (air-xiu).
 Do not: call `Command::new` directly in `crates/cli/tests`.
 
 **A test asserted a fixed 3 s bar and went red under load.**
@@ -750,7 +974,7 @@ and zero FAIL. Commit b2426f7 (air-g7e).
 
 **A test asserted the fixture's `AIR_PROJECT` only while the ambient one was unset, and hid a bug that blocked every landing.**
 Seen: 2026-08-22.
-Fix: `project_from(env, cwd)` (`crates/cli/src/cmd/hook.rs:1016`) tested without touching the
+Fix: `project_from(env, cwd)` (`crates/cli/src/cmd/hook.rs:1045`) tested without touching the
 environment; the sweep runs with every launcher variable set. Commit 4dc5732 (air-7ah).
 
 **A blocking `read_line` hung the MCP test for minutes instead of failing at its deadline.**
@@ -796,10 +1020,18 @@ Fix: commit 6111ebe.
 **A selftest probe's synthetic hook inherited `CLAUDE_PID` and registered a worker as a live session owned by the claude running the suite.**
 Seen: 2026-09-29, the lane's batch red at 2a4ffa8: the probe "env reaches the hook" went
 BLOCKED because `air worker w` then read worker w as running.
-Fix: `air_command` (`crates/cli/src/cmd/selftest.rs:81`) and the tests' `common::command`
-(`crates/cli/tests/common/mod.rs:22`) clear `CLAUDE_PID` with the `AIR_*` variables. Commit
+Fix: `air_command` (`crates/cli/src/cmd/selftest.rs:82`) and the tests' `common::command`
+(`crates/cli/tests/common/mod.rs:25`) clear `CLAUDE_PID` with the `AIR_*` variables. Commit
 b5f287c (air-4n5t).
 Do not: let a spawned probe or test inherit a variable a hook reads as its session's identity.
+
+**`air selftest`'s base_branch probe landed without a git identity and was red on a host with no global git config.**
+Seen: 2026-11-04, the first Linux verify: `air land` builds its commit with `git commit-tree`,
+which exited 128 with the author identity unknown.
+Fix: every `air` a probe spawns carries the identity its git fixtures set, from one constant
+(`crates/cli/src/cmd/selftest.rs:75` `GIT_IDENTITY`). Commit e3e8610 (air-3sh). SURFACE
+`selftest-git-identity`.
+Do not: let a probe's `air` take its identity from the host's global git config.
 
 **The bd-server probe and the tmux launch test waited a fixed 10 s for a freshly written executable, and went red under fleet load.**
 Seen: 2026-09-28, worker-2 at 7789c160 with three sessions verifying: the keep-alive probe
@@ -925,7 +1157,6 @@ landed Air change. The coordinator can check each.
   f9f6071): no incident detail beyond the subject line.
 - `air fleet stop` (air-1vri.1): an owner request; "one SendMessage per session" is not a
   recorded failure.
-- A lease refusal for `air lease take X && <cmd>` (CHANGELOG): no incident detail.
 - The `dated-cutoffs` doctor report: superseded by deleting the fallbacks (air-jsee); listed
   above under tests.
 - `stuck`, `cross-project-fence`, `gone-with-claim` history and `owner-decision-waiting`:

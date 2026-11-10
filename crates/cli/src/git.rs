@@ -146,7 +146,17 @@ fn wait_drained_with(
         None => {
             kill(&mut child);
             let _ = child.wait();
-            // Pipes close when the child dies; the drain threads finish.
+            // The pipes close when the child dies, and the drain threads finish then.
+            //
+            // Known gap (air-dj7): they close only when every holder of a write end has
+            // exited. A grandchild inherits them, so on Linux a killed git whose helper
+            // (ssh, a credential helper, a pager) is still running stalls this call for the
+            // helper's lifetime, not the budget. The first Linux run of the suite hit it
+            // through `sh -c "sleep 5"`, which forks `sleep` there and execs it on macOS.
+            // The bd crate's twin of this function detaches instead (air-19u) and the mcp
+            // path kills the whole group (air-se4n); no git call has been recorded stalling
+            // this way. Bound the drain here, or spawn git as a group leader and use
+            // `wait_drained_group`, when a hook or status call is recorded doing that.
             let _ = out_t.join();
             let _ = err_t.join();
             return Ok(None);
@@ -177,8 +187,10 @@ pub fn head(cwd: &Path) -> Result<String> {
 /// A branch ref reads identically from every worktree, so this asserts nothing about where a
 /// future `air land` will run — which is why `Site` is still deliberately not built in
 /// `status::select`.
-pub fn main_tip(cwd: &Path) -> Result<String> {
-    run(cwd, &["rev-parse", "main"])
+///
+/// air-h7l: the ref is the base branch, `main` unless `.claude/air.json` sets `base_branch`.
+pub fn base_tip(cwd: &Path) -> Result<String> {
+    run(cwd, &["rev-parse", &crate::cmd::handover::base_branch(cwd)])
 }
 
 pub fn toplevel(cwd: &Path) -> Result<PathBuf> {
@@ -311,8 +323,11 @@ mod drain_tests {
     #[test]
     fn a_real_hang_is_killed_and_reported() {
         const STALL: Duration = Duration::from_secs(5);
+        // `exec`, so the pid killed is `sleep` on every sh. Without it Linux forks `sleep`
+        // as a grandchild holding the pipes, and the join above waits the whole stall
+        // (air-dj7, the first pod verify); macOS execs a lone command on its own.
         let child = Command::new("sh")
-            .args(["-c", &format!("sleep {}", STALL.as_secs())])
+            .args(["-c", &format!("exec sleep {}", STALL.as_secs())])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

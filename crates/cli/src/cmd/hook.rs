@@ -223,12 +223,22 @@ impl Dispatched {
 /// flag, and the launcher's task prompt is not an option because a worker launched with no task
 /// gets no prompt at all (`probe_no_task_no_prompt`). So it is said, once, here.
 ///
+/// Owner, 2026-11-02 (air-8wy): the heartbeat is opt-in. Two owners had it cancelled within
+/// the hour because each firing printed a line they read past, so the instruction is said only
+/// where `.claude/air.json` sets `heartbeat_minutes`. Remove the key and this text when the
+/// harness resumes a limited session with no timer.
+///
 /// Owner, 2026-09-26: only the coordinator is told. Air's channel notices reach workers and
 /// the lane, and the coordinator's heartbeat notices a session that did not come back.
-const WAKE_CONTEXT: &str = "air: create your 5-minute heartbeat now if you have none \
-    (`CronCreate`, every 5 minutes, prompt: \"run `air status`; if you owe work, continue it; \
-    otherwise say nothing\"). It is what brings this session back after an account limit \
-    resets, and it stays silent when there is nothing to do. See .air/roles.md.";
+fn wake_context(minutes: u64) -> String {
+    format!(
+        "air: this repo asks for a coordinator heartbeat; create it now if you have none \
+        (`CronCreate`, every {minutes} minutes, prompt: \"run `air status`; if you owe work, \
+        continue it; otherwise say nothing\"). It is what brings this session back after an \
+        account limit resets, and it stays silent when there is nothing to do. See \
+        .air/roles.md."
+    )
+}
 
 fn dispatch(
     ledger: &Ledger,
@@ -253,7 +263,9 @@ fn dispatch(
             Dispatched::new(
                 HookOutcome::Allow {
                     context: (prev.is_none() && role == "coordinator")
-                        .then(|| WAKE_CONTEXT.to_string()),
+                        .then(|| super::handover::heartbeat_minutes(cwd))
+                        .flatten()
+                        .map(wake_context),
                 },
                 dec::SESSION_START_REGISTERED,
                 transition(&prev, &state),
@@ -798,7 +810,7 @@ pub fn lease_gate(
         };
         rows.push(serde_json::json!({
             "resource": n.resource, "pattern": n.pattern, "holder": holder,
-            "held": s == Standing::Mine,
+            "held": s == Standing::Mine, "taken_on_line": n.taken,
         }));
         if let Some(a) = advice(n, &s, worker) {
             missing.push(a);
@@ -807,28 +819,45 @@ pub fn lease_gate(
     let inputs = serde_json::json!({"command": cmd, "enforce": enforce, "needs": rows});
     let denominator = format!("{} lease(s) needed", need.len());
     if missing.is_empty() {
+        // A need whose `air lease take <resource>` runs earlier on the line, joined by `&&`,
+        // counts as held (air-643): a refused take stops the chain before the command.
+        let reason = if need.iter().any(|n| n.taken) {
+            "every lease the command needs is held or taken earlier on the line"
+        } else {
+            "every lease the command needs is held"
+        };
         return Ok(Some(
             Dispatched::new(
                 HookOutcome::Allow { context: None },
                 dec::PRE_TOOL_USE_LEASE_HELD,
-                "every lease the command needs is held",
+                reason,
             )
             .inputs(inputs)
             .denominator(denominator),
         ));
     }
-    // 0.4.7 and 0.4.8 trials: `air lease take X && <cmd>` is refused as a whole, because the
-    // line is checked before any of it runs.
+    // The 0.4.7 and 0.4.8 trials and the 2026-11-06 round refused `air lease take X && <cmd>`
+    // as a whole (air-643). That shape now counts; a take still on the line but not counted is
+    // for another resource, or not joined to the command by `&&` all the way.
     if super::lease::segments(cmd)
         .iter()
-        .any(|s| s.starts_with("air lease take"))
+        .any(|s| super::lease::take_resource(s).is_some())
     {
-        missing.push(
-            "This line also runs `air lease take`, and this check reads the whole line before \
-             any of it runs: run `air lease take <name> --reason \"<why>\"` as its own Bash call \
-             first, then this command."
-                .to_string(),
-        );
+        let wanted = need
+            .iter()
+            .filter(|n| !n.taken)
+            .map(|n| {
+                format!(
+                    "`air lease take {} --reason \"<why>\" && {}`",
+                    n.resource, n.segment
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        missing.push(format!(
+            "This line also runs `air lease take`, which counts only as {wanted}: the take \
+             for that resource, then `&&`, then the command, with nothing but `&&` between."
+        ));
     }
     let msg = format!("air: {}", missing.join("\n"));
     let (outcome, decision) = if enforce {
@@ -1031,36 +1060,47 @@ pub fn project_for(cwd: &Path) -> String {
 /// caller can put the transition on the event line. `worker`/`role` are updated on every
 /// hook: `claude --worktree` can fire SessionStart with `cwd` still at the main checkout, and
 /// a row stuck on `main` made a live worker look gone (the adopter).
-/// air-air: the model a session is running, read out of its own transcript.
+/// air-air, air-ius: the model a session is running, read out of its own transcript.
 ///
 /// Recorded rather than inferred, and that is the whole point of the bead: a session launched
 /// with no `--model` inherits whatever the settings happen to hold, so anything Air derived from
 /// a config file would be a guess dressed as a fact. The transcript carries `"model":"<id>"` on
-/// every assistant message, and the FIRST one is the model the session launched with, which is
-/// what the coordinator is asking.
+/// every assistant record, and the newest one is the model the session runs now, which is what
+/// the coordinator is asking.
 ///
-/// Pure: it is handed one line at a time by [`model_of`], which stops at the first match.
-pub fn model_in_transcript(head: &str) -> Option<String> {
-    let key = "\"model\":\"";
-    let start = head.find(key)?.checked_add(key.len())?;
-    let rest = head.get(start..)?;
-    let end = rest.find('"')?;
-    let id = rest.get(..end)?;
+/// Pure: one transcript line in, the model it names when it is an assistant record. Only an
+/// assistant record counts (air-ius): other record kinds carry the key too, such as a request
+/// shape whose tool schema text mentions a model id, and a substring match on any line showed
+/// the coordinator as Opus while it ran Fable (2026-11-09).
+pub fn model_in_transcript(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return None;
+    }
+    let id = v.get("message")?.get("model")?.as_str()?;
     (!id.is_empty()).then(|| id.to_string())
 }
 
-/// The transcript read line by line up to the first line that names a model (air-06k7). It
-/// read the first 64 KB, and a launched session's first assistant line sits past that, behind
-/// the appended role text, so every launched session showed `[?]`. Reading stops at the first
-/// match, which is near the top; a file with no assistant line yet yields None and the next
-/// hook tries again.
+/// The transcript read line by line to the end, keeping the newest assistant record's model
+/// (air-ius), so a `/model` switch after launch shows on the next hook. A line without
+/// `"type":"assistant"` is skipped before any parse, so the cost is one JSON parse per
+/// assistant record. The read is not bounded by size: it read the first 64 KB once, and a
+/// launched session's first assistant line sits past that, behind the appended role text, so
+/// every launched session showed `[?]` (air-06k7). A file with no assistant record yet yields
+/// None and the next hook tries again.
 pub fn model_of(path: Option<&str>) -> Option<String> {
     use std::io::BufRead;
     let f = std::fs::File::open(path?).ok()?;
     std::io::BufReader::new(f)
         .split(b'\n')
         .map_while(Result::ok)
-        .find_map(|line| model_in_transcript(&String::from_utf8_lossy(&line)))
+        .filter_map(|line| {
+            let line = String::from_utf8_lossy(&line);
+            line.contains("\"type\":\"assistant\"")
+                .then(|| model_in_transcript(&line))
+                .flatten()
+        })
+        .last()
 }
 
 fn set_session(
@@ -1167,6 +1207,28 @@ mod tests {
             Some("claude-opus-5-5")
         );
         std::fs::write(&path, &user).unwrap();
+        assert_eq!(super::model_of(path.to_str()), None);
+    }
+
+    /// air-ius: the model is the newest assistant record's, and a record of another kind that
+    /// carries the key is not read. The coordinator's transcript had a request-shape record
+    /// naming an Opus id before its first assistant record, and a `/model` switch after launch.
+    #[test]
+    fn the_model_is_the_newest_assistant_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let lines = concat!(
+            "{\"type\":\"api-request-shape\",\"schema\":\"{\\\"model\\\":\\\"claude-opus-5-5\\\"}\",\"model\":\"claude-opus-5-5\"}\n",
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-fable-5-1\"}}\n",
+        );
+        std::fs::write(&path, lines).unwrap();
+        assert_eq!(
+            super::model_of(path.to_str()).as_deref(),
+            Some("claude-fable-5-1")
+        );
+        // Only the non-assistant record: no model, so the recorded one is left alone.
+        std::fs::write(&path, lines.lines().next().unwrap()).unwrap();
         assert_eq!(super::model_of(path.to_str()), None);
     }
 
@@ -1493,7 +1555,14 @@ mod tests {
                 _ => None,
             }
         };
-        assert!(start("c", "coordinator", "coordinator").is_some_and(|c| c.contains("CronCreate")));
+        // air-8wy: opt-in. No key, no instruction.
+        assert_eq!(start("c0", "coordinator", "coordinator"), None);
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        std::fs::write(repo.join(".claude/air.json"), r#"{"heartbeat_minutes": 7}"#).unwrap();
+        assert!(
+            start("c", "coordinator", "coordinator")
+                .is_some_and(|c| { c.contains("CronCreate") && c.contains("every 7 minutes") })
+        );
         assert_eq!(start("w", "worker", "w1"), None);
         assert_eq!(start("l", "lane", "lane"), None);
     }
@@ -1722,7 +1791,7 @@ mod tests {
         };
         let ids = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
         let fan = |set: &[&str], at: &str| {
-            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), &[], at)
+            crate::cmd::fanout::fan_out_ready(&ledger, "coordinator", &s, &ids(set), at)
         };
         assert!(
             fan(&[], "2026-09-26T22:20:00Z").is_empty(),

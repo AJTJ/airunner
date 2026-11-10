@@ -149,8 +149,13 @@ pub struct Issue {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShownDep {
+    /// `id` in `bd show --json`; `depends_on_id` in `bd list --json`, whose edge objects name
+    /// the bead by that key and carry no status (air-o6x.3: the board reads one list call).
+    #[serde(alias = "depends_on_id")]
     pub id: String,
     pub status: String,
+    /// `dependency_type` in `bd show --json`; `type` in `bd list --json`.
+    #[serde(alias = "type")]
     pub dependency_type: String,
 }
 
@@ -227,11 +232,14 @@ pub trait WorkLedger {
     /// `bd close [id...]` with "one --reason for all IDs" (`bd close --help`, read
     /// 2026-08-22). The per-process cost is the whole cost (see [`stats`]), so closing ten
     /// beads one at a time cost ten times what this costs (air-869).
-    fn close_all(&self, ids: &[String], reason: &str, actor: &str) -> Result<()>;
+    ///
+    /// `force` is bd's `--force` (air-52u). bd 1.3.0 refuses to close a bead whose assignee
+    /// is not the actor without it, and the lane's landing closes as `lane` what a worker
+    /// holds: every landing of the 2026-11-09 trial was refused that way. The landing passes
+    /// it; `air close` and `air done` pass none (owner, 2026-11-09: the force is the landing's).
+    fn close_all(&self, ids: &[String], reason: &str, actor: &str, force: bool) -> Result<()>;
 }
 
-/// The argv for a batched close: one process, every id, one reason. Pure so the count of
-/// processes is checkable without running bd (`air selftest`).
 /// The one bd process a release makes (air-0kk): status back to open and the assignee
 /// cleared together, so the two cannot be left half-applied and a released bead is claimable
 /// by anyone. Pure, so `air selftest` can read it.
@@ -296,7 +304,10 @@ pub fn dep_list_argv(ids: &[String]) -> Vec<String> {
     v
 }
 
-pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
+/// The argv for a batched close: one process, every id, one reason, and `--force` last when
+/// asked (air-52u). Pure so the count of processes and the flag are checkable without running
+/// bd (`air selftest`).
+pub fn close_argv(ids: &[String], reason: &str, actor: &str, force: bool) -> Vec<String> {
     let mut v: Vec<String> = vec!["close".to_string()];
     v.extend(ids.iter().cloned());
     v.push("--reason".to_string());
@@ -304,6 +315,9 @@ pub fn close_argv(ids: &[String], reason: &str, actor: &str) -> Vec<String> {
     if !actor.is_empty() {
         v.push("--actor".to_string());
         v.push(actor.to_string());
+    }
+    if force {
+        v.push("--force".to_string());
     }
     v
 }
@@ -610,8 +624,8 @@ impl WorkLedger for BdCli {
         self.run(&["comment", id, text]).map(|_| ())
     }
 
-    fn close_all(&self, ids: &[String], reason: &str, actor: &str) -> Result<()> {
-        let argv = close_argv(ids, reason, actor);
+    fn close_all(&self, ids: &[String], reason: &str, actor: &str, force: bool) -> Result<()> {
+        let argv = close_argv(ids, reason, actor, force);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
         self.run_for(&args, self.budget(ids.len())).map(|_| ())
     }
@@ -620,6 +634,25 @@ impl WorkLedger for BdCli {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    /// air-o6x.3: the edge objects of `bd list --json` name the bead as `depends_on_id` and the
+    /// edge as `type`; `bd show --json` says `id` and `dependency_type`. One struct reads both.
+    #[test]
+    fn a_shown_dependency_reads_the_list_shape_and_the_show_shape() {
+        let list: super::ShownDep = serde_json::from_str(
+            r#"{"issue_id":"zz-5","depends_on_id":"zz-2","type":"blocks","created_at":"t"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (list.id.as_str(), list.dependency_type.as_str()),
+            ("zz-2", "blocks")
+        );
+        let show: super::ShownDep = serde_json::from_str(
+            r#"{"id":"zz-2","status":"open","dependency_type":"blocks","title":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!((show.id.as_str(), show.status.as_str()), ("zz-2", "open"));
+    }
+
     use super::*;
 
     /// air-bp0: one id through `show_all` gets bd's single-object answer, which is one issue.
@@ -632,6 +665,22 @@ mod tests {
         // An object that is not an issue (no id) is still nothing.
         assert!(parse_issues(r#"{"count":3}"#).unwrap().is_empty());
         assert!(parse_issues("null").unwrap().is_empty());
+    }
+
+    /// air-52u: `--force` is last and only when asked; the lane's landing asks, nothing else.
+    #[test]
+    fn close_argv_ends_in_force_only_when_asked() {
+        let ids = vec!["zz-1".to_string()];
+        assert_eq!(
+            close_argv(&ids, "r", "lane", true),
+            [
+                "close", "zz-1", "--reason", "r", "--actor", "lane", "--force"
+            ]
+        );
+        assert_eq!(
+            close_argv(&ids, "r", "lane", false),
+            ["close", "zz-1", "--reason", "r", "--actor", "lane"]
+        );
     }
 
     #[test]

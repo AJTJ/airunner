@@ -17,8 +17,8 @@ molecules, convoys, merge slots) are the cautionary case: mechanisms ahead of me
 **Before any change, read what was already solved, and write it on the bead as a `## Precedent`
 section.** The same defect came back under a new name: the channel repeated one condition
 thousands of times on 2026-08-22 and was fixed for that one kind (air-s7c); the same shape came
-back on 2026-09-27 as `closed-not-landed`, 417 pushes, because the fix had been made for a kind
-and not for the rule. Nobody read the earlier fix before making the later one, because there was
+back on 2026-09-27 as `closed-not-landed` (a condition since deleted, air-4xj.3), 417 pushes,
+because the fix had been made for a kind and not for the rule. Nobody read the earlier fix before making the later one, because there was
 nowhere to read it (owner, 2026-09-28: "a surgical fix that's well thought out with an
 understanding of historical precedents"). The section has four parts:
 

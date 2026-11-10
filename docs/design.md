@@ -3,13 +3,18 @@
 Air is a single Rust binary that lets a few Claude Code agents work on one repository at the
 same time, each in its own git worktree. It records the facts the agents would otherwise relay
 from memory: which commit passed verification, who is editing which file, who holds which
-task, and who holds a shared resource. On every close it checks the gate: a bead does not close
-without a recorded green that contains main and every commit naming the bead.
+task, and who holds a shared resource. A worker declares a bead done once a commit names it, and
+the bead closes only when a landing puts that commit on main after the lane's green.
 
-This document describes main at `40bffd2` on 2026-09-28: version 0.4.11 (the last release row),
-with 2 notices waiting for the next release. Every number below was re-derived from that tree
-the same day. What was removed, and why, is in `docs/solved-issues.md` and `CHANGELOG.md`; this
-document describes only what exists.
+This document describes main at `a53b03e3` on 2026-11-10, the end of the live-UI round
+(air-o6x, after 0.4.16 and the done-at-landing round's pod trial): version 0.4.16 (the last
+release row, `install::RELEASES`), with four notices waiting (247 files in
+`crates/cli/surface.d/` against the row's 243). The statements the 0.4.15 round's 24 commits
+touch were re-checked against that tree on 2026-11-07 (air-0b7), the done flow (air-4xj) was
+written into §4 to §8 on 2026-11-09, the trial fixes were swept into §4, §6, §8.1 and §9.1
+the same day (air-nfd), and `air ui` was added to §3, §4.1, §5, §7 and §11 on 2026-11-10
+(air-o6x.5). What was removed, and why, is in `docs/solved-issues.md` and
+`CHANGELOG.md`; this document describes only what exists.
 
 ## 1. Context and goals
 
@@ -48,14 +53,15 @@ what those two cannot rebuild.
 
 ## 3. Components
 
-The workspace has four crates. Line counts are `.rs` lines on 2026-09-28.
+The workspace has four crates. Line counts are `.rs` lines on 2026-11-10, tests included
+(`find crates/<crate> -name '*.rs' | xargs cat | wc -l`).
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 3,968 | The SQLite schema (v26), one row type per table, and the event writer. No network, no beads. |
-| hooks | 1,343 | Hook input and output types, the close gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts. |
-| bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
-| cli | 54,215 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, and the self-test (13,903 lines, 165 probes). |
+| ledger | 4,490 | The SQLite schema (v31), one row type per table, and the event writer. No network, no beads. |
+| hooks | 1,533 | Hook input and output types, the hand-over gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts, with or without its green checks. |
+| bd | 701 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
+| cli | 65,296 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), the live view (`air ui`), and the self-test (14,478 lines, 169 probes). |
 
 The ledger is one SQLite file in WAL mode under `.air` in the main checkout, shared by every
 worktree; a row stays until what it describes stops being true. The event stream gets one line
@@ -75,8 +81,36 @@ The launchers make `.claude/worktrees/<name>` on branch `worktree-<name>`, copy 
 environment, in the tmux session `<project>-<name>`, which is also the name `SendMessage`
 addresses. The project is `project` in `.claude/air.json`, else the beads prefix, else the
 directory name. A tmux name taken in another directory is refused; in the same one it attaches.
-Claude Code still asks two start-up questions Air cannot answer (folder trust, and the
-development-channels warning), and the coordinator launcher names both.
+
+Every launcher pre-answers the start-up prompts Claude Code documents an answer for:
+`--add-dir <main checkout>` (every worktree session reads `.air/` there), `--permission-mode
+auto`, and `skipAutoPermissionPrompt` and `enabledMcpjsonServers` on `--settings`, never in the
+project file, which an untrusted folder ignores. Before starting any session a launcher reads
+`projects["<main checkout>"].hasTrustDialogAccepted` in `~/.claude.json` (`CLAUDE_CONFIG_DIR`
+when set) and refuses, with the fix, when it is not `true`; Air never writes that key (air-z41).
+
+The development-channels warning has no documented skip, so it, and any other prompt a session
+is found on, is answered by hand: by the owner in the pane, or by the coordinator from its own
+session with `tmux send-keys` once the owner has said yes to that (air-d73). The coordinator's
+launcher allows `Bash(tmux send-keys *)` on its `--settings`, since auto mode's classifier
+refused that keystroke three times in two days (air-yux). For the trial fleet, `make trial`
+sends that Enter to each pane itself (§9.1, air-fkb). Folder trust is answered by the owner,
+except for the trial's scratch copy, which `make trial` marks trusted itself (§9.1, air-zau).
+
+The live view, `air ui [--port N]`, is a GET-only HTTP server in the binary on 127.0.0.1,
+port 7311 by default, serving one embedded page and five JSON endpoints. It opens the ledger
+read-only for each request, never with the migrating opener, and runs from `/` so the readers
+check never counts it as a worktree's process. The fleet cards add what the ledger lacks from
+Claude Code's own session files, the last 64 KiB of each transcript and each tmux pane; the
+board asks `bd` at most twice every 30 seconds; the attention panel reads the conditions the
+coordinator's channel wrote and computes none; and `air status` is never run, since it writes
+on every call. Nothing the page shows is a condition; the owner reads it and the fleet does not
+(`crates/cli/src/cmd/ui/`, air-o6x).
+
+`air coordinator -- "<text>"` starts the coordinator on `<text>` as its first prompt, placed
+first in argv like a worker's task prompt (air-fkb). On a Mac the session runs as the child of
+`caffeinate -i`, so the machine does not idle-sleep under a long command and may once the
+fleet is idle; `air status` prints an idle-sleep setting under ten minutes (air-1ye).
 
 ### 3.1 Roles and permissions
 
@@ -85,13 +119,25 @@ Every permission comes from `AIR_ROLE`, which only the launchers set to `worker`
 counts as a worker. The directory and the repository path never grant anything.
 
 Claude Code's deny list, passed by the launcher, keeps workers from `air land`, `git push`,
-every beads write (reads and `bd comment` stay), `claude`, the launchers, `air fleet`, the
-worktree tools and the question prompt; Air refuses `air land` and `air reclaim` again by role.
+every beads write (reads and `bd comment` stay), `claude`, the launchers, `air fleet`,
+`air ready`, the worktree tools and the question prompt; Air refuses `air land`, `air reclaim`
+and `air ready` again by role.
+
 The lane is a worker with `air land` allowed, plus allow rules on its own command line for its
-bare loop commands (`air land`, `air batch cut`, `air record`, `air status`, `git merge`, `git
-reset --hard main`) so auto mode's classifier does not refuse them. The coordinator is denied
-`git push` and the question prompt, plus `coordinator_deny`; the owner is reached through
-`air capture`.
+bare loop commands (`air land`, `air batch cut`, `air record`, `air status`, `git merge`,
+`git reset --hard main`) so auto mode's classifier does not refuse them. A worker is allowed
+`air run` and `air record` bare the same way, since the classifier refused a worker's run
+against a target (air-nyi). The coordinator is denied `git push` and the question prompt, plus
+`coordinator_deny`, and is allowed one command the same way, `tmux send-keys`, for the start-up
+prompt answer (air-yux); the owner is reached through `air capture`.
+
+`worker_allow` and `coordinator_allow` in `.claude/air.json` add the adopter's own patterns to
+the worker's and the lane's, and to the coordinator's, allow list the same way, for the
+commands that reach its machines, which Air does not know (air-xji); the deny list wins where
+both name a command. Every key is read from the main checkout's `.claude/air.json` with the
+gitignored `.claude/air.local.json` laid over it, top-level key by top-level key, so a
+machine's own `targets` and allow lists stay out of git and take effect when written rather
+than when a landing carries them (air-aei).
 
 ## 4. Interfaces
 
@@ -101,20 +147,23 @@ Any session may run these.
 
 | Command | What it does |
 |---|---|
-| air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step. |
-| air handover | Says what the close gate would decide for this worktree now, each missing fact with its fix, and on a pass the `air close` that would go through. |
-| air close | Closes beads in one beads process and releases their claims. For a worker or the lane it runs the close gate on each bead first, whatever `AIR_ENFORCE` says, and closes nothing if one fails. It refuses an id with whitespace, and names an id beads does not have. |
+| air record | Runs a check and records worker, commit, tree, exit, duration, output size, dirty flag and command, and stamps the machine it ran on. With a target for the session in `targets` the check runs there on the pushed HEAD (`air run`'s push and checkout) and is recorded at the local HEAD as usual; a dirty tree is refused, since the target holds only commits, and `--local` runs it here. Kinds: verify, precheck, docs-check, fitness; a precheck never reads as a verify green. It refuses a backgrounded command. A signal kills the run as no verdict: SIGINT reaches the check, and on SIGTERM or SIGHUP Air stops it and records it as interrupted. A red keeps the tail of its output in `.air/logs/`. At a batch head it tells each member the result and prints the lane's next step; after a red of several members, that is the members not yet verified alone and the `--only` cut for the first, until each has been (air-67q). |
+| air run | Runs a command on the calling session's target, or here when `targets` in `.claude/air.json` names none for it, with the same exit code and nothing added. A target is an argv prefix that runs a command on the machine with stdin and stdout attached (`exec`, such as `kubectl exec -i <pod> -c <c> -n <ns> --`) and the repository `path` there; `kind: ssh` with `host` and `user` is the short form for the prefix `ssh user@host`. With a target it initialises a repository at the path once, pushes HEAD to `refs/air/<session>` there through the same prefix as git's `ext::` remote (forced; the ref is the session's own, and no remote in `.git/config` is touched), removes what the previous command left untracked there (`git clean -qfd`, so ignored files stay) and checks that commit out detached and forced, and runs the command in that directory as `<prefix> sh -c '<line>'` with the output streamed back. The prefix's program is resolved on `PATH`. Every run, local or not, is one row in `runs` with the machine it ran on, and `--json` prints it after the command's output. `--pull <glob>` (repeatable) brings declared result paths back after the command exits, whatever its exit: the matches under the target's checkout come back as one tar stream over the same prefix and are unpacked into the worktree at the same relative paths, overwriting; nothing comes back without it, a path outside the checkout is never listed, and a glob matching nothing is reported, not an error. The pull is judged by the local unpack: a sender killed by SIGPIPE after it is the normal end, and a sender that exits with a code after a good unpack is reported with that code and nothing is recorded as pulled (air-b50). |
+| air handover | Says what the hand-over gate would decide for this worktree now, with the green beside the other facts, each missing fact with its fix, and on a pass the `air done` that would go through. |
+| air done | A worker's or the lane's declaration that a bead is done, with proof: the hand-over gate without its green (a commit naming the bead on the branch or on main, the caller's own claim, a green precheck where declared, a digest where configured), whatever `AIR_ENFORCE` says. On a pass the proof goes on the bead as a comment and the judged head on the claim, which stays open; `air land` closes the bead once main contains that head, and a bead main already holds closes at once. It refuses the coordinator, a bead the caller does not hold, an id with whitespace, and an id beads does not have. |
+| air close | Closes beads in one beads process and releases their claims: the coordinator's and the owner's command. A worker's or the lane's close is refused and names `air done`. It refuses an id with whitespace, and names an id beads does not have. |
 | air claim | The only claim path: the ledger first, then beads, then the ledger row. It refuses while the fleet is stopped, and refuses a bead that is held, `owner`-labelled, an epic, closed, assigned elsewhere, or blocked by an open `blocks` dependency, naming the reason. A beads timeout is followed by a re-read, never a second claim. |
 | air release | Returns the caller's own bead to open. It never reopens a closed bead. |
 | air capture | One item, or a whole file, into the coordinator's inbox. It never blocks. |
 | air holdings | Who has edits in which files, across worktrees. A recorded edit ends once its file is clean in the holder's worktree and unchanged on its branch against main. |
-| air lease | Takes, releases or reports a named shared resource. `air lease needs "<cmd>"` says which lease a command needs under `leases` in `.claude/air.json`. |
-| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, and whether the install is out of date. Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
-| air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. `--without <worker>...` or `--only <worker>...` takes part of the set, so a split after a red batch is a recorded cut. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
+| air lease | Takes (`--reason`), releases, breaks (`--force`), beats or reports a named shared resource. `air lease needs "<cmd>"` says which lease a command needs under `leases` in `.claude/air.json`. |
+| air status | The one screen: sessions, claims, greens, overlapping edits, inbox, batch-ready and in-batch branches, checks running, what else runs in each tree, a warning for a launched session running in the main checkout, loop times, whether the install is out of date, a `DIFFERS` mark on a session whose transcript's newest assistant record names a model other than `model` or `lane_model` in `.claude/air.json`, and one line per top-level key the running binary does not read (`handover::KNOWN_CONFIG_KEYS`; a count, not a gate), naming `.claude/air.local.json` when the overlay set it; one line when the overlay is not valid JSON and the committed file is read alone, and one when git tracks the overlay (air-aei). Only a person's `air status` and `air land` run `lsof`; the channel poll reads their last reading while it is under 30 s old. |
+| air batch cut | The lane's cut; see §6. It checks every batch-ready branch against main and each earlier member with `git merge-tree` (git 2.38+), drops and names a conflict, resets the lane's branch to main, and merges the rest. `--without <worker>...` or `--only <worker>...` takes part of the set, and may take the members of a red batch at their red-held heads, so a split after a red batch is a recorded cut. It refuses in the main checkout, on uncommitted changes, while the fleet is stopped, and while the lane's head is a green batch that could still land. A cut that stops part way records why and who holds any git lock. |
 | air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, beads' mode, and in server mode whether Dolt is the pinned version (2.3.5; reported, never refused). |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
 | air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its p50, p90, p99 and maximum beside the budget. Facts, not verdicts. |
-| air selftest | A red and a green probe for every check (165); `--prove` runs each probe's declared mutation. |
+| air selftest | A red and a green probe for every check (169); `--prove` runs each probe's declared mutation. |
+| air ui | A read-only view of the fleet for a browser on 127.0.0.1 (`--port`, 7311 by default, 0 for a free one; `--json` prints the URL as JSON). `/` is the page; `/api/fleet` one card per session with its claims, head, harness status, the call in flight and its pane's last lines; `/api/lane` the verify in flight, the newest cuts, runs and landings, the standing red with the members not yet verified alone, and the two loop medians; `/api/beads` every bead in one of five columns with its claim, done declaration and landing; `/api/feed?since=<offset>` Air's decisions, notices and messages oldest first; `/api/attention` the fleet stop, open conditions, open captures, leases and waits. Every other method is 405. |
 | air gc | Reports what a retention period would remove from `.air/events` and removes it only with `--apply`. |
 
 The coordinator, the lane or the owner run these. The deny list keeps workers from `air land`,
@@ -124,10 +173,11 @@ the launchers and `air fleet`; Air refuses `air land` to every launched role but
 | Command | What it does |
 |---|---|
 | air inbox, air triage | Lists open captures; resolves one by linking the filed bead (checked against beads) or dropping it with a reason. |
-| air land | The lane's landing; see §6.3. It lists each landed bead with its acceptance text, tells every other session that main moved, closes each epic beads reports with all children closed, and prints the batch-ready set and the next command. |
+| air land | The lane's landing; see §6.3. It lists each landed bead with its acceptance text, closes each bead declared done whose head is now on main (one beads process with beads' `--force`, since the landing's actor is the lane and the assignee is the worker; the claims released as landed; a close beads refuses even so is named as refused, apart from a bead still waiting for its head), closes each epic beads reports with all children closed, tells every other session that main moved, naming each member's closed, waiting and refused beads, and prints the batch-ready set and the next command. |
 | air reclaim | Takes back a gone worker's bead with `bd reclaim`, once beads' five-minute claim lease has run out; never `--force`. |
-| air worker, air lane, air coordinator | Start a session (or `--print` its command). `air coordinator` first asks whether to start the fleet. `air worker` refuses while install's output is uncommitted. |
-| air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. |
+| air worker, air lane, air coordinator | Start a session (or `--print` its command); `--model` picks the model, `-- <text>` gives the session its first prompt, and `air worker` and `air lane` take `--tmux` and `--task`. `air coordinator` first asks whether to start the fleet; `--fleet` or `--no-fleet` answers in advance, and with no terminal the answer is no. `air worker` refuses while install's output is uncommitted; `air worker <name> --remove` removes a worktree that holds nothing. |
+| air fleet up | Starts the Dolt server if it is down, the lane, and as many workers as `workers` says (three by default), leaving running sessions alone. `--model <m>` sets the model for that launch over `model` and `lane_model` in `.claude/air.json`. |
+| air ready | The coordinator offers its branch's head to the lane. With `coordinator_autobatch` absent or false its branch is batch-ready only at an offered head, and a later commit needs a new offer; with it true the offer is only recorded. Refused to workers and the lane by role, and denied to workers. |
 | air fleet stop, air fleet resume | Coordinator and owner only. Stop records who and why and tells every session; while it holds, `air claim`, `air batch cut` and `air land` refuse, the ready fan-out and the stop nudge are silent, and `air status` leads with it. Nothing is killed. |
 | air install | Adds the hooks and the channel server to the settings, writes `.air/roles.md`, `.air/docs/` and the `air-*` skills, prints every notice the repository has not had, and writes only with `--write`. It refuses a downgrade, an unignored `.air`, or a different `air` on the path; `--pin` copies the binary to `.air/bin/air`. |
 | air init | Sets up a new repository: git, beads in server mode on a free port, the ignore file, `.claude/air.json`, a verify command it finds or a failing placeholder, then install. |
@@ -141,10 +191,10 @@ removal condition. A self-test probe fails when a decision or budget has no row.
 
 ### 4.2 Channel tools, resources and conditions
 
-The channel server lists ten tools (status, attention, holdings, handover, claim, release,
-capture, inbox, triage, close) and five resources (status, attention, inbox, holdings, leases),
-all running the CLI with `--json`, and answers three lease tools it does not list. The
-coordinator's channel pushes ten conditions, computed by `air status`, each keyed by its subject
+The channel server lists eleven tools (status, attention, holdings, handover, claim, release,
+capture, inbox, triage, done, close) and five resources (status, attention, inbox, holdings,
+leases), all running the CLI with `--json`, and answers three lease tools it does not list. The
+coordinator's channel pushes nine conditions, computed by `air status`, each keyed by its subject
 and pushed when new, changed or escalating; its age counts from when the channel first saw it.
 
 | Condition | Meaning |
@@ -153,9 +203,8 @@ and pushed when new, changed or escalating; its age counts from when the channel
 | silent with claim | A worker holds a bead and its session has written nothing for a while. |
 | gone with claim | A worker holds a bead and its process has gone. |
 | idle without claim | A worker is idle with no claim while claimable beads are ready and nothing of its own runs in its tree. |
-| handover not green | Someone tried to close a bead without the green the gate wants. |
+| done refused | A worker's `air done` was refused and has not passed since; the text gives the attempt count per bead and the last attempt's time. |
 | landable | A branch other than the lane's is green and contains main, and no lane session is alive. |
-| closed not landed | A bead is closed and its commits are only on one worktree's branch. |
 | rewound and carried | A merge that was rewound off main is still carried by a branch. History only. |
 | lease held by dead session | A shared resource's holder has gone. |
 | lease stale | A shared resource's holder has not refreshed it in time. |
@@ -168,7 +217,7 @@ Every call, including the silent ones, writes one event line.
 | Event | What happens |
 |---|---|
 | SessionStart, SessionEnd | The session's row is created idle, or ended. A start from compaction keeps the state it found. |
-| PreToolUse | For an edit, a warning if another worker's recorded edit is on the file. A command the repository says needs a lease is refused to a worker or the lane not holding it (redirections removed before matching). A `SendMessage` is recorded with its content. |
+| PreToolUse | For an edit, a warning if another worker's recorded edit is on the file. A command the repository says needs a lease is refused to a worker or the lane not holding it (redirections removed before matching; `air lease take <resource>` earlier on the same line, joined by `&&`, counts as holding it). A `SendMessage` is recorded with its content. |
 | PostToolUse | The edited file goes in the edit journal and the session is marked working. |
 | PostToolUseFailure, PermissionRequest, PermissionDenied, Notification, StopFailure | The session's state is updated. A stop failure, a quota notification, or a permission or idle prompt is the session's sticky fact, shown until the session's next event of its own. |
 | Stop | The session is marked idle. A worker is nudged with ready beads it has confirmed when it holds no claim or, under a lane, when every claim it holds is batch-ready; the same set is named once. The lane and the coordinator are never nudged. |
@@ -190,19 +239,28 @@ Every call, including the silent ones, writes one event line.
 | `.claude/settings.json`, `.mcp.json` | The hook entries and the channel server entry, merged in by install. |
 | `.worktreeinclude` | Ignored files copied into new worktrees. |
 | `changelog.d/<bead>.md` | One changelog fragment per bead; `make changelog` folds them into `CHANGELOG.md`. |
+| `.claude/air.local.json` | One machine's own settings, gitignored by the adopter and read beside `.claude/air.json` from the main checkout; its top-level keys replace the committed file's (air-aei). `air status` names a key set there the binary does not read with the file, says once when it does not parse, and warns once if git tracks it. |
 
-`.claude/air.json` holds the repository's settings: `project`; `worker_deny` and
-`coordinator_deny`; `leases`; `verify_lane` (true here: the lane batches and workers run no
-verify of their own); `precheck`; `verify_key` (`tree` here, so a green stands for any commit
-with the same tree); `digests` or `digest_dir`; `journal_dir`; `workers`; `metis`; and
-`adopters`.
+`.claude/air.json` holds the repository's settings. `project`. `base_branch`, the branch the
+fleet lands onto, `main` by default; every gate, cut, landing and notice reads it where it says
+main, and the session named `main` keeps its name. `worker_deny`, `coordinator_deny`,
+`worker_allow` and `coordinator_allow`. `leases`. `verify_lane`, true here: the lane batches
+and workers run no verify of their own. `precheck`. `verify_key`, `tree` here, so a green
+stands for any commit with the same tree. `digests` or `digest_dir`. `journal_dir`. `workers`.
+
+The rest of its keys. `model` and `lane_model`, what every launcher passes as `--model`.
+`heartbeat_minutes`. `coordinator_autobatch`. `metis` and `metis_plugin_dir`. `adopters`. And
+`targets`, one remote target per session for `air run`: the argv prefix that runs a command on
+the machine and the repository path there, as in
+`{"worker-1": {"exec": ["kubectl", "exec", "-i", …, "--"], "path": …}}`, or the short form
+`{"kind": "ssh", "host": …, "user": …, "path": …}`; absent, every session runs locally.
 
 The launchers set `AIR_ROLE`, `BEADS_ACTOR`, `AIR_PROJECT`, `AIR_CHANNEL=1`,
 `BEADS_DOLT_AUTO_START=0`, and for workers and the lane `AIR_ENFORCE=1`, which makes the hook
-refuse a lease command rather than advise. `air worker worker-9 --print` shows a whole launch, including
-`--append-system-prompt-file .air/roles.md`, `--name ai_runner-worker-9`, the development
-channel and `--disallowed-tools`. Other variables move where Air finds its tools and change
-its timeouts (`AIR_BD_TIMEOUT_MS`).
+refuse a lease command rather than advise. `air worker worker-9 --print` shows a whole launch,
+including `--append-system-prompt-file .air/roles.md`, `--name ai_runner-worker-9`, the
+development channel and `--disallowed-tools`. Other variables move where Air finds its tools
+and change its timeouts (`AIR_BD_TIMEOUT_MS`).
 
 ## 5. Data
 
@@ -210,21 +268,25 @@ its timeouts (`AIR_BD_TIMEOUT_MS`).
 erDiagram
   sessions ||--o{ edit_journal : "worker"
   sessions ||--o{ messages : "session"
-  claims }o--|| verify_runs : "closes on a green"
+  claims }o--|| landings : "closes on a landing"
   verify_runs ||--o| landings : "landed as"
   verify_inflight ||--|| verify_runs : "becomes"
   batch_cuts ||--o{ verify_runs : "members of"
   captures }o--o| claims : "becomes a bead"
   leases ||--o{ lease_wants : "resource"
   deliveries }o--|| sessions : "worktree"
+  sessions ||--o{ runs : "session"
+  sessions ||--o{ offers : "worker"
 ```
 
 | Table | Holds | Written by |
 |---|---|---|
-| verify_runs | One row per recorded check: commit, tree, exit, command, duration, dirty flag, kept log, the main it ran over, batch members. | record, land |
+| verify_runs | One row per recorded check: commit, tree, exit, command, duration, dirty flag, kept log, the main it ran over, batch members, and the machine it ran on (v29; null before). | record, land |
 | verify_inflight | The check running now and its process. | record |
+| runs | One row per `air run`: session, commit, tree, command, exit, times, output size, the target (`local`, or the ssh destination or exec prefix with `:path`), and the machine as the probe read it there (hostname, image, arch, nproc, CPU), and what `--pull` brought back (the paths and their byte total). Not a verify: no green query reads it. | run |
 | batch_cuts | The members a cut merged, keyed by lane and head. | batch cut |
-| claims | Who holds which bead, the files declared, and when and why it let go. | claim, release, close, reclaim |
+| offers | The heads the coordinator offered to the lane with `air ready` (v30): worker, commit, time. The batch-ready rule reads it for the coordinator's branch unless `coordinator_autobatch` is set. | ready |
+| claims | Who holds which bead, the files declared, the head and proof its worker declared it done with (v31, `air done`), and when and why it let go. | claim, done, release, close, land, reclaim |
 | sessions | One row per worker name: role, state, sticky fact, and pid with start time; alive only when that pid runs with that start time. | the hook |
 | edit_journal | Which worker touched which file, and when; deleted when the edit ends. | the hook, holdings, land |
 | landings | Each landing: result, beads, the landing commit. | land |
@@ -238,6 +300,11 @@ erDiagram
 Ledger rows do not expire (`air doctor` on 2026-09-28: 498 verify runs, 258 claims, 175
 landings); event files go only with `air gc --apply`, never while the ledger points at them.
 
+Every command opens the ledger through `Ledger::open_in`, which runs the migrations, except
+`air ui`, which opens it with `Ledger::open_read_only` (SQLite's read-only flag, no migration,
+the same busy timeout, never `immutable=1`): a view built from a newer tree cannot migrate the
+ledger under the fleet's binary, and a live file keeps its change detection.
+
 ## 6. Flows
 
 ### The bead and branch lifecycle
@@ -249,17 +316,18 @@ not fields it stores, and each transition is decided by the pure function in the
 stateDiagram-v2
   [*] --> claimed: air claim
   claimed --> committed: commit with Bead trailer
+  committed --> done: air done
+  committed --> closed: air close by the coordinator or the owner
   committed --> batch_ready: rule holds
+  done --> batch_ready: rule holds
+  closed --> batch_ready: rule holds
   batch_ready --> in_batch: air batch cut
   in_batch --> batch_green: lane records green
   in_batch --> batch_red: lane records red
   batch_red --> committed: a new commit
   batch_red --> batch_ready: a later green contains it
-  batch_green --> closed: air close
-  batch_green --> landed: air land
-  closed --> landed: air land
+  batch_green --> landed: air land, closes the done beads
   batch_green --> stale: main moves
-  closed --> stale: main moves
   stale --> batch_ready: rule holds
   landed --> [*]
 ```
@@ -267,27 +335,36 @@ stateDiagram-v2
 | State | Event | Next state | Decided by |
 |---|---|---|---|
 | claimed | commit carrying `Bead: <id>` | committed | `attribution::attributed_in_range` |
-| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not landable alone, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared | `status::batch_ready_rule` |
+| committed | `air done` | done: the proof on the bead, the judged head on the claim; still held, and batch-ready as before | `air_hooks::handover_verdict` with `require_green` false, in `done::gate` |
+| committed | `air close` by the coordinator or the owner | closed: still batch-ready, a closed bead counts | `close::run`, with no gate |
+| committed | the rule holds | batch-ready: names a bead held or closed in `main..head`, not in a running batch, not held by a red batch, not dropped at this head, precheck green where declared. The coordinator's branch needs no bead: a commit main lacks, and a head offered with `air ready` unless `coordinator_autobatch` is set | `status::batch_ready_rule` |
 | batch-ready | `air batch cut` | in-batch: the lane's branch is main plus every batch-ready head | `batch_cut::run`, refusing while the lane's head could still land (`batch_cut::land_first`) and on the guards §4.1 lists: the main checkout, uncommitted changes, a stopped fleet, a git without `merge-tree --write-tree` |
 | in-batch | lane records green | batch-green | `record::run` |
-| in-batch | lane records red | batch-red: nothing lands; every member is held out | `status::red_held` |
+| in-batch | lane records red | batch-red: nothing lands; every member is held out, and `air record` lists the members not yet verified alone with the `--only` cut for the first | `status::red_held`, `batch::untested_alone` |
 | batch-red | a new commit | committed: the new head was in no red batch | `status::red_held` |
 | batch-red | a later green contains the head (the lane's split) | batch-ready again | `status::red_held` |
-| batch-green | `air close` | closed | `air_hooks::handover_verdict`, with `batch::cover` |
 | batch-green | `air land --worker lane` | landed | `land::check`: green at head, head contains main |
+| landed | `air land`, the same command | closed: every bead whose declared head main now contains, in one beads process with beads' `--force` (the lane is not the assignee), its claim released as landed; a close beads refuses leaves the bead done, named refused rather than waiting, for the next landing | `land::close_done` |
 | batch-green | main moves first | stale: cannot land, and the next cut resets past it | `batch_cut::land_first` |
-| closed | main moves before the landing | stale and closed: batch-ready again, a closed bead counts | `status::batch_ready_rule` |
-| landed | `air close` | closed: the work is read from git as in main | `batch::in_main` |
+| done | main moves before the landing | still done, still batch-ready | `status::batch_ready_rule` |
 | claimed | `air release` | open again | `claim::release` |
 | any | fleet stop | unchanged: claim, cut and land refuse until resume | `fleet::stopped` |
 
+`main` in the table and the diagram is the base branch, `main` unless `.claude/air.json` sets
+`base_branch` (air-h7l); `handover::base_branch` is the one reader of the key.
+
 No cell lacks a way out. The model test in `crates/cli/src/cmd/lifecycle.rs` calls five of
 these functions, `batch_ready_rule`, `red_held`, `land_first`, `cover` and `handover_verdict`,
-through every order of commit, merge, close, cut or split, verify, land and a move of main for
-two workers and a lane (135,722 states in 5 s). It models the rest itself: containment as set
-inclusion in place of `in_main`, and a landing as `land::check`'s two conditions. It fails if any
-reachable state can no longer land and close every bead, and it fails on the code before the
-fixes of 2026-09-28.
+through every order of commit, merge, close or declare, cut or split, verify, land and a move of
+main for two workers and a lane. Under the coordinator's close rule it reaches 135,722 states
+in about 2 s, and under the done rule, where the declaration runs the gate without its green
+and the landing closes on containment of the declared head, 870,873 states, none stuck
+(`close_at_landing_is_evaluated`).
+
+It models the rest itself: containment as set inclusion in place of `in_main`, and a landing
+as `land::check`'s two conditions. It fails if any reachable state can no longer land and close
+every bead, and it fails on the code before the fixes of 2026-09-28 and on the done rule as
+first modelled, where a declaration on work main already held left the bead open.
 
 ### 6.1 Claiming a bead
 
@@ -311,33 +388,39 @@ sequenceDiagram
 The ledger is asked first because it is local; beads decides races because its claim is the
 only atomic write, and a timeout is followed by a re-read, never a second claim.
 
-### 6.2 Closing a bead
+### 6.2 Declaring a bead done
 
 ```mermaid
 sequenceDiagram
   participant W as worker
-  participant H as air close
-  participant F as ledger and git
-  W->>H: air close <id>
-  H->>F: a commit naming it? green? contains main? claimed or carried? digest where asked?
+  participant H as air done
+  participant F as ledger, beads and git
+  W->>H: air done <id> --reason-file <proof>
+  H->>F: a commit naming it? claimed by me? precheck where declared? digest where asked?
   alt every fact present
-    H->>F: bd close, release the claim
-    H-->>W: closed
+    H->>F: bd comment with the proof; the judged head on the claim
+    H-->>W: done at <head>; the landing closes it
   else something missing
     H-->>W: refused: each missing fact and its fix
   end
 ```
 
-A green is a successful run at the exact commit, or at any commit with the same tree when
-`verify_key` is `tree`. A bead is also covered, whatever its head carries after it, when a
-recorded green contains every commit whose `Bead:` trailer names it and the main that run was
-recorded over (`batch::cover`, over every green since the bead's oldest commit), or when main
-contains all those commits (`batch::in_main`); under a lane that is how a worker closes on the
-lane's green. A head main is ahead of is refused as behind main unless main contains it, the
-bead is covered, or, under a lane, no green is at the head yet. A refusal names a red recorded
-at the head with its kept output, a missing precheck, or a missing trailer. A bead that no
-commit names, on the branch or on main, is refused whatever the head's green, and the refusal
-names the fix: commit the result with its `Bead:` trailer.
+The declaration reads no green. The head it records is the newest commit in `main..HEAD`
+carrying the bead's trailer, whatever the branch carries after it, so a worker declares an
+earlier bead with its next bead's commits on top; when main already holds every such commit
+the bead closes at once, since no landing is ahead of it.
+
+A refusal names a missing precheck, a missing trailer, or a bead the caller does not hold, and
+it stamps the claim's attempt counter, which `done refused` reads and a pass clears. A bead
+that no commit names, on the branch or on main, is refused, and the refusal names the fix:
+commit the result with its `Bead:` trailer.
+
+`air handover` reports the same facts with the green beside them, and names a missing precheck
+whatever the green, so it and `air done` agree on it. A green is a successful run at the exact
+commit, or at any commit with the same tree when `verify_key` is `tree`, and a bead is covered
+when a recorded green contains every commit naming it and the main that run was recorded over
+(`batch::cover`). The coordinator and the owner close with `air close`, which runs no gate,
+and a worker's or the lane's `air close` is refused.
 
 ### 6.3 Landing
 
@@ -353,16 +436,29 @@ sequenceDiagram
     A-->>C: refused, names what is missing
   end
   A->>G: commit the branch's tree onto main, fast-forward main
-  A->>L: write the landing, then tell every session main moved
+  A->>L: write the landing; close every done bead main now contains; tell every session main moved
   A-->>C: landed beads with their acceptance, the next cut
 ```
 
-Main moves only by fast-forward onto a commit whose tree has a green, so nothing is re-verified
-or rolled back. The landing records the beads its commits name by trailer; a range naming none
-lands only if every commit is a journal entry or the coordinator's. The row is written after
-main moves, and the notice after the row. Epics whose children are all closed are closed. The
-worker closes its own bead, before or after. `--despite-inflight` lands over a running verify
-and records it.
+Main, meaning the base branch (`base_branch`, `main` by default), which the main checkout must
+have checked out, moves only by fast-forward onto a commit whose tree has a green, so nothing
+is re-verified or rolled back. The landing records the beads its commits name by trailer; a
+range naming none lands only if every commit is a journal entry or the coordinator's.
+
+The landing commit's author is the main checkout's git identity, and a checkout with none
+cannot land: `git commit-tree` exits 128 and main is untouched. Air adopts an identity of its
+own only when an adopter records hitting that. The row is written after main moves, carrying
+the machine (hostname, image, arch, nproc, CPU) of the green it stands on (air-2w6), and the
+notice after the row.
+
+Every bead declared done whose head the landing put on main is closed in one beads process,
+with beads' `--force` because the landing's actor is the lane and the bead's assignee is its
+worker (beads 1.3.0 refuses the close otherwise, and did at every landing of the 2026-11-09
+trial), and its claim released as landed. A declared bead whose head is still missing waits
+for a later landing, a close beads refuses even so is named as refused and tried at the next
+landing, and a bead nobody declared is left to the coordinator or the owner. Epics whose
+children are all closed are closed. `--despite-inflight` lands over a running verify and
+records it.
 
 ### 6.4 A hook call
 
@@ -391,20 +487,21 @@ is repeated unchanged.
 
 | Notice | Queued by | To |
 |---|---|---|
-| beads are ready | `air claim`, `air release`, `air close` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
+| beads are ready (a count and `bd ready`, never ids: air-bcg) | `air claim`, `air release`, `air close`, `air done` and `air land` after their write, and the coordinator's tick as the sweeper, when the claimable set gains a bead or a worker is newly without a claim (air-4lci) | live workers holding no claim |
 | batch-ready | `air record` after its write, and the tick, once per branch head | the lane |
-| batch green, batch red | `air record` at a batch head | each member; a green names only beads it covers that the member still holds |
+| batch red | `air record` at a batch head | each member, with the exit and the kept output; the lane's own output lists the members not yet verified alone and the `--only` cut for the first (air-67q); a green says nothing to members, since the landing closes their declared beads (air-4xj.2) |
 | dropped from batch | `air batch cut` | the dropped branch's worker, with the other side and the paths |
-| main moved | `air land` | every session but the lane and the one that landed |
+| main moved | `air land` | every session but the lane and the one that landed; a member's copy names the beads of its own the landing closed, any done bead still waiting for its head, and any beads refused to close |
 | capture from | `air capture` | the coordinator |
-| the ready queue is empty | `air claim`, `air release`, `air close`, and the tick, once per emptying | the coordinator |
+| the ready queue is empty | `air claim`, `air release`, `air close`, `air done`, and the tick, once per emptying | the coordinator |
 | bd server was down | the tick's check of the Dolt port | the coordinator, once per outage |
 | lease is free | `air lease release` or break | each worker waiting, oldest first |
 | fleet stop, fleet resumed | `air fleet` | every session |
 
 Every notice states what is observed and, where one exists, the command that acts on it.
-`air status` prints two loop times for the last 24 hours, batch-ready to its verify and batch
-green to close. The coordinator's 5-minute heartbeat is the backstop for a missed push.
+`air status` prints two loop times for the last 24 hours, batch-ready to its verify and done to
+landed. Where the repo sets `heartbeat_minutes`, the coordinator's heartbeat is the backstop
+for a missed push.
 
 ### 6.6 Session states
 
@@ -425,19 +522,20 @@ fact (stopped for quota, waiting for the person) shows until the session's next 
 Every wait records its duration and whether it hit its limit. Each budget in `cmd/budgets.rs`
 names the measurement its number came from, `air audit` prints its p50, p90, p99 and maximum
 beside it, and a hit is reported as a fact about load. The numbers below are unchanged pending
-the owner's ruling on air-1cdr. A beads call gets 60 s plus 5 s
-per bead named, from one function every call uses, and fails closed naming `AIR_BD_TIMEOUT_MS`.
-The status tick gets four times beads' median (2 to 8 s) and falls back to cached counts; the
-stop nudge gets 3 s. Each MCP tool runs its command in its own process group, one beads limit
-above what the command can spend, capped 10 s under Claude Code's `MCP_TOOL_TIMEOUT`; the read
-tools get 20 s. On the hook path git gets 1.5 s, the SQLite lock 1 s, and the hook 5 s, all
-failing open.
+the owner's ruling on air-1cdr.
+
+A beads call gets 60 s plus 5 s per bead named, from one function every call uses, and fails
+closed naming `AIR_BD_TIMEOUT_MS`. The status tick gets four times beads' median (2 to 8 s)
+and falls back to cached counts; the stop nudge gets 3 s. Each MCP tool runs its command in
+its own process group, one beads limit above what the command can spend, capped 10 s under
+Claude Code's `MCP_TOOL_TIMEOUT`; the read tools get 20 s. On the hook path git gets 1.5 s,
+the SQLite lock 1 s, and the hook 5 s, all failing open.
 
 ## 7. Guarantees and failure model
 
 | Always true | Enforced by | A violation shows up as |
 |---|---|---|
-| A bead closes only with a green containing main and every commit naming it, or with its work in main. | The close gate, enforced for workers and the lane. | A handover not green condition. |
+| A bead a worker declared done closes only when main contains the commit it declared, after the lane's green; nothing a worker sets closes a bead. | `air done`'s gate and `air land`'s close on containment; a worker's `air close` refused. | A done refused condition, or a bead closed with no landing naming it. |
 | Main moves only forward, onto a tree with a green. | `air land`. | A commit on main with no run. |
 | One worker holds a claim at a time. | The ledger check, then beads' atomic claim. | Two open claims for one bead. |
 | A lease command runs only while its lease is held. | The hook, refusing for workers and advising the coordinator. | A lease refuse event. |
@@ -452,21 +550,27 @@ The hook fails open, because it must never block the editor. A beads timeout dur
 leaves the state unknown and the bead is read again; a killed verify is no verdict. When the
 Dolt server is down every beads command fails; the launchers start it first and the
 coordinator's tick restarts it and says so, never over a data directory without the project's
-database. An unknown process reading counts as nothing running. Everything else fails closed
-and names its fix: landing while a verify runs in the main checkout or the lane's tree unless
-overridden (a worker's own verify never blocks it), the wrong role landing or
-closing, a repository path outside the project, and install over a newer version, an unignored
-`.air` or a different binary.
+database. An unknown process reading counts as nothing running. The live view down means the
+page says it cannot reach the server and nothing else happens: no session, hook or command
+reads from it, and a missing ledger gives every endpoint its empty shape.
+
+Everything else fails closed and names its fix: landing while a verify runs in the main
+checkout or the lane's tree unless overridden (a worker's own verify never blocks it), the
+wrong role landing or closing, a repository path outside the project, and install over a newer
+version, an unignored `.air` or a different binary.
 
 ## 8. Enforcement and judgement
 
-Air enforces who may run what, atomic claims, one holder per shared resource, the close gate,
-an honest record of every verify, who edited what, and main moving only onto a verified tree.
-The agents decide the rest: what a capture becomes, which bead to take, whether a diff is good
-or a verify enough, and what to do about a condition; the owner decides `owner` beads. Left out
-on purpose: a cap on work in progress, stored epic phases, automatic retries of a red, headless
-workers, claims inferred by watching beads, Gas Town's convoys and merge slots, and automatic
-prioritisation; `air next`, `air peer` and merge advice were specified and never needed.
+Air enforces who may run what, atomic claims, one holder per shared resource, the hand-over
+gate behind `air done`, an honest record of every verify, who edited what, and main moving only
+onto a verified tree. The agents decide the rest: what a capture becomes, which bead to take,
+whether a diff is good or a verify enough, and what to do about a condition; the owner decides
+`owner` beads.
+
+Left out on purpose: a cap on work in progress, stored epic phases, automatic retries of a red,
+headless workers, claims inferred by watching beads, Gas Town's convoys and merge slots, and
+automatic prioritisation; `air next`, `air peer` and merge advice were specified and never
+needed.
 
 ### 8.1 Standing rulings
 
@@ -474,7 +578,10 @@ The owner's rulings in force, one line each, dated when made or last changed.
 
 | Rule | Date | Carried by |
 |---|---|---|
-| Closing needs a green containing main and the bead's commits; a digest only where configured. | 2026-09-25 | the close gate in `air close`, for workers and the lane |
+| An addition to a bead a worker holds is a bead plus a `SendMessage` to the holder; a correction is a `SendMessage` checked as received, and a bead if it was not. | 2026-11-09 | `docs/rules/roles.md`, coordinator section |
+| A worker declares its bead done with proof through `air done`; the landing that puts that head on main closes it. A landing closes nothing nobody declared done. | 2026-11-09 | `done.rs`, `land::close_done`, `close::worker_refusal` |
+| When a whole batch is red, each member is verified alone. Air lists the members not yet verified alone and the next `--only` cut, and picks nobody for the lane. | 2026-11-09 | `batch::untested_alone`, `record::after_batch`, `batch_cut::red_held_members` |
+| Closing needs a green containing main and the bead's commits; a digest only where configured (superseded 2026-11-09, first row: the declaration needs no green, and the landing supplies it). | 2026-09-25 | the gate behind `air handover` |
 | A green is keyed by commit and counts for any worker; by tree only where declared. | 2026-09-05 | `verify_key` |
 | A backgrounded verify is refused; a dirty tree, a changed command and the counts at a commit with several runs are stated beside the exit. | 2026-09-28 | `air record` |
 | Landing is refused while a verify runs in the main checkout or the lane's tree, never for a worker's own; the override is recorded. | 2026-09-28 | `land::at_risk`, `air land --despite-inflight` |
@@ -484,7 +591,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 | Everything Air says is keyed by kind and subject and said when new, changed or escalating, never again unchanged. | 2026-09-28 | `deliveries`, `select_new_at` in `mcp.rs` |
 | A worker idle without a claim is a condition; queue depth is only measured. | 2026-08-22 | `idle-without-claim` |
 | This repository runs a verification lane; workers run no verify of their own. | 2026-09-28 | `verify_lane` |
-| The lane's loop commands run bare, with no pipe or redirect, under allow rules on its command line. | 2026-09-28 | `air lane` |
+| The lane's loop commands, and a worker's `air run` and `air record`, run bare, with no pipe or redirect, under allow rules on the launcher's command line. | 2026-09-28; workers 2026-11-05 (air-nyi) | `air lane`, `air worker` |
 | Taking back a bead never forces beads; it waits for the claim lease. | 2026-09-26 | `air reclaim` |
 | A new project's beads runs in server mode on one Dolt server per project, a plain background process Air starts and keeps up; an embedded project stays embedded. | 2026-09-28 | `air init`, `air bd-server` |
 | Each budget names the measurement its number came from, and `air audit` prints its p50 and maximum beside it; a hit is a fact. The numbers are unchanged pending air-1cdr. | 2026-09-28 | `cmd/budgets.rs`, `air audit` |
@@ -496,7 +603,7 @@ The owner's rulings in force, one line each, dated when made or last changed.
 | Workers capture; they never file, claim through beads, push, land or launch. The coordinator may commit and launch, not push or land. Denies ride launcher flags. | 2026-09-14 | `WORKER_DENY`, `COORDINATOR_DENY` |
 | Air makes each session's worktree; the verification lane is a role and the only one that lands. | 2026-09-14 | `air lane`, `air land` |
 | The merge-queue protocol is Air's and ships in `.air/roles.md`; a repository keeps only its commands, setup and resources. | 2026-09-25 | `.air/roles.md` |
-| A worker closes its own bead with proof through `air close`; there is no review status, and beads writes are denied to workers and the lane. | 2026-09-26 | `close.rs`, `WORKER_DENY` |
+| A worker closes its own bead with proof through `air close`; there is no review status, and beads writes are denied to workers and the lane (superseded 2026-11-09, first row: the worker declares, the landing closes). | 2026-09-26 | `close.rs`, `WORKER_DENY` |
 | Proof is a command's output, a `file:line` or a test; what only the owner can do becomes a successor bead. | 2026-08-22 | roles.md |
 | Landing attributes beads by `Bead:` trailers; workers pull work and nobody assigns it. | 2026-08-22 | `air land`, `air claim` |
 | beads is the task store, pinned at 1.3.0; Air wraps it and never watches it; beads are created with `--validate`. | 2026-09-26 | `air doctor` |
@@ -508,43 +615,128 @@ The owner's rulings in force, one line each, dated when made or last changed.
 
 ## 9. Operations
 
-Install Air from a GitHub Release (a prebuilt binary and a shell installer) or with cargo from this repository, then `air init` in a new repository or `air
-install` in one that uses beads; both write only when told to. Start the coordinator with `air
-coordinator`; a yes, or `air fleet up`, starts the lane and the workers. `air status` is the
-screen to watch. Worktrees isolate branches, not the machine: a repository with heavy builds
-gives each worktree its own `CARGO_TARGET_DIR` and a share of `CARGO_BUILD_JOBS`.
+Install Air from a GitHub Release (a prebuilt binary and a shell installer) or with cargo from
+this repository, then `air init` in a new repository or `air install` in one that uses beads;
+both write only when told to. Start the coordinator with `air coordinator`; a yes, or
+`air fleet up`, starts the lane and the workers. `air status` is the screen to watch.
+Worktrees isolate branches, not the machine: a repository with heavy builds gives each
+worktree its own `CARGO_TARGET_DIR` and a share of `CARGO_BUILD_JOBS`.
 
 `make verify` checks formatting, runs clippy, the tests, the adopter check, and the self-test on
-the binary it built. A release appends a row to `install::RELEASES`, sets `Cargo.toml`'s
-version, and `make release` refuses a dirty tree, a branch other than main or leftover changelog
-fragments, then runs `air release-check`, `make verify` and `make adoption-check` (which adopts
-a copy of `examples/minimal`) and tags. Air writes three tracked files in a repository and
-ignores the rest; it runs git, beads, tmux, ps, lsof, Claude Code and the verify command, and
-contains no network code. Pushing the tag runs `.github/workflows/release.yml`, generated by
-cargo-dist from `dist-workspace.toml`, which builds the binaries and publishes the release.
+the binary it built. A change to what an adopting repo sees adds one notice file,
+`crates/cli/surface.d/<ordinal>-<id>.rs`, which `build.rs` folds into `install::SURFACE` in
+filename order (air-38q); `air install` prints the notices a repo has not seen.
+
+A release appends a row to `install::RELEASES`, sets `Cargo.toml`'s version, and
+`make release` refuses a dirty tree, a branch other than main or leftover changelog fragments,
+then runs `air release-check`, `make verify` and `make adoption-check` (which adopts a copy of
+`examples/minimal`) and tags. Air writes three tracked files in a repository and ignores the
+rest; it runs git, beads, tmux, ps, lsof, Claude Code and the verify command, and contains no
+network code. Pushing the tag runs `.github/workflows/release.yml`, generated by cargo-dist
+from `dist-workspace.toml`, which builds the binaries and publishes the release.
+
+Verifying on a target. A session whose entry in `targets` names a machine runs its checks there
+(`air run`, §4), and the setup from the first entry to the first green is
+[`docs/rules/remote-verify.md`](rules/remote-verify.md).
+
+It covers which session gets the target (the lane first, since under `verify_lane` it runs
+every verify; a worker's bare `air run` and `air record` lines are allowed too, §3.1, and the
+guide's last section gives every session its own machine), what the machine needs on a
+non-login PATH, the gitignored files copied once (`private/adopters.md` here, since
+`air adopter-check` refuses without it), the entry in both forms, the first cold run and its
+row, and the gone-machine case, which records nothing.
+
+Its last section gives every launched session, the coordinator included, a machine of its own:
+one ssh entry each for VMs, and for replicas of one deployment a script in this repository's
+`scripts/` that resolves the session's pod when the command runs (air-oep). This repository's
+lane verifies on a dev pod through an `exec` prefix that runs that script and sets PATH,
+written in the owner's gitignored `.claude/air.local.json` and not in the committed file
+(air-vj6); the names and the deploy command are in the gitignored `private/devpod-setup.md`,
+and the first run's measurements are on air-tdh (2026-11-05: cold compile 71 s, warm verify
+46 s against 118 s on the laptop, 96 cores).
 
 ### 9.1 The live trial
 
 Every release is tried on a real fleet before it is tagged. `make trial` builds the binary,
-adopts a scratch copy of `examples/minimal` with it pinned, and commits the scenarios' config
-(`"verify_lane": true`, `"precheck": true`, the `serve` lease and the precheck line in
-`CLAUDE.md`) so no session has to edit a config file. It copies `scripts/trial/request.md` in.
-The coordinator, started with `.air/bin/air coordinator --fleet`, reads the request and files
-the scenarios' beads. When every bead is closed it writes
-`.air/trial-report.md`, and an observer checks it against the events, git and beads and adds
-the counts from `scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and
-not fixed during the trial. The release is tagged only if every scenario ends as expected.
+adopts a copy of `examples/minimal` at `$TRIAL_DIR/minimal` with it pinned, and commits the
+scenarios' config (`"verify_lane": true`, `"precheck": true`, the `serve` lease and the
+precheck line in `CLAUDE.md`) so no session has to edit a config file. `TRIAL_DIR` defaults to
+one fixed path, `$TMPDIR/air-trial`.
+
+It then starts the fleet with `.air/bin/air coordinator --fleet -- "<request>"`, the text of
+`scripts/trial/request.md` as the coordinator's launch prompt (a copy stays in
+`.air/trial-request.md` as the record), and answers the development-channels prompt in every
+pane with `tmux send-keys Enter` (`scripts/trial/answer-prompts.sh`, tested against stub panes
+in `crates/cli/tests/trial_answer_prompts.rs`), so nothing waits on the owner once it starts
+(air-fkb: the 2026-11-05 trial's coordinator, told to read the request from a file, had the
+read refused by the auto-mode classifier and waited hours, air-fzl).
+
+`make trial` marks the copy trusted itself: `scripts/trial/trust-copy.py` writes the one key
+Claude Code reads, `projects[<copy>].hasTrustDialogAccepted`, under the path's physical form,
+through a temp file and a rename, with every other key in `~/.claude.json` as it was (tested in
+`crates/cli/tests/trial_trust_copy.rs`; the launcher's refusal before and not after is pinned
+in `install_and_launch.rs`).
+
+The trial stopped on that dialog three times on 2026-11-05 and 2026-11-06, hours each, and the
+owner ruled on 2026-11-07 that it needs no step at all (air-zau; the research had recommended
+trusting the path once per machine, air-ekj). The launcher still refuses an untrusted
+repository and never writes the key; the script writes it for a directory it has just built
+from Air's own example. Removed when Claude Code offers a session-level flag that pre-trusts a
+directory.
+
+The coordinator files the first wave at once (the happy path, the lease epic, precheck and
+done before green) and every later step on an event the rows name, never a timer (air-283: the
+2026-11-09 run spent two of its rounds on a scripted two-minute wait and per-landing waves).
+
+The base-branch scenario's rename and key are its own edits in the scratch copy's main
+checkout, not a step for the owner (air-3hw: the 2026-11-06 trial stopped for hours at that
+row waiting to be told). When every bead is closed it writes `.air/trial-report.md`, and an
+observer checks it against the events, git and beads and adds the counts from
+`scripts/trial/count.py`. Defects are filed as beads, traced to their cause, and not fixed
+during the trial. The release is tagged only if every scenario ends as expected.
 
 | Scenario | Set up | Expected |
 |---|---|---|
-| Happy path | Three unrelated beads | Batches land, every bead closes with proof, `make verify` passes on main |
-| Conflict | Two beads changing the same line, two workers | The cut drops the later-ready branch naming the file; it lands in a later batch |
-| Red batch | A bead that breaks a test | The batch is reported red by member and nothing lands |
-| Early close | A worker closes before the lane's green | Refused, naming what is missing |
-| Lease | A lease on a command, run by two workers | The second is refused until the first releases |
+| Happy path | Three unrelated beads | Batches land, every bead is declared done with proof and closes at its landing, `make verify` passes on main |
+| Conflict | Once two branches have landed, two beads changing the same line, two workers | Each worker is warned once by the hook that the other holds the file; the cut drops the later-ready branch naming the file; it lands in a later batch |
+| Red batch | Three beads filed together, two that each break a test and one harmless; the coordinator runs `air fleet stop` once all three are claimed and `air fleet resume` once all three are batch-ready, so the lane's one cut has three members (air-67q); each breaker reverts once Air tells it its branch was red alone, with no timer | While the stop holds, `air status` leads with `FLEET STOPPED`, the lane's cut is refused naming it and no session is killed; after the resume the batch of three is red and the red reaches all three; `air record` lists all three as not yet verified alone with the first `--only` cut; the lane cuts each alone in turn, the two breakers are red alone and held until their reverts, the harmless one is green alone and lands, the list is empty before anything else is cut, and the reverts land in a later batch |
+| Done before green | In the first wave, a worker runs `air done` before the lane's green, then commits once more for the bead without declaring again | Accepted; the bead stays in progress with the proof as a comment and closes at the landing that contains the declared head; the report records which landing carried the later commit and what named it |
+| Lease | A lease on a command (`serve.sh`, 20 s), run by two workers; the three beads are children of one epic, in the first wave | The second is refused until the first releases; the landing of the last child closes the epic and names it |
+| Dependency | A bead depending on one whose worker has declared done but whose landing has not happened | `air claim` refuses naming the dependency and its status and `bd ready` omits it until the landing; then it is offered and claimed. The 2026-11-06 trial's lease scenario never ran as specified because a dependent was claimable one batch early (`.air/trial-report-2026-11-06-pods.md` in the main checkout, its Lease row) |
 | Behind main | A branch still waiting when another batch lands | It stays ready and lands without its worker merging main |
 | Landing by role | The coordinator runs `air land` | Refused; only the lane lands |
-| Precheck | `"precheck": true`, a hand-over without one | Not ready for the lane until `air record precheck` passes |
+| Precheck | `"precheck": true`, a first-wave hand-over without one | Not ready for the lane until `air record precheck` passes |
+| Start-up prompts | The fleet `make trial` started with `air coordinator --fleet -- "<request>"`, the development-channels prompt answered in each pane by `scripts/trial/answer-prompts.sh` (air-fkb) | Every session registers in `air status` and no pane is on a prompt, with nothing typed by the coordinator or the owner (air-z41, air-fkb) |
+| Base branch | The coordinator renames the copy's `main` to `trunk` and sets `"base_branch": "trunk"` itself (air-3hw), one bead | The cut, the green, the done and the landing name and move `trunk`; `air status` prints the key; the session named `main` is still the owner (air-h7l) |
+
+The trial of record for 0.4.15 is the pod trial of 2026-11-06. `TRIAL_PODS=1 make trial` built
+the copy at `$TMPDIR/air-trial/minimal` from 429decff, and the lane and the three workers each
+verified on their own replica: 34 verify and precheck rows on four pods, 33 green, and no two
+sessions on one machine (the copy's ledger, `verify_runs` by worker and hostname). Twelve
+beads were filed and closed and eight batches landed. Nine of the ten scenarios of that run
+ended as expected.
+
+The lease scenario did not: the second serve run was claimed by another worker while
+`serve.sh` still sat on the first worker's branch, so the take and the release worked and no
+session was ever refused a held lease; the Dependency row above is that finding, and the done
+flow (air-4xj) is its fix. The behind-main branch landed without the lane needing anything
+from its worker, but that worker had merged main itself, so the case was not clean. The report
+is `.air/trial-report.md` in that copy.
+
+A hand-built pod copy on 2026-11-05 (air-fzl) ran five scenarios before its coordinator
+session ended and found two defects in `--pull`, fixed the same night (air-32u, air-b50); its
+report is `.air/trial-report-2026-11-05-pods.md` in the main checkout.
+
+`TRIAL_PODS=1 make trial` builds the pod copy (air-1bn): after the adopt commit,
+`scripts/trial/pod-targets.py` reads the owner's own `.claude/air.local.json` in the main
+checkout, takes the kubeconfig, namespace, deployment, container and `env PATH=` tail from
+its first kube-exec-nth entry, runs `hostname` on replica 1 through this checkout's
+`scripts/kube-exec-nth` and stops with kubectl's reason if that fails, then writes the copy's
+`.claude/air.local.json` with the five targets (coordinator 1, lane 2, worker-N N+2, each at
+`<the owner's path's parent>/trial/<session>`), hidden from the copy's git by its
+`.git/info/exclude` so no landing there can carry it.
+
+Unset, the copy has no overlay and runs locally. Removed when the trial no longer runs on pods.
 
 ## 10. TODO
 
@@ -552,11 +744,9 @@ One row per item; a row is deleted when its work lands.
 
 | Item | Added | Detail |
 |---|---|---|
-| Describe the fleet everywhere as three workers, a lane and the coordinator; CLAUDE.md still says "the workers and the coordinator". | 2026-09-14 | air-rr98 |
 | Record the failing step on a red run; `failing_step` is written only for an interrupted run. | 2026-09-14 | `cmd/record.rs` |
-| Red-batch policy: drop the member the failing step names, else halve; one recorded re-run for a suspected flake. Owner ruling open. | 2026-09-14 | recommended: drop by step |
+| Red-batch policy, what is still open: one recorded re-run for a suspected flake. The split itself is ruled (§8.1, 2026-11-09: each member is verified alone, air-67q). First datum for the flake: 2026-11-03, batch 71079154 red on a test's 20 s wall-clock wait under load, the member re-entered with an empty commit, one verify wasted (air-6y5). | 2026-09-14 | |
 | A verify whose tree changed between start and exit records a green for a tree that never existed; flag it like a dirty start. | 2026-09-14 | `cmd/record.rs` |
-| Does the coordinator keep `air close`? Recommended yes, counted: it recovers a gone worker's bead. Owner ruling open. | 2026-09-14 | `cmd/close.rs` |
 | `air gc` does not collect `.air/logs/`, which grows by up to 64 KiB per red run. | 2026-09-28 | air-06k7 |
 | The next trial shows both loop times under a minute plus the verify, and a fan-out and a fleet stop reaching exactly their sessions. | 2026-09-26 | air-1vri |
 | Audit every command and channel tool: purpose, incident, overlap, keep or drop; use an adopter's counts. | 2026-09-14 | |
@@ -564,7 +754,6 @@ One row per item; a row is deleted when its work lands.
 | Cut source comments to responsibility, invariants and contract, crate by crate. | 2026-09-25 | |
 | The do-less questions per mechanism, the failure direction of each text parse, a pass over the roles text, and the multi-agent question once traffic is measured. | 2026-08-29 | `do-less` |
 | Whether `bd serve` is worth a daemon, and whether beads' compare-and-set lets the claims table stop being the authority. | 2026-09-25 | §11 |
-| Keep the adopting guide current, and the README's quick start once the coordinator sets up the fleet on request. | 2026-09-25 | `docs/rules/adopting-air.md` |
 | Turn the two findings indexes about the adopter into beads. | 2026-09-25 | `private/adopter-corpus/` |
 
 ## 11. Technology decisions
@@ -587,10 +776,17 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 | The channel delivers Air's messages to every launched session. | A channel is the documented push into a running, even idle, session; events during a turn are queued for the next. A Stop hook with asyncRewake needs a waiting process per stop. The cost is one development-channels confirmation per session. | https://code.claude.com/docs/en/channels-reference.md, https://code.claude.com/docs/en/hooks.md (2026-09-26, Claude Code 2.1.283) |
 | The lane is a merge queue: batch, one verify at a time, fast-forward onto a verified tree, a conflict back to its author, no speculation, no rebase. | Every merge queue with a slow verify batches and splits on red; on one machine the verify is the CPU, and a rebase gives every commit a new sha. | bors-ng README, https://zuul-ci.org/docs/zuul/latest/gating.html, GitHub merge queue docs (2026-09-14) |
 | `git merge-tree --write-tree` for the conflict check; git 2.38 or later. | It merges without touching the index or the working tree. | https://git-scm.com/docs/git-merge-tree (2026-09-14) |
+| The remote runner's push over a command prefix (`kubectl exec`) is git's `ext::` remote helper, `git -c protocol.ext.allow=always push 'ext::<prefix> %S <path>'`, not a bundle piped through the prefix. | One exec per push with git's own negotiation; a bundle needs a second exec for the far tip, a temp file on the target (`git fetch /dev/stdin` fails), and a special case for nothing to send. Equal cost on a local stand-in, 0.13 s to 0.15 s cold for 100 commits (Apple M5, 2026-11-02, air-opq.2). | `git help remote-ext` (git 2.54.0, 2026-11-02); the measurement on air-opq.2 |
+| One `base_branch` key, read by one function, for the branch the fleet lands onto; the session named `main` keeps its name. | The research recommended no key (git's local `main` already supplies the base, and a key touches every gate: 15 branch-sense sites in 9 files). The owner reversed that on 2026-11-03: renaming a feature branch to local `main` is a hack and a hard-coded name makes no sense either. The research's §3 is the shape that was built. | `docs/research/base-branch.md` (air-zu3, 2026-11-02); owner ruling 2026-11-03 and the build, air-h7l |
+| Folder trust stays the owner's answer for a repository; the trial's scratch copy is marked trusted by `make trial` itself. | Claude Code has no flag or setting that pre-accepts trust for a session (the settings reference searched whole), only the hand-set `hasTrustDialogAccepted` key, which its own docs tell an agent not to set on the user's behalf; parent-directory trust stops at a nested repository (2.1.232). The research recommended trusting a fixed `TRIAL_DIR` once per machine and building nothing; after the dialog stopped the trial three times, the owner ruled on 2026-11-07 that the trial needs no step, and the research's option D was built narrowed to the trial script and one path (`scripts/trial/trust-copy.py`). The launcher never writes the key. | `docs/research/folder-trust.md` (air-ekj, 2026-11-05); owner ruling 2026-11-07, air-zau |
+| The remote runner stays the lane's verify transport and is not extended for workers. | Every product that gives an agent a machine puts the agent's process on it (Claude Code cloud and self-hosted sessions, dev containers, Cursor, Codex, Copilot); shipping a commit and a command to a machine and recording the verdict at the commit is the CI shape, which is right for the lane's green and wrong for a session that wants to work there. Six of the runner's eleven parts are friction a session on the machine would not have; the two trial defects are that friction. The shape to try for workers is one fleet on one pod, with no Air change. | `docs/research/remote-runner.md` (air-9ao, 2026-11-06) |
+| `--pull` stays a tar stream over the prefix, judged by the receiving tar; a sender killed by SIGPIPE after a good unpack is the normal end, and a sender's non-zero exit code is still a failure. | The idiom's verdict is the receiver's: `kubectl cp` returns only its local unpack's error and never collects the exec's (cp.go:361, :403-406), the shell pipeline's status is the last command's, and GNU tar 1.24 reverted the one release that treated a SIGPIPE death as an error. The 141 is the local `kubectl` (Go: a write to a broken stdout exits with SIGPIPE) after bsdtar stopped at the end-of-archive marker with 6 KiB of record padding still in flight, measured. rsync needs rsync on every target and a wrapper; not for result files. Nothing built beyond air-b50's lines. | `docs/research/pull-over-exec.md` (air-uyn, 2026-11-06) |
+| No notice filter and no feed pane for the coordinator yet; its chat keeps every notice. | In the one measured day no no-reply notice reached the coordinator, so the cost is unmeasured. The next step is to log every channel push as an event and count no-tool coordinator turns for one round; the fix, if material, is two lines in the fan-out, not a per-role filter table. | `docs/research/coordinator-notices.md` (air-ank, 2026-11-02) |
 | A few sessions: three workers, a lane, a coordinator. | Returns thin beyond three or four agents; subscription usage pools across sessions. | https://arxiv.org/abs/2512.08296 (2026-08-18); https://code.claude.com/docs/en/costs.md (2026-08-17) |
 | The close gate is an external recorded check, not the agent's report. | Models still claim success they did not achieve; an anti-cheating prompt lowers the rate and leaves it high (Opus 4.5, 55% to 35%). | https://assets.anthropic.com/m/64823ba7485345a7/Claude-Opus-4-5-System-Card.pdf (2026-08-18) |
 | Facts and refusals over procedure prose, each mechanism with a removal condition. | Context files do not raise task success and cost over 20% more; harness pieces encoding what a model cannot do get removed on the next model. | https://arxiv.org/abs/2602.11988, https://www.anthropic.com/engineering/harness-design-long-running-apps (2026-08-21); `.claude/skills/do-less/references/evidence.md` |
 | cargo-dist builds and publishes release binaries; macOS and Linux only. | Adopters needed Rust and a checkout to install Air. dist is the standard generator for a Rust binary's GitHub Releases and installer, so Air writes no release CI of its own. Windows is left out because Air needs tmux. Removed if Air ships through a package manager instead. | https://github.com/axodotdev/cargo-dist (0.33.0, 2026-10-21) |
+| Live UI: a hand-rolled std HTTP server in the binary, over an HTTP crate or a daemon. | The tree has no async runtime and no HTTP crate, the surface is GET and five JSON shapes, and a page that polls needs no push; `bd serve` has a write surface and no read-only mode, and the harness's own agent views show nothing of Air's facts. The ledger is read through a read-only open, bd through the shared trait at most twice per 30 s, and nothing is written. | `docs/research/live-ui.md` (2026-11-09) §1, §3, §4 |
 | Metis is attached to the coordinator for planning; Air stores no phase. | Metis enforces only forward-only phase moves on its own documents; Air borrows its decomposition reasoning and derives an epic's state. | metis at 6745810 (2026-08-17) |
 
 ## 12. Glossary
@@ -599,6 +795,7 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 |---|---|
 | bead | One task in beads, the task store. |
 | claim | The ledger's record that a worker holds a bead. |
+| done | A worker's declaration through `air done` that a bead's work is committed, with proof; the landing that carries the declared commit closes the bead. |
 | lane | The verification lane: the session that cuts, verifies and lands batches. |
 | owner | The person running the fleet, and any shell Air did not start. |
 | main checkout | The repository's own directory, on main, where the ledger lives. |

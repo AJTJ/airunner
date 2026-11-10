@@ -196,6 +196,39 @@ impl Ledger {
         Ok(())
     }
 
+    /// The machine a recorded run happened on (air-opq.5, schema v29): stamped after the row,
+    /// so no query that decides green, red or flaky changes shape.
+    pub fn stamp_machine(&self, id: &str, m: &crate::runs::Machine) -> Result<()> {
+        self.conn().execute(
+            "UPDATE verify_runs SET hostname=?2, image=?3, arch=?4, nproc=?5, cpu=?6 WHERE id=?1",
+            params![id, m.hostname, m.image, m.arch, m.nproc, m.cpu],
+        )?;
+        Ok(())
+    }
+
+    /// The machine stamped on run `id`; None for a row before v29 or one never stamped.
+    pub fn machine_of(&self, id: &str) -> Result<Option<crate::runs::Machine>> {
+        let m = self
+            .conn()
+            .query_row(
+                "SELECT hostname, image, arch, nproc, cpu FROM verify_runs WHERE id=?1",
+                params![id],
+                |r| {
+                    Ok(r.get::<_, Option<String>>(0)?
+                        .map(|hostname| crate::runs::Machine {
+                            hostname,
+                            image: r.get(1).unwrap_or(None),
+                            arch: r.get(2).unwrap_or_default(),
+                            nproc: r.get(3).unwrap_or(0),
+                            cpu: r.get(4).unwrap_or_default(),
+                        }))
+                },
+            )
+            .optional()?
+            .flatten();
+        Ok(m)
+    }
+
     /// (green, red) counts of `kind` at `sha`, every worker: disagreement at one sha is
     /// flakiness made visible (the adopter's adoption log §9). Counted at the commit,
     /// not the tree (air-7wf): two commits over one tree that disagree could be flakiness OR
@@ -393,6 +426,24 @@ impl Ledger {
         Ok(v)
     }
 
+    /// Every run of `kind` that finished strictly after `at` and was not killed, any verdict,
+    /// newest first (air-67q). The other half of a red batch's split: which members have since
+    /// been verified on their own is read from the runs after the red, with their members, and
+    /// a killed run is no verdict, so it does not count as having tested anything.
+    pub fn runs_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
+        let sql = format!(
+            "SELECT id, worker, sha, kind, exit_code, trigger, failing_step, started_at, \
+             finished_at, log_path, command, duration_ms, output_bytes, dirty, tree, members, \
+             main_sha FROM verify_runs WHERE kind=?1 AND finished_at > ?2 AND {NOT_KILLED} \
+             ORDER BY finished_at DESC"
+        );
+        let mut st = self.conn().prepare(&sql)?;
+        let v = st
+            .query_map(params![kind.as_str(), at], row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
     /// Every run of `kind` started at or after `at`, any verdict, newest first (air-06k7): what
     /// the loop measurement reads, instead of the newest 500.
     pub fn runs_started_since(&self, kind: Kind, at: &str) -> Result<Vec<VerifyRun>> {
@@ -573,6 +624,25 @@ mod tests {
             members: vec![],
             main_sha: None,
         }
+    }
+
+    /// air-opq.5: the machine is stamped after the row and read back; an unstamped row answers
+    /// None, and the stamp changes nothing a green query reads.
+    #[rstest]
+    fn a_run_is_stamped_with_its_machine(ledger: Ledger) {
+        let r = run("lane", "abc", 0, "2026-11-03T10:00:00Z");
+        ledger.record_verify(&r).unwrap();
+        assert_eq!(ledger.machine_of(&r.id).unwrap(), None);
+        let m = crate::runs::Machine {
+            hostname: "box".into(),
+            image: None,
+            arch: "aarch64".into(),
+            nproc: 8,
+            cpu: "Apple M1".into(),
+        };
+        ledger.stamp_machine(&r.id, &m).unwrap();
+        assert_eq!(ledger.machine_of(&r.id).unwrap(), Some(m));
+        assert_eq!(ledger.runs_at("abc", Kind::Verify).unwrap(), (1, 0));
     }
 
     /// air-1pu5: the next tool call after a precheck is stamped once, and only on a finished
@@ -762,6 +832,30 @@ mod tests {
         );
         // The prune is a write: the dead row is gone for the next reader too.
         assert_eq!(ledger.verifies_in_flight().unwrap().len(), 2);
+    }
+
+    /// air-67q: `runs_since` is every non-killed run finished strictly after `at`, any
+    /// verdict, with its members, newest first.
+    #[rstest]
+    fn runs_since_returns_every_verdict_after_at_except_killed(ledger: Ledger) {
+        let at = "2026-11-09T19:22:21Z";
+        ledger.record_verify(&run("lane", "before", 1, at)).unwrap();
+        let mut alone = run("lane", "cut-a", 2, "2026-11-09T19:22:46Z");
+        alone.members = vec![crate::landings::Member {
+            worker: "w1".into(),
+            sha: "aaaa".into(),
+        }];
+        ledger.record_verify(&alone).unwrap();
+        ledger
+            .record_verify(&run("lane", "green", 0, "2026-11-09T19:23:00Z"))
+            .unwrap();
+        ledger
+            .record_verify(&run("lane", "killed", 143, "2026-11-09T19:24:00Z"))
+            .unwrap();
+        let since = ledger.runs_since(Kind::Verify, at).unwrap();
+        let shas: Vec<&str> = since.iter().map(|r| r.sha.as_str()).collect();
+        assert_eq!(shas, ["green", "cut-a"]);
+        assert_eq!(since.get(1).map(|r| &r.members), Some(&alone.members));
     }
 
     /// air-80x.4: a run's members round-trip, and `latest_runs` returns every verdict newest

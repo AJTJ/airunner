@@ -117,6 +117,9 @@ mod tests {
         head: Set,
         bead: Bead,
         commits: u8,
+        /// Rule (b) only: the head the worker declared done at (air-4xj.1). The landing
+        /// closes the bead once main contains it.
+        done: Option<Set>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -189,6 +192,7 @@ mod tests {
             head: base,
             bead: Bead::Held,
             commits: 0,
+            done: None,
         };
         State {
             main: base,
@@ -272,8 +276,6 @@ mod tests {
         let f = BatchFacts {
             worker: format!("w{i}"),
             head: sha(&w.head),
-            contains_main: is_sub(&s.main, &w.head),
-            green_at_head: verdict_at(s, &w.head) == Some(Verdict::Green),
             carried,
             held: if open(rule, w.bead) {
                 vec![bead_name(i)]
@@ -356,6 +358,8 @@ mod tests {
             bead: Some(bead_name(i)),
             held_beads: vec![bead_name(i)],
             under_lane: true,
+            // Rule (b) is `air done`: the gate without its green checks (air-4xj.1).
+            require_green: rule == CloseRule::BeforeLanding,
             ..GateFacts::default()
         };
         handover_verdict(&f).pass
@@ -416,13 +420,24 @@ mod tests {
                 t.w[i].head.extend(s.main);
                 out.push((Event::MergeMain(i), t));
             }
-            if w.bead == Bead::Held && close_passes(s, rule, i) {
+            // Rule (b): a done bead may be declared again after a later commit, which moves
+            // the declared head (air-4xj.1).
+            let declarable = match rule {
+                CloseRule::BeforeLanding => w.bead == Bead::Held,
+                CloseRule::AtLanding => w.bead != Bead::Closed,
+            };
+            if declarable && close_passes(s, rule, i) {
                 let mut t = s.clone();
                 let landed = (0..w.commits).all(|n| s.main.contains(&commit_id(i, n)));
                 t.w[i].bead = match rule {
                     CloseRule::BeforeLanding => Bead::Closed,
+                    // `air done` on work main already holds closes at once: no landing
+                    // ahead would carry it.
                     CloseRule::AtLanding if landed => Bead::Closed,
-                    CloseRule::AtLanding => Bead::Done,
+                    CloseRule::AtLanding => {
+                        t.w[i].done = Some(w.head);
+                        Bead::Done
+                    }
                 };
                 out.push((Event::Close(i), t));
             }
@@ -496,11 +511,11 @@ mod tests {
             let mut t = s.clone();
             t.main.extend(s.lane);
             if rule == CloseRule::AtLanding {
+                // `land::close_done`: a declared bead closes when main contains its declared
+                // head; a bead nobody declared is never closed by a landing.
                 for i in 0..2 {
                     let w = &t.w[i];
-                    let all_in =
-                        w.commits > 0 && (0..w.commits).all(|n| t.main.contains(&commit_id(i, n)));
-                    if all_in && w.bead != Bead::Closed {
+                    if w.bead == Bead::Done && w.done.is_some_and(|d| is_sub(&d, &t.main)) {
                         t.w[i].bead = Bead::Closed;
                     }
                 }
@@ -613,8 +628,11 @@ mod tests {
         eprintln!("lifecycle model: {n} states in {:?}", t0.elapsed());
     }
 
-    /// air-k52n item 3: the same model under rule (b), close at landing. Printed for the
-    /// owner's ruling, asserted only to have run: no rule is changed by that bead.
+    /// air-k52n item 3, built by air-4xj.1: the same model under rule (b). The worker's
+    /// `air done` runs the gate without its green checks and the landing closes the bead once
+    /// main contains the declared head, so from every reachable state every bead still lands
+    /// and closes. Fails on the rule as air-k52n first modelled it, where a declaration on
+    /// work main already held left the bead open with no landing ahead to close it.
     #[test]
     fn close_at_landing_is_evaluated() {
         let (n, stuck, path) = explore(CloseRule::AtLanding);
@@ -623,5 +641,12 @@ mod tests {
             stuck.len()
         );
         assert!(n > 100, "the model reached only {n} states");
+        assert!(
+            stuck.is_empty(),
+            "{} of {n} reachable states are stuck under close-at-landing; the first is reached \
+             by {path:?}: {:?}",
+            stuck.len(),
+            stuck.first()
+        );
     }
 }

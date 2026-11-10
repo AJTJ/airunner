@@ -17,10 +17,6 @@ fn scratch_repo() -> tempfile::TempDir {
             .arg("-C")
             .arg(dir.path())
             .args(args)
-            .env("GIT_AUTHOR_NAME", "air")
-            .env("GIT_AUTHOR_EMAIL", "air@example.invalid")
-            .env("GIT_COMMITTER_NAME", "air")
-            .env("GIT_COMMITTER_EMAIL", "air@example.invalid")
             .output()
             .unwrap();
         assert!(

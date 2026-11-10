@@ -7,6 +7,283 @@ been told about, including releases before this file started.
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-11-09
+
+A worker declares its bead done with `air done` and proof; the landing that puts that commit
+on main closes the bead. Live trial on 2026-11-09 on pods
+(`.air/trial-report-2026-11-09-pods.md`) found three defects, fixed in this release; the trial
+of record is the rerun after them.
+
+### Added
+
+- `air done <id> --reason-file <proof>` for a worker or the lane: the hand-over gate without
+  its green checks (the bead's commit, your claim, a declared precheck), the proof as a comment
+  on the bead and the judged head on the claim. `air land` closes a done bead once the base
+  branch contains that head, in one bd process, and releases the claim as `landed`; a bead
+  already on the base branch closes at once. A bead nobody declared done is never closed by a
+  landing.
+- After a red batch of several members, `air record` and `air status` list the members not
+  yet verified alone and the `--only` cut for the first, until each has been cut alone or a
+  later green carries it (owner ruling 2026-11-09: each member is tested individually). The split
+  chooses among every red-held branch, not only the newest red batch's members. The trial's Red
+  batch row files three beads, two breakers and one harmless, held in one cut by the fleet stop.
+
+### Changed
+
+- A worker's or the lane's `air close` is refused and names `air done`; the landing
+  closes a declared bead once the base branch holds its head. The coordinator's and the
+  owner's `air close` are unchanged. The `batch green` notice to a batch's members is gone,
+  since a green asks nothing of a worker that has declared done; the red and dropped notices
+  stay. A member's `main moved` notice names the beads of its own the landing closed and any
+  done bead still waiting for its head. The loops line measures done to landed in place of
+  batch green to close.
+- The roles text, the design doc, CLAUDE.md, the README, the adopting guide, the beads
+  and decomposition skills and the example say what the round built: a worker declares its
+  bead done with `air done` and the landing closes it; `air close` is the coordinator's and the
+  owner's.
+- The live trial covers the done flow: Early close is Done before green, with one more
+  commit after the declaration; a Dependency scenario shows a dependent refused until its
+  dependency lands; the red batch has two members and a fleet stop and resume inside the
+  breaker's wait; the lease beads are one epic's children, closed by the last landing; the
+  conflict pair hears the peer-file warning. Eleven scenarios, in the request and in §9.1.
+
+### Removed
+
+- The `closed-not-landed` attention condition: its input, a worker's close before the
+  landing, no longer arrives once a worker declares done and the landing closes. Recorded
+  firings still attribute in `air audit`. `handover-not-green` is renamed `done-refused`: a
+  worker whose `air done` was refused and has not passed since, with the attempt count per
+  bead and the last attempt's time, whatever the green at its head.
+
+### Fixed
+
+- `air land` could not close a bead its worker held: bd 1.3.0 refuses a close by another
+  actor without `--force`, and the lane was refused at every landing of the 2026-11-09 trial.
+  The landing's close passes `--force` (the landing's only; `air close` and `air reclaim` pass
+  none), a close bd refuses even so is reported as `done: bd refused to close` and in the
+  `main moved` notice as `done but refused`, apart from a bead still waiting for its head, and
+  `air handover` names a missing precheck whatever the green, as `air done` does.
+- `air status` showed a session's model from the first transcript line carrying the key,
+  whatever the record kind, so the coordinator read as Opus while it ran Fable. The model is
+  now the newest assistant record's, and a `/model` switch after launch shows on the next hook.
+
+## [0.4.15] - 2026-11-07
+
+Live trial on 2026-11-06, the first with every session on its own pod
+(`.air/trial-report-2026-11-06-pods.md`): 12 beads, 8 landings, one red reverted and landed
+green, nothing typed by the owner after `TRIAL_PODS=1 make trial`. The 0.4.14 row below was
+never tagged; this release carries both.
+
+### Added
+
+- `TRIAL_PODS=1 make trial` runs the trial fleet on pods: the copy gets a gitignored
+  `.claude/air.local.json` of five targets, one replica and one path per session, built by
+  `scripts/trial/pod-targets.py` from the owner's own overlay through this checkout's
+  `scripts/kube-exec-nth`, after replica 1 has answered `hostname`; unset, nothing changes.
+- `docs/research/remote-runner.md`: whether `air run` and `targets` are the idiomatic way to
+  give a session a machine. The field puts the agent on the machine; Air's shape is CI's, right
+  for the lane's verify and not for workers. Keep it for the lane, fix the two trial defects,
+  build no more of it, and try one fleet on one pod next.
+- The `user-summary` skill, the shape of every reply to the owner in chat: one line of
+  state, then Question, Context and Recommendation per item, the settling action last. Ported
+  from an adopter; CLAUDE.md names it and `plain-language` allows its three labels.
+- `.claude/air.local.json`, gitignored by the adopter and read beside `.claude/air.json`
+  from the main checkout: its top-level keys replace the committed file's, so a machine's
+  `targets` and allow lists stay out of git history and take effect when written, not when a
+  landing carries them (twice on 2026-11-05 a `targets` landing verified on the old target).
+  `air status` names an unknown key the overlay set with its file, reports an overlay that
+  does not parse, and warns once if git tracks it.
+- `docs/research/folder-trust.md`: whether a fleet can start in a fresh directory without
+  the owner answering Claude Code's folder-trust dialog. It cannot by any flag or setting; the
+  trial script's `TRIAL_DIR` at a fixed, once-trusted path is the answer, and nothing is built.
+- `docs/rules/remote-verify.md`, the setup guide for verifying on another machine: what a
+  target is, which session gets it and why, what the machine needs, the gitignored files, the
+  entry in both forms, the first run, the machine gone. Linked from the README, the docs
+  index, the adopting guide and the design doc.
+- `"targets"` entries take an `exec` list, the argv prefix that runs a command on the
+  machine (such as `kubectl exec -i <pod> -c <c> -n <ns> --`); `air run` and `air record` run
+  every step through it and push through it as git's `ext::` remote. `"kind": "ssh"` stays as
+  the short form for `ssh user@host`.
+- `docs/research/pull-over-exec.md`: how `kubectl cp`, the tar-over-ssh idiom and rsync
+  carry files back over an exec transport and judge success. The 141 `air run --pull` sees is
+  the local `kubectl` killed by SIGPIPE after the receiving tar stopped at the end-of-archive
+  marker; the idiom's verdict is the receiver's, and a sender's non-zero exit code stays a
+  failure. air-b50 follows it; nothing else is built.
+- `air status` names each top-level key in `.claude/air.json` the running binary does not
+  read, with the binary's version and build commit, and `--json` lists them as
+  `unknown_config_keys`; a fleet ran a binary thirteen days behind main against a `targets` key
+  and nothing said so.
+- `worker_allow` and `coordinator_allow` in `.claude/air.json`: permission patterns the
+  launcher puts on that role's `--settings` allow list, the lane taking the worker's, as the
+  two deny keys already reach its deny list. For the adopter's own machine commands, which Air
+  does not name; the deny list wins where both name a command.
+
+### Changed
+
+- the trial request's last scenario: the coordinator renames the scratch copy's `main` to
+  `trunk` and sets `"base_branch": "trunk"` itself, so no row of `make trial`'s request waits on
+  the owner.
+- `roles.md`: the worker sequence says `git merge <base branch>` instead of `git merge
+  main`, and the Every-role section says the name is `main` unless `base_branch` is set and that
+  `air status` prints it.
+- the ready notice: `<n> bead(s) are claimable; run `bd ready`` instead of a list of ids
+  that was stale by the time a worker read it; the per-recipient rotation of that list is gone
+  with it.
+- `make trial` starts the trial fleet itself and needs no keystroke after it: the request
+  text is the coordinator's launch prompt (`air coordinator -- "<text>"`, a positional that now
+  leads argv instead of landing among the deny values), the development-channels prompt in each
+  pane is answered by the script, and `TRIAL_DIR` defaults to one fixed path the owner trusts
+  once.
+- `air worker` allows `air run` and `air record` bare on its `--settings`, the way the
+  lane's loop is allowed, so a worker's run against a target is not refused by auto mode's
+  classifier; `.air/roles.md` tells workers to run both with no pipe or redirect.
+- `.claude/air.json` gives the coordinator, the lane and each worker a target of its
+  own, each pinned to a different replica of the dev deployment: `scripts/kube-exec-nth`
+  resolves the session's pod when the command runs (coordinator, lane, worker-N, sorted by
+  name), and a session
+  whose replica is missing fails with one line naming it. The setup guide's new section
+  "One machine per session" covers VMs reachable by ssh (one entry each, no resolver) and
+  replicas of one deployment (air-oep).
+- the committed `.claude/air.json` of this repository carries no `targets`: the five
+  per-session entries, which name one laptop's kubeconfig and one user's home, live in the
+  owner's gitignored `.claude/air.local.json`, so a clone on another machine runs locally
+  until its owner writes an overlay of their own (air-vj6).
+- `make trial`: it marks its scratch copy trusted in Claude Code's `~/.claude.json` itself
+  (`scripts/trial/trust-copy.py`, one key for that one path), so no folder-trust dialog stops the
+  trial on any machine. The launcher still refuses an untrusted repository.
+- `closed-not-landed`: when the lane would not cut the branch either, the detail says why
+  and names the fix (`not_batch_ready` on the row, `not cut by the lane:` on the printed line).
+
+### Fixed
+
+- the row `air land` writes at the landed sha carried no machine: it now copies the
+  hostname, image, arch, nproc and cpu from the green it lands on, so a landing verified on a
+  target names the machine like the verify did (first seen on the pod, 2026-11-05).
+- a file a command wrote in the target checkout blocked the next checkout there of a
+  commit that tracks it, so the precheck or the lane's verify recorded nothing (the pod trial,
+  2026-11-06): `air run` and `air record` now run `git clean -qfd` and a forced checkout before
+  the command, so the target holds only commits; ignored files there stay.
+- `air selftest`'s base_branch probe landed without a git identity and failed with exit 128
+  on a host with no global git config: every air the selftest spawns now carries the same
+  identity its git fixtures set, from one constant.
+- the lease check refused `air lease take X --reason "..." && <cmd>` as a whole; a take
+  of the same resource joined to the command by `&&` now counts as holding it, and `;`, `||`
+  or a take for another resource is still refused.
+- `scripts/changelog-assemble.sh` folded a leading blank line under the first entry of a
+  heading on mawk (Debian's awk), which made every verify on the Linux pod red on the changelog
+  tests; the key is now tested before the element is referenced.
+- `air run --pull` through `kubectl exec` reported "the tar stream failed" and recorded nothing
+  pulled although the files arrived: the local tar closes the pipe at the end-of-archive marker
+  and the prefix dies of SIGPIPE. The unpack is now the verdict; a sender exit code after a good
+  unpack is reported as the target's tar failing.
+- a repo's `coordinator_deny` patterns were appended after the Metis flags when `metis` is
+  true, where the harness read them as positional arguments and denied nothing; they now go
+  among the `--disallowed-tools` values. Worker argv was already right.
+- The machine probe behind `air run` and `air record` read an empty CPU model on arm64 Linux,
+  where `/proc/cpuinfo` has no `model name` line; it now falls back to `lscpu`, then to the
+  CPU implementer and part, so the run row names the CPU on the pod.
+- the drain test `a_real_hang_is_killed_and_reported` failed on Linux: its `sh -c "sleep 5"`
+  forks `sleep` there, the kill reached `sh` alone, and the timeout path waited the whole
+  stall for the pipes. The fixture now execs `sleep`, and the git.rs timeout path records the
+  grandchild stall as a known gap with the condition for bounding the drain.
+- twelve landing tests failed on a host with no global git config (`commit-tree` exited
+  128, author identity unknown): the shared test helper now gives every spawned process its own
+  git identity and no global config, so the suite passes and fails the same on every host.
+
+## [0.4.14] - 2026-11-03
+
+Live trial on 2026-11-03 (`.air/trial-report-2026-11-03.md`): 11 beads, 8 landings, one red as
+planned. Six of eight scenarios passed on the first try. Landing by role was not shown at Air's
+layer: the auto-mode classifier denied the coordinator's `air land` before Air could refuse it.
+Precheck held, but the worker ran `air handover` itself instead of waiting to be told. One extra
+red came from a worker amending a commit after the cut. No Air refusal was worked around.
+
+### Added
+
+- `base_branch` in `.claude/air.json`: the branch the fleet lands onto, `main` by
+  default. Every gate, cut, landing, notice and refusal reads it where it used to say `main`,
+  and names it; the session named `main` keeps its name. `air status` prints it when set and
+  `--json` carries it. A selftest scenario runs a fleet whose only branch is `trunk` (air-h7l).
+- On a Mac the launchers run the session under `caffeinate -i`, so an hour-long command no
+  longer idle-sleeps the machine (three hours lost at an adopter on 2026-10-29); the assertion
+  ends with the session. `air status` prints `idle sleep: <n> min` when `pmset -g` reports
+  under ten minutes.
+- `docs/research/coordinator-notices.md`: whether the coordinator's no-reply notices (main
+  moved, batch result, session join) should go to a feed pane instead of its chat; the one-day
+  ledger count, and the recommendation to log every channel push first and build nothing yet.
+- `model` and `lane_model` in `.claude/air.json`: every launcher passes `--model` from them
+  when the command line gives none, `air fleet up --model <m>` overrides for one launch, and
+  `air status` marks a session whose transcript names another model.
+- `docs/rules/adopting-air.md` names the fix for a file every branch appends to:
+  `merge=union` in `.gitattributes`, for append-only files only.
+- `air run -- <command>` runs a command on the calling session's target from `"targets"` in
+  `.claude/air.json` (kind `ssh`: push HEAD to `refs/air/<session>` on the host, check it out, run
+  there, stream the output back, pass the exit code through), and locally with nothing added
+  when the session has no target.
+- every `air run` is recorded in the ledger's `runs` table with the machine it ran on
+  (hostname, `AIR_IMAGE` if the target sets one, arch, nproc, CPU model), beside the session,
+  commit, tree, command, exit, times, output size and target; `air run --json` prints the row.
+- `air run --pull <glob>` (repeatable): after the command exits, the matching paths under the
+  target's checkout come back as one tar stream over the same ssh and are unpacked into the
+  worktree, overwriting; the run's row names the pulled paths and their byte total.
+- `air record` runs the check on the session's target when `targets` names one, on the
+  pushed HEAD, and records it at the local HEAD as before with the machine stamped on the row;
+  a dirty tree is refused and `--local` runs it here. Every recorded run now carries the machine
+  it ran on.
+- `air coordinator` allows `Bash(tmux send-keys *)` on its own `--settings`, so the
+  start-up prompt answer the coordinator types after the owner's yes (air-d73) is no longer
+  refused by auto mode's classifier; three refusals in two days of the live trial. Workers
+  and the lane get no such rule.
+- `docs/research/base-branch.md`: what merge queues and trunk-based development do about a
+  base other than main, the count of `main` literals by sense, and the recommendation to
+  document git's answer (a local `main` tracking any branch) and build no mechanism.
+
+### Changed
+
+- Surface notices are one file each under `crates/cli/surface.d/<ordinal>-<id>.rs`, folded
+  into `install::SURFACE` by `build.rs`, so two beads adding a notice never conflict at the same
+  line. A missing or empty directory fails the build; a malformed fragment is a rustc error
+  naming the file.
+- The coordinator's heartbeat is opt-in. `.air/roles.md` and the SessionStart context tell
+  it to create one only where `.claude/air.json` sets `heartbeat_minutes`, and `air status`
+  prints the expected interval when the key is set.
+- The decomposition skill (installed as `air-decomposition`) carries four rules from Kairos,
+  each cited into its repository: check every name a plan cites against the code before filing,
+  cut a wide refactor as expand then contract, name a bead not yet filed by its full quoted
+  title, and review a wave as a set before filing it.
+- after a launch the coordinator reads each new pane and, if a start-up prompt is
+  waiting, asks the owner once and on a yes answers it through tmux; the one exception to
+  "do not type into panes". Folder trust stays the owner's. The design doc no longer says Air
+  cannot answer the start-up prompts.
+- The coordinator's branch is batch-ready only at a head it offered with `air ready` (new,
+  coordinator only), unless `.claude/air.json` sets `coordinator_autobatch` true; `air status
+  --json` says `not-offered` until then. Every coordinator commit used to cost the lane a cut.
+- The remote runner's push over a command prefix (`kubectl exec`) is decided: git's `ext::`
+  remote helper, not a bundle piped through the prefix; one row in the design doc's technology
+  decisions carries the measurement.
+- the coordinator's first step, unless the owner has said how to work, is to offer four
+  named workflows in plain text (fleet, coordinator alone, mixed, read-only) and take the pick
+  for the session; "commit in your own worktree only when no worker can make the change" is
+  replaced by the one real case, a commit only the coordinator's branch can carry.
+- `air worker`, `air lane`, `air coordinator` and `air fleet up` pre-answer the start-up
+  prompts Claude Code documents an answer for (`--add-dir <main checkout>`, `--permission-mode
+  auto`, `skipAutoPermissionPrompt`) and refuse to launch, naming the fix, when the main checkout
+  has no `hasTrustDialogAccepted` in `~/.claude.json`. Air never writes that key.
+
+### Fixed
+
+- the `air record` kill test polls with one connection and a short sleep, with a 60 s
+  deadline, so a loaded lane does not red the batch on a test's wall clock.
+- A worker branch that is green at a head containing `main` is batch-ready under a lane, so
+  the lane cuts it instead of leaving it closed and unlanded.
+- `air batch cut --only` and `--without` could not split a red batch: its members were
+  already held out of the set the split chose from. A split now chooses among the batch-ready
+  branches and the newest red batch's members at their red-held heads.
+- the three batch_cut tests reach their assertion when a cut fails and print the command's
+  stderr in the red, so a git error behind an empty member set names itself.
+- `air land --help` had no description and `air ready --help` showed the landing's: the
+  `Ready` variant had been inserted under `Land`'s doc comment (air-m8u). Each shows its own.
+
 ## [0.4.13] - 2026-10-22
 
 Live trial on 2026-10-22 (`.air/trial-report-2026-10-22.md`): 11 beads, 7 landings, one red as

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-pub const CURRENT_VERSION: i64 = 26;
+pub const CURRENT_VERSION: i64 = 31;
 
 const V1: &str = r#"
 CREATE TABLE IF NOT EXISTS verify_runs (
@@ -386,6 +386,70 @@ const V26: &str = r#"
 ALTER TABLE verify_runs ADD COLUMN resumed_at TEXT;
 "#;
 
+/// v27 (2026-11-03, air-opq.3): one row per `air run`, with the machine it ran on. Not a verify:
+/// no green query reads it. An adopter's measurements had no record of the machine behind them.
+const V27: &str = r#"
+CREATE TABLE IF NOT EXISTS runs (
+  id            TEXT PRIMARY KEY,
+  session       TEXT NOT NULL,
+  sha           TEXT NOT NULL,
+  tree          TEXT,
+  command       TEXT NOT NULL,
+  exit_code     INTEGER NOT NULL,
+  started_at    TEXT NOT NULL,
+  finished_at   TEXT NOT NULL,
+  duration_ms   INTEGER NOT NULL,
+  output_bytes  INTEGER NOT NULL,
+  target        TEXT NOT NULL,
+  hostname      TEXT NOT NULL,
+  image         TEXT,
+  arch          TEXT NOT NULL,
+  nproc         INTEGER NOT NULL,
+  cpu           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS runs_session ON runs(session, started_at);
+"#;
+
+/// v28 (2026-11-03, air-opq.4): what `air run --pull` brought back: the paths as a JSON array
+/// and their byte total. NULL and 0 on rows from before, and on every run without `--pull`.
+const V28: &str = r#"
+ALTER TABLE runs ADD COLUMN pulled TEXT;
+ALTER TABLE runs ADD COLUMN pulled_bytes INTEGER NOT NULL DEFAULT 0;
+"#;
+
+/// v29 (2026-11-03, air-opq.5): the machine a verify ran on, stamped after the row is written
+/// (`stamp_machine`). NULL for rows before it and for a probe that failed. A verify through
+/// `air run`'s target is recorded at the local head like any other; these say where it ran.
+const V29: &str = r#"
+ALTER TABLE verify_runs ADD COLUMN hostname TEXT;
+ALTER TABLE verify_runs ADD COLUMN image TEXT;
+ALTER TABLE verify_runs ADD COLUMN arch TEXT;
+ALTER TABLE verify_runs ADD COLUMN nproc INTEGER;
+ALTER TABLE verify_runs ADD COLUMN cpu TEXT;
+"#;
+
+/// v30 (2026-11-03, air-m8u): the heads the coordinator offered to the lane with `air ready`.
+/// With `coordinator_autobatch` absent or false its branch is batch-ready only at an offered
+/// head; each coordinator commit at an adopter had cost the lane a cut and a verify.
+const V30: &str = r#"
+CREATE TABLE IF NOT EXISTS offers (
+  worker  TEXT NOT NULL,
+  sha     TEXT NOT NULL,
+  at      TEXT NOT NULL,
+  PRIMARY KEY (worker, sha)
+);
+"#;
+
+/// v31 (2026-11-09, air-4xj.1): a worker's "done" declaration on its open claim. `air done`
+/// writes the head it judged (the bead's newest trailer commit), the proof and the time; the
+/// claim stays open, and `air land` closes the bead once the base branch contains `done_head`.
+/// NULL on every claim nobody declared done, which a landing never closes.
+const V31: &str = r#"
+ALTER TABLE claims ADD COLUMN done_at TEXT;
+ALTER TABLE claims ADD COLUMN done_head TEXT;
+ALTER TABLE claims ADD COLUMN done_proof TEXT;
+"#;
+
 /// Every migration in order, `MIGRATIONS[i]` being the step from version `i` to `i + 1`.
 ///
 /// air-z7rh: ONE ordered list, because there were two. The runner applied V1..V20 in twenty
@@ -401,7 +465,7 @@ ALTER TABLE verify_runs ADD COLUMN resumed_at TEXT;
 /// what production would have produced.
 const MIGRATIONS: &[&str] = &[
     V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18, V19, V20, V21,
-    V22, V23, V24, V25, V26,
+    V22, V23, V24, V25, V26, V27, V28, V29, V30, V31,
 ];
 
 /// Apply migrations up to `CURRENT_VERSION`. Idempotent.

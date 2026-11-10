@@ -58,59 +58,18 @@ pub fn added(before: &[String], now: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// `ids` with each run of equal priority rotated left by `by`, so each recipient reads a
-/// different bead first (0.4.9 trial: nine claim refusals, every one a race after a single
-/// notice put the same first bead in front of every idle worker). bd's priority order is kept:
-/// the groups stay where they are, and only where each group starts moves, so one P0 bead is
-/// still first for everyone (they collide, which is correct) and three P0 beads give three
-/// workers three different first beads. `priorities` is bd's per id; a length that does not
-/// match `ids` (a cache from before it was recorded) reads as one group.
-pub fn rotated(ids: &[String], priorities: &[i64], by: usize) -> Vec<String> {
-    let known = priorities.len() == ids.len();
-    let pairs: Vec<(&String, Option<i64>)> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            (
-                id,
-                if known {
-                    priorities.get(i).copied()
-                } else {
-                    None
-                },
-            )
-        })
-        .collect();
-    let mut out = Vec::with_capacity(ids.len());
-    for run in pairs.chunk_by(|a, b| a.1 == b.1) {
-        let by = by.checked_rem(run.len()).unwrap_or(0);
-        out.extend(
-            run.iter()
-                .skip(by)
-                .chain(run.iter().take(by))
-                .map(|(id, _)| (*id).clone()),
-        );
-    }
-    out
-}
-
-pub fn beads_ready_text(ids: &[String], priorities: &[i64], rotated_by: usize) -> String {
-    let listed = rotated(ids, priorities, rotated_by);
-    let order = if listed == ids {
-        String::new()
-    } else {
-        " (the same beads every worker was told, in a different order so you do not all try \
-         the same one first)"
-            .to_string()
-    };
-    // air-0blv: the list is a snapshot. In the 0.4.10 trial 10 of 14 refused claims came 83 s
-    // to 19 min after a peer took the bead: workers walking this list after a hand-over, not
-    // racing on it. So it says so, and names where the current list is.
+/// The ready notice: a count and where the current list is, never the ids (air-bcg). The
+/// list was a snapshot, and said so (air-0blv), and workers still walked it: in the 2026-11-06
+/// trial worker-1 lost three claim races and worker-2 two on beads the notice still listed.
+/// `bd ready` takes about 0.12 s, so the worker reads the live list instead. The rotation of
+/// the list per recipient (0.4.9 trial, `beads-ready-rotated`) went with the list; the
+/// measurement that would bring a spread back is claim refusals on the first bead of
+/// `bd ready` in `air audit`.
+pub fn beads_ready_text(count: usize) -> String {
+    let beads = if count == 1 { "bead is" } else { "beads are" };
     format!(
-        "beads are ready: {}{order}. If you hold no claim, claim one with `air claim <id>`; the \
-         first claim wins, and a refusal names its reason. This list is as of \
-         now: after a refused claim or a finished bead, pick from `bd ready`, not from here.",
-        listed.join(" ")
+        "{count} {beads} claimable; run `bd ready` for the current list. If you hold no claim, \
+         claim one with `air claim <id>`; the first claim wins, and a refusal names its reason."
     )
 }
 
@@ -130,7 +89,6 @@ pub fn fan_out_ready(
     worker: &str,
     s: &Snapshot,
     ready: &[String],
-    priorities: &[i64],
     at: &str,
 ) -> Vec<String> {
     let cached = |k: &str| -> Option<Vec<String>> {
@@ -142,7 +100,7 @@ pub fn fan_out_ready(
     };
     let seen = cached(READY_SEEN);
     let before = cached(READY_RECIPIENTS);
-    // Sorted so a worker's index, and so its rotation, does not depend on snapshot order.
+    // Sorted so the cached recipient list compares by name, not by snapshot order.
     let mut recipients = without_claim(s);
     recipients.sort();
     for (k, v) in [
@@ -159,12 +117,12 @@ pub fn fan_out_ready(
         return Vec::new();
     }
     let key = ready.join(" ");
+    let text = beads_ready_text(ready.len());
     let mut told = Vec::new();
-    for (i, w) in recipients.iter().enumerate() {
+    for w in &recipients {
         if new.is_empty() && !joined.contains(w) {
             continue;
         }
-        let text = beads_ready_text(ready, priorities, i);
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
@@ -212,23 +170,17 @@ pub fn fan_out_ready(
 
 /// The claimable ready list, refreshed from bd when the cache is older than a minute. `None`
 /// when bd did not answer and nothing was cached, so a silence is never read as "empty".
-fn ready_now(repo: &Path, at: &str) -> Option<(Vec<String>, Vec<i64>)> {
+fn ready_now(repo: &Path, at: &str) -> Option<Vec<String>> {
     let cached = super::ready_cache::read(repo);
     let fresh = cached
         .as_ref()
         .and_then(|c| super::status::seconds_between(&c.at, at))
         .is_some_and(|age| age < READY_REFRESH_SECS);
     if fresh {
-        return cached.map(|c| (c.ids, c.priorities));
+        return cached.map(|c| c.ids);
     }
     let bd = super::claim::bd_for(repo);
-    // The refresh wrote the cache with priorities; read them back from it.
-    super::ready_cache::refresh(repo, &bd, at)
-        .and_then(|ids| {
-            let c = super::ready_cache::read(repo)?;
-            Some((ids, c.priorities))
-        })
-        .or_else(|| cached.map(|c| (c.ids, c.priorities)))
+    super::ready_cache::refresh(repo, &bd, at).or_else(|| cached.map(|c| c.ids))
 }
 
 /// One pass of every producer from a command that just changed a fact (air-4lci): `air record`
@@ -265,9 +217,8 @@ pub fn tick(repo: &Path, ledger: &Ledger, worker: &str, s: &Snapshot) {
     }
     let at = super::now();
     let ready = ready_now(repo, &at);
-    let (ids, priorities) = ready.clone().unwrap_or_default();
-    fan_out_ready(ledger, worker, s, &ids, &priorities, &at);
-    if let Some((ready, _)) = &ready {
+    fan_out_ready(ledger, worker, s, ready.as_deref().unwrap_or_default(), &at);
+    if let Some(ready) = &ready {
         queue_empty(
             ledger,
             worker,
@@ -444,7 +395,7 @@ pub fn lanes(s: &Snapshot) -> Vec<String> {
     v
 }
 
-fn batch_ready_line(b: &BatchReady) -> String {
+pub fn batch_ready_line(b: &BatchReady) -> String {
     // air-ch9p: the coordinator's branch carries no bead, and printed `()`.
     let beads = if b.beads.is_empty() {
         "no bead".to_string()
@@ -599,20 +550,18 @@ fn member_beads(
     out
 }
 
-/// What each member hears when the lane records a batch verify: `close` on a green, the exit
-/// and the kept output on a red. A kill is no verdict and says nothing. Pure over the run and
-/// each member's beads.
-///
-/// A green names only the beads it covers (air-5ynn). A member with none, such as the
-/// coordinator whose commits name no bead, hears the green with no close instruction: an
-/// adopter's coordinator had about fifteen "close them now" in a day with nothing to close.
+/// What each member hears when the lane records a batch verify: the exit and the kept output
+/// on a red. A green says nothing here (air-4xj.2): a member declared its bead done when the
+/// work was committed, and the landing's "main moved" names what it closed; the "close them
+/// now" note a green used to carry had nothing left to ask for. A kill is no verdict and says
+/// nothing. Pure over the run and each member's beads.
 pub fn batch_result_notes(
     run: &air_ledger::verify::VerifyRun,
     beads_of: &dyn Fn(&Member) -> MemberBeads,
 ) -> Vec<MemberNote> {
     use air_ledger::verify::Verdict;
     let verdict = run.verdict();
-    if verdict == Verdict::Killed {
+    if verdict == Verdict::Killed || verdict == Verdict::Green {
         return Vec::new();
     }
     let alone = run.members.len() == 1;
@@ -621,79 +570,43 @@ pub fn batch_result_notes(
         .filter(|m| !m.worker.is_empty())
         .map(|m| {
             let beads = beads_of(m);
-            let (kind, content, named) = if verdict == Verdict::Green {
-                let later = if beads.later.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " {} has a later commit this batch does not contain; the next batch \
-                         covers it.",
-                        beads.later.join(" ")
-                    )
-                };
-                // air-ch9p (air-23ve): a batch of one fast-forwards, so "batch green at X
-                // contains your X" named one commit twice.
-                let what = if alone {
-                    format!("your {} is green as a batch of one", short(&m.sha))
-                } else {
-                    format!(
-                        "batch green at {} contains your {}",
-                        short(&run.sha),
-                        short(&m.sha)
-                    )
-                };
-                let content = if beads.covered.is_empty() {
-                    format!("{what}; it covers no bead you hold open.{later}")
-                } else {
-                    format!(
-                        "{what} ({}). Close them now with `air close <id> --reason-file \
-                         <proof>`; the proof is the lane's green at {}. `air handover` says \
-                         whether the close will pass.{later}",
-                        beads.covered.join(" "),
-                        run.sha
-                    )
-                };
-                ("batch-green", content, beads.covered)
+            let mut all = beads.covered;
+            all.extend(beads.later);
+            let list = if all.is_empty() {
+                "your commits".to_string()
             } else {
-                let mut all = beads.covered;
-                all.extend(beads.later);
-                let list = if all.is_empty() {
-                    "your commits".to_string()
-                } else {
-                    all.join(" ")
-                };
-                let output = run.log_path.as_deref().unwrap_or("not kept");
-                // air-ch9p (air-23ve): a batch of one has nothing to split, and since
-                // air-hyli its member stays out of the next batch until it moves.
-                let content = if alone {
-                    format!(
-                        "batch red at {} (exit {}); your {} ({list}) was its only member. \
-                         Output: {output}. Nothing lands on it. Your branch is batch-ready \
-                         again once it has a new commit, or a later green contains it.",
-                        short(&run.sha),
-                        run.exit_code,
-                        short(&m.sha),
-                    )
-                } else {
-                    format!(
-                        "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
-                         Output: {output}. Nothing lands on it and the lane splits the batch. \
-                         Your branch is out of the next batch until a later green contains your \
-                         commit (the split proves it) or you commit again; if the failure is in \
-                         your change, fix it with a new commit.",
-                        short(&run.sha),
-                        run.exit_code,
-                        short(&m.sha),
-                        run.members.len(),
-                    )
-                };
-                ("batch-red", content, all)
+                all.join(" ")
+            };
+            let output = run.log_path.as_deref().unwrap_or("not kept");
+            // air-ch9p (air-23ve): a batch of one has nothing to split, and since
+            // air-hyli its member stays out of the next batch until it moves.
+            let content = if alone {
+                format!(
+                    "batch red at {} (exit {}); your {} ({list}) was its only member. \
+                     Output: {output}. Nothing lands on it. Your branch is batch-ready \
+                     again once it has a new commit, or a later green contains it.",
+                    short(&run.sha),
+                    run.exit_code,
+                    short(&m.sha),
+                )
+            } else {
+                format!(
+                    "batch red at {} (exit {}); your {} ({list}) was one of {} members. \
+                     Output: {output}. Nothing lands on it and the lane verifies each member \
+                     alone. Your branch is out of the next batch until a later green contains \
+                     your commit, the lane verifies it alone, or you commit again; if the \
+                     failure is in your change, fix it with a new commit.",
+                    short(&run.sha),
+                    run.exit_code,
+                    short(&m.sha),
+                    run.members.len(),
+                )
             };
             MemberNote {
                 to: m.worker.clone(),
-                kind,
+                kind: "batch-red",
                 key: run.id.clone(),
-                beads: named.join(" "),
+                beads: all.join(" "),
                 content,
             }
         })
@@ -767,6 +680,7 @@ pub fn main_moved_recipients(
 ) -> Vec<String> {
     let mut v: Vec<String> = worktrees
         .iter()
+        // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
         .filter(|n| n.as_str() != "main" && !lanes.contains(n))
         .filter(|n| role == "owner" || n.as_str() != me)
         .cloned()
@@ -808,9 +722,32 @@ pub fn paths_line(paths: &[String]) -> String {
     }
 }
 
-/// The text one session reads. Everyone gets the fact, and a member also reads that its beads
-/// are in and may be closed, so a member gets one notice rather than this and a second "landed"
-/// one. Asks for no reply.
+/// One session's side of a landing (air-4xj.2): the head of its own the landing carried,
+/// when the batch commit named one (a batch of one fast-forwards and names none), the beads
+/// of its own the landing closed, its done beads whose declared head is still not on the
+/// base branch, and its done beads whose head is on it but bd refused to close (air-52u).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberMove {
+    pub sha: Option<String>,
+    pub closed: Vec<String>,
+    pub waiting: Vec<String>,
+    pub refused: Vec<String>,
+}
+
+impl MemberMove {
+    /// Nothing to say to this session beyond the fact.
+    pub fn is_empty(&self) -> bool {
+        self.sha.is_none()
+            && self.closed.is_empty()
+            && self.waiting.is_empty()
+            && self.refused.is_empty()
+    }
+}
+
+/// The text one session reads. Everyone gets the fact, and a member also reads that its head
+/// is in and which of its beads the landing closed, so a member gets one notice rather than
+/// this and a second "landed" one. It names only beads the landing closed, never a bead to go
+/// and close (air-4xj.2: a worker declares done and the landing closes). Asks for no reply.
 ///
 /// No command for merging (air-fehk). Workers read "`git merge main` brings these into your
 /// branch" as an instruction and merged mid-batch, moving the head off the sha the lane was
@@ -818,13 +755,14 @@ pub fn paths_line(paths: &[String]) -> String {
 /// to merge is the worker's call from the files listed (owner, 2026-09-29: "let the AI decide
 /// what is right to do"); roles.md says when.
 pub fn main_moved_text(
+    base: &str,
     merge: &str,
     beads: &[String],
     paths: &[String],
-    member: Option<(&str, &[String])>,
+    member: Option<&MemberMove>,
 ) -> String {
     let mut t = format!(
-        "main moved to {}: landed {}; files changed: {}.",
+        "{base} moved to {}: landed {}; files changed: {}.",
         short(merge),
         if beads.is_empty() {
             "no declared bead".to_string()
@@ -833,17 +771,45 @@ pub fn main_moved_text(
         },
         paths_line(paths)
     );
-    if let Some((sha, mine)) = member {
-        t.push_str(&format!(
-            " Your {} ({}) is in it: close any of those beads still open, with the lane's green \
-             as proof.",
-            short(sha),
-            if mine.is_empty() {
-                "your commits".to_string()
-            } else {
-                mine.join(" ")
-            }
-        ));
+    if let Some(m) = member.filter(|m| !m.is_empty()) {
+        let mut parts = Vec::new();
+        if let Some(sha) = &m.sha {
+            parts.push(format!("Your {} is in it", short(sha)));
+        }
+        if !m.closed.is_empty() {
+            parts.push(format!(
+                "{}closed: {}",
+                if m.sha.is_none() { "Of yours, " } else { "" },
+                m.closed.join(" ")
+            ));
+        }
+        if !m.waiting.is_empty() {
+            parts.push(format!(
+                "{}done but waiting: {} (the declared head is not on {base} yet)",
+                if m.sha.is_none() && m.closed.is_empty() {
+                    "Of yours, "
+                } else {
+                    ""
+                },
+                m.waiting.join(" ")
+            ));
+        }
+        // air-52u: its own words. The 2026-11-09 trial's notices said "waiting" for a head
+        // that was on main and a close bd had refused, and the workers read a contradiction.
+        if !m.refused.is_empty() {
+            parts.push(format!(
+                "{}done but refused: {} (bd refused the close; the next landing tries again)",
+                if m.sha.is_none() && m.closed.is_empty() && m.waiting.is_empty() {
+                    "Of yours, "
+                } else {
+                    ""
+                },
+                m.refused.join(" ")
+            ));
+        }
+        t.push(' ');
+        t.push_str(&parts.join("; "));
+        t.push('.');
     }
     t.push_str(" No reply needed.");
     t
@@ -853,7 +819,8 @@ pub fn main_moved_text(
 pub type LandedMember = (air_ledger::landings::Member, String);
 
 /// After `air land` moved main from `before` to `merge`: tell every session but the lane and
-/// the caller, once per landing. Returns who was queued.
+/// the caller, once per landing. `closed` and `waiting` are `(bead, worker)` pairs from the
+/// landing's done pass, and each member reads its own. Returns who was queued.
 #[allow(clippy::too_many_arguments)]
 pub fn main_moved(
     repo: &Path,
@@ -864,6 +831,9 @@ pub fn main_moved(
     merge: &str,
     beads: &[String],
     members: &[LandedMember],
+    closed: &[(String, String)],
+    waiting: &[(String, String)],
+    refused: &[(String, String)],
 ) -> Vec<String> {
     let paths: Vec<String> = crate::git::run(
         repo,
@@ -884,18 +854,27 @@ pub fn main_moved(
     let to = main_moved_recipients(&names, &lane_names(ledger), me, role);
     let at = super::now();
     let subject = beads.join(" ");
+    let base = super::handover::base_branch(repo);
     let mut told = Vec::new();
+    let of = |rows: &[(String, String)], w: &str| -> Vec<String> {
+        rows.iter()
+            .filter(|(_, who)| who == w)
+            .map(|(b, _)| b.clone())
+            .collect()
+    };
     for w in &to {
-        let member = members.iter().find(|(m, _)| &m.worker == w);
-        let mine = member
-            .map(|(m, tip)| beads_between(repo, tip, &m.sha))
-            .unwrap_or_default();
-        let text = main_moved_text(
-            merge,
-            beads,
-            &paths,
-            member.map(|(m, _)| (m.sha.as_str(), mine.as_slice())),
-        );
+        // A session hears its own side whether or not the batch commit named its head: a
+        // batch of one fast-forwards and names no member, and its bead still closed.
+        let member = MemberMove {
+            sha: members
+                .iter()
+                .find(|(m, _)| &m.worker == w)
+                .map(|(m, _)| m.sha.clone()),
+            closed: of(closed, w),
+            waiting: of(waiting, w),
+            refused: of(refused, w),
+        };
+        let text = main_moved_text(&base, merge, beads, &paths, Some(&member));
         let queued = ledger
             .enqueue_delivery(
                 &Outgoing {
@@ -919,7 +898,7 @@ pub fn main_moved(
         super::decisions::FANOUT_MAIN_MOVED,
         &json!({"merge": merge, "beads": beads, "paths": paths.len(), "to": told}),
         &format!(
-            "main moved to {}; told {} session(s)",
+            "{base} moved to {}; told {} session(s)",
             short(merge),
             told.len()
         ),
@@ -980,7 +959,7 @@ pub fn after_delivery(ledger: &Ledger, me: &str, d: &air_ledger::deliveries::Del
 }
 
 /// After `air batch cut` dropped a branch: tell its worker at once.
-pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped) {
+pub fn batch_dropped(ledger: &Ledger, lane: &str, base: &str, d: &super::batch_cut::Dropped) {
     let note = MemberNote {
         to: d.worker.clone(),
         kind: "batch-dropped",
@@ -993,7 +972,7 @@ pub fn batch_dropped(ledger: &Ledger, lane: &str, d: &super::batch_cut::Dropped)
             d.against,
             short(&d.against_sha),
             d.paths.join(", "),
-            super::batch_cut::drop_advice(d)
+            super::batch_cut::drop_advice(d, base)
         ),
     };
     queue_notes(
@@ -1014,47 +993,20 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    /// 0.4.9 trial: nine claim refusals, all races on the first bead of one notice. Each
-    /// recipient's list starts one bead further along within a priority group; the beads and
-    /// bd's order are the same.
+    /// air-bcg: the notice carries a count and `bd ready`, never an id, so nothing in it is
+    /// stale by the time a worker reads it. One bead reads as "bead is".
     #[test]
-    fn beads_ready_is_rotated_within_a_priority_group_per_recipient() {
+    fn beads_ready_carries_a_count_and_no_ids() {
         let ids = names(&["b-1", "b-2", "b-3"]);
-        // Three P0: three recipients, three different first beads.
-        let p0 = [0, 0, 0];
-        let firsts: Vec<String> = (0..3)
-            .map(|i| rotated(&ids, &p0, i).swap_remove(0))
-            .collect();
-        assert_eq!(firsts, ids);
-        assert_eq!(rotated(&ids, &p0, 1), names(&["b-2", "b-3", "b-1"]));
-        assert_eq!(rotated(&ids, &p0, 3), ids);
-        // One P0 and two P1: every recipient sees the P0 first; the P1s rotate among themselves.
-        let mixed = [0, 1, 1];
-        assert!((0..3).all(|i| rotated(&ids, &mixed, i)[0] == "b-1"));
-        assert_eq!(rotated(&ids, &mixed, 1), names(&["b-1", "b-3", "b-2"]));
-        // No priorities recorded: one group.
-        assert_eq!(rotated(&ids, &[], 1), names(&["b-2", "b-3", "b-1"]));
-        assert!(rotated(&[], &[], 2).is_empty());
-        let first = beads_ready_text(&ids, &p0, 0);
-        let third = beads_ready_text(&ids, &p0, 2);
+        let text = beads_ready_text(ids.len());
         assert!(
-            first.starts_with("beads are ready: b-1 b-2 b-3."),
-            "{first}"
+            text.starts_with("3 beads are claimable; run `bd ready`"),
+            "{text}"
         );
-        assert!(!first.contains("different order"), "{first}");
-        // air-0blv: the list is a snapshot, and the notice names where the current one is.
-        assert!(
-            first.contains("pick from `bd ready`, not from here"),
-            "{first}"
-        );
-        assert!(
-            third.starts_with("beads are ready: b-3 b-1 b-2 ("),
-            "{third}"
-        );
-        assert!(third.contains("same beads"), "{third}");
-        // A single P0 bead alone rotates nowhere, so nothing claims it was reordered.
-        let alone = beads_ready_text(&names(&["b-1"]), &[0], 2);
-        assert!(!alone.contains("different order"), "{alone}");
+        assert!(ids.iter().all(|id| !text.contains(id.as_str())), "{text}");
+        assert!(text.contains("claim one with `air claim <id>`"), "{text}");
+        let one = beads_ready_text(1);
+        assert!(one.starts_with("1 bead is claimable;"), "{one}");
     }
 
     /// air-1vri.5: the coordinator hears "the ready queue is empty" once per emptying while a
@@ -1078,6 +1030,9 @@ mod tests {
                     handover_attempts: 0,
                     released_at: None,
                     release_reason: None,
+                    done_at: None,
+                    done_head: None,
+                    done_proof: None,
                 })
                 .collect(),
             session: Some(Session {
@@ -1201,7 +1156,7 @@ mod tests {
     #[test]
     fn main_moved_text_truncates_paths_and_asks_for_no_reply() {
         let paths: Vec<String> = (0..12).map(|i| format!("f{i}")).collect();
-        let t = main_moved_text("abcdef0123", &names(&["b-1"]), &paths, None);
+        let t = main_moved_text("main", "abcdef0123", &names(&["b-1"]), &paths, None);
         assert!(
             t.starts_with("main moved to abcdef01: landed b-1; files changed: f0,"),
             "{t}"
@@ -1210,18 +1165,76 @@ mod tests {
         assert!(!t.contains("Merge main"), "{t}");
         assert!(t.ends_with("No reply needed."), "{t}");
         let mine = names(&["b-1"]);
-        let w = main_moved_text(
+        let member = MemberMove {
+            sha: Some("0011223344".into()),
+            closed: mine.clone(),
+            waiting: names(&["b-2"]),
+            refused: names(&["b-3"]),
+        };
+        let w = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&member));
+        assert!(
+            w.contains(
+                "files changed: f0. Your 00112233 is in it; closed: b-1; done but waiting: b-2 \
+                 (the declared head is not on main yet); done but refused: b-3 (bd refused \
+                 the close; the next landing tries again). No reply needed."
+            ),
+            "{w}"
+        );
+        // air-52u: refused alone is still "of yours", and never "waiting".
+        let refused_only = MemberMove {
+            refused: names(&["b-3"]),
+            ..Default::default()
+        };
+        let r = main_moved_text(
+            "main",
             "abcdef0123",
             &mine,
             &paths[..1],
-            Some(("0011223344", &mine)),
+            Some(&refused_only),
         );
         assert!(
-            w.contains("files changed: f0. Your 00112233 (b-1) is in it"),
-            "{w}"
+            r.contains(
+                "Of yours, done but refused: b-3 (bd refused the close; the next landing \
+                 tries again). No reply needed."
+            ),
+            "{r}"
         );
-        // air-fehk: the fact only; whether to merge is the worker's call.
+        assert!(!r.contains("waiting"), "{r}");
+        // air-fehk: the fact only; whether to merge is the worker's call. air-4xj.2: no bead
+        // to go and close either.
         assert!(!w.contains("git merge main"), "{w}");
-        assert!(w.ends_with("No reply needed."), "{w}");
+        assert!(!w.contains("close any"), "{w}");
+        let bare = MemberMove {
+            sha: Some("0011223344".into()),
+            ..Default::default()
+        };
+        let b = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&bare));
+        assert!(
+            b.contains("Your 00112233 is in it. No reply needed."),
+            "{b}"
+        );
+        // A batch of one fast-forwards and names no member head; the closed bead is still
+        // its worker's to hear. Nothing of its own: the fact alone.
+        let unnamed = MemberMove {
+            sha: None,
+            closed: mine.clone(),
+            ..Default::default()
+        };
+        let u = main_moved_text("main", "abcdef0123", &mine, &paths[..1], Some(&unnamed));
+        assert!(
+            u.contains("f0. Of yours, closed: b-1. No reply needed."),
+            "{u}"
+        );
+        let none = main_moved_text(
+            "main",
+            "abcdef0123",
+            &mine,
+            &paths[..1],
+            Some(&MemberMove::default()),
+        );
+        assert!(
+            none.ends_with("files changed: f0. No reply needed."),
+            "{none}"
+        );
     }
 }

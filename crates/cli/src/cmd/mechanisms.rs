@@ -95,6 +95,7 @@ pub const DELETED_NAMES: &[&str] = &[
     "KEEP_LOGS",
     "pid_alive",
     "would-refuse",
+    "closed-not-landed",
 ];
 
 /// Every mechanism Air ships that leaves a trace in the event log.
@@ -140,6 +141,17 @@ pub const DELETED_NAMES: &[&str] = &[
 ///   it misparsed a possessive path (air-dqa). Close-with-proof already covers the failure it
 ///   was built for: the adopter's 99 beads closed on branch containment alone. `air land`
 ///   still prints each bead's acceptance text, with no verdict.
+/// - `closed-not-landed` (2026-09-07, air-gazh; removed 2026-11-09, air-4xj.3). A bead bd
+///   had closed whose commits were in no tree but its author's worktree: a worker closed on
+///   a batch green, main moved, and the branch stopped being landable with no error anywhere.
+///   Its input was a worker's close before the landing, and since air-4xj.2 a worker's close
+///   is refused: the worker declares done and the landing closes, so a bead closed by a
+///   worker is on main by construction. The zero this is deleted on is the do-less skill's
+///   case 3, an input that no longer arrives, not a firing count: it fired once for real in
+///   the 2026-11-06 pod trial, and 417 times into a dead session on 2026-09-27 (the keying
+///   defect, air-8goe). A bead the coordinator or the owner closes on an unlanded branch is
+///   still batch-ready, named as "closed, waiting for the lane" (air-voeb), which is the
+///   case the condition's join also saw.
 /// - `edit-outside-worktree`, the worktree fence (2026-09-06, air-8gj; removed 2026-09-28,
 ///   air-w18h, owner: remove it, tell workers in the roles). Its recorded refusals at an
 ///   adopter, 6 of 6, were writes to the session's own Claude Code scratchpad under
@@ -150,11 +162,15 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "handover-gate",
         class: "refusal",
-        what: "A worker's or the lane's close needs a recorded green that contains main and \
-               the bead's commits. `air close` runs it; `hook.PreToolUse / refuse` is the \
-               matcher on raw `bd close` deleted 2026-09-26, kept so older days attribute.",
-        added: "2026-08-22 (air-i59); in `air close` 2026-09-26",
-        source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/close.rs, gate",
+        what: "A worker's or the lane's `air done` needs a commit carrying the bead's trailer, \
+               the worker's own claim, a green precheck where the repo declares one and a \
+               digest where it declares one; no green (air-4xj.1). `air handover` reports the \
+               same facts with the green beside them. A worker's `air close` is refused outright \
+               and names `air done` (air-4xj.2); until then it ran this gate with the green. \
+               `hook.PreToolUse / refuse` is the matcher on raw `bd close` deleted 2026-09-26, \
+               kept so older days attribute.",
+        added: "2026-08-22 (air-i59); in `air close` 2026-09-26; `air done` 2026-11-09",
+        source: "docs/rules/roles.md, Worker section; crates/cli/src/cmd/done.rs, gate; close.rs, worker_refusal",
         // `hook.handover` is what the first slice called the same gate before hook events
         // were dispatched by name (2026-08-18). It is not a second mechanism and never was, so
         // it is a second entry point here rather than a row of its own — which is exactly what
@@ -164,12 +180,15 @@ pub const MECHANISMS: &[Mechanism] = &[
             ("hook.PreToolUse", "refuse"),
             ("handover", "refuse"),
             ("hook.handover", "refuse"),
-            // A worker's `air close` refused by the same gate (owner, 2026-09-26). Until then
-            // this line was `close-refusal`, the role refusal of a worker's `air close`, which
-            // that ruling removed.
+            // A worker's `air close` refused by the same gate (owner, 2026-09-26); since
+            // air-4xj.2 the refusal names `air done` instead of running the gate, and the
+            // event is the same line.
             ("close", "refuse"),
+            // A worker's `air done` refused by the same gate without its green checks
+            // (air-4xj.1): the bead's commit, its claim and a missing precheck.
+            ("done", "refuse"),
         ]),
-        removal: Removal::ZeroFirings("a full round passes with zero `handover-not-green` events"),
+        removal: Removal::ZeroFirings("a full round passes with zero `done-refused` events"),
     },
     Mechanism {
         id: "lease-needed",
@@ -254,27 +273,6 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "closed-not-landed",
-        class: "attention",
-        what: "A bead bd has closed whose commits are in no tree but its author's worktree. \
-               No other condition reaches it — `landable` needs a branch containing main so \
-               it goes quiet the moment main moves.",
-        added: "2026-09-07 (air-gazh)",
-        source: "crates/cli/src/cmd/status.rs (closed_not_landed)",
-        fires: Fires::Condition("closed-not-landed"),
-        // The removal condition is deliberately NOT "when it stops firing" (air-gazh names
-        // this): a quiet round is this mechanism working. This repo had zero on 2026-09-07
-        // only because its coordinator landed every branch within minutes of each close, and
-        // an adopter that batches had six at once the same day. Absence here measures the
-        // landing cadence, not the mechanism.
-        //
-        // So the condition names what would have to change about LANDING for the state to
-        // become unreachable, which is a fact anyone can check without waiting for a number.
-        removal: Removal::Judgement(
-            "landing no longer requires a branch to contain main at the moment someone looks — a recorded green can be landed after main moves without a re-merge — so a closed bead's commits cannot be stranded by main moving underneath them",
-        ),
-    },
-    Mechanism {
         id: "idle-without-claim",
         class: "attention",
         what: "An idle worker holding no claim while beads are ready.",
@@ -286,14 +284,19 @@ pub const MECHANISMS: &[Mechanism] = &[
         ),
     },
     Mechanism {
-        id: "handover-not-green",
+        id: "done-refused",
         class: "attention",
-        what: "A worker handed over from a HEAD with no recorded green.",
-        added: "2026-08-21 (plan 0006)",
+        what: "A worker whose `air done` was refused and has not passed since: one line per \
+               worker, with the attempt count per bead and the last attempt's time. The \
+               counter is the claim's `handover_attempts`, stamped by the gate on a refusal \
+               and cleared on a pass. It was `handover-not-green` (a hand-over from a HEAD \
+               with no recorded green) until the declaration stopped needing a green \
+               (air-4xj.3).",
+        added: "2026-08-21 (plan 0006); re-keyed 2026-11-09 (air-4xj.3)",
         source: "crates/cli/src/cmd/status.rs",
-        fires: Fires::Condition("handover-not-green"),
+        fires: Fires::Condition("done-refused"),
         removal: Removal::ZeroFirings(
-            "a full round passes with zero `handover-not-green` events (same condition as the gate it reports)",
+            "a full round passes with zero `done-refused` events (same condition as the gate it reports)",
         ),
     },
     // `owner-decision-waiting` was here (plan 0006): captures sitting in the owner queue,
@@ -839,8 +842,9 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "beads-ready-fanout",
         class: "nudge",
-        what: "When the claimable ready set gains a bead, Air queues \"beads are ready: <ids>\" \
-               for every worker with a live session holding no claim, whatever its state; a \
+        what: "When the claimable ready set gains a bead, Air queues \"<n> bead(s) are \
+               claimable; run `bd ready`\" (a count, never the ids, air-bcg) for every worker \
+               with a live session holding no claim, whatever its state; a \
                worker newly without a claim (joined, or its claim ended) is told a non-empty \
                set as it stands (air-oerm). No worker hears the same set twice; never the lane \
                or a worker holding a claim.",
@@ -874,16 +878,17 @@ pub const MECHANISMS: &[Mechanism] = &[
     Mechanism {
         id: "batch-result-to-members",
         class: "nudge",
-        what: "Each member worker hears its batch's result at once: close on a green or a \
-               landing (inside \"main moved\"), the exit and the kept output on a red, the \
-               other side and the paths when `air batch cut` drops it. A killed run says \
+        what: "Each member worker hears its batch's red at once, with the exit and the kept \
+               output, and the other side and the paths when `air batch cut` drops it. A green \
+               says nothing to members (air-4xj.2: the worker declared done before the batch, \
+               and the landing's \"main moved\" names what it closed). A killed run says \
                nothing.",
-        added: "2026-09-26 (air-1vri.2)",
+        added: "2026-09-26 (air-1vri.2); the green note removed 2026-11-09 (air-4xj.2)",
         source: "crates/cli/src/cmd/fanout.rs, batch_result, batch_dropped; a landing is main_moved",
-        // Same trial: a worker learned the lane's green, and could close, only on its own wake.
+        // Same trial: a worker learned the lane's red, and could fix it, only on its own wake.
         fires: Fires::Decisions(&[("fanout", "batch-result")]),
         removal: Removal::Judgement(
-            "the lane is removed, or a round's `loops` line shows batch green to close no shorter with the push than the wake gave",
+            "the lane is removed, or a round shows no member committing a fix or resolving a drop before its own wake would have told it",
         ),
     },
     Mechanism {
@@ -891,8 +896,8 @@ pub const MECHANISMS: &[Mechanism] = &[
         class: "nudge",
         what: "When `air land` moves main, every session but the lane and the one that ran it \
                hears \"main moved to <sha>: landed <beads>; files changed: <paths>\" once per \
-               landing; a member's copy also says its beads may be closed. It asks for no \
-               reply.",
+               landing; a member's copy also names the beads of its own the landing closed and \
+               any done bead still waiting for its head (air-4xj.2). It asks for no reply.",
         added: "2026-09-26 (air-1vri.4)",
         source: "crates/cli/src/cmd/fanout.rs, main_moved; called from land.rs run",
         // Owner, 2026-09-26: "have air fan out a msg to ALL agents ... whenever the lane lands

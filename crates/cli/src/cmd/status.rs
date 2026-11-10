@@ -34,15 +34,17 @@ pub mod kinds {
     pub const IDLE_WITHOUT_CLAIM: &str = "idle-without-claim";
     pub const SILENT_WITH_CLAIM: &str = "silent-with-claim";
     pub const GONE_WITH_CLAIM: &str = "gone-with-claim";
-    pub const HANDOVER_NOT_GREEN: &str = "handover-not-green";
+    /// air-4xj.3: `handover-not-green` until the declaration stopped needing a green; the
+    /// counter it reads is the one `air done` stamps on a refusal.
+    pub const DONE_REFUSED: &str = "done-refused";
     pub const LANDABLE: &str = "landable";
     /// air-ob0, narrowed by air-odv: history only, since no new rewind can occur.
     pub const REWOUND_AND_CARRIED: &str = "rewound-and-carried";
     // `landed-not-closed` was here (air-ayp; DELETED by air-cizz, owner 2026-09-28): 7 of 8
     // firings at an adopter were paths an acceptance clause only mentioned. See mechanisms.rs.
-    /// air-gazh: closed ∩ NOT landed, which nothing else in this list covers — `landable`
-    /// needs a branch containing main so it goes quiet the moment main moves.
-    pub const CLOSED_NOT_LANDED: &str = "closed-not-landed";
+    // `closed-not-landed` was here (air-gazh; DELETED by air-4xj.3, 2026-11-09): its input,
+    // a worker's close before the landing, no longer arrives, since a worker declares done
+    // and the landing closes. See mechanisms.rs.
     // `owner-decision-waiting` was here (plan 0006; DELETED by air-uef, owner 2026-09-05).
     // Its subject was the owner capture queue, which is gone: the owner's queue is beads
     // labelled `owner`, counted on the `ready:` line of `air status`.
@@ -55,10 +57,9 @@ pub mod kinds {
         IDLE_WITHOUT_CLAIM,
         SILENT_WITH_CLAIM,
         GONE_WITH_CLAIM,
-        HANDOVER_NOT_GREEN,
+        DONE_REFUSED,
         LANDABLE,
         REWOUND_AND_CARRIED,
-        CLOSED_NOT_LANDED,
         LEASE_HELD_BY_DEAD_SESSION,
         LEASE_STALE,
     ];
@@ -160,11 +161,6 @@ pub struct Snapshot {
     /// `lease_take` records a want only when it was refused by a HEALTHY lease, so a name in
     /// here is someone who asked and was told to wait.
     pub lease_wants: BTreeMap<String, Vec<String>>,
-    /// air-gazh: Beads bd has closed whose commits are in no tree but their
-    /// author's worktree. Joined from two things already computed — `landable` (which names
-    /// every bead on a branch not yet in main, blocked or not) and the ledger's `closed`
-    /// release reason — so it costs no git walk and no bd call of its own.
-    pub closed_not_landed: Vec<ClosedNotLanded>,
     /// Every session row (two sessions in one checkout are two entries; the per-worker view
     /// above keeps only the latest): (worker, role, session).
     pub sessions: Vec<(String, String, Session)>,
@@ -246,13 +242,43 @@ pub struct Snapshot {
     /// How long the lane's loop waited on messages in the last 24 hours (air-1vri.2).
     pub loops: super::loops::LoopTimes,
     /// The newest red verify at a batch head that no later green has superseded (air-80x.4),
-    /// with the members it was recorded with. The lane splits by hand; nothing lands on it.
+    /// with the members it was recorded with. Nothing lands on it; the lane verifies each
+    /// member alone.
     pub red_batch: Option<super::batch::RedBatch>,
+    /// The red batch of several members the lane is splitting, with the members not yet
+    /// verified alone (air-67q). Usually the same batch as `red_batch`; a member cut alone and
+    /// found red is the newer red batch, and this is still the one being split.
+    pub red_split: Option<super::batch::RedSplit>,
     /// The install record is older than this binary (air-d61); the same line `air doctor`
     /// prints, so the coordinator sees it without asking.
     pub install_lag: Option<super::install::InstallLag>,
+    /// The Mac's idle-sleep setting in minutes when it is under ten (air-1ye), read from
+    /// `pmset -g` by `air status` alone, not by the channel's poll; None elsewhere or when
+    /// the machine stays up long enough that nobody needs telling.
+    pub idle_sleep_min: Option<u32>,
     /// The fleet-wide stop, while one is set (air-1vri.1).
     pub fleet_stop: Option<air_ledger::fleet::FleetStop>,
+    /// `heartbeat_minutes` from `.claude/air.json`: the interval the coordinator's heartbeat
+    /// is expected at (air-8wy). None, and no line, when the repo does not ask for one.
+    pub heartbeat_minutes: Option<u64>,
+    /// Top-level keys of `.claude/air.json` this binary does not read (air-xdc), sorted. One
+    /// line each; empty, the normal state, prints nothing. `handover::KNOWN_CONFIG_KEYS` has
+    /// the incident and the removal condition.
+    pub unknown_config_keys: Vec<String>,
+    /// What `.claude/air.local.json` contributed (air-aei): the keys it set, named on an
+    /// unknown-key line that came from it, and why it was not used when it is invalid, which
+    /// is one line with the path. The default, and no line, when it is absent.
+    pub config_overlay: super::handover::ConfigOverlay,
+    /// True when `.claude/air.local.json` exists and git tracks it (air-aei): one line naming
+    /// the `.gitignore` entry to add, since a tracked overlay lands a machine's own values.
+    pub config_overlay_tracked: bool,
+    /// `model` and `lane_model` from `.claude/air.json` (air-ap1): what each launched session
+    /// is expected to be on. None when the file names none, and then no session is marked.
+    pub model_setting: Option<String>,
+    pub lane_model_setting: Option<String>,
+    /// `base_branch` from `.claude/air.json` (air-h7l): the branch the fleet lands onto, `main`
+    /// unless set. Printed only when it is not `main`.
+    pub base_branch: String,
     /// How bd reaches its data here and, in server mode, whether the port answered.
     pub bd_mode: Option<super::bd_server::Mode>,
     pub bd_server_up: bool,
@@ -323,7 +349,7 @@ pub struct Attention {
     /// The subject: a worker name, `owner`, or (for `review-waiting`) the bead id, so the
     /// channel's (subject, kind) de-dupe fires once per bead.
     pub worker: String,
-    /// idle-with-claim | silent-with-claim | handover-not-green |
+    /// idle-with-claim | silent-with-claim | done-refused |
     /// lease-held-by-dead-session | lease-stale | idle-without-claim
     /// (inbox depth is a measurement in `status`, never a condition: audit 2026-08-21;
     /// review waits became a condition on 2026-08-22, air-e7q: three parties waited 20 min
@@ -557,10 +583,15 @@ pub struct BatchReady {
 pub struct NotBatchReady {
     pub worker: String,
     pub head: String,
-    /// `green-at-head` | `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
-    /// `no-precheck` | `nothing-ahead` (the coordinator)
+    /// `in-batch` | `red-at-head` | `dropped-at-head` | `no-claimed-bead` |
+    /// `no-precheck` | `nothing-ahead` | `not-offered` (the coordinator)
     pub check: &'static str,
     pub detail: String,
+    /// For a `red-at-head` head only: what the branch is batch-ready as once the red is set
+    /// aside, so a split (`air batch cut --only` or `--without`) can take it by name (air-jk2).
+    /// None for every other check, and for a red-held head that lacks something else too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_split: Option<Box<BatchReady>>,
 }
 
 /// The facts the batch-ready rule reads, one worktree's worth.
@@ -568,10 +599,9 @@ pub struct NotBatchReady {
 pub struct BatchFacts {
     pub worker: String,
     pub head: String,
-    /// `git merge-base --is-ancestor main <head>`. With `green_at_head`, landable on its own.
-    pub contains_main: bool,
-    /// `green::at(head)` holds. Landable, and so not for a batch, only while it contains main.
-    pub green_at_head: bool,
+    /// The base branch's name (air-h7l): `main` unless `base_branch` is set; empty reads as
+    /// `main`, so a fixture that names none is unchanged. For the detail lines only.
+    pub base: String,
     /// Beads declared by `Bead:` trailers in `main..head`.
     pub carried: Vec<String>,
     /// Beads this worker holds an open claim on.
@@ -590,6 +620,12 @@ pub struct BatchFacts {
     /// `main..head` has a commit. Read only for the coordinator, whose branch would otherwise
     /// be batch-ready with nothing in it.
     pub ahead: bool,
+    /// `"coordinator_autobatch": true` in `.claude/air.json` (air-m8u): the coordinator's
+    /// branch is batch-ready on any commit main lacks. False, the default, needs an offer.
+    pub autobatch: bool,
+    /// The coordinator ran `air ready` at exactly this head (`offers` row). Read only for the
+    /// coordinator.
+    pub offered_at_head: bool,
     /// A red batch took this exact head as a member and no later green contains it
     /// ([`red_held`]; 0.4.6 trial D3, air-hyli, air-vdst).
     pub red_batch_at_head: bool,
@@ -600,8 +636,21 @@ pub struct BatchFacts {
     pub in_batch: Option<String>,
 }
 
-/// THE batch-ready rule, pure (air-80x.3): a branch that is not already landable (green at a
-/// head that contains main) and whose commits name a bead the worker holds. In that order, so
+impl BatchFacts {
+    /// The base branch's name for a detail line: `main` when none was recorded.
+    pub fn base(&self) -> &str {
+        base_or_main(&self.base)
+    }
+}
+
+/// `main` when a snapshot or fixture recorded no base (air-h7l), else the recorded name.
+pub fn base_or_main(base: &str) -> &str {
+    if base.is_empty() { "main" } else { base }
+}
+
+/// THE batch-ready rule, pure (air-80x.3): a branch whose commits name a bead the worker holds
+/// or that is closed. A branch already green at a head that contains main is batch-ready too
+/// (air-757): under a lane nothing lands it alone, and it sat closed and unlanded. In that order, so
 /// the reason a branch is absent is the first fact it lacks. Nothing here is a judgement: each
 /// fact is a git or ledger lookup the lane could make itself.
 ///
@@ -619,23 +668,27 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         head: f.head.clone(),
         check,
         detail,
+        if_split: None,
     };
     // The coordinator's branch (air-jc2p.1, owner 2026-09-14: its changes reach main through
     // the lane like a worker's). Its commits carry no bead, so it needs no claimed one, and
     // nothing lands it alone, so there is no landable-alone exit; what it must have is a commit
     // main lacks. Removed with the lane, when the coordinator would land its own branch again.
-    if f.coordinator {
-        if !f.ahead {
-            return Err(not(
-                "nothing-ahead",
-                format!("{} at {short}: no commit that main lacks", f.worker),
-            ));
-        }
-    } else if f.contains_main && f.green_at_head {
+    if f.coordinator && !f.ahead {
         return Err(not(
-            "green-at-head",
+            "nothing-ahead",
+            format!("{} at {short}: no commit that {} lacks", f.worker, f.base()),
+        ));
+    }
+    // air-m8u: with `coordinator_autobatch` off, a coordinator head is batch-ready only once
+    // offered. Each coordinator commit at an adopter cost the lane a cut, a verify and two
+    // notices while a note was still being written.
+    if f.coordinator && !f.autobatch && !f.offered_at_head {
+        return Err(not(
+            "not-offered",
             format!(
-                "{} at {short} is already green with main merged: landable on its own, nothing to batch",
+                "{} at {short}: not offered to the lane; run `air ready` at this head, or set \
+                 \"coordinator_autobatch\": true in .claude/air.json",
                 f.worker
             ),
         ));
@@ -695,8 +748,9 @@ pub fn batch_ready_rule(f: &BatchFacts) -> Result<BatchReady, NotBatchReady> {
         return Err(not(
             "no-claimed-bead",
             format!(
-                "{} at {short}: no commit in main..{short} names a bead {} holds a claim on or that is closed (carried: {}; held: {})",
+                "{} at {short}: no commit in {}..{short} names a bead {} holds a claim on or that is closed (carried: {}; held: {})",
                 f.worker,
+                f.base(),
                 f.worker,
                 if f.carried.is_empty() {
                     "none".to_string()
@@ -808,10 +862,11 @@ pub fn batch_ready_for(
     // VISIBLE — running from its own worktree, alerts' branch compared against itself and was
     // reported batch-ready in the same snapshot where `select` said `landable: []`. One bug in
     // two paths, disagreeing because being wrong the same way surfaces differently.
-    let main_tip = match git::main_tip(repo) {
+    let base = super::handover::base_branch(repo);
+    let main_tip = match git::base_tip(repo) {
         Ok(t) => t,
         Err(e) => {
-            errors.push(format!("git rev-parse main: {e}"));
+            errors.push(format!("git rev-parse {base}: {e}"));
             return (ready, not, errors);
         }
     };
@@ -826,10 +881,12 @@ pub fn batch_ready_for(
         .map(|c| c.bead)
         .collect();
     let precheck_required = precheck_declared(repo);
+    let autobatch = super::handover::coordinator_autobatch(repo);
     for (path, _) in worktrees {
         let worker = air_ledger::paths::worker_name_for(&path).unwrap_or_default();
         // The main checkout is main; the lane's branch is the batch, not a member. The
-        // coordinator's worktree is a member (air-jc2p.1).
+        // coordinator's worktree is a member (air-jc2p.1). `main` here is the SESSION name of
+        // the primary checkout, not the base branch (air-h7l).
         let coordinator = match super::hook::role_for(&worker) {
             "worker" => false,
             "coordinator" if worker != "main" => true,
@@ -839,13 +896,6 @@ pub fn batch_ready_for(
             Ok(h) => h,
             Err(e) => {
                 errors.push(format!("{worker}: git rev-parse HEAD: {e}"));
-                continue;
-            }
-        };
-        let green_at_head = match super::green::at(ledger, &path, &head, Kind::Verify) {
-            Ok(e) => e.holds(),
-            Err(e) => {
-                errors.push(format!("{worker}: green lookup: {e}"));
                 continue;
             }
         };
@@ -878,6 +928,7 @@ pub fn batch_ready_for(
             .iter()
             .find(|(_, members)| members.contains(&head))
             .map(|(b, _)| b.clone());
+        let offered_at_head = coordinator && ledger.offered(&worker, &head).unwrap_or(false);
         let facts = BatchFacts {
             red_batch_at_head,
             dropped_at_head,
@@ -886,9 +937,10 @@ pub fn batch_ready_for(
             precheck_green_at_head,
             coordinator,
             ahead,
-            contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
-            green_at_head,
-            carried: super::attribution::attributed_in_range(repo, &format!("main..{head}"))
+            autobatch,
+            offered_at_head,
+            base: base.clone(),
+            carried: super::attribution::attributed_in_range(repo, &format!("{base}..{head}"))
                 .declared,
             held: claims
                 .iter()
@@ -901,7 +953,18 @@ pub fn batch_ready_for(
         };
         match batch_ready_rule(&facts) {
             Ok(b) => ready.push(b),
-            Err(n) => not.push(n),
+            Err(mut n) => {
+                // air-jk2: a split names a red-held member on purpose, so say what it would be
+                // batch-ready as with the red set aside. Every other fact still has to hold.
+                if n.check == "red-at-head" {
+                    let facts = BatchFacts {
+                        red_batch_at_head: false,
+                        ..facts
+                    };
+                    n.if_split = batch_ready_rule(&facts).ok().map(Box::new);
+                }
+                not.push(n);
+            }
         }
     }
     (ready, not, errors)
@@ -935,36 +998,6 @@ pub fn beads_suffix(beads: &[String]) -> String {
     } else {
         format!(" ({})", beads.join(" "))
     }
-}
-
-/// A bead bd has closed whose commits have not reached main (air-gazh).
-///
-/// **How this state is reached with no error anywhere.** A worker closes on a batch green,
-/// legitimately: the close gate passes. The coordinator then commits to main, so that batch no
-/// longer contains main and stops being landable. The lane folds the members into the next cut;
-/// that one reds, the one after is killed, the one after lands different workers. The branch has
-/// simply not landed — no refusal, no red, nothing wrong locally. From inside the worktree the
-/// bead reads closed, the branch is green and the tree is clean, so **the party best placed to
-/// notice is the last who will**: every local signal is correct. An adopter had six at once,
-/// found by their coordinator while answering an unrelated question, and derived independently
-/// by their worker from a different join — same six.
-///
-/// **Removal condition, and it is not "when it stops firing"** (air-gazh is explicit): this
-/// state becomes unreachable when landing stops depending on a branch containing main at the
-/// moment someone looks — that is, when a green recorded for a tree can be landed after main
-/// moves without a re-merge, so a closed bead's commits cannot be stranded by main moving
-/// underneath them. Delete it then. Until then a quiet round is the mechanism working, not
-/// evidence against it: this repo had zero on 2026-09-07 only because its coordinator landed
-/// every branch within minutes of its close, and a fleet that batches leaves this residue
-/// whenever a batch stops being landable.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClosedNotLanded {
-    pub bead: String,
-    pub worker: String,
-    pub head: String,
-    /// Why the branch is not landable right now, when that is known — the same sentence
-    /// `landable` shows. `None` when the branch could land as it stands and simply has not.
-    pub blocked: Option<String>,
 }
 
 /// A branch that is not landable, and why. Never silent (air-6u5).
@@ -1032,10 +1065,11 @@ pub fn select(repo: &Path) -> Selection {
     // An error RETURNS rather than defaulting. `unwrap_or_default()` turned a git failure into
     // an empty sha that silently disqualified every branch as "does not contain main" — a
     // failure reading as an absence, which is the one thing air-6u5 says this must never do.
-    let main_tip = match git::main_tip(repo) {
+    let base = super::handover::base_branch(repo);
+    let main_tip = match git::base_tip(repo) {
         Ok(t) => t,
         Err(e) => {
-            out.errors.push(format!("git rev-parse main: {e}"));
+            out.errors.push(format!("git rev-parse {base}: {e}"));
             return out;
         }
     };
@@ -1044,6 +1078,7 @@ pub fn select(repo: &Path) -> Selection {
     // role, other than the main checkout. Used only for a range that names no bead.
     let coordinator_head = worktrees.iter().find_map(|(p, _)| {
         let w = air_ledger::paths::worker_name_for(p).ok()?;
+        // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
         if w != "main" && super::hook::role_for(&w) == "coordinator" {
             git::head(p).ok()
         } else {
@@ -1104,6 +1139,7 @@ pub fn select(repo: &Path) -> Selection {
         // from a worktree and has no business asserting where a future `air land` will run.
         let facts = super::land::Facts {
             worker: &worker,
+            base: &base,
             branch_exists: true,    // the head above came from this worktree
             already_in_main: false, // left above
             contains_main: git::is_ancestor(repo, &main_tip, &head).unwrap_or(false),
@@ -1116,7 +1152,7 @@ pub fn select(repo: &Path) -> Selection {
             Ok(false) => continue,
             Err(why) => Some(why),
         };
-        let range = format!("main..{head}");
+        let range = format!("{base}..{head}");
         let ids = super::attribution::attributed_in_range(repo, &range).declared;
         // air-kexg: a branch whose ONLY commits are session-journal entries carries no bead by
         // design, and is landable anyway. The journal (air-3xww) is explicitly not work on a
@@ -1126,7 +1162,7 @@ pub fn select(repo: &Path) -> Selection {
         // bead — which is what two workers were told tonight, and what the coordinator worked
         // around by having them name a bead that was already closed and that they had not
         // touched.
-        let changed = git::changed_since(&path, "main").unwrap_or_default();
+        let changed = git::changed_since(&path, &base).unwrap_or_default();
         let journal = super::handover::journal_dir(repo);
         let journal_branch = ids.is_empty() && journal_only(&changed, journal.as_deref());
         // A range of only the coordinator's commits carries no bead either. The batch-ready
@@ -1159,7 +1195,7 @@ pub fn select(repo: &Path) -> Selection {
             out.skipped.push(Skipped {
                 check: "no-bead-named",
                 detail: format!(
-                    "{worker} is green at {} but no commit in main..{} declares a bead{hint}",
+                    "{worker} is green at {} but no commit in {base}..{} declares a bead{hint}",
                     head.get(..8).unwrap_or(&head),
                     head.get(..8).unwrap_or(&head)
                 ),
@@ -1173,7 +1209,7 @@ pub fn select(repo: &Path) -> Selection {
         }
         // Oldest commit since main: how long this branch has waited. Used for ORDERING only —
         // never to decide whether a bead belongs, which is what air-6u5 was.
-        let since = git::branch_point_time(&path, "main")
+        let since = git::branch_point_time(&path, &base)
             .ok()
             .and_then(|t| t.parse::<jiff::Timestamp>().ok())
             .map(|t| t.to_string())
@@ -1193,7 +1229,7 @@ pub fn select(repo: &Path) -> Selection {
                 // three cycles in an hour.
                 command: match &blocked {
                     None => land_command(&worker),
-                    Some(_) => super::land::remerge_command(),
+                    Some(_) => super::land::remerge_command(&base),
                 },
                 blocked: blocked.clone(),
                 // Filled by `air land` for the branch it is landing (`acceptance_for`), not
@@ -1335,7 +1371,7 @@ pub fn landings_in_flight(ledger: &Ledger) -> Vec<LandingInFlight> {
 
 /// One line for a landing in flight: what merged, when, and whether anything is still working
 /// on it. The second half is the part `pgrep` was being asked for.
-pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
+pub fn landing_in_flight_line(f: &LandingInFlight, base: &str, at: &str) -> String {
     let l = &f.landing;
     let merge = l.merge_commit.as_deref().unwrap_or("");
     let elapsed = seconds_between(&l.finished_at, at)
@@ -1345,8 +1381,8 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
         // air-odv: `air land` runs no verify and arms no rollback; the fast-forward is the
         // only step that moves main, so a gone process either moved it or did not.
         Some(false) => format!(
-            "the `air land` process (pid {}) is GONE before it reported. If main is at {merge}, \
-             the landing happened; if main is still at {}, nothing moved and `air land` may \
+            "the `air land` process (pid {}) is GONE before it reported. If {base} is at {merge}, \
+             the landing happened; if {base} is still at {}, nothing moved and `air land` may \
              run again",
             l.pid.unwrap_or(0),
             l.tip_sha.as_deref().unwrap_or("<tip>")
@@ -1355,7 +1391,7 @@ pub fn landing_in_flight_line(f: &LandingInFlight, at: &str) -> String {
         None => "no pid recorded, so nothing can say whether it is still running".into(),
     };
     format!(
-        "{} ({}) merged at {} {elapsed}, main was {}: {state}",
+        "{} ({}) merged at {} {elapsed}, {base} was {}: {state}",
         l.worker,
         l.beads.join(" "),
         merge.get(..8).unwrap_or(merge),
@@ -1695,21 +1731,21 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             }
             None => {}
         }
-        // One line per worker, not one per claim (air-0j4). A worker's HEAD is one sha, so
-        // every claim it holds is not-green for the SAME reason and the same fix; the adopter's
-        // status printed eleven lines for one worker, which is one fact eleven times. The
-        // single-claim wording is unchanged, because that is the case that reads well already.
+        // One line per worker, not one per claim (air-0j4). The adopter's status printed
+        // eleven lines for one worker, which is one fact eleven times. The single-claim
+        // wording is unchanged, because that is the case that reads well already.
+        //
+        // The counter is `handover_attempts`, which `air done`'s gate stamps on a refusal and
+        // clears on a pass (air-4xj.3; `close::gate` did the same until air-4xj.2). A green at
+        // the head no longer enters into it: the declaration needs none.
         //
         // Removal: when no worker ever holds two claims at once, this collapses nothing and
         // the loop above can go back to pushing per claim.
-        let red: Vec<&Claim> = if w.green_at_head == Some(false) {
-            w.claims
-                .iter()
-                .filter(|c| c.handover_attempts > 0)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let red: Vec<&Claim> = w
+            .claims
+            .iter()
+            .filter(|c| c.handover_attempts > 0)
+            .collect();
         // Longest wait first, so `for_minutes` is the oldest attempt rather than an arbitrary
         // one, and the beads read in the order they have been waiting.
         let oldest = red
@@ -1717,16 +1753,21 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             .filter_map(|c| c.last_handover_at.as_deref())
             .min()
             .unwrap_or(now);
+        // The refusal's reason is on the event line `air done` wrote and on no row, so the
+        // line names the command that says it again rather than quoting a copy.
         let detail = match red.as_slice() {
             [] => None,
             [c] => Some(format!(
-                "{} handed over {} time(s) without green verify at HEAD; last attempt {}",
-                c.bead,
+                "air done refused {} time(s) for {}; last attempt {}; `air handover --bead {}` \
+                 names what the declaration needs",
                 c.handover_attempts,
-                c.last_handover_at.as_deref().unwrap_or(now)
+                c.bead,
+                c.last_handover_at.as_deref().unwrap_or(now),
+                c.bead
             )),
             many => Some(format!(
-                "{} beads handed over without green verify at HEAD ({}); {} attempts in total; oldest {}",
+                "air done refused for {} beads ({}); {} attempts in total; oldest {}; `air \
+                 handover --bead <id>` names what each needs",
                 many.len(),
                 many.iter()
                     .map(|c| c.bead.as_str())
@@ -1739,7 +1780,7 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
         if let Some(detail) = detail {
             out.push(Attention {
                 worker: w.worker.clone(),
-                kind: kinds::HANDOVER_NOT_GREEN,
+                kind: kinds::DONE_REFUSED,
                 detail,
                 for_minutes: minutes_between(oldest, now).unwrap_or(0),
                 fingerprint: String::new(),
@@ -1831,8 +1872,9 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
                 worker: worker.to_string(),
                 kind: kinds::LANDABLE,
                 detail: format!(
-                    "{worker} is green at {} with main merged, carrying {}; landing is the \
+                    "{worker} is green at {} with {} merged, carrying {}; landing is the \
                      lane's or the owner's (`air land --worker {worker}`)",
+                    base_or_main(&s.base_branch),
                     head.get(..8).unwrap_or(head),
                     beads.join(" ")
                 ),
@@ -1855,34 +1897,6 @@ pub fn attention(s: &Snapshot, now: &str, t: Thresholds) -> Vec<Attention> {
             // The commit and who holds it is the whole fact; its age is not a change.
             fingerprint: format!("{}@{}", r.merge_commit, r.carried_by.join(",")),
             subject: r.merge_commit.clone(),
-        });
-    }
-    // air-gazh: a bead closed and not landed, the state no other condition reaches.
-    // `landable` goes quiet the moment main moves. A bead
-    // closed on a batch green whose batch then stopped containing main satisfies neither, and
-    // an adopter had six of them at once with no error anywhere in how they got there.
-    //
-    // It is a CONDITION rather than only a printed line because the reporting incident is
-    // exactly a coordinator who had the fleet view and was not looking: theirs surfaced while
-    // answering an unrelated question. A line nobody reads is what this already had.
-    for c in &s.closed_not_landed {
-        let (bead, worker) = (&c.bead, &c.worker);
-        let short = c.head.get(..8).unwrap_or(&c.head);
-        let why = match &c.blocked {
-            Some(b) => format!("that branch cannot land as it stands: {b}"),
-            None => "that branch could land as it stands and has not".to_string(),
-        };
-        out.push(Attention {
-            worker: worker.clone(),
-            kind: kinds::CLOSED_NOT_LANDED,
-            // air-ch9p: facts only. It claimed the branch was green and clean, which nothing
-            // here checks, and its continuation lines carried runs of literal spaces.
-            detail: format!(
-                "{bead} is closed; its commits are only on {worker}'s branch, at {short}: {why}"
-            ),
-            for_minutes: 0,
-            fingerprint: format!("{bead}/{}", c.head),
-            subject: bead.clone(),
         });
     }
     out
@@ -2484,8 +2498,19 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         landings_in_flight: landings_in_flight(&ledger),
         tree_readers,
         red_batch: super::batch::red_batch_standing(&ledger, repo),
+        red_split: super::batch::red_split_standing(&ledger, repo),
         install_lag: super::install::lag(ledger.dir()),
+        idle_sleep_min: None,
         fleet_stop: ledger.fleet_stop().ok().flatten(),
+        heartbeat_minutes: super::handover::heartbeat_minutes(repo),
+        unknown_config_keys: super::handover::unknown_config_keys(repo),
+        config_overlay: super::handover::config_overlay(repo),
+        config_overlay_tracked: super::handover::config_overlay_tracked(repo),
+        model_setting: super::handover::air_json(repo)
+            .and_then(|c| super::launch::configured_model(&c, "worker")),
+        lane_model_setting: super::handover::air_json(repo)
+            .and_then(|c| super::launch::configured_model(&c, "lane")),
+        base_branch: super::handover::base_branch(repo),
         bd_mode: Some(bd_mode.clone()),
         bd_server_up: super::bd_server::is_up(&bd_listener),
         bd_listener,
@@ -2494,11 +2519,10 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
         // cwd's HEAD. From a worktree that asked "is this rewound landing back in main?" of
         // the worktree's own branch, and the answer suppresses the warning — so a worker whose
         // branch contained the merge saw nothing about work main had lost.
-        rewound_carried: rewound_carried(repo, &ledger, git::main_tip(repo).ok().as_deref()),
+        rewound_carried: rewound_carried(repo, &ledger, git::base_tip(repo).ok().as_deref()),
         // air-03w: the same selection `air land --all` runs, so the condition cannot claim a
         // branch is landable that the command would then skip. air-72t7: and its WHOLE answer,
         // so a reader can see why the others cannot.
-        closed_not_landed: closed_not_landed(&ledger, &selection.landings),
         landable: selection.landings,
         land_skipped: selection.skipped,
         land_errors: selection.errors,
@@ -2520,43 +2544,6 @@ pub fn gather_with(repo: &Path, bd_use: BdUse) -> Result<Snapshot, String> {
             (false, false) => "live",
         },
     })
-}
-
-/// Beads bd has closed whose commits are in no tree but their author's worktree (air-gazh).
-///
-/// **This is a join, not a scan.** `landable` already names every bead on a worktree branch that
-/// is not yet in main — `select` drops a branch already in main through its one silent exit, so
-/// a landed bead cannot appear here at all — and the ledger already records `closed` as a
-/// release reason when the reconcile saw bd say so. Both halves existed and nothing joined them.
-/// A second git walk was the obvious shape and would have been a second implementation of
-/// `select`'s predicate, which is what air-y3v was.
-///
-/// The closed set is read once and used as a set, so this is O(landable) with no per-bead
-/// lookup: the beads of unlanded branches are few and the closed rows are one query.
-fn closed_not_landed(ledger: &Ledger, landable: &[Landing]) -> Vec<ClosedNotLanded> {
-    let closed: std::collections::BTreeSet<String> = match ledger.closed_claims() {
-        Ok(v) => v.into_iter().map(|c| c.bead).collect(),
-        // A failed lookup is not a fact about any bead (air-x1ha). Reporting nothing here is
-        // reporting "nothing found", which is why the error path stays empty rather than
-        // guessing: `gather` already surfaces ledger failures on its own errors list.
-        Err(_) => return Vec::new(),
-    };
-    let mut out: Vec<ClosedNotLanded> = Vec::new();
-    for l in landable {
-        // A journal-only branch carries `None` and closes no bead (air-kexg).
-        let Some(bead) = &l.bead else { continue };
-        if !closed.contains(bead) {
-            continue; // open on an unlanded branch is the normal state, and says nothing
-        }
-        out.push(ClosedNotLanded {
-            bead: bead.clone(),
-            worker: l.worker.clone(),
-            head: l.head.clone(),
-            blocked: l.blocked.clone(),
-        });
-    }
-    out.sort_by(|a, b| (&a.worker, &a.bead).cmp(&(&b.worker, &b.bead)));
-    out
 }
 
 /// The ancestor-deadlock scan (air-btz), and what it costs, gated so the common repo pays one
@@ -2794,8 +2781,53 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
             f.line()
         ));
     }
+    if let Some(n) = s.heartbeat_minutes {
+        out.push_str(&format!(
+            "heartbeat: expected every {n} min (`heartbeat_minutes`); `CronList` shows whether the coordinator has it\n"
+        ));
+    }
+    // air-h7l: said only when it is not main, since every notice and refusal then names it.
+    if !s.base_branch.is_empty() && s.base_branch != "main" {
+        out.push_str(&format!(
+            "base branch: {} (`base_branch`); landings, cuts and the close gate read it where \
+             they used to read main\n",
+            s.base_branch
+        ));
+    }
     if let Some(m) = &s.bd_mode {
         out.push_str(&format!("{}\n", super::bd_server::line(m, &s.bd_listener)));
+    }
+    // air-xdc: a key the running binary does not read, once per key, under the bd line. A
+    // fleet ran a build thirteen days behind main and nothing said so.
+    for k in &s.unknown_config_keys {
+        // air-aei: a key the overlay set is named with its file, since the committed file
+        // does not show it.
+        let from = if s.config_overlay.keys.contains(k) {
+            format!("; set in {}", super::handover::AIR_LOCAL_JSON)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "config: \"{k}\" is not read by this binary (air {}, built from {}{from}); upgrade \
+             or remove it\n",
+            env!("CARGO_PKG_VERSION"),
+            super::install::BUILD
+        ));
+    }
+    // air-aei: an overlay that could not be used is said once, with the path, so a machine's
+    // own targets do not vanish silently; a tracked overlay would land them.
+    if let Some(why) = &s.config_overlay.invalid {
+        out.push_str(&format!(
+            "config: {} is not used ({why}); .claude/air.json is read alone until it parses\n",
+            super::handover::AIR_LOCAL_JSON
+        ));
+    }
+    if s.config_overlay_tracked {
+        out.push_str(&format!(
+            "config: {0} is tracked by git, so its machine-specific values would land; add \
+             `{0}` to .gitignore and run `git rm --cached {0}`\n",
+            super::handover::AIR_LOCAL_JSON
+        ));
     }
     for w in &s.workers {
         let sess = w
@@ -2810,6 +2842,22 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                     "?".to_string()
                 } else {
                     x.model.clone()
+                };
+                // air-ap1: a session on a model the file does not name. The adopter's
+                // coordinator relaunched four sessions by hand to find this out.
+                let expected = if w.role == "lane" {
+                    s.lane_model_setting.as_deref()
+                } else if super::is_worker_like(&w.role) || w.role == "coordinator" {
+                    s.model_setting.as_deref()
+                } else {
+                    None
+                };
+                let model = match expected {
+                    Some(e) if !x.model.is_empty() && !model_matches(&x.model, e) => format!(
+                        "{model} DIFFERS from .claude/air.json ({e}); relaunch via air {}",
+                        w.role
+                    ),
+                    _ => model,
                 };
                 // air-9dg: a worker whose hooks do not see AIR_ENFORCE=1 has the one refusal
                 // switched off, and until this line nothing said so. Only `Some(false)` on a
@@ -2939,9 +2987,25 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     if let Some(b) = &s.red_batch {
         out.push_str(&format!("{}\n", super::batch::red_batch_line(b)));
     }
+    // air-67q: while a red batch of several is being split, the members not yet verified alone
+    // and the next `--only` cut; silent once every member has been.
+    if let Some(split) = &s.red_split {
+        for l in super::batch::untested_lines(&split.untested) {
+            out.push_str(&format!("{l}\n"));
+        }
+    }
     // air-d61: one line while the record lags; gone the moment `air install --write` runs.
     if let Some(l) = &s.install_lag {
         out.push_str(&format!("{}\n", super::install::lag_line(l)));
+    }
+    // air-1ye: an adopter's Mac slept a minute after the owner stepped away and stayed asleep
+    // for three hours of a worker's run. Sessions Air launches hold it awake (caffeinate -i);
+    // the setting is printed so a run started any other way is not a surprise.
+    if let Some(m) = s.idle_sleep_min {
+        out.push_str(&format!(
+            "idle sleep: {m} min (pmset -g); sessions Air launched hold the Mac awake with \
+             caffeinate -i, anything started by hand does not\n"
+        ));
     }
     for l in s.pin.iter().flat_map(super::install::pin_lines) {
         out.push_str(&format!("{l}\n"));
@@ -2950,7 +3014,7 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     for f in &s.landings_in_flight {
         out.push_str(&format!(
             "landing in flight: {}\n",
-            landing_in_flight_line(f, &s.at)
+            landing_in_flight_line(f, base_or_main(&s.base_branch), &s.at)
         ));
     }
     // air-y3v: work that is waiting but not yet landable. Shown, because the coordinator needs
@@ -2967,21 +3031,6 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
                 .unwrap_or("")
                 .trim_start_matches("refused: "),
             l.command
-        ));
-    }
-    // air-gazh: printed as well as pushed. The condition is the part that matters — the
-    // reporting incident is a coordinator with the fleet view not looking — but a reader who
-    // runs `air status` after the push has gone quiet still needs to see the state.
-    for c in &s.closed_not_landed {
-        out.push_str(&format!(
-            "closed, not landed: {} ({}) at {} — {}\n",
-            c.worker,
-            c.bead,
-            c.head.get(..8).unwrap_or(&c.head),
-            c.blocked
-                .as_deref()
-                .unwrap_or("could land as it stands")
-                .trim_start_matches("refused: "),
         ));
     }
     // air-80x.3: what the verify lane merges next. A fact, printed where the lane reads it;
@@ -3165,14 +3214,44 @@ fn render(s: &Snapshot, att: &[Attention]) -> String {
     out
 }
 
+/// Pure: the idle-sleep minutes `pmset -g` reports when under [`IDLE_SLEEP_WARN_MIN`], else
+/// None. The line is ` sleep                1 (sleep prevented by …)`: the first token `sleep`,
+/// the second a number; `disksleep` and `displaysleep` are other words. 0 means never, so it
+/// is not short.
+pub fn idle_sleep_minutes(pmset_g: &str) -> Option<u32> {
+    pmset_g.lines().find_map(|l| {
+        let mut words = l.split_whitespace();
+        (words.next()? == "sleep")
+            .then(|| words.next()?.parse::<u32>().ok())
+            .flatten()
+            .filter(|m| (1..IDLE_SLEEP_WARN_MIN).contains(m))
+    })
+}
+
+/// Under this many minutes the setting is printed (air-1ye: the adopter's was one).
+pub const IDLE_SLEEP_WARN_MIN: u32 = 10;
+
+/// `pmset -g` on PATH, wherever one is (a test puts a fake there); None where there is none.
+fn idle_sleep_from_pmset() -> Option<u32> {
+    let out = std::process::Command::new("pmset")
+        .arg("-g")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| idle_sleep_minutes(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
 pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
-    let snap = match gather(repo) {
+    let mut snap = match gather(repo) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("air status: {e}");
             return 1;
         }
     };
+    snap.idle_sleep_min = idle_sleep_from_pmset();
     let att = attention(&snap, &snap.at, Thresholds::from_env());
     if let Ok((ledger, worker)) = open(repo) {
         log_event(
@@ -3226,14 +3305,183 @@ pub fn run(repo: &Path, attention_only: bool, json: bool) -> i32 {
     0
 }
 
+/// Pure (air-ap1): does the model a session's transcript names satisfy the configured one?
+/// Equal, or the recorded id contains the setting, case-insensitively, so `"opus"` in the file
+/// matches a session on `claude-opus-5-5` and `claude-opus-5` matches `claude-opus-5-5`.
+pub fn model_matches(recorded: &str, expected: &str) -> bool {
+    let r = recorded.trim().to_ascii_lowercase();
+    let e = expected.trim().to_ascii_lowercase();
+    !e.is_empty() && (r == e || r.contains(&e))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+
+    /// air-1ye: the `sleep` line alone, under ten minutes, and 0 (never) is not short.
+    #[test]
+    fn idle_sleep_is_read_from_the_sleep_line_under_ten_minutes() {
+        let g = |m: &str| {
+            format!(
+                " disksleep            10\n sleep                {m} (sleep prevented by x)\n displaysleep         10\n"
+            )
+        };
+        assert_eq!(idle_sleep_minutes(&g("1")), Some(1));
+        assert_eq!(idle_sleep_minutes(&g("9")), Some(9));
+        assert_eq!(idle_sleep_minutes(&g("10")), None);
+        assert_eq!(idle_sleep_minutes(&g("0")), None);
+        assert_eq!(idle_sleep_minutes(" displaysleep 1\n"), None);
+        assert_eq!(idle_sleep_minutes(""), None);
+    }
     use super::*;
+
+    /// air-ap1: a session on a model other than the file's is marked; one on it, or with the
+    /// file naming none, is not; `lane_model` is the lane's.
+    #[test]
+    fn model_mark_on_mismatch_only() {
+        assert!(model_matches("claude-opus-5-5", "opus"));
+        assert!(model_matches("claude-opus-5-5", "claude-opus-5"));
+        assert!(model_matches("Claude-Fable-5-1", "claude-fable-5-1"));
+        assert!(!model_matches("claude-fable-5-1", "sonnet"));
+        assert!(!model_matches("claude-fable-5-1", ""));
+        let mut w = worker("w1", Some("running"), "2026-11-03T10:00:00Z", vec![], None);
+        if let Some(x) = w.session.as_mut() {
+            x.model = "claude-fable-5-1".into();
+        }
+        let snap = |m: Option<&str>| Snapshot {
+            workers: vec![w.clone()],
+            model_setting: m.map(String::from),
+            ..Snapshot::default()
+        };
+        let on = render(&snap(Some("sonnet")), &[]);
+        assert!(
+            on.contains(
+                "[claude-fable-5-1 DIFFERS from .claude/air.json (sonnet); relaunch via air worker]"
+            ),
+            "{on}"
+        );
+        assert!(!render(&snap(Some("fable")), &[]).contains("DIFFERS"));
+        assert!(!render(&snap(None), &[]).contains("DIFFERS"));
+        let mut lane = w.clone();
+        lane.role = "lane".into();
+        lane.worker = "lane".into();
+        let s = Snapshot {
+            workers: vec![lane],
+            model_setting: Some("sonnet".into()),
+            lane_model_setting: Some("fable".into()),
+            ..Snapshot::default()
+        };
+        assert!(
+            !render(&s, &[]).contains("DIFFERS"),
+            "lane_model wins for the lane"
+        );
+    }
 
     /// air-hyli, air-vdst: every member of a red batch is held out until it moves or a green
     /// recorded after the red contains it. A two-member red holds both; a later green carrying
     /// A frees A and not B; B is free after a new commit. A one-member red holds its member.
+    #[test]
+    fn heartbeat_line_only_when_the_key_is_set() {
+        let on = render(
+            &Snapshot {
+                heartbeat_minutes: Some(5),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(on.contains("heartbeat: expected every 5 min"), "{on}");
+        assert!(!render(&Snapshot::default(), &[]).contains("heartbeat"));
+    }
+
+    /// air-xdc: a key the binary does not read is named once, with the binary; a config of
+    /// known keys adds no line.
+    #[test]
+    fn config_line_names_each_unknown_key_once_and_nothing_otherwise() {
+        let on = render(
+            &Snapshot {
+                unknown_config_keys: vec!["targets".into(), "zzz".into()],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: \"targets\" is not read by this binary (air ")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert_eq!(on.matches("config: \"zzz\" is not read").count(), 1, "{on}");
+        assert!(on.contains("built from "), "{on}");
+        assert!(on.contains("; upgrade or remove it"), "{on}");
+        assert!(!render(&Snapshot::default(), &[]).contains("config: "));
+    }
+
+    /// air-aei: an unknown key the overlay set names its file; an overlay that does not parse
+    /// and a tracked overlay each get one line with the path; an applied overlay of known keys
+    /// adds nothing.
+    #[test]
+    fn config_lines_name_the_overlay_where_it_set_or_broke_something() {
+        let overlay =
+            |keys: &[&str], invalid: Option<&str>| super::super::handover::ConfigOverlay {
+                keys: keys.iter().map(|k| k.to_string()).collect(),
+                invalid: invalid.map(str::to_string),
+            };
+        let on = render(
+            &Snapshot {
+                unknown_config_keys: vec!["zzz".into()],
+                config_overlay: overlay(&["targets", "zzz"], None),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("; set in .claude/air.local.json); upgrade or remove it")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(!on.contains("is not used"), "{on}");
+        let on = render(
+            &Snapshot {
+                config_overlay: overlay(&[], Some("EOF while parsing a value at line 1 column 12")),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: .claude/air.local.json is not used (EOF while parsing")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(on.contains("; .claude/air.json is read alone"), "{on}");
+        let on = render(
+            &Snapshot {
+                config_overlay_tracked: true,
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(
+            on.matches("config: .claude/air.local.json is tracked by git")
+                .count(),
+            1,
+            "{on}"
+        );
+        assert!(
+            on.contains("add `.claude/air.local.json` to .gitignore"),
+            "{on}"
+        );
+        let quiet = render(
+            &Snapshot {
+                config_overlay: overlay(&["targets"], None),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(!quiet.contains("config: "), "{quiet}");
+    }
+
     #[test]
     fn a_red_batch_holds_its_members_until_they_move_or_a_later_green_carries_them() {
         let run = |sha: &str, members: &[&str]| air_ledger::verify::VerifyRun {
@@ -3274,6 +3522,66 @@ mod tests {
         assert!(red_held(&reds, "bbbb", &carries_a));
         // B commits past its red head: the new head was in no red batch.
         assert!(!red_held(&reds, "b2b2", &none));
+    }
+
+    /// air-m8u: with the key absent or false a coordinator head is `not-offered` until `air
+    /// ready` ran at it, then batch-ready; a later commit is a new head and needs a new offer;
+    /// with the key true the rule before the key holds, offer or none.
+    #[test]
+    fn a_coordinator_head_needs_an_offer_unless_autobatch() {
+        let base = BatchFacts {
+            worker: "coordinator".into(),
+            head: "c0c0c0c0c0c0c0c0".into(),
+            coordinator: true,
+            ahead: true,
+            ..Default::default()
+        };
+        let n = batch_ready_rule(&base).unwrap_err();
+        assert_eq!(n.check, "not-offered");
+        assert!(
+            n.detail.contains("air ready") && n.detail.contains("coordinator_autobatch"),
+            "{}",
+            n.detail
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                offered_at_head: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                autobatch: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            batch_ready_rule(&BatchFacts {
+                autobatch: true,
+                offered_at_head: true,
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        // Nothing ahead is the first lack, offer or none.
+        let n = batch_ready_rule(&BatchFacts {
+            ahead: false,
+            offered_at_head: true,
+            ..base.clone()
+        })
+        .unwrap_err();
+        assert_eq!(n.check, "nothing-ahead");
+        // A worker is never asked for an offer.
+        let w = BatchFacts {
+            worker: "w1".into(),
+            head: "2d2ea33dd9cc3571".into(),
+            carried: vec!["zz-1".into()],
+            held: vec!["zz-1".into()],
+            ..Default::default()
+        };
+        assert!(batch_ready_rule(&w).is_ok());
     }
 
     /// 0.4.9 trial: a head a cut dropped for a conflict was listed batch-ready ten seconds
@@ -3435,6 +3743,9 @@ mod tests {
             handover_attempts: attempts,
             released_at: None,
             release_reason: None,
+            done_at: None,
+            done_head: None,
+            done_proof: None,
         }
     }
 
@@ -3590,7 +3901,7 @@ mod tests {
                 ("idle", "idle-with-claim"),
                 ("silent", "silent-with-claim"),
                 ("gone", "gone-with-claim"),
-                ("red", "handover-not-green"),
+                ("red", "done-refused"),
             ]
         );
         assert_eq!(att[0].for_minutes, past_every_line_min());
@@ -3606,7 +3917,7 @@ mod tests {
         };
         let att = attention(&s, NOW, loose);
         let kinds: Vec<&str> = att.iter().map(|a| a.kind).collect();
-        assert_eq!(kinds, vec!["gone-with-claim", "handover-not-green"]);
+        assert_eq!(kinds, vec!["gone-with-claim", "done-refused"]);
     }
 
     /// air-3eu: the claim on a handed-over bead stays open so the coordinator still sees the
@@ -3635,7 +3946,7 @@ mod tests {
                 .iter()
                 .map(|a| a.kind)
                 .collect::<Vec<_>>(),
-            vec!["idle-with-claim", "handover-not-green"]
+            vec!["idle-with-claim", "done-refused"]
         );
     }
 

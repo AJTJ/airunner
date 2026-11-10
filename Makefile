@@ -23,9 +23,11 @@ adoption-check:
 	cargo build -q -p air
 	sh scripts/adoption-check.sh
 
-# Prepare the live trial (docs/design.md §9.1, air-4usc): build the release binary and pin it
-# into a scratch copy of examples/minimal under $TMPDIR, leaving the `air` on PATH alone. Prints
-# where the copy is and how to start it. Starts no session.
+# Run the live trial (docs/design.md §9.1, air-4usc, air-fkb): build the release binary, pin it
+# into a copy of examples/minimal at $TRIAL_DIR/minimal (default $TMPDIR/air-trial), mark the copy
+# trusted in ~/.claude.json (air-zau), leave the `air` on PATH alone, start the trial fleet with the request as the
+# coordinator's prompt, and answer the development-channels prompt in each pane. TRIAL_PODS=1
+# puts the fleet on pods, one replica per session, from the owner's own overlay (air-1bn).
 .PHONY: trial
 trial:
 	cargo build -q --release -p air

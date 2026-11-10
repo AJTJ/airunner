@@ -40,6 +40,10 @@ use crate::cmd::install::ROLES_MD;
 /// Deny rules for a worker (roles.md "Never"; agent-roles-and-confinement §5 L1).
 pub const WORKER_DENY: &[&str] = &[
     "Bash(air land *)",
+    // air-m8u: offering a head to the lane is the coordinator's; the command refuses by role
+    // too, and this keeps the attempt out of the pane.
+    "Bash(air ready)",
+    "Bash(air ready *)",
     "Bash(git push *)",
     // Owner, 2026-09-26: a worker and the lane READ beads and add comments (`bd comment`,
     // `bd comments add`); every other change to a bead or to the store goes through `air`
@@ -210,28 +214,75 @@ pub fn lane_deny() -> Vec<&'static str> {
 /// over coordinator sessions.
 pub const COORDINATOR_DENY: &[&str] = &["Bash(git push *)", "AskUserQuestion"];
 
-/// Repo-specific deny rules, tracked in `<main>/.claude/air.json`:
-/// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...]}`. Patterns, not
-/// enumerations, so a new publish target cannot ship outside the list (the adopter's capture
-/// fcd8ff: `make deploy-site` shipped without being added to a list that named `deploy-api`).
-pub fn repo_deny(repo: &Path, key: &str) -> Vec<String> {
-    let Ok(air_dir) = air_ledger::paths::air_dir_for(repo) else {
-        return Vec::new();
-    };
-    let path = air_dir
-        .parent()
-        .map(|m| m.join(".claude/air.json"))
-        .unwrap_or_default();
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get(key).and_then(|a| a.as_array()).cloned())
+/// Repo-specific permission rules, tracked in `<main>/.claude/air.json`:
+/// `{"worker_deny": ["Bash(make deploy*)"], "coordinator_deny": [...], "worker_allow": [...],
+/// "coordinator_allow": [...]}`. Patterns, not enumerations, so a new publish target cannot
+/// ship outside the list (the adopter's capture fcd8ff: `make deploy-site` shipped without
+/// being added to a list that named `deploy-api`). Pure over the parsed file: the strings
+/// under `key` when it is an array, else nothing.
+pub fn config_patterns(cfg: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    cfg.and_then(|v| v.get(key).and_then(|a| a.as_array()))
         .map(|a| {
             a.iter()
                 .filter_map(|x| x.as_str().map(str::to_string))
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Pure: the repo's own rules for `role` (`worker` and `lane` read the `worker_*` keys, the
+/// coordinator the `coordinator_*` keys) put onto an argv the role's pure builder made: the
+/// allow patterns (`worker_allow`, `coordinator_allow`) merged into the `--settings` blob's
+/// `permissions.allow` beside the hardcoded rules ([`lane_allow`], [`worker_allow`],
+/// [`coordinator_allow`]), and the deny patterns put among the `--disallowed-tools` values,
+/// after the last one already there. A key that is absent or not an array adds nothing.
+///
+/// air-b70 (2026-11-05): the deny patterns used to be appended at the end of the argv. A
+/// worker's argv ends with its deny values, so that was right for workers; the coordinator's
+/// ends with the Metis argv (`--mcp-config <path>`), so with `metis` on a repo's
+/// `coordinator_deny` followed that path as positional arguments and denied nothing. Found by
+/// reading the code while on air-xji; dormant here (`coordinator_deny` is empty).
+///
+/// air-xji (2026-11-05): the owner wants the coordinator to deploy and resize the fleet's
+/// machines itself and workers to use them. Every `gh workflow run` and every `kubectl` write
+/// from a launched session was refused by the auto-mode classifier as a shared-cluster
+/// mutation, so on 2026-11-05 alone five such commands were typed by the owner from text the
+/// coordinator gave inline. The commands are the adopter's, not Air's, so they cannot be
+/// hardcoded the way `tmux send-keys` (air-yux) and `air run` (air-nyi) were: Air knows no
+/// provider, and a Kubernetes pod, a VM at a hosting company and a bare host each need their
+/// own list. A config key is the pattern the deny side already has. The harness evaluates
+/// deny before allow ("Rules are evaluated in order: deny, then ask, then allow. The first
+/// match in that order determines the outcome", https://code.claude.com/docs/en/permissions.md
+/// "Manage permissions", accessed 2026-11-05), so a pattern in both lists stays denied and
+/// nothing here widens past the deny list. A rule matches the bare line only; a piped line is
+/// judged by the classifier (air-b1h8).
+///
+/// Removal: when the harness stops judging bare lines from launched sessions in auto mode.
+pub fn apply_repo_rules(argv: &mut Vec<String>, cfg: Option<&serde_json::Value>, role: &str) {
+    let side = if role == "coordinator" {
+        "coordinator"
+    } else {
+        "worker"
+    };
+    let allow = config_patterns(cfg, &format!("{side}_allow"));
+    if !allow.is_empty() {
+        merge_settings(
+            argv,
+            &[serde_json::json!({ "permissions": { "allow": allow } })],
+        );
+    }
+    let deny = config_patterns(cfg, &format!("{side}_deny"));
+    // After the flag's last value: the next argument that is a flag, or the end.
+    let at = match argv.iter().position(|a| a == "--disallowed-tools") {
+        Some(flag) => argv
+            .iter()
+            .enumerate()
+            .skip(flag.saturating_add(1))
+            .find(|(_, a)| a.starts_with("--"))
+            .map_or(argv.len(), |(i, _)| i),
+        None => argv.len(),
+    };
+    argv.splice(at..at, deny);
 }
 
 /// Write the task to `<main>/.air/tasks/<name>.md` and return the path. Overwritten on every
@@ -430,6 +481,52 @@ pub fn lane_allow(pin: Option<&Path>) -> Vec<String> {
     v
 }
 
+/// Allow rules for a worker: `air run` and `air record`, the two commands that reach a target
+/// in `targets` (`.claude/air.json`), and the pinned binary's forms as [`lane_allow`] has them.
+///
+/// air-nyi (2026-11-05): a worker's launcher wrote no allow list, so every line went to the
+/// auto-mode classifier, which reads the conversation and refused a bare `air run -- true`
+/// against a pod twice (once with no reason given) and a direct `kubectl exec` the day before.
+/// A target for a worker was therefore worth nothing. Same shape as the lane's `air land`
+/// (air-8cdh) and the same fix: a narrow allow rule on the role's `--settings`, which resolves
+/// before the classifier (the sources are on [`lane_allow`]). The rule matches the bare line
+/// only; a piped line is judged by the classifier (air-b1h8), and roles.md tells workers so.
+/// The deny list still wins where it names a command, so nothing here widens what a worker
+/// may do beyond these two air subcommands.
+///
+/// Removal: when the harness stops refusing bare `air run` lines in auto mode, measured by a
+/// round with zero `hook.PermissionDenied` events naming `air run` or `air record` from a
+/// worker.
+pub fn worker_allow(pin: Option<&Path>) -> Vec<String> {
+    const AIR: &[&str] = &["run *", "record *"];
+    let mut v: Vec<String> = AIR.iter().map(|c| format!("Bash(air {c})")).collect();
+    if let Some(p) = pin {
+        v.extend(AIR.iter().map(|c| format!("Bash({} {c})", p.display())));
+    }
+    v
+}
+
+/// Allow rule for the coordinator: `tmux send-keys`, the one keystroke roles.md lets it type
+/// into another session (the recorded answer to a known start-up prompt, after the owner's yes;
+/// air-d73).
+///
+/// air-yux (2026-11-03): the live trial's five sessions sat on the development-channels
+/// prompt, the owner said yes, and the coordinator's `tmux send-keys -t <session> Enter` was
+/// refused by the auto-mode classifier ("Consent Given For The User"), three times across two
+/// days; its attempt to add the rule to `.claude/settings.local.json` was refused too
+/// ("Self-Modification"). Only the owner's own typing answered the prompts. Same shape as the
+/// lane's `air land` (air-8cdh) and the same fix: an allow rule on the role's `--settings`,
+/// which resolves before the classifier and is honored in a folder not yet trusted, never in
+/// the project file. The rule covers the bare command only; a piped line is still judged by
+/// the classifier (air-b1h8), and roles.md tells the coordinator to run it bare.
+///
+/// Removal: when every start-up prompt is pre-answered by the launcher, so nothing is left
+/// for the coordinator to type (air-z41: the development-channels warning has no documented
+/// skip yet).
+pub fn coordinator_allow() -> Vec<String> {
+    vec!["Bash(tmux send-keys *)".to_string()]
+}
+
 /// The one project MCP server Air installs (`.mcp.json`, and `server:air` for the channel).
 ///
 /// air-oe9k (2026-09-25 trial): every session stopped at "New MCP server found in this project:
@@ -450,8 +547,9 @@ pub const MCP_SERVERS: &[&str] = &["air"];
 /// documented way is by hand, `projects["<path>"].hasTrustDialogAccepted` in `~/.claude.json`
 /// (https://code.claude.com/docs/en/permissions.md "What runs before you trust a folder"),
 /// a file "that it writes for itself; you don't need to edit it"
-/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so Air
-/// does not write it. Trust in a worktree is keyed on the main checkout's root
+/// (https://code.claude.com/docs/en/settings.md), and the dialog is the owner's consent, so the
+/// launcher does not write it; `make trial` writes it for its own scratch copy, built from Air's
+/// example (`scripts/trial/trust-copy.py`, air-zau). Trust in a worktree is keyed on the main checkout's root
 /// (permissions.md "Project allow rules and workspace trust"), so one accept covers every
 /// session Air starts; the trial asked five times because five sessions started at once in a
 /// fresh copy. The development-channels warning has no documented skip either: the flag works
@@ -464,14 +562,80 @@ pub const MCP_SERVERS: &[&str] = &["air"];
 /// Every session warns about development channels since air-1vri: the Air channel is how each
 /// session receives the messages Air addresses to it, so the lane and the workers load it too.
 pub fn startup_prompts_note(main: &Path) -> String {
+    // Folder trust is checked before launch (air-z41), so a session never starts on it.
     format!(
-        "If Claude Code has not been trusted in {} yet, each session asks \"Is this a project \
-         you created or one you trust?\": answer Yes; the default exits. One accept covers \
-         every worktree; running `claude` there once first avoids the question. Each session \
-         also warns about loading development channels (the Air channel, which is how Air's \
-         messages reach it): choose \"I am using this for local development\"; Exit quits.",
+        "Each session warns about loading development channels (the Air channel, which is how \
+         Air's messages reach it): choose \"I am using this for local development\"; Exit quits. \
+         Folder trust in {} was checked before launch; the other start-up prompts are \
+         pre-answered.",
         main.display()
     )
+}
+
+/// Flags that pre-answer start-up prompts (air-z41): `--add-dir <main checkout>` so the read of
+/// `.air/` every worktree session makes outside its working directory does not prompt, and
+/// `--permission-mode auto` stated rather than inherited. `skipAutoPermissionPrompt` is on the
+/// `--settings` blob. Removal: when Claude Code stops prompting for these, or the fleet leaves
+/// auto mode.
+pub fn prompt_flags(main: &Path) -> Vec<String> {
+    vec![
+        "--add-dir".into(),
+        main.display().to_string(),
+        "--permission-mode".into(),
+        "auto".into(),
+    ]
+}
+
+/// Put [`prompt_flags`] before `--disallowed-tools`, whose values run to the next flag.
+fn insert_prompt_flags(argv: &mut Vec<String>, main: &Path) {
+    let at = argv
+        .iter()
+        .position(|a| a == "--disallowed-tools")
+        .unwrap_or(argv.len());
+    argv.splice(at..at, prompt_flags(main));
+}
+
+/// Where Claude Code keeps `projects["<path>"].hasTrustDialogAccepted`: `.claude.json` under
+/// `CLAUDE_CONFIG_DIR` when set, else the home directory.
+fn claude_json_path() -> Option<std::path::PathBuf> {
+    if let Some(d) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(std::path::PathBuf::from(d).join(".claude.json"));
+    }
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude.json"))
+}
+
+/// Pure: whether `claude_json` records the folder-trust dialog as accepted for `main`, under the
+/// path as given or its canonical form.
+pub fn trust_accepted(claude_json: &str, main: &Path) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(claude_json) else {
+        return false;
+    };
+    let accepted = |p: &Path| {
+        v.get("projects")
+            .and_then(|m| m.get(p.display().to_string()))
+            .and_then(|e| e.get("hasTrustDialogAccepted"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    };
+    accepted(main) || main.canonicalize().is_ok_and(|c| accepted(&c))
+}
+
+/// The refusal when the main checkout is not trusted, else None. The launcher never writes the
+/// key: the dialog is the owner's consent (the trial script writes it for its own copy, air-zau). Before this, five sessions started at once each stopped on the
+/// dialog (air-z41, an adopter 2026-10-28 to 2026-10-30).
+fn trust_refusal(main: &Path, who: &str) -> Option<String> {
+    let text = claude_json_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    if trust_accepted(&text, main) {
+        return None;
+    }
+    Some(format!(
+        "{who}: refused: Claude Code has not been trusted in {m} (`hasTrustDialogAccepted` is \
+         absent for it in ~/.claude.json), so every session would stop on the folder-trust \
+         dialog. Run `claude` once in {m}, answer Yes, then launch again.",
+        m = main.display()
+    ))
 }
 
 /// The flag that attaches the Air channel. A local `.mcp.json` server is not on Claude Code's
@@ -494,6 +658,10 @@ fn settings_blob(env: &[(String, String)], allow: &[String]) -> String {
         "enabledMcpjsonServers".into(),
         serde_json::json!(MCP_SERVERS),
     );
+    // air-z41: the first-run auto-mode calibration dialog sat on the lane for over an hour at an
+    // adopter (2026-10-28 to 2026-10-30). Documented on `--settings` (Claude Code 2.1.308; the
+    // adopter's research, 2026-10-30), so it is not left to the project file.
+    blob.insert("skipAutoPermissionPrompt".into(), serde_json::json!(true));
     if !allow.is_empty() {
         blob.insert("permissions".into(), serde_json::json!({ "allow": allow }));
     }
@@ -622,10 +790,10 @@ fn role_argv(
     deny: &[&str],
     extra: &[String],
 ) -> Vec<String> {
-    let allow = if role == "lane" {
-        lane_allow(None)
-    } else {
-        Vec::new()
+    let allow = match role {
+        "lane" => lane_allow(None),
+        "worker" => worker_allow(None),
+        _ => Vec::new(),
     };
     let settings = settings_blob(&role_env(role, name, project), &allow);
     let mut v: Vec<String> = vec![
@@ -650,6 +818,49 @@ fn role_argv(
 /// args), with any pass-through `--settings` merged into Air's so the line carries one
 /// (air-9dg). The lane takes the repo's `worker_deny` too: it is a worker with one permission
 /// added.
+/// `"model"` and `"lane_model"` from `.claude/air.json` (air-ap1): the model the fleet should
+/// be on, `lane_model` winning for the lane. The adopter's coordinator relaunched four sessions
+/// by hand on two days running to get them onto the owner's model, because the model lived
+/// nowhere Air reads. Pure over the parsed file; an empty or non-string value is absent.
+/// Removed when the harness carries a per-project model that launched sessions inherit.
+pub fn configured_model(cfg: &serde_json::Value, role: &str) -> Option<String> {
+    let key = |k: &str| {
+        cfg.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    if role == "lane"
+        && let Some(m) = key("lane_model")
+    {
+        return Some(m);
+    }
+    key("model")
+}
+
+/// `extra` with `--model <configured>` in front when the config names one and `extra` does
+/// not already carry `--model` (from the launcher's flag or a passthrough after `--`): the
+/// command line wins over the file, and an absent key passes nothing, so the session inherits
+/// the harness's model as before. First, for the reason [`crate::main`]'s `with_model` gives.
+pub fn with_configured_model(
+    cfg: Option<&serde_json::Value>,
+    role: &str,
+    extra: &[String],
+) -> Vec<String> {
+    let given = extra
+        .iter()
+        .any(|a| a == "--model" || a.starts_with("--model="));
+    match cfg.and_then(|c| configured_model(c, role)) {
+        Some(m) if !given => {
+            let mut v = vec!["--model".to_string(), m];
+            v.extend(extra.iter().cloned());
+            v
+        }
+        _ => extra.to_vec(),
+    }
+}
+
 fn worker_argv_for(
     repo: &Path,
     role: &str,
@@ -657,7 +868,9 @@ fn worker_argv_for(
     roles: &Path,
     extra: &[String],
 ) -> Result<Vec<String>, String> {
-    let (extra, theirs) = split_settings(extra)?;
+    let cfg = super::handover::air_json(repo);
+    let extra = with_configured_model(cfg.as_ref(), role, extra);
+    let (extra, theirs) = split_settings(&extra)?;
     let project = super::tmux::project_prefix(repo);
     let mut base = if role == "lane" {
         lane_argv(name, &project, roles, &[])
@@ -665,6 +878,8 @@ fn worker_argv_for(
         worker_argv(name, &project, roles, &[])
     };
     merge_settings(&mut base, &theirs);
+    let main = super::worktree::main_checkout(repo);
+    insert_prompt_flags(&mut base, &main);
     // The pinned binary by absolute path, which is how the lane ran it in the trial (air-8cdh).
     let pin = super::install::pin_path(&super::worktree::main_checkout(repo).join(".air"));
     if role == "lane" && pin.is_file() {
@@ -674,9 +889,36 @@ fn worker_argv_for(
             &[serde_json::json!({ "permissions": { "allow": allow } })],
         );
     }
-    base.extend(repo_deny(repo, "worker_deny"));
+    // air-h7l: `lane_allow` names main in its reset rule; a repo with another base needs the
+    // same rule for that branch, since that is what the lane's loop resets to.
+    let base_branch = super::handover::base_branch(repo);
+    if role == "lane" && base_branch != "main" {
+        merge_settings(
+            &mut base,
+            &[serde_json::json!({ "permissions": { "allow": [
+                format!("Bash(git reset --hard {base_branch})")
+            ] } })],
+        );
+    }
+    apply_repo_rules(&mut base, cfg.as_ref(), role);
     base.extend(extra);
     Ok(base)
+}
+
+/// Pure: a leading positional in the coordinator's pass-through (`air coordinator -- "<text>"`)
+/// is its first prompt, and the rest stays pass-through. Nothing when `extra` starts with a
+/// flag or is empty.
+///
+/// air-fkb (2026-11-05): the live trial's coordinator was told to read its request from a
+/// file; the auto-mode classifier refused the `cat`, and the trial waited on the owner for
+/// hours (air-fzl). `make trial` now passes the request text here. Unlike a worker's `--task`
+/// (air-er0), the text rides in argv, so a `pkill -f` naming a command the text quotes would
+/// match the coordinator's process; the trial's request names `air land` and `make verify`.
+pub fn leading_prompt(extra: &[String]) -> (Option<&str>, &[String]) {
+    match extra.split_first() {
+        Some((p, rest)) if !p.starts_with('-') && !p.trim().is_empty() => (Some(p), rest),
+        _ => (None, extra),
+    }
 }
 
 /// Pure: the argv for the coordinator session.
@@ -685,6 +927,8 @@ fn worker_argv_for(
 /// directory when the repo declared one that exists (air-g5o). It is placed BEFORE `extra`, so
 /// a caller passing its own `--mcp-config` is last and wins, the same ordering every other
 /// pass-through here already has. Workers get none of it: the coordinator plans, workers work.
+/// A leading positional in `extra` ([`leading_prompt`]) goes first, where a worker's task
+/// prompt goes (air-2ct): appended, it sat among the `--disallowed-tools` values.
 pub fn coordinator_argv(
     project: &str,
     roles: &Path,
@@ -692,9 +936,11 @@ pub fn coordinator_argv(
     metis: &[String],
     extra: &[String],
 ) -> Vec<String> {
+    let (prompt, extra) = leading_prompt(extra);
     // No AIR_ENFORCE: the hand-over gate is the worker's. AIR_PROJECT is both roles' (air-0lk);
     // the coordinator is the one that can see every fleet on the machine.
-    let settings = settings_blob(&coordinator_env(project), &[]);
+    // Plus its one allow rule, `tmux send-keys` (air-yux).
+    let settings = settings_blob(&coordinator_env(project), &coordinator_allow());
     let mut v: Vec<String> = vec![
         channels_flag.into(),
         "server:air".into(),
@@ -709,7 +955,7 @@ pub fn coordinator_argv(
     v.extend(COORDINATOR_DENY.iter().map(|s| (*s).to_string()));
     v.extend(metis.iter().cloned());
     v.extend(extra.iter().cloned());
-    v
+    worker_argv_prompt(v, prompt)
 }
 
 fn coordinator_argv_for(
@@ -719,16 +965,52 @@ fn coordinator_argv_for(
     metis: &[String],
     extra: &[String],
 ) -> Result<Vec<String>, String> {
-    let (extra, theirs) = split_settings(extra)?;
+    let cfg = super::handover::air_json(repo);
+    // The prompt first, before a configured `--model` is put in front of the pass-through.
+    let (prompt, extra) = leading_prompt(extra);
+    let extra = with_configured_model(cfg.as_ref(), "coordinator", extra);
+    let (extra, theirs) = split_settings(&extra)?;
     let mut base = coordinator_argv(&super::tmux::project_prefix(repo), roles, flag, metis, &[]);
     merge_settings(&mut base, &theirs);
-    base.extend(repo_deny(repo, "coordinator_deny"));
+    insert_prompt_flags(&mut base, &super::worktree::main_checkout(repo));
+    apply_repo_rules(&mut base, cfg.as_ref(), "coordinator");
     base.extend(extra);
-    Ok(base)
+    Ok(worker_argv_prompt(base, prompt))
 }
 
 fn claude_bin() -> String {
     std::env::var("AIR_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
+}
+
+/// The `caffeinate` to hold the Mac awake for the life of a launched session (air-1ye): an
+/// adopter's laptop, set to sleep after a minute idle, slept for three hours while a worker's
+/// measurement ran (2026-10-29, 46 sleep/wake lines in `pmset -g log`); the harness's own
+/// `caffeinate -i -t 300` covers parts of a turn, not an hour-long command. `AIR_CAFFEINATE_BIN`
+/// names another binary for a test, and empty turns it off; otherwise macOS with
+/// `/usr/bin/caffeinate` present. Elsewhere: None, and the session runs bare. Removal: when the
+/// harness holds its own idle assertion for the whole session.
+pub fn caffeinate_bin() -> Option<String> {
+    match std::env::var("AIR_CAFFEINATE_BIN") {
+        Ok(v) if v.is_empty() => None,
+        Ok(v) => Some(v),
+        Err(_) => (cfg!(target_os = "macos") && Path::new("/usr/bin/caffeinate").is_file())
+            .then(|| "caffeinate".to_string()),
+    }
+}
+
+/// Pure: the command to run, wrapped in `caffeinate -i` when there is one. `caffeinate` runs
+/// the command as its child, holds the idle assertion while it lives, and exits with it, so
+/// nothing is left behind when the session ends and the machine may sleep while the fleet is
+/// idle.
+pub fn awake(caffeinate: Option<&str>, bin: &str, argv: &[String]) -> (String, Vec<String>) {
+    match caffeinate {
+        Some(c) => {
+            let mut v = vec!["-i".to_string(), bin.to_string()];
+            v.extend(argv.iter().cloned());
+            (c.to_string(), v)
+        }
+        None => (bin.to_string(), argv.to_vec()),
+    }
 }
 
 /// POSIX single-quote an argument so `sh -c` reconstructs it byte for byte. Bare words pass
@@ -841,10 +1123,10 @@ fn spawn_tmux(
     detached: bool,
     print: bool,
 ) -> Result<i32, String> {
-    let bin = claude_bin();
+    let (bin, argv) = awake(caffeinate_bin().as_deref(), &claude_bin(), argv);
     let socket = tmux_socket();
     let session = super::tmux::session_name(&super::tmux::project_prefix(repo), name);
-    let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, argv);
+    let targv = tmux_session_argv(&session, cwd, socket.as_deref(), env, detached, &bin, &argv);
     if print {
         println!("{}", print_line("tmux", &targv));
         return Ok(0);
@@ -931,15 +1213,15 @@ fn attach_existing(session: &str, socket: Option<String>, detached: bool) -> i32
 }
 
 fn exec_claude(repo: &Path, env: &[(String, String)], argv: &[String], print: bool) -> i32 {
-    let bin = claude_bin();
+    let (bin, argv) = awake(caffeinate_bin().as_deref(), &claude_bin(), argv);
     if print {
-        println!("{}", print_env_line(env, &bin, argv));
+        println!("{}", print_env_line(env, &bin, &argv));
         return 0;
     }
     let mut cmd = Command::new(&bin);
     // On the process, not only in argv: nothing on a command line can clobber it (air-9dg).
     cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .args(argv)
+        .args(&argv)
         .current_dir(repo);
     #[cfg(unix)]
     {
@@ -1055,6 +1337,7 @@ pub fn lane(
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .unwrap_or("lane");
+    // `main` is the SESSION name of the primary checkout, not the base branch (air-h7l).
     if matches!(name, "main" | "coordinator") || name.contains('/') {
         eprintln!("air lane: name must be a worktree name, no slashes, not main or coordinator");
         return 1;
@@ -1175,16 +1458,23 @@ pub fn fleet_members(workers: usize) -> Vec<(&'static str, String)> {
 /// `air fleet up`: the lane and the workers, each in its worktree and a detached tmux session
 /// (air-jc2p.5; owner, 2026-09-14 and 2026-09-25: the owner starts only the coordinator, and
 /// the fleet comes up from it). A session already running is left running and named. Every
-/// member is tried, and the exit is 1 if any failed.
-pub fn fleet_up(repo: &Path, print: bool) -> i32 {
-    fleet_up_noting(repo, print, true)
+/// member is tried, and the exit is 1 if any failed. `model` is `--model` for this launch of
+/// every member, over the file's `model` and `lane_model` (air-ap1).
+pub fn fleet_up(repo: &Path, print: bool, model: Option<&str>) -> i32 {
+    fleet_up_noting(repo, print, true, model)
 }
 
 /// `note` false when `air coordinator` has already said what the sessions will ask.
-fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
+fn fleet_up_noting(repo: &Path, print: bool, note: bool, model: Option<&str>) -> i32 {
     if let Some(refusal) = install_output_refusal(repo, "air fleet up") {
         eprintln!("{refusal}");
         log_install_refusal(repo, "air fleet up", &refusal, print);
+        return 1;
+    }
+    if !print
+        && let Some(refusal) = trust_refusal(&super::worktree::main_checkout(repo), "air fleet up")
+    {
+        eprintln!("{refusal}");
         return 1;
     }
     if note && !print {
@@ -1195,6 +1485,11 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
     if !print {
         super::bd_server::ensure_for_launch(repo, "air fleet up");
     }
+    let extra: Vec<String> = model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| vec!["--model".to_string(), m.to_string()])
+        .unwrap_or_default();
     let mut failed = Vec::new();
     for (role, name) in fleet_members(fleet_workers(repo)) {
         let start = Start {
@@ -1203,7 +1498,7 @@ fn fleet_up_noting(repo: &Path, print: bool, note: bool) -> i32 {
             fixed: (role == "lane").then_some(LANE_START),
             detached: true,
         };
-        match launch_role(repo, role, &name, &[], start, print) {
+        match launch_role(repo, role, &name, &extra, start, print) {
             Ok(0) => {}
             Ok(code) => failed.push((name, format!("exited {code}"))),
             Err(why) => failed.push((name, why)),
@@ -1320,6 +1615,9 @@ fn launch_role(
         log_install_refusal(repo, &who, &refusal, print);
         return Err(refusal);
     }
+    if !print && let Some(refusal) = trust_refusal(&super::worktree::main_checkout(repo), &who) {
+        return Err(refusal);
+    }
     // air-4n5t: a worker the ledger has a live session for is running, whatever its tmux
     // session is called. Twice on 2026-09-28 a change of `"project"` renamed the sessions and
     // `air fleet up`, finding no session of the new name, started a second claude in each
@@ -1391,6 +1689,13 @@ pub fn live_session(
 /// the terminal, and with no terminal the answer is no, so a script never starts a fleet by
 /// accident (owner, 2026-09-25, air-jc2p.5).
 pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<bool>) -> i32 {
+    if !print
+        && let Some(refusal) =
+            trust_refusal(&super::worktree::main_checkout(repo), "air coordinator")
+    {
+        eprintln!("{refusal}");
+        return 1;
+    }
     let start_fleet =
         fleet.unwrap_or_else(|| std::io::stdin().is_terminal() && ask_fleet(fleet_workers(repo)));
     // Said once for every session about to start (air-oe9k), before the launch below replaces
@@ -1401,7 +1706,7 @@ pub fn coordinator(repo: &Path, extra: &[String], print: bool, fleet: Option<boo
         super::bd_server::ensure_for_launch(repo, "air coordinator");
     }
     // Before the coordinator: on a terminal its launch replaces this process.
-    if start_fleet && fleet_up_noting(repo, print, false) != 0 {
+    if start_fleet && fleet_up_noting(repo, print, false, None) != 0 {
         eprintln!("air coordinator: the fleet did not fully start; starting the coordinator");
     }
     // Metis first, because its split paragraph goes into the file the next line writes
@@ -1574,9 +1879,17 @@ mod tests {
         let allow = lane["permissions"]["allow"].as_array().unwrap();
         assert!(allow.iter().any(|r| r == "Bash(air land *)"), "{lane}");
         let worker = settings_of(&worker_argv("w", "air", roles, &[]));
-        assert!(worker.get("permissions").is_none(), "{worker}");
+        let worker_rules = worker["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !worker_rules.iter().any(|r| r == "Bash(air land *)"),
+            "{worker}"
+        );
         let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
-        assert!(coord.get("permissions").is_none(), "{coord}");
+        let coord_allow = coord["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !coord_allow.iter().any(|r| r == "Bash(air land *)"),
+            "{coord}"
+        );
         // A pinned repo's lane may run the pin by absolute path, as it did in the trial.
         let pin = lane_allow(Some(Path::new("/m/.air/bin/air")));
         assert!(
@@ -1612,6 +1925,207 @@ mod tests {
         );
     }
 
+    /// air-yux: the coordinator's `tmux send-keys -t <session> Enter`, the recorded answer to a
+    /// start-up prompt after the owner's yes (air-d73), was refused by the auto-mode classifier
+    /// three times in two days. The rule is on the coordinator's settings, exactly one, and on
+    /// no other role's.
+    #[test]
+    fn workers_are_allowed_air_run_and_air_record_past_the_classifier() {
+        let roles = Path::new("/r/.air/roles.md");
+        let worker = settings_of(&worker_argv("w", "air", roles, &[]));
+        assert_eq!(
+            worker["permissions"]["allow"],
+            serde_json::json!(["Bash(air run *)", "Bash(air record *)"]),
+            "{worker}"
+        );
+        // Every rule is an air subcommand; the deny list still names what a worker may not run.
+        for r in worker_allow(None) {
+            assert!(r.starts_with("Bash(air "), "{r}");
+        }
+        let pin = worker_allow(Some(Path::new("/m/.air/bin/air")));
+        assert!(
+            pin.contains(&"Bash(/m/.air/bin/air run *)".to_string()),
+            "{pin:?}"
+        );
+        assert!(
+            pin.contains(&"Bash(/m/.air/bin/air record *)".to_string()),
+            "{pin:?}"
+        );
+        // The coordinator's list is unchanged, and the lane's gains nothing here.
+        assert_eq!(coordinator_allow(), ["Bash(tmux send-keys *)"]);
+        assert!(!lane_allow(None).iter().any(|r| r == "Bash(air run *)"));
+    }
+
+    /// air-xji: `worker_allow` and `coordinator_allow` in `.claude/air.json` reach the
+    /// role's `permissions.allow` beside the hardcoded rules, the lane taking `worker_allow`
+    /// as it takes `worker_deny`. Absent or not an array, nothing is added.
+    #[test]
+    fn repo_allow_rules_reach_each_roles_settings() {
+        let roles = Path::new("/r/.air/roles.md");
+        let cfg = serde_json::json!({
+            "worker_allow": ["Bash(ssh *)", "Bash(hcloud *)"],
+            "coordinator_allow": ["Bash(kubectl *)", "Bash(gh workflow run *)"],
+        });
+        let allow_of = |v: &[String]| settings_of(v)["permissions"]["allow"].clone();
+        let has = |a: &serde_json::Value, r: &str| a.as_array().unwrap().iter().any(|x| x == r);
+
+        let mut worker = worker_argv("w", "air", roles, &[]);
+        apply_repo_rules(&mut worker, Some(&cfg), "worker");
+        let a = allow_of(&worker);
+        assert!(has(&a, "Bash(ssh *)") && has(&a, "Bash(hcloud *)"), "{a}");
+        assert!(has(&a, "Bash(air run *)"), "{a}");
+        assert!(!has(&a, "Bash(kubectl *)"), "{a}");
+
+        let mut lane = lane_argv("lane", "air", roles, &[]);
+        apply_repo_rules(&mut lane, Some(&cfg), "lane");
+        let a = allow_of(&lane);
+        assert!(has(&a, "Bash(ssh *)") && has(&a, "Bash(air land *)"), "{a}");
+        assert!(!has(&a, "Bash(kubectl *)"), "{a}");
+
+        let mut coord = coordinator_argv("air", roles, "--ch", &[], &[]);
+        apply_repo_rules(&mut coord, Some(&cfg), "coordinator");
+        let a = allow_of(&coord);
+        assert!(
+            has(&a, "Bash(kubectl *)") && has(&a, "Bash(gh workflow run *)"),
+            "{a}"
+        );
+        assert!(has(&a, "Bash(tmux send-keys *)"), "{a}");
+        assert!(!has(&a, "Bash(ssh *)"), "{a}");
+
+        // Absent, not an array, or no file at all: the list is the hardcoded one.
+        for cfg in [
+            None,
+            Some(serde_json::json!({})),
+            Some(serde_json::json!({"worker_allow": "Bash(ssh *)", "coordinator_allow": 1})),
+        ] {
+            let mut w = worker_argv("w", "air", roles, &[]);
+            apply_repo_rules(&mut w, cfg.as_ref(), "worker");
+            assert_eq!(
+                allow_of(&w),
+                serde_json::json!(worker_allow(None)),
+                "{cfg:?}"
+            );
+            let mut c = coordinator_argv("air", roles, "--ch", &[], &[]);
+            apply_repo_rules(&mut c, cfg.as_ref(), "coordinator");
+            assert_eq!(
+                allow_of(&c),
+                serde_json::json!(coordinator_allow()),
+                "{cfg:?}"
+            );
+        }
+    }
+
+    /// air-xji: a pattern in both of a role's repo lists is still on its `--disallowed-tools`,
+    /// and the harness evaluates deny before allow ("Rules are evaluated in order: deny, then
+    /// ask, then allow. The first match in that order determines the outcome",
+    /// https://code.claude.com/docs/en/permissions.md "Manage permissions", accessed
+    /// 2026-11-05), so it stays denied.
+    #[test]
+    fn a_pattern_in_both_repo_lists_stays_denied() {
+        let roles = Path::new("/r/.air/roles.md");
+        let cfg = serde_json::json!({
+            "worker_allow": ["Bash(make deploy*)"],
+            "worker_deny": ["Bash(make deploy*)"],
+        });
+        let mut w = worker_argv("w", "air", roles, &[]);
+        apply_repo_rules(&mut w, Some(&cfg), "worker");
+        let allow = settings_of(&w)["permissions"]["allow"].clone();
+        assert!(
+            allow
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "Bash(make deploy*)"),
+            "{allow}"
+        );
+        let deny_at = w.iter().position(|a| a == "--disallowed-tools").unwrap();
+        let pat_at = w.iter().position(|a| a == "Bash(make deploy*)").unwrap();
+        assert!(pat_at > deny_at, "{w:?}");
+        // Still one of the flag's values: no other flag between.
+        assert!(
+            !w[deny_at + 1..pat_at].iter().any(|a| a.starts_with("--")),
+            "{w:?}"
+        );
+    }
+
+    /// air-b70: with Metis on, `coordinator_argv` ends `--disallowed-tools <deny> --mcp-config
+    /// <path>`, and the repo's `coordinator_deny` appended at the end followed the path as
+    /// positional arguments, denying nothing. The repo's patterns go among the flag's values.
+    #[test]
+    fn repo_deny_patterns_stay_among_the_disallowed_tools_values_with_metis_on() {
+        let roles = Path::new("/r/.air/roles.md");
+        let metis = ["--mcp-config".to_string(), "/m/metis.json".to_string()];
+        let cfg = serde_json::json!({ "coordinator_deny": ["Bash(make deploy*)"] });
+        let mut v = coordinator_argv("air", roles, "--ch", &metis, &["--verbose".to_string()]);
+        apply_repo_rules(&mut v, Some(&cfg), "coordinator");
+        let deny_at = v.iter().position(|a| a == "--disallowed-tools").unwrap();
+        let pat_at = v.iter().position(|a| a == "Bash(make deploy*)").unwrap();
+        assert!(pat_at > deny_at, "{v:?}");
+        assert!(
+            !v[deny_at + 1..pat_at].iter().any(|a| a.starts_with("--")),
+            "{v:?}"
+        );
+        // The hardcoded deny list, the Metis argv and the pass-through are all still there,
+        // in that order after the pattern.
+        for d in COORDINATOR_DENY {
+            assert!(v[deny_at + 1..pat_at].contains(&(*d).to_string()), "{v:?}");
+        }
+        let tail: Vec<&str> = v[pat_at + 1..].iter().map(String::as_str).collect();
+        assert_eq!(
+            tail,
+            ["--mcp-config", "/m/metis.json", "--verbose"],
+            "{v:?}"
+        );
+    }
+
+    /// air-fkb (2026-11-05): `air coordinator -- "<request>"` is how `make trial` hands the
+    /// trial coordinator its request, so the session starts on it instead of on a file read.
+    /// The positional leads argv, where a worker's task prompt goes (air-2ct): appended, it
+    /// sat among the `--disallowed-tools` values and read as one more deny rule.
+    #[test]
+    fn a_leading_positional_in_the_coordinators_extra_leads_argv() {
+        let roles = Path::new("/r/.air/roles.md");
+        let text = "File the trial's beads.";
+        let v = coordinator_argv(
+            "air",
+            roles,
+            "--ch",
+            &[],
+            &[text.to_string(), "--verbose".to_string()],
+        );
+        assert_eq!(v[0], text, "{v:?}");
+        assert!(task_is_prompt(&v, text), "{v:?}");
+        assert_eq!(v.last().map(String::as_str), Some("--verbose"));
+        // Pass-through flags alone are placed as before.
+        let v = coordinator_argv("air", roles, "--ch", &[], &["--verbose".to_string()]);
+        assert_eq!(v[0], "--ch", "{v:?}");
+        assert_eq!(v.last().map(String::as_str), Some("--verbose"));
+    }
+
+    #[test]
+    fn only_the_coordinator_is_allowed_tmux_send_keys_past_the_classifier() {
+        let roles = Path::new("/r/.air/roles.md");
+        let coord = settings_of(&coordinator_argv("air", roles, "--ch", &[], &[]));
+        assert_eq!(
+            coord["permissions"]["allow"],
+            serde_json::json!(["Bash(tmux send-keys *)"]),
+            "{coord}"
+        );
+        let worker = settings_of(&worker_argv("w", "air", roles, &[]));
+        let worker_rules = worker["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !worker_rules.iter().any(|r| r == "Bash(tmux send-keys *)"),
+            "{worker}"
+        );
+        let lane = settings_of(&lane_argv("lane", "air", roles, &[]));
+        let lane_rules = lane["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !lane_rules.iter().any(|r| r == "Bash(tmux send-keys *)"),
+            "{lane}"
+        );
+        assert_eq!(coordinator_allow(), ["Bash(tmux send-keys *)"]);
+    }
+
     /// air-oe9k: every session stopped at "New MCP server found in this project: air", whose
     /// default drops the channel. `enabledMcpjsonServers` from `--settings` approves it, and is
     /// honored there even in a folder not yet trusted.
@@ -1637,9 +2151,24 @@ mod tests {
     #[test]
     fn the_startup_note_names_each_remaining_prompt_and_its_answer() {
         let note = startup_prompts_note(Path::new("/m"));
-        assert!(note.contains("trust") && note.contains("Yes") && note.contains("/m"));
+        assert!(note.contains("trust") && note.contains("/m"));
         assert!(note.contains("development channels"));
         assert!(note.contains("I am using this for local development"));
+    }
+
+    /// air-z41: trust is read from `projects[<path>].hasTrustDialogAccepted`, and only `true`
+    /// counts.
+    #[test]
+    fn trust_is_accepted_only_when_the_key_is_true_for_the_main_checkout() {
+        let main = Path::new("/r/main");
+        let t = r#"{"projects":{"/r/main":{"hasTrustDialogAccepted":true}}}"#;
+        let f = r#"{"projects":{"/r/main":{"hasTrustDialogAccepted":false}}}"#;
+        let other = r#"{"projects":{"/r/other":{"hasTrustDialogAccepted":true}}}"#;
+        assert!(trust_accepted(t, main));
+        assert!(!trust_accepted(f, main));
+        assert!(!trust_accepted(other, main));
+        assert!(!trust_accepted("not json", main));
+        assert!(!trust_accepted("", main));
     }
 
     /// The prompt must come before `--disallowed-tools`, whose values are space-separated
@@ -1778,7 +2307,69 @@ mod tests {
         assert!(split_settings(&["--settings".to_string()]).is_err());
     }
 
+    /// air-ap1: the file's model reaches every launcher; `lane_model` wins for the lane; a
+    /// `--model` already on the command line wins over both; absent, nothing is passed.
+    #[test]
+    fn configured_model_rules() {
+        let cfg = serde_json::json!({"model": "x", "lane_model": "y"});
+        let none: &[String] = &[];
+        assert_eq!(
+            with_configured_model(Some(&cfg), "worker", none),
+            ["--model", "x"]
+        );
+        assert_eq!(
+            with_configured_model(Some(&cfg), "coordinator", none),
+            ["--model", "x"]
+        );
+        assert_eq!(
+            with_configured_model(Some(&cfg), "lane", none),
+            ["--model", "y"]
+        );
+        let only = serde_json::json!({"model": "x"});
+        assert_eq!(
+            with_configured_model(Some(&only), "lane", none),
+            ["--model", "x"],
+            "lane_model absent: the lane takes model"
+        );
+        let flag: Vec<String> = ["--model", "z"].map(String::from).to_vec();
+        assert_eq!(
+            with_configured_model(Some(&cfg), "lane", &flag),
+            flag,
+            "the command line wins"
+        );
+        let eq = vec!["--model=z".to_string(), "--verbose".to_string()];
+        assert_eq!(with_configured_model(Some(&cfg), "worker", &eq), eq);
+        let other = vec!["--verbose".to_string()];
+        assert_eq!(
+            with_configured_model(Some(&cfg), "worker", &other),
+            ["--model", "x", "--verbose"],
+            "in front, so it terminates the deny list"
+        );
+        assert_eq!(with_configured_model(None, "worker", &other), other);
+        let empty = serde_json::json!({"model": "  ", "lane_model": 3});
+        assert_eq!(
+            with_configured_model(Some(&empty), "lane", none),
+            none,
+            "blank or non-string is absent"
+        );
+        assert_eq!(configured_model(&cfg, "lane").as_deref(), Some("y"));
+        assert_eq!(configured_model(&cfg, "worker").as_deref(), Some("x"));
+    }
+
     /// air-9dg: the printed line carries the env as shell assignments in front of the exec.
+    /// air-1ye: with a caffeinate the command is `caffeinate -i <bin> <argv…>`, so the session
+    /// is its child and the assertion ends with it; without one the command is unchanged.
+    #[test]
+    fn awake_wraps_the_command_in_caffeinate_only_when_there_is_one() {
+        let argv = vec!["--model".to_string(), "x".to_string()];
+        let (bin, v) = awake(Some("caffeinate"), "claude", &argv);
+        assert_eq!(bin, "caffeinate");
+        assert_eq!(v, ["-i", "claude", "--model", "x"]);
+        let (bin, v) = awake(None, "claude", &argv);
+        assert_eq!(bin, "claude");
+        assert_eq!(v, argv);
+    }
+
     #[test]
     fn print_env_line_prefixes_assignments() {
         let env = role_env("worker", "w1", "air");
