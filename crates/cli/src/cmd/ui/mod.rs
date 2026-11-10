@@ -60,6 +60,14 @@ impl Ctx {
     pub fn ledger(&self) -> Option<Ledger> {
         Ledger::open_read_only(&self.air_dir).ok()
     }
+
+    /// The main checkout, where the worktrees live: the parent of `.air`.
+    pub fn main(&self) -> PathBuf {
+        self.air_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.air_dir.clone())
+    }
 }
 
 /// One answer: the status, the content type and the body.
@@ -127,10 +135,15 @@ pub fn handle(ctx: &Ctx, line: &str) -> Response {
             content_type: "text/html; charset=utf-8",
             body: PAGE.as_bytes().to_vec(),
         },
-        "/api/fleet" => Response::json(&fleet::fleet(ctx.ledger().as_ref(), &at)),
+        "/api/fleet" => Response::json(&fleet::fleet(ctx.ledger().as_ref(), &ctx.main(), &at)),
         "/api/lane" => Response::json(&lane::lane(ctx.ledger().as_ref(), &at)),
         "/api/beads" => Response::json(&beads::beads(ctx.ledger().as_ref(), &at)),
-        "/api/feed" => Response::json(&feed::feed(ctx.ledger().as_ref(), &at, feed::since(query))),
+        "/api/feed" => Response::json(&feed::feed(
+            ctx.ledger().as_ref(),
+            &ctx.air_dir,
+            &at,
+            feed::since(query),
+        )),
         "/api/attention" => Response::json(&attention::attention(ctx.ledger().as_ref(), &at)),
         _ => Response::text(404, "no such path\n"),
     }
@@ -353,7 +366,7 @@ mod tests {
             k
         }
         let at = "2026-11-10T00:00:00Z";
-        let f = serde_json::to_value(fleet::fleet(None, at)).unwrap();
+        let f = serde_json::to_value(fleet::fleet(None, Path::new("/m"), at)).unwrap();
         assert_eq!(keys(&f), sorted(["at", "sessions"]));
         let s =
             serde_json::to_value(fleet::Session::empty("w", "worker", "idle", "", "t0")).unwrap();
@@ -425,7 +438,7 @@ mod tests {
                 "landed"
             ])
         );
-        let fd = serde_json::to_value(feed::feed(None, at, 0)).unwrap();
+        let fd = serde_json::to_value(feed::feed(None, Path::new("/m/.air"), at, 0)).unwrap();
         assert_eq!(keys(&fd), sorted(["at", "next_offset", "items"]));
         let item = serde_json::to_value(feed::Item {
             at: at.into(),
