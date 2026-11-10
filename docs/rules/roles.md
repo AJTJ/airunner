@@ -370,6 +370,9 @@ For anything Air does not already carry, reach one worker with `SendMessage` to 
 name `air status` shows; that should be rare. Tmux panes are for the owner to watch; do not type
 into them, with one exception, the start-up prompts below.
 
+`air ui` is a read-only page the owner may have open. It reads the ledger, the transcripts and
+bd and writes nothing, so it changes nothing you do.
+
 After any launch (`air fleet up`, `air worker`, `air lane`), read each new pane with `tmux
 capture-pane -p -t <project>-<name>`. A session waiting on a prompt hears no notices and does no
 work. If a prompt is waiting, ask the owner once, in plain text, "Shall I accept these on your

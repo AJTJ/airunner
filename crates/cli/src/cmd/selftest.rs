@@ -245,6 +245,17 @@ const MUTATIONS: &[(&str, Mutation)] = &[
             also_red: &[],
         },
     ),
+    // air-o6x.1: the server stays in the tree it was started in and reads as that worker's
+    // own process. Seen red 2026-11-10.
+    (
+        "ui: the page and every endpoint answer on a free port against a seeded repo, and the server reads the tree from nowhere",
+        Mutation {
+            file: "crates/cli/src/cmd/ui/mod.rs",
+            from: "    if let Err(e) = std::env::set_current_dir(\"/\") {",
+            to: "    if let Err(e) = std::env::set_current_dir(\".\") {",
+            also_red: &[],
+        },
+    ),
     // air-1vri.3: the want is kept after the worker was told. Seen red 2026-09-26.
     (
         "lease: a freed lease is told once to each worker that wanted it, oldest first, and the want goes on delivery",
@@ -2747,6 +2758,7 @@ fn all_probes() -> Vec<Probe> {
         probe_refusal_names_the_command_it_refused(),
         probe_worker_close_is_refused_naming_air_done(),
         probe_done_closes_at_the_landing(),
+        probe_ui_serves_from_nowhere(),
         probe_every_wait_is_recorded_once_against_its_own_budget(),
         probe_every_budget_has_a_catalogue_row_naming_its_fail_direction(),
         probe_a_hook_records_its_own_wall_clock(),
@@ -5152,6 +5164,174 @@ Bead: zz-1
         red_fires: red,
         green_passes: green,
     }
+}
+
+/// air-o6x.1: `air ui` answers the page and every endpoint on a free port against a seeded
+/// repo, refuses what it must, and reads the tree from nowhere. The real binary.
+///
+/// Red: an unknown path is 404 and a POST is 405, and the cwd read sees a process whose cwd is
+/// the repo (a `sleep` started there), so the green's "the server is in no tree" is not
+/// vacuous. Green: `/` and the five endpoints answer 200 with their content types, the fleet
+/// carries the seeded session, and the server's own pid has a cwd outside the repo.
+///
+/// The cwd is read per pid (`/proc/<pid>/cwd`, or `lsof -p <pid> -d cwd`), the same two
+/// sources `readers.rs` reads for every process, and not through `readers::lookup`, whose
+/// whole-machine `lsof` runs under a budget that a loaded verify machine overran (seen once,
+/// 2026-11-10: the probe read BLOCKED under a parallel build).
+fn probe_ui_serves_from_nowhere() -> Probe {
+    use std::io::{BufRead as _, Read as _, Write as _};
+    let res = (|| -> Result<(bool, bool), String> {
+        let root = std::env::temp_dir().join(format!("air-selftest-{}", new_id()));
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let root = root.canonicalize().map_err(|e| e.to_string())?;
+        let g = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .envs(GIT_IDENTITY)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        g(&["init", "-q", "-b", "main"])?;
+        g(&["commit", "-q", "--allow-empty", "-m", "a"])?;
+        let ledger = Ledger::open_in(&root.join(".air")).map_err(|e| e.to_string())?;
+        ledger
+            .conn()
+            .execute(
+                "INSERT INTO sessions (session_id, worker, state, changed_at, started_at, role) \
+                 VALUES ('s1', 'w1', 'idle', 't0', 't0', 'worker')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        drop(ledger);
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let mut child = air_command(&exe, &root)
+            .args(["ui", "--port", "0", "--json"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let mut first = String::new();
+        if let Some(out) = child.stdout.take() {
+            let _ = std::io::BufReader::new(out).read_line(&mut first);
+        }
+        let started: serde_json::Value = serde_json::from_str(first.trim())
+            .map_err(|e| format!("air ui printed {first:?}: {e}"))?;
+        let port = started
+            .get("port")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|p| u16::try_from(p).ok())
+            .ok_or("no port in the URL line")?;
+        let get = |line: &str| -> Result<(u16, String, String), String> {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let mut s =
+                std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5))
+                    .map_err(|e| e.to_string())?;
+            let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            write!(s, "{line}\r\nHost: localhost\r\n\r\n").map_err(|e| e.to_string())?;
+            let mut raw = String::new();
+            s.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+            let (head, body) = raw.split_once("\r\n\r\n").ok_or("no header end")?;
+            let status: u16 = head
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or("no status")?;
+            let ctype = head
+                .lines()
+                .find_map(|l| l.strip_prefix("Content-Type: "))
+                .unwrap_or_default()
+                .to_string();
+            Ok((status, ctype, body.to_string()))
+        };
+        let finish = |mut child: std::process::Child, mut sleeper: std::process::Child| {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = sleeper.kill();
+            let _ = sleeper.wait();
+            let _ = std::fs::remove_dir_all(&root);
+        };
+        // A process whose cwd IS the tree, so the sensor is seen to see one.
+        let sleeper = match Command::new("sleep").arg("30").current_dir(&root).spawn() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = child.kill();
+                return Err(e.to_string());
+            }
+        };
+        let cwd_of = |pid: u32| -> Option<String> { cwd_of_pid(pid) };
+        let in_tree = |cwd: Option<String>| cwd.is_some_and(|c| Path::new(&c).starts_with(&root));
+        // RED: the refusals fire, and the sensor sees the sleeper in the tree.
+        let not_found = get("GET /nope HTTP/1.1")
+            .map(|r| r.0 == 404)
+            .unwrap_or(false);
+        let not_post = get("POST /api/fleet HTTP/1.1")
+            .map(|r| r.0 == 405)
+            .unwrap_or(false);
+        let sees_sleeper = in_tree(cwd_of(sleeper.id()));
+        let red = not_found && not_post && sees_sleeper;
+        // GREEN: the page and every endpoint, the seeded session, and the server's cwd.
+        let page = get("GET / HTTP/1.1")
+            .map(|(s, t, _)| s == 200 && t.starts_with("text/html"))
+            .unwrap_or(false);
+        let mut endpoints = true;
+        let mut seeded = false;
+        for path in [
+            "/api/fleet",
+            "/api/lane",
+            "/api/beads",
+            "/api/feed",
+            "/api/attention",
+        ] {
+            match get(&format!("GET {path} HTTP/1.1")) {
+                Ok((200, t, body)) if t == "application/json" => {
+                    match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => {
+                            if path == "/api/fleet" {
+                                seeded = v
+                                    .get("sessions")
+                                    .and_then(|s| s.get(0))
+                                    .and_then(|s| s.get("worker"))
+                                    .is_some_and(|w| w == "w1");
+                            }
+                        }
+                        Err(_) => endpoints = false,
+                    }
+                }
+                _ => endpoints = false,
+            }
+        }
+        let server_cwd = cwd_of(child.id());
+        let from_nowhere = server_cwd.is_some() && !in_tree(server_cwd);
+        finish(child, sleeper);
+        Ok((red, page && endpoints && seeded && from_nowhere))
+    })();
+    let (red, green) = res.unwrap_or_else(blocked);
+    Probe {
+        name: "ui: the page and every endpoint answer on a free port against a seeded repo, and the server reads the tree from nowhere",
+        red_fires: red,
+        green_passes: green,
+    }
+}
+
+/// One process's working directory, as the readers check reads it: `/proc/<pid>/cwd` where
+/// that exists, else `lsof -a -p <pid> -d cwd -Fn`. None when neither answers.
+fn cwd_of_pid(pid: u32) -> Option<String> {
+    if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+        return Some(p.to_string_lossy().into_owned());
+    }
+    let out = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix('n').map(str::to_string))
 }
 
 /// air-mun: Air runs exactly one `git merge`, and it is `--ff-only`, so no Air command can

@@ -6,13 +6,14 @@ from memory: which commit passed verification, who is editing which file, who ho
 task, and who holds a shared resource. A worker declares a bead done once a commit names it, and
 the bead closes only when a landing puts that commit on main after the lane's green.
 
-This document describes main at `92c1ac51` on 2026-11-09, the end of the done-at-landing round
-and the three fixes its pod trial asked for (air-52u, air-67q, air-ius): version 0.4.15 (the
-last release row, `install::RELEASES`), with seven notices waiting (243 files in
-`crates/cli/surface.d/` against the row's 236). The statements the 0.4.15 round's 24 commits
+This document describes main at `a53b03e3` on 2026-11-10, the end of the live-UI round
+(air-o6x, after 0.4.16 and the done-at-landing round's pod trial): version 0.4.16 (the last
+release row, `install::RELEASES`), with four notices waiting (247 files in
+`crates/cli/surface.d/` against the row's 243). The statements the 0.4.15 round's 24 commits
 touch were re-checked against that tree on 2026-11-07 (air-0b7), the done flow (air-4xj) was
-written into §4 to §8 on 2026-11-09, and the trial fixes were swept into §4, §6, §8.1 and §9.1
-the same day (air-nfd). What was removed, and why, is in `docs/solved-issues.md` and
+written into §4 to §8 on 2026-11-09, the trial fixes were swept into §4, §6, §8.1 and §9.1
+the same day (air-nfd), and `air ui` was added to §3, §4.1, §5, §7 and §11 on 2026-11-10
+(air-o6x.5). What was removed, and why, is in `docs/solved-issues.md` and
 `CHANGELOG.md`; this document describes only what exists.
 
 ## 1. Context and goals
@@ -52,15 +53,15 @@ what those two cannot rebuild.
 
 ## 3. Components
 
-The workspace has four crates. Line counts are `.rs` lines on 2026-11-07, tests included
+The workspace has four crates. Line counts are `.rs` lines on 2026-11-10, tests included
 (`find crates/<crate> -name '*.rs' | xargs cat | wc -l`).
 
 | Crate | Lines | What it does |
 |---|---|---|
-| ledger | 4,327 | The SQLite schema (v31), one row type per table, and the event writer. No network, no beads. |
-| hooks | 1,361 | Hook input and output types, the hand-over gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts, with or without its green checks. |
-| bd | 652 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
-| cli | 60,698 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), and the self-test (14,069 lines, 167 probes). |
+| ledger | 4,490 | The SQLite schema (v31), one row type per table, and the event writer. No network, no beads. |
+| hooks | 1,533 | Hook input and output types, the hand-over gate, the edit journal, and the stop nudge. The gate is a pure function of a set of facts, with or without its green checks. |
+| bd | 701 | A wrapper over the beads CLI (`bd --json`): ready, show, claim, list, comment, close, dependencies, reclaim. It counts time spent waiting on beads. |
+| cli | 65,296 | Every command, the hook entry point, the channel server, the launchers, install and init, status and its conditions, landing, audit, the lifecycle model, the remote runner (`air run`), the live view (`air ui`), and the self-test (14,478 lines, 169 probes). |
 
 The ledger is one SQLite file in WAL mode under `.air` in the main checkout, shared by every
 worktree; a row stays until what it describes stops being true. The event stream gets one line
@@ -95,6 +96,16 @@ launcher allows `Bash(tmux send-keys *)` on its `--settings`, since auto mode's 
 refused that keystroke three times in two days (air-yux). For the trial fleet, `make trial`
 sends that Enter to each pane itself (§9.1, air-fkb). Folder trust is answered by the owner,
 except for the trial's scratch copy, which `make trial` marks trusted itself (§9.1, air-zau).
+
+The live view, `air ui [--port N]`, is a GET-only HTTP server in the binary on 127.0.0.1,
+port 7311 by default, serving one embedded page and five JSON endpoints. It opens the ledger
+read-only for each request, never with the migrating opener, and runs from `/` so the readers
+check never counts it as a worktree's process. The fleet cards add what the ledger lacks from
+Claude Code's own session files, the last 64 KiB of each transcript and each tmux pane; the
+board asks `bd` at most twice every 30 seconds; the attention panel reads the conditions the
+coordinator's channel wrote and computes none; and `air status` is never run, since it writes
+on every call. Nothing the page shows is a condition; the owner reads it and the fleet does not
+(`crates/cli/src/cmd/ui/`, air-o6x).
 
 `air coordinator -- "<text>"` starts the coordinator on `<text>` as its first prompt, placed
 first in argv like a worker's task prompt (air-fkb). On a Mac the session runs as the child of
@@ -151,7 +162,8 @@ Any session may run these.
 | air doctor | The ledger's path, size, schema and row counts, whether beads is the pinned version, beads' mode, and in server mode whether Dolt is the pinned version (2.3.5; reported, never refused). |
 | air bd-server | `up` starts the project's Dolt server when its port does not answer, as a background process in its own process group (pid in `.air/dolt/server.pid`), and waits up to 10 s; `status` reports. Both count it up only when the process on the port serves this project's `.air/dolt/data`. |
 | air audit | Per mechanism: how often it fired, over what, when last, and its removal condition; per timing budget its p50, p90, p99 and maximum beside the budget. Facts, not verdicts. |
-| air selftest | A red and a green probe for every check (167); `--prove` runs each probe's declared mutation. |
+| air selftest | A red and a green probe for every check (169); `--prove` runs each probe's declared mutation. |
+| air ui | A read-only view of the fleet for a browser on 127.0.0.1 (`--port`, 7311 by default, 0 for a free one; `--json` prints the URL as JSON). `/` is the page; `/api/fleet` one card per session with its claims, head, harness status, the call in flight and its pane's last lines; `/api/lane` the verify in flight, the newest cuts, runs and landings, the standing red with the members not yet verified alone, and the two loop medians; `/api/beads` every bead in one of five columns with its claim, done declaration and landing; `/api/feed?since=<offset>` Air's decisions, notices and messages oldest first; `/api/attention` the fleet stop, open conditions, open captures, leases and waits. Every other method is 405. |
 | air gc | Reports what a retention period would remove from `.air/events` and removes it only with `--apply`. |
 
 The coordinator, the lane or the owner run these. The deny list keeps workers from `air land`,
@@ -287,6 +299,11 @@ erDiagram
 
 Ledger rows do not expire (`air doctor` on 2026-09-28: 498 verify runs, 258 claims, 175
 landings); event files go only with `air gc --apply`, never while the ledger points at them.
+
+Every command opens the ledger through `Ledger::open_in`, which runs the migrations, except
+`air ui`, which opens it with `Ledger::open_read_only` (SQLite's read-only flag, no migration,
+the same busy timeout, never `immutable=1`): a view built from a newer tree cannot migrate the
+ledger under the fleet's binary, and a live file keeps its change detection.
 
 ## 6. Flows
 
@@ -533,7 +550,9 @@ The hook fails open, because it must never block the editor. A beads timeout dur
 leaves the state unknown and the bead is read again; a killed verify is no verdict. When the
 Dolt server is down every beads command fails; the launchers start it first and the
 coordinator's tick restarts it and says so, never over a data directory without the project's
-database. An unknown process reading counts as nothing running.
+database. An unknown process reading counts as nothing running. The live view down means the
+page says it cannot reach the server and nothing else happens: no session, hook or command
+reads from it, and a missing ledger gives every endpoint its empty shape.
 
 Everything else fails closed and names its fix: landing while a verify runs in the main
 checkout or the lane's tree unless overridden (a worker's own verify never blocks it), the
@@ -767,6 +786,7 @@ Each choice, why, and the evidence; a URL carries the date it was read.
 | The close gate is an external recorded check, not the agent's report. | Models still claim success they did not achieve; an anti-cheating prompt lowers the rate and leaves it high (Opus 4.5, 55% to 35%). | https://assets.anthropic.com/m/64823ba7485345a7/Claude-Opus-4-5-System-Card.pdf (2026-08-18) |
 | Facts and refusals over procedure prose, each mechanism with a removal condition. | Context files do not raise task success and cost over 20% more; harness pieces encoding what a model cannot do get removed on the next model. | https://arxiv.org/abs/2602.11988, https://www.anthropic.com/engineering/harness-design-long-running-apps (2026-08-21); `.claude/skills/do-less/references/evidence.md` |
 | cargo-dist builds and publishes release binaries; macOS and Linux only. | Adopters needed Rust and a checkout to install Air. dist is the standard generator for a Rust binary's GitHub Releases and installer, so Air writes no release CI of its own. Windows is left out because Air needs tmux. Removed if Air ships through a package manager instead. | https://github.com/axodotdev/cargo-dist (0.33.0, 2026-10-21) |
+| Live UI: a hand-rolled std HTTP server in the binary, over an HTTP crate or a daemon. | The tree has no async runtime and no HTTP crate, the surface is GET and five JSON shapes, and a page that polls needs no push; `bd serve` has a write surface and no read-only mode, and the harness's own agent views show nothing of Air's facts. The ledger is read through a read-only open, bd through the shared trait at most twice per 30 s, and nothing is written. | `docs/research/live-ui.md` (2026-11-09) §1, §3, §4 |
 | Metis is attached to the coordinator for planning; Air stores no phase. | Metis enforces only forward-only phase moves on its own documents; Air borrows its decomposition reasoning and derives an epic's state. | metis at 6745810 (2026-08-17) |
 
 ## 12. Glossary

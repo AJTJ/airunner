@@ -5218,6 +5218,60 @@ fn a_batchs_recorded_members_are_the_shas_it_took_not_where_the_branches_moved_t
     assert!(out.contains("beta"), "{out}");
 }
 
+/// air-jkk: a landing that carries no bead still ends with the lane's next step. The lane landed
+/// the coordinator's research doc with the 0.4.16 binary and got two lines and no next step,
+/// because the block ran only when the range named a bead; it ran `air status` to learn that
+/// nothing was batch-ready.
+#[test]
+fn a_landing_with_no_bead_ends_with_the_lanes_next_step() {
+    let (_tmp, main, _alpha) = land_repo("true");
+    let bd = fake_bd(&main);
+    let dead = &[("AIR_ATTRIBUTION_FALLBACK_BEFORE", "2000-01-01T00:00:00Z")];
+    std::fs::write(
+        main.join(".claude/air.json"),
+        r#"{"verify_command": "true", "journal_dir": "docs/journal"}"#,
+    )
+    .unwrap();
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "chore: journal dir"]);
+    let scribe = main.parent().unwrap().join("scribe");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-scribe",
+            scribe.to_str().unwrap(),
+        ],
+    );
+    let scribe = scribe.canonicalize().unwrap();
+    std::fs::create_dir_all(scribe.join("docs/journal")).unwrap();
+    std::fs::write(scribe.join("docs/journal/scribe.md"), "what I hit\n").unwrap();
+    git(&scribe, &["add", "docs/journal"]);
+    git(
+        &scribe,
+        &["commit", "-q", "-m", "docs(journal): scribe, entries"],
+    );
+    assert_eq!(
+        air_env(&scribe, &bd, &["record", "verify", "--", "true"], dead).0,
+        0
+    );
+
+    let (code, out, err) = air_env(&main, &bd, &["land", "--worker", "scribe"], dead);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("landed scribe () at"),
+        "no bead carried: {out}"
+    );
+    let last = out.trim_end().lines().last().unwrap_or_default();
+    assert!(
+        last == "next: air batch cut" || last.starts_with("nothing is batch-ready"),
+        "the landing ends with the lane's next step: {out}"
+    );
+}
+
 /// air-kexg, end to end: a branch whose only commits are session-journal entries lands with no
 /// bead, and one that mixes them with anything else still needs a trailer.
 ///

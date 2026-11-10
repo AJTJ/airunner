@@ -1689,6 +1689,8 @@ mod tests {
         assert!(has("never the folder-trust dialog"));
         // 2026-09-26: SendMessage is for what Air does not already carry (air-uzh2, air-1vri).
         assert!(has("reach one worker with `SendMessage`"));
+        // air-o6x.5: the coordinator is told the live view exists and changes nothing it does.
+        assert!(has("`air ui` is a read-only page the owner may have open."));
         // air-bpn: what reaches a worker about a bead it holds now, by kind.
         assert!(has("An addition to the bead is a bead,"));
         assert!(has("A correction not seen to arrive becomes a bead"));
