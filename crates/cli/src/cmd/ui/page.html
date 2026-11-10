@@ -2,27 +2,381 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>air ui</title>
 <style>
-  body { font: 14px/1.4 ui-monospace, Menlo, monospace; margin: 2rem; color: #222; background: #fafafa; }
-  pre { white-space: pre-wrap; }
+  :root {
+    --bg: #fbfbfa; --fg: #1f1f1f; --muted: #6b6b6b; --line: #e3e3e0; --card: #ffffff;
+    --red: #b3261e; --amber: #9a6700; --green: #1a7f37; --chip: #f0f0ee; --accent: #3b5bdb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --fg: #e6e6e6; --muted: #9a9a9a; --line: #2c2c2c; --card: #1c1c1c;
+      --red: #f28b82; --amber: #e3b341; --green: #57ab5a; --chip: #262626; --accent: #8ab4f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.25rem; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  code, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  header { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline; margin-bottom: 1.25rem; }
+  header h1 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+  header .muted, .muted { color: var(--muted); }
+  .banner { padding: 0.5rem 0.75rem; border: 1px solid var(--red); color: var(--red); border-radius: 6px;
+            margin-bottom: 1rem; }
+  .banner.amber { border-color: var(--amber); color: var(--amber); }
+  section { margin-bottom: 1.75rem; }
+  section > h2 { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.6rem; display: flex; gap: 0.75rem;
+                 align-items: baseline; }
+  section > h2 .age { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.85rem; }
+  .card p { margin: 0.2rem 0; overflow-wrap: anywhere; }
+  .card .title { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+  .card .title b { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0; }
+  .chip { background: var(--chip); border-radius: 999px; padding: 0 0.55rem; font-size: 12px; line-height: 1.6;
+          font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .red { color: var(--red); } .amber { color: var(--amber); } .green { color: var(--green); }
+  .meter { display: inline-block; width: 90px; height: 6px; background: var(--chip); border-radius: 3px;
+           vertical-align: middle; overflow: hidden; margin-left: 0.4rem; }
+  .meter i { display: block; height: 100%; background: var(--accent); }
+  details { margin-top: 0.3rem; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { margin: 0.3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px;
+        font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; }
+  .column h3 { font-size: 0.85rem; font-weight: 600; margin: 0 0 0.4rem; color: var(--muted); }
+  .column .card { margin-bottom: 0.5rem; padding: 0.5rem 0.65rem; }
+  .column .card p { margin: 0.1rem 0; font-size: 13px; }
+  .empty { color: var(--muted); font-style: italic; }
+  ul.plain { list-style: none; padding: 0; margin: 0; } ul.plain li { padding: 0.15rem 0; overflow-wrap: anywhere; }
+  .timeline li { display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.75rem; }
+  .filter { margin: 0 0 0.5rem; }
+  .filter input { font: inherit; padding: 0.25rem 0.5rem; border: 1px solid var(--line); border-radius: 6px;
+                  background: var(--card); color: var(--fg); min-width: 14rem; }
+  #feed { max-height: 28rem; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--card); padding: 0.5rem 0.75rem; }
+  #feed li { display: grid; grid-template-columns: 4.5rem 6.5rem 1fr; gap: 0.6rem; font-size: 13px;
+             padding: 0.15rem 0; }
+  @media (max-width: 600px) { body { padding: 0.75rem; } #feed li { grid-template-columns: 4.5rem 1fr; }
+                              #feed li .k { display: none; } .timeline li { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<h1>air ui</h1>
-<p>A placeholder page (air-o6x.1): it fetches <code>/api/fleet</code> every two seconds and prints the JSON. The page bead replaces it.</p>
-<pre id="fleet">loading…</pre>
+<header>
+  <h1>air ui</h1>
+  <span id="main" class="mono muted"></span>
+  <span id="updated" class="muted"></span>
+  <span id="unreachable" class="red"></span>
+</header>
+<div id="stop" class="banner" hidden></div>
+
+<section id="fleet"><h2>Fleet <span class="age"></span></h2><div class="cards"></div></section>
+<section id="beads"><h2>Beads <span class="age"></span></h2><div class="columns"></div></section>
+<section id="lane"><h2>Lane <span class="age"></span></h2><div class="body"></div></section>
+<section id="attention"><h2>Attention <span class="age"></span></h2><div class="body"></div></section>
+<section id="feedsec">
+  <h2>Feed <span class="age"></span></h2>
+  <p class="filter"><input id="filter" type="search" placeholder="filter by worker or text"></p>
+  <ul id="feed" class="plain"></ul>
+</section>
+
 <script>
-  async function poll() {
-    try {
-      const r = await fetch('/api/fleet');
-      document.getElementById('fleet').textContent = JSON.stringify(await r.json(), null, 2);
-    } catch (e) {
-      document.getElementById('fleet').textContent = 'fetch failed: ' + e;
-    }
+'use strict';
+// The endpoints, each named once (mod.rs tests that), and the two tiers (air-o6x.4).
+const API = { fleet: '/api/fleet', lane: '/api/lane', attention: '/api/attention',
+              beads: '/api/beads', feed: '/api/feed' };
+const FAST_MS = 2000, SLOW_MS = 10000, HIDDEN_MS = 10000;
+const ROLE_ORDER = { coordinator: 0, lane: 1, worker: 2 };
+
+// Everything the page knows: the last good answer per endpoint and when it arrived.
+const state = { fleet: null, lane: null, attention: null, beads: null, feedItems: [], feedOffset: 0,
+                last: {}, unreachableSince: null, autoScroll: true };
+
+// --- small DOM helpers: text only, never markup from data ---------------------------------
+function el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'class') n.className = v; else if (k === 'hidden') n.hidden = true; else n.setAttribute(k, v);
   }
-  poll();
-  setInterval(poll, 2000);
+  for (const c of children.flat()) {
+    if (c === null || c === undefined || c === false) continue;
+    n.append(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return n;
+}
+function replace(node, ...children) { node.replaceChildren(...children.flat().filter(Boolean)); }
+function short(sha) { return sha ? String(sha).slice(0, 8) : ''; }
+function chips(items) { return el('span', { class: 'chips' }, items.map(x => el('span', { class: 'chip' }, x))); }
+function empty(text) { return el('p', { class: 'empty' }, text); }
+
+// --- time ------------------------------------------------------------------------------
+function parseAt(s) {
+  if (typeof s === 'number') return s;
+  const t = Date.parse(s); return Number.isNaN(t) ? null : t;
+}
+function ago(s, now) {
+  const t = parseAt(s); if (t === null) return '';
+  const d = Math.max(0, Math.round(((now || Date.now()) - t) / 1000));
+  if (d < 60) return d + ' s'; if (d < 3600) return Math.round(d / 60) + ' min';
+  if (d < 86400) return (d / 3600).toFixed(1) + ' h'; return Math.round(d / 86400) + ' d';
+}
+function clock(s) { const t = parseAt(s); if (t === null) return s || ''; return new Date(t).toLocaleTimeString(); }
+function elapsed(s) {
+  const t = parseAt(s); if (t === null) return '';
+  const d = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0');
+}
+function ageLabel(sec, key) {
+  const node = sec.querySelector('h2 .age'); const at = state.last[key];
+  node.textContent = at ? 'updated ' + ago(at) + ' ago' : '';
+}
+
+// --- fetching ----------------------------------------------------------------------------
+async function getJson(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+  return r.json();
+}
+function reachable() {
+  state.unreachableSince = null; document.getElementById('unreachable').textContent = '';
+}
+function unreachable() {
+  if (!state.unreachableSince) state.unreachableSince = new Date();
+  document.getElementById('unreachable').textContent =
+    'server unreachable since ' + state.unreachableSince.toLocaleTimeString() + '; showing the last data';
+}
+async function pollFast() {
+  try {
+    const [fleet, lane, attention] = await Promise.all([getJson(API.fleet), getJson(API.lane), getJson(API.attention)]);
+    const now = Date.now();
+    state.fleet = fleet; state.lane = lane; state.attention = attention;
+    state.last.fleet = state.last.lane = state.last.attention = now;
+    reachable(); renderHeader(); renderFleet(); renderLane(); renderAttention();
+  } catch (e) { unreachable(); }
+}
+async function pollBeads() {
+  try {
+    state.beads = await getJson(API.beads); state.last.beads = Date.now();
+    reachable(); renderBeads();
+  } catch (e) { unreachable(); }
+}
+async function pollFeed() {
+  try {
+    const f = await getJson(API.feed + '?since=' + encodeURIComponent(state.feedOffset));
+    state.feedOffset = f.next_offset; state.last.feed = Date.now();
+    if (f.items && f.items.length) {
+      // The answer is oldest first; the list shows newest first and keeps the newest 100.
+      state.feedItems = f.items.slice().reverse().concat(state.feedItems).slice(0, 100);
+    }
+    reachable(); renderFeed();
+  } catch (e) { unreachable(); }
+}
+
+// --- header -------------------------------------------------------------------------------
+function mainSha() {
+  const main = (state.fleet && state.fleet.sessions || []).find(s => s.worker === 'main');
+  if (main && main.head_short) return main.head_short;
+  const landed = state.lane && state.lane.landings && state.lane.landings[0];
+  return landed ? short(landed.main_after) : '';
+}
+function renderHeader() {
+  const sha = mainSha();
+  document.getElementById('main').textContent = sha ? 'main ' + sha : '';
+  const stop = state.attention && state.attention.fleet_stop;
+  const banner = document.getElementById('stop');
+  if (stop) {
+    replace(banner, 'FLEET STOPPED by ' + stop.by + ' at ' + clock(stop.at) + ': ' + stop.reason);
+    banner.hidden = false;
+  } else banner.hidden = true;
+}
+function renderUpdated() {
+  const newest = Math.max(0, ...Object.values(state.last));
+  document.getElementById('updated').textContent = newest ? 'updated ' + ago(newest) + ' ago' : 'loading…';
+  for (const [id, key] of [['fleet', 'fleet'], ['beads', 'beads'], ['lane', 'lane'],
+                           ['attention', 'attention'], ['feedsec', 'feed']]) {
+    ageLabel(document.getElementById(id), key);
+  }
+}
+
+// --- fleet --------------------------------------------------------------------------------
+function statusClass(s) {
+  if (s.harness_status === 'waiting' || s.waiting_for) return 'amber';
+  if (!s.pid_alive) return 'red';
+  return '';
+}
+function sessionCard(s) {
+  const status = [s.state];
+  if (s.harness_status) status.push('harness ' + s.harness_status);
+  if (s.waiting_for) status.push('waiting for ' + s.waiting_for);
+  if (!s.pid_alive) status.push('process gone');
+  const tool = s.current_tool;
+  const toolLine = tool ? el('p', { class: 'mono' }, tool.name + ': ' + (tool.detail || ''),
+                             el('span', { class: 'muted' }, '  ' + elapsed(tool.started_at))) : null;
+  const tokens = s.context_tokens;
+  const meter = tokens === null || tokens === undefined ? null
+    : el('p', { class: 'muted' }, 'context ' + Math.round(tokens / 1000) + 'k tokens',
+         el('span', { class: 'meter' }, el('i', { style: 'width:' + Math.min(100, tokens / 2000) + '%' })));
+  return el('div', { class: 'card' },
+    el('p', { class: 'title' }, el('b', {}, s.worker,
+         s.worker.startsWith(s.role) ? null : el('span', { class: 'muted' }, ' ' + s.role)),
+       el('span', { class: 'mono muted' }, s.head_short || '')),
+    el('p', { class: statusClass(s) }, status.join(', ')),
+    el('p', { class: 'muted' }, (s.model || 'model unknown') + ', since ' + clock(s.since)),
+    s.claims && s.claims.length ? chips(s.claims) : el('p', { class: 'muted' }, 'no claim'),
+    toolLine,
+    s.last_text ? el('p', { class: 'muted' }, s.last_text) : null,
+    meter,
+    s.pane_tail && s.pane_tail.length
+      ? el('details', {}, el('summary', {}, 'pane'), el('pre', {}, s.pane_tail.join('\n'))) : null);
+}
+function renderFleet() {
+  const box = document.querySelector('#fleet .cards');
+  const sessions = (state.fleet && state.fleet.sessions || []).slice()
+    .sort((a, b) => (ROLE_ORDER[a.role] ?? 3) - (ROLE_ORDER[b.role] ?? 3) || a.worker.localeCompare(b.worker));
+  replace(box, sessions.length ? sessions.map(sessionCard) : empty('no session yet'));
+}
+
+// --- beads --------------------------------------------------------------------------------
+function beadCard(b, column) {
+  const sha = column === 'done_waiting' ? (b.done && short(b.done.head))
+    : column === 'closed_recent' ? (b.landed && short(b.landed.sha)) : null;
+  const who = b.claim ? b.claim.worker : b.assignee;
+  return el('div', { class: 'card' },
+    el('p', {}, el('span', { class: 'mono' }, b.id), ' ', b.title),
+    el('p', { class: 'muted' },
+       b.priority === null || b.priority === undefined ? '' : 'P' + b.priority + ' ', b.type,
+       who ? el('span', { class: 'chip' }, who) : null,
+       sha ? el('span', { class: 'mono' }, ' ' + sha) : null),
+    b.blocked_by && b.blocked_by.length ? el('p', { class: 'muted' }, 'blocked by ' + b.blocked_by.join(' ')) : null);
+}
+const COLUMNS = [['ready', 'ready'], ['in_progress', 'in progress'], ['done_waiting', 'done, waiting'],
+                 ['blocked', 'blocked'], ['closed_recent', 'closed recently']];
+function renderBeads() {
+  const box = document.querySelector('#beads .columns');
+  const b = state.beads || {};
+  replace(box, COLUMNS.map(([key, label]) => {
+    const list = b[key] || [];
+    return el('div', { class: 'column' }, el('h3', {}, label + ' (' + list.length + ')'),
+      list.length ? list.map(x => beadCard(x, key)) : empty('nothing yet'));
+  }));
+  const h2 = document.querySelector('#beads h2');
+  let note = h2.querySelector('.bdage');
+  if (!note) { note = el('span', { class: 'age bdage' }); h2.append(note); }
+  note.textContent = b.fetched_at ? 'bd read ' + ago(b.fetched_at) + ' ago' : (state.beads ? 'bd not read yet' : '');
+}
+
+// --- lane ---------------------------------------------------------------------------------
+function renderLane() {
+  const box = document.querySelector('#lane .body');
+  const l = state.lane;
+  if (!l) { replace(box, empty('nothing yet')); return; }
+  const parts = [];
+  parts.push(el('p', { class: 'muted' }, l.lane ? 'lane session ' + l.lane : 'no lane session recorded'));
+  if (l.inflight) {
+    parts.push(el('p', {}, 'verifying ', el('span', { class: 'mono' }, short(l.inflight.sha)), ' with ',
+      el('code', {}, l.inflight.command), ' for ', el('span', { class: 'mono', 'data-started': l.inflight.started_at },
+      elapsed(l.inflight.started_at))));
+  } else parts.push(el('p', { class: 'muted' }, 'no verify in flight'));
+  const cut = l.batch_cuts && l.batch_cuts[0];
+  if (cut) {
+    parts.push(el('p', {}, 'current batch ', el('span', { class: 'mono' }, short(cut.head)), ' over main ',
+      el('span', { class: 'mono' }, short(cut.main_sha)), ', cut ' + ago(cut.cut_at) + ' ago'));
+    parts.push(chips(cut.members.map(m =>
+      m.worker + '@' + short(m.sha) + (m.beads.length ? ' ' + m.beads.join(' ') : ''))));
+  } else parts.push(el('p', { class: 'muted' }, 'no batch cut yet'));
+  if (l.red) {
+    parts.push(el('p', { class: 'red' }, 'red batch ' + short(l.red.sha) + ': members ' + l.red.members.join(', ')));
+    if (l.red.untested_alone.length) {
+      parts.push(el('p', { class: 'red' }, 'not yet verified alone: ' + l.red.untested_alone.join(', ')));
+    } else parts.push(el('p', { class: 'muted' }, 'every member has been verified alone'));
+    if (l.red.log_path) parts.push(el('p', { class: 'muted mono' }, l.red.log_path));
+  }
+  const runs = (l.verify_runs || []).slice(0, 10);
+  if (runs.length) {
+    parts.push(el('p', { class: 'muted' }, 'recent runs'));
+    parts.push(el('ul', { class: 'plain' }, runs.map(r => el('li', {},
+      el('span', { class: r.verdict === 'green' ? 'green' : r.verdict === 'red' ? 'red' : 'amber' }, r.verdict),
+      ' ' + r.kind + ' at ', el('span', { class: 'mono' }, short(r.sha)),
+      r.duration_ms === null || r.duration_ms === undefined ? '' : ', ' + Math.round(r.duration_ms / 1000) + ' s',
+      r.members.length ? ', members ' + r.members.join(', ') : '', ', ' + ago(r.finished_at) + ' ago'))));
+  }
+  const landings = (l.landings || []).slice(0, 10);
+  parts.push(el('p', { class: 'muted' }, 'landings'));
+  parts.push(landings.length ? el('ul', { class: 'plain timeline' }, landings.map(x => el('li', {},
+    el('span', { class: 'muted' }, clock(x.finished_at)),
+    el('span', {}, el('span', { class: 'mono green' }, short(x.sha)), ' by ' + x.worker + ': ',
+      x.beads.length ? x.beads.join(' ') : 'no bead', el('span', { class: 'muted mono' },
+      '  main ' + short(x.main_before) + ' → ' + short(x.main_after)))))) : empty('no landing yet'));
+  const lo = l.loops || {};
+  const fmt = v => v === null || v === undefined ? 'no datum' : Math.round(v) + ' s';
+  parts.push(el('p', { class: 'muted' }, 'loops (24 h): batch-ready to verify ' + fmt(lo.batch_ready_to_verify_s) +
+    ', done to landed ' + fmt(lo.done_to_landed_s)));
+  replace(box, parts);
+}
+function tickElapsed() {
+  for (const n of document.querySelectorAll('[data-started]')) n.textContent = elapsed(n.dataset.started);
+}
+
+// --- attention ----------------------------------------------------------------------------
+function renderAttention() {
+  const box = document.querySelector('#attention .body');
+  const a = state.attention;
+  if (!a) { replace(box, empty('nothing yet')); return; }
+  const parts = [];
+  const cond = a.conditions || [];
+  parts.push(cond.length ? el('ul', { class: 'plain' }, cond.map(c => el('li', { class: 'red' },
+    c.kind + ' ' + c.worker + (c.subject ? ' ' + c.subject : '') + ': ' + c.text,
+    el('span', { class: 'muted' }, ' (' + ago(c.since) + ')'))))
+    : el('p', { class: 'muted' }, 'no open condition'));
+  const caps = a.captures || [];
+  if (caps.length) {
+    parts.push(el('p', { class: 'muted' }, 'open captures'));
+    parts.push(el('ul', { class: 'plain' }, caps.map(c => el('li', {}, el('span', { class: 'mono' }, c.id),
+      ' from ' + c.worker + ' ' + ago(c.at) + ' ago: ' + c.text))));
+  } else parts.push(el('p', { class: 'muted' }, 'no open capture'));
+  const leases = a.leases || [], wants = a.lease_wants || [];
+  if (leases.length || wants.length) {
+    parts.push(el('ul', { class: 'plain' },
+      leases.map(x => el('li', {}, 'lease ', el('span', { class: 'mono' }, x.resource), ' held by ' + x.holder +
+        ' since ' + clock(x.since) + (x.reason ? ': ' + x.reason : ''))),
+      wants.map(w => el('li', { class: 'amber' },
+        w.worker + ' waits for ' + w.resource + ' since ' + clock(w.since)))));
+  } else parts.push(el('p', { class: 'muted' }, 'no lease held'));
+  replace(box, parts);
+}
+
+// --- feed ---------------------------------------------------------------------------------
+function renderFeed() {
+  const box = document.getElementById('feed');
+  const q = document.getElementById('filter').value.trim().toLowerCase();
+  const items = state.feedItems.filter(i =>
+    !q || (i.worker + ' ' + i.kind + ' ' + i.text).toLowerCase().includes(q));
+  replace(box, items.length ? items.map(i => el('li', {},
+    el('span', { class: 'muted' }, clock(i.at)),
+    el('span', { class: 'k mono' }, i.worker + ' ' + i.kind),
+    el('span', {}, i.text)))
+    : el('li', { class: 'empty' }, state.feedItems.length ? 'nothing matches' : 'nothing yet'));
+  if (state.autoScroll) box.scrollTop = 0;
+}
+document.getElementById('filter').addEventListener('input', renderFeed);
+document.getElementById('feed').addEventListener('scroll', () => {
+  // Scrolling away from the top turns auto-scroll off; scrolling back to the top turns it on.
+  state.autoScroll = document.getElementById('feed').scrollTop < 8;
+});
+
+// --- the loop -----------------------------------------------------------------------------
+let fastTimer = null, beadsTimer = null;
+function schedule() {
+  clearInterval(fastTimer); clearInterval(beadsTimer);
+  const hidden = document.visibilityState === 'hidden';
+  fastTimer = setInterval(() => { pollFast(); pollFeed(); }, hidden ? HIDDEN_MS : FAST_MS);
+  beadsTimer = setInterval(pollBeads, hidden ? HIDDEN_MS : SLOW_MS);
+}
+document.addEventListener('visibilitychange', schedule);
+setInterval(() => { renderUpdated(); tickElapsed(); }, 1000);
+pollFast(); pollBeads(); pollFeed(); renderUpdated(); schedule();
 </script>
 </body>
 </html>

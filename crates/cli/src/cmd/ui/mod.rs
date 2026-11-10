@@ -458,6 +458,38 @@ mod tests {
         assert_eq!(feed::since(None), 0);
     }
 
+    /// air-o6x.4: the embedded page is HTML that names each endpoint path exactly once (the
+    /// `API` table), so a renamed route fails here, and it has no line over 120 characters
+    /// outside its inline style.
+    #[test]
+    fn the_page_names_each_endpoint_once_and_keeps_its_lines_short() {
+        assert!(PAGE.starts_with("<!doctype html>"), "{}", &PAGE[..40]);
+        assert!(PAGE.contains("<html") && PAGE.contains("</html>"));
+        for path in [
+            "/api/fleet",
+            "/api/lane",
+            "/api/beads",
+            "/api/feed",
+            "/api/attention",
+        ] {
+            assert_eq!(PAGE.matches(path).count(), 1, "{path}");
+        }
+        let mut in_style = false;
+        for (i, line) in PAGE.lines().enumerate() {
+            if line.contains("<style>") {
+                in_style = true;
+            }
+            if line.contains("</style>") {
+                in_style = false;
+            }
+            assert!(
+                in_style || line.chars().count() <= 120,
+                "line {}: {line}",
+                i + 1
+            );
+        }
+    }
+
     #[test]
     fn the_url_line_names_the_port_and_json_carries_the_air_dir() {
         let t = url_line(7311, Path::new("/r/.air"), false);
