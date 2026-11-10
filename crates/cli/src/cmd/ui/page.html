@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>air ui</title>
+<style>
+  body { font: 14px/1.4 ui-monospace, Menlo, monospace; margin: 2rem; color: #222; background: #fafafa; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>air ui</h1>
+<p>A placeholder page (air-o6x.1): it fetches <code>/api/fleet</code> every two seconds and prints the JSON. The page bead replaces it.</p>
+<pre id="fleet">loading…</pre>
+<script>
+  async function poll() {
+    try {
+      const r = await fetch('/api/fleet');
+      document.getElementById('fleet').textContent = JSON.stringify(await r.json(), null, 2);
+    } catch (e) {
+      document.getElementById('fleet').textContent = 'fetch failed: ' + e;
+    }
+  }
+  poll();
+  setInterval(poll, 2000);
+</script>
+</body>
+</html>

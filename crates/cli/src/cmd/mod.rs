@@ -42,6 +42,7 @@ pub mod runlog;
 pub mod selftest;
 pub mod status;
 pub mod tmux;
+pub mod ui;
 pub mod worktree;
 
 use std::path::Path;
