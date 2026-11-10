@@ -465,7 +465,13 @@ mod tests {
     fn the_page_names_each_endpoint_once_and_keeps_its_lines_short() {
         assert!(PAGE.starts_with("<!doctype html>"), "{}", &PAGE[..40]);
         assert!(PAGE.contains("<html") && PAGE.contains("</html>"));
-        for path in ["/api/fleet", "/api/lane", "/api/beads", "/api/feed", "/api/attention"] {
+        for path in [
+            "/api/fleet",
+            "/api/lane",
+            "/api/beads",
+            "/api/feed",
+            "/api/attention",
+        ] {
             assert_eq!(PAGE.matches(path).count(), 1, "{path}");
         }
         let mut in_style = false;
@@ -476,7 +482,11 @@ mod tests {
             if line.contains("</style>") {
                 in_style = false;
             }
-            assert!(in_style || line.chars().count() <= 120, "line {}: {line}", i + 1);
+            assert!(
+                in_style || line.chars().count() <= 120,
+                "line {}: {line}",
+                i + 1
+            );
         }
     }
 
