@@ -1,14 +1,16 @@
 //! `/api/feed?since=<offset>`: Air's decisions, notices and messages, oldest first
-//! (air-o6x.1, air-o6x.2). The decisions are the event stream's lines with a decision other
-//! than `observed` or `quiet`, which are the hook's state changes and status's silence: 2,331
-//! of one day's 2,927 lines (`docs/research/live-ui.md` §2a). The notices are `deliveries`
-//! rows and the messages `messages` rows, each taken for the span of time the returned
-//! decisions cover, so a page that passes `next_offset` back sees every item once.
+//! (air-o6x.1, air-o6x.2, air-o6x.6). The decisions are the event stream's lines with a
+//! decision other than `observed` or `quiet`, which are the hook's state changes and status's
+//! silence: 2,331 of one day's 2,927 lines (`docs/research/live-ui.md` §2a). The notices are
+//! `deliveries` rows and the messages `messages` rows, each taken for the span of time the
+//! returned decisions cover, so a page that passes `next_offset` back sees every item once.
 //!
-//! The offset is a position in the day files concatenated in date order, in bytes, so it
-//! survives the day rolling at midnight UTC: the page keeps passing back what it was given.
-//! A call returns at most [`CAP`] items; the offset then stops at the last line returned, and
-//! the next call continues from there.
+//! The page is live, not an archive: with no offset the answer is the newest [`CAP`] items of
+//! today's file, and the offset it returns is day-scoped, `<day>:<byte position>`, so a later
+//! call reads the rest of that day and then each newer day whole. The first build read the
+//! whole history from its oldest file and a first load showed a week-old slice as "newest"
+//! (air-o6x.6). A call returns at most [`CAP`] items and its offset stops at the last line it
+//! consumed; a partial last line, still being written, waits for the next call.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -29,9 +31,10 @@ const BACK_BYTES: u64 = 64 * 1024;
 pub struct Feed {
     /// When this answer was computed (UTC, RFC 3339).
     pub at: String,
-    /// What to pass as `since` next time; equal to `since` when nothing is new.
-    pub next_offset: u64,
-    /// New items since `since`, oldest first.
+    /// What to pass as `since` next time: `<day>:<byte position>` in that day's event file.
+    /// The same text comes back when nothing is new.
+    pub next_offset: String,
+    /// The items, oldest first: with no offset the newest of today, else what came after it.
     pub items: Vec<Item>,
 }
 
@@ -57,19 +60,87 @@ pub enum Source {
     Message,
 }
 
-/// The `since` offset from a query string, 0 when absent or not a number.
-pub fn since(query: Option<&str>) -> u64 {
+/// Where a call continues: a day's event file and a byte position in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offset {
+    /// The day, `YYYY-MM-DD`, naming `<air_dir>/events/<day>.ndjson`.
+    pub day: String,
+    /// The byte position in that file, at a line start.
+    pub pos: u64,
+}
+
+impl Offset {
+    /// The text a page passes back.
+    pub fn text(&self) -> String {
+        format!("{}:{}", self.day, self.pos)
+    }
+
+    /// Pure over `<day>:<n>`; anything else is no offset.
+    pub fn parse(s: &str) -> Option<Self> {
+        let (day, n) = s.split_once(':')?;
+        let shaped = day.len() == 10
+            && day.bytes().enumerate().all(|(i, b)| {
+                if i == 4 || i == 7 {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit()
+                }
+            });
+        if !shaped {
+            return None;
+        }
+        Some(Self {
+            day: day.to_string(),
+            pos: n.parse().ok()?,
+        })
+    }
+}
+
+/// The `since` offset from a query string, percent-decoded. None (tail today) when absent,
+/// `0`, or not a `<day>:<n>`.
+pub fn since(query: Option<&str>) -> Option<Offset> {
     query
         .unwrap_or_default()
         .split('&')
         .find_map(|kv| kv.strip_prefix("since="))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
+        .map(percent_decode)
+        .and_then(|s| Offset::parse(&s))
 }
 
-/// The feed from `since`: the decisions after that offset, then the notices and messages in
-/// the span those decisions cover.
-pub fn feed(ledger: Option<&Ledger>, air_dir: &Path, at: &str, since: u64) -> Feed {
+/// `%XX` and `+` undone, as a browser's `encodeURIComponent` wrote them.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let hex = |j: usize| bytes.get(j).and_then(|c| char::from(*c).to_digit(16));
+        match (b, hex(i.saturating_add(1)), hex(i.saturating_add(2))) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(u8::try_from(h.saturating_mul(16).saturating_add(l)).unwrap_or(b'?'));
+                i = i.saturating_add(3);
+            }
+            (b'+', _, _) => {
+                out.push(b' ');
+                i = i.saturating_add(1);
+            }
+            _ => {
+                out.push(b);
+                i = i.saturating_add(1);
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One day's event file.
+struct DayFile {
+    day: String,
+    path: PathBuf,
+    len: u64,
+}
+
+/// The feed: the newest items of today with no offset, else what came after the offset.
+pub fn feed(ledger: Option<&Ledger>, air_dir: &Path, at: &str, since: Option<Offset>) -> Feed {
     feed_capped(ledger, air_dir, at, since, CAP)
 }
 
@@ -78,102 +149,166 @@ pub fn feed_capped(
     ledger: Option<&Ledger>,
     air_dir: &Path,
     at: &str,
-    since: u64,
+    since: Option<Offset>,
     cap: usize,
 ) -> Feed {
     let files = day_files(air_dir);
-    let (mut items, next_offset) = events_from(&files, since, cap);
-    // The span the returned decisions cover: from the decision just before `since` (none at
-    // the start) to the newest returned. Notices and messages are taken inside it, so a
-    // later call, continuing from `next_offset`, never repeats one and never skips one.
-    let from = last_at_before(&files, since).unwrap_or_default();
+    let today = crate::cmd::today();
+    let first_load = since.is_none();
+    let (mut items, next, from) = match since {
+        None => tail_today(&files, &today),
+        Some(off) => {
+            let from = last_at_before(&files, &off);
+            let (items, next) = events_after(&files, &off, cap);
+            (items, next, from)
+        }
+    };
+    // The span the returned decisions cover: from the decision just before the first one
+    // returned (none at the start of history) to the newest returned. Notices and messages
+    // are taken inside it, so a later call, continuing from `next_offset`, never repeats one
+    // and never skips one.
+    let from = from.unwrap_or_default();
     let to = items.iter().map(|i| i.at.clone()).max();
     if let (Some(l), Some(to)) = (ledger, to) {
-        let left = cap.saturating_sub(items.len());
-        items.extend(deliveries(l, &from, &to, left));
-        let left = cap.saturating_sub(items.len());
-        items.extend(messages(l, &from, &to, left));
+        items.extend(deliveries(l, &from, &to, cap));
+        items.extend(messages(l, &from, &to, cap));
     }
     items.sort_by(|a, b| a.at.cmp(&b.at));
-    items.truncate(cap);
+    // A first load keeps the newest `cap` of the merged set; its offset is the end of today,
+    // so nothing dropped is lost to a later call. A continuation keeps everything it read,
+    // since its offset has moved past those lines: at most `cap` decisions, and the notices
+    // and messages of their span.
+    if first_load {
+        let drop = items.len().saturating_sub(cap);
+        items.drain(..drop);
+    }
     Feed {
         at: at.to_string(),
-        next_offset,
+        next_offset: next.text(),
         items,
     }
 }
 
 /// The day files in date order, each with its size: the names sort by date.
-fn day_files(air_dir: &Path) -> Vec<(PathBuf, u64)> {
+fn day_files(air_dir: &Path) -> Vec<DayFile> {
     let Ok(dir) = std::fs::read_dir(air_dir.join("events")) else {
         return Vec::new();
     };
-    let mut files: BTreeMap<String, (PathBuf, u64)> = BTreeMap::new();
+    let mut files: BTreeMap<String, DayFile> = BTreeMap::new();
     for e in dir.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".ndjson") {
+        let Some(day) = name.strip_suffix(".ndjson") else {
             continue;
-        }
+        };
         if let Ok(m) = e.metadata() {
-            files.insert(name, (e.path(), m.len()));
+            files.insert(
+                day.to_string(),
+                DayFile {
+                    day: day.to_string(),
+                    path: e.path(),
+                    len: m.len(),
+                },
+            );
         }
     }
     files.into_values().collect()
 }
 
-/// The decision lines from the concatenated position `since`, up to `cap` items, and the
-/// position after the last line consumed. A partial last line, still being written, is left
-/// for the next call.
-fn events_from(files: &[(PathBuf, u64)], since: u64, cap: usize) -> (Vec<Item>, u64) {
-    let mut items = Vec::new();
-    let mut pos = since;
-    let mut start = 0u64;
-    for (path, len) in files {
-        let end = start.saturating_add(*len);
-        if pos >= end {
-            start = end;
-            continue;
-        }
-        let Ok(mut f) = std::fs::File::open(path) else {
-            start = end;
-            continue;
-        };
-        let within = pos.saturating_sub(start);
-        if f.seek(SeekFrom::Start(within)).is_err() {
-            start = end;
-            continue;
-        }
-        let mut buf = Vec::new();
-        if f.read_to_end(&mut buf).is_err() {
-            start = end;
-            continue;
-        }
-        let text = String::from_utf8_lossy(&buf);
-        let mut consumed = 0usize;
-        for line in text.split_inclusive('\n') {
-            if !line.ends_with('\n') {
-                break;
-            }
-            consumed = consumed.saturating_add(line.len());
-            if let Some(item) = event_item(line) {
-                items.push(item);
-            }
-            if items.len() >= cap {
-                break;
-            }
-        }
-        pos = pos.saturating_add(u64::try_from(consumed).unwrap_or(u64::MAX));
-        if items.len() >= cap {
+/// One file's whole lines from `pos`: each item with the byte position of its line's start,
+/// and the position after the last whole line.
+fn lines_from(path: &Path, pos: u64) -> (Vec<(u64, Option<Item>, String)>, u64) {
+    let mut out = Vec::new();
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return (out, pos);
+    };
+    if f.seek(SeekFrom::Start(pos)).is_err() {
+        return (out, pos);
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return (out, pos);
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut at = pos;
+    for line in text.split_inclusive('\n') {
+        if !line.ends_with('\n') {
             break;
         }
-        // The rest of this file was read whole; the next file starts at its own offset.
-        start = end;
-        if pos < end {
+        let line_at = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| {
+                v.get("at")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        out.push((at, event_item(line), line_at));
+        at = at.saturating_add(u64::try_from(line.len()).unwrap_or(u64::MAX));
+    }
+    (out, at)
+}
+
+/// Every decision of today, the offset at the end of today's file, and the `at` of the last
+/// line of the day before, which bounds the notices a first load carries. No file for today:
+/// nothing, and today at 0.
+fn tail_today(files: &[DayFile], today: &str) -> (Vec<Item>, Offset, Option<String>) {
+    let start = Offset {
+        day: today.to_string(),
+        pos: 0,
+    };
+    let Some(file) = files.iter().find(|f| f.day == today) else {
+        return (Vec::new(), start, None);
+    };
+    let (lines, end) = lines_from(&file.path, 0);
+    let items = lines.into_iter().filter_map(|(_, item, _)| item).collect();
+    let from = last_at_before(files, &start);
+    (
+        items,
+        Offset {
+            day: today.to_string(),
+            pos: end,
+        },
+        from,
+    )
+}
+
+/// The decisions after `off`: the rest of its day, then each newer day whole, up to `cap`;
+/// and the offset to continue from. A day whose file is gone is skipped.
+fn events_after(files: &[DayFile], off: &Offset, cap: usize) -> (Vec<Item>, Offset) {
+    let mut items = Vec::new();
+    let mut next = off.clone();
+    for file in files.iter().filter(|f| f.day.as_str() >= off.day.as_str()) {
+        let start = if file.day == off.day { off.pos } else { 0 };
+        let (lines, end) = lines_from(&file.path, start);
+        let mut consumed = start;
+        let mut full = false;
+        for (at, item, _) in lines {
+            if items.len() >= cap {
+                full = true;
+                consumed = at;
+                break;
+            }
+            if let Some(i) = item {
+                items.push(i);
+            }
+        }
+        if full {
+            next = Offset {
+                day: file.day.clone(),
+                pos: consumed,
+            };
+            return (items, next);
+        }
+        next = Offset {
+            day: file.day.clone(),
+            pos: end,
+        };
+        if end < file.len {
             // A partial last line: stop here and let the next call continue.
             break;
         }
     }
-    (items, pos)
+    (items, next)
 }
 
 /// Pure over one event line: an item for every decision but the quiet ones.
@@ -198,41 +333,31 @@ pub fn event_item(line: &str) -> Option<Item> {
     })
 }
 
-/// The `at` of the whole line that ends at `position`, read from the tail of the file
-/// holding it (up to 64 KiB back). None at the start of the stream.
-fn last_at_before(files: &[(PathBuf, u64)], position: u64) -> Option<String> {
-    if position == 0 {
-        return None;
-    }
-    let mut start = 0u64;
-    for (i, (path, len)) in files.iter().enumerate() {
-        let end = start.saturating_add(*len);
-        if position > end {
-            start = end;
-            continue;
-        }
-        let mut within = position.saturating_sub(start);
-        let mut path = path.clone();
-        if within == 0 {
-            // At the very start of this file: the line before is the previous file's last.
-            let (prev, prev_len) = files.get(i.checked_sub(1)?)?;
-            path = prev.clone();
-            within = *prev_len;
-        }
-        let mut f = std::fs::File::open(&path).ok()?;
-        let from = within.saturating_sub(BACK_BYTES);
-        f.seek(SeekFrom::Start(from)).ok()?;
-        let mut buf = vec![0u8; usize::try_from(within.saturating_sub(from)).ok()?];
-        f.read_exact(&mut buf).ok()?;
-        let text = String::from_utf8_lossy(&buf);
-        let line = text.lines().rev().find(|l| !l.trim().is_empty())?;
-        let v: serde_json::Value = serde_json::from_str(line).ok()?;
-        return v
-            .get("at")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-    }
-    None
+/// The `at` of the whole line that ends at `off`, read from the tail of its file (up to 64 KiB
+/// back), or the last line of the day before when `off` is at a file's start. None at the
+/// start of history.
+fn last_at_before(files: &[DayFile], off: &Offset) -> Option<String> {
+    let (path, within) = if off.pos > 0 {
+        let f = files.iter().find(|f| f.day == off.day)?;
+        (f.path.clone(), off.pos)
+    } else {
+        let prev = files
+            .iter()
+            .rev()
+            .find(|f| f.day.as_str() < off.day.as_str())?;
+        (prev.path.clone(), prev.len)
+    };
+    let mut f = std::fs::File::open(&path).ok()?;
+    let from = within.saturating_sub(BACK_BYTES);
+    f.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = vec![0u8; usize::try_from(within.saturating_sub(from)).ok()?];
+    f.read_exact(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?;
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    v.get("at")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 fn limit(cap: usize) -> i64 {
@@ -242,7 +367,7 @@ fn limit(cap: usize) -> i64 {
 fn deliveries(l: &Ledger, from: &str, to: &str, cap: usize) -> Vec<Item> {
     let Ok(mut stmt) = l.conn().prepare(
         "SELECT created_at, to_worker, kind, content FROM deliveries \
-         WHERE created_at > ?1 AND created_at <= ?2 ORDER BY created_at LIMIT ?3",
+         WHERE created_at > ?1 AND created_at <= ?2 ORDER BY created_at DESC LIMIT ?3",
     ) else {
         return Vec::new();
     };
@@ -264,7 +389,7 @@ fn deliveries(l: &Ledger, from: &str, to: &str, cap: usize) -> Vec<Item> {
 fn messages(l: &Ledger, from: &str, to: &str, cap: usize) -> Vec<Item> {
     let Ok(mut stmt) = l.conn().prepare(
         "SELECT at, from_worker, \"to\", content FROM messages \
-         WHERE at > ?1 AND at <= ?2 ORDER BY at LIMIT ?3",
+         WHERE at > ?1 AND at <= ?2 ORDER BY at DESC LIMIT ?3",
     ) else {
         return Vec::new();
     };
@@ -316,107 +441,155 @@ mod tests {
         (tmp, air)
     }
 
-    /// Observed and quiet lines are left out, an offset is honoured across the day roll, a
-    /// partial last line waits, and a line that does not parse is skipped.
+    fn kinds(f: &Feed) -> Vec<(String, String)> {
+        f.items
+            .iter()
+            .map(|i| (i.kind.clone(), i.text.clone()))
+            .collect()
+    }
+
+    /// No offset tails today, newest first-load, and skips observed and quiet lines; the
+    /// offset passed back returns only what was appended; an offset from yesterday returns
+    /// yesterday's remainder and all of today; no file for today gives nothing at today:0.
     #[test]
-    fn the_events_feed_skips_the_quiet_lines_and_honours_the_offset() {
+    fn no_offset_tails_today_and_an_offset_continues_across_the_day_roll() {
         let (_tmp, air) = air_dir();
-        let d1 = air.join("events/2026-11-09.ndjson");
-        let d2 = air.join("events/2026-11-10.ndjson");
+        let today = crate::cmd::today();
+        let y = air.join("events/2000-01-01.ndjson");
+        let t = air.join(format!("events/{today}.ndjson"));
+        // No file for today yet.
+        let f = feed(None, &air, "now", None);
+        assert!(f.items.is_empty());
+        assert_eq!(f.next_offset, format!("{today}:0"));
+        let y1 = line("2000-01-01T10:00:00Z", "w1", "claim", "claimed", "y one");
+        let y2 = line(
+            "2000-01-01T11:00:00Z",
+            "w1",
+            "hook.PreToolUse",
+            "observed",
+            "x",
+        );
+        let y3 = line("2000-01-01T12:00:00Z", "w1", "done", "done", "y three");
+        std::fs::write(&y, format!("{y1}\n{y2}\n{y3}\n")).unwrap();
         std::fs::write(
-            &d1,
+            &t,
             format!(
-                "{}\n{}\n{}\n",
+                "{}\n{}\n{}\nnot json\n{}\n",
                 line(
-                    "2026-11-09T10:00:00Z",
-                    "w1",
-                    "hook.PreToolUse",
-                    "observed",
-                    "x"
-                ),
-                line(
-                    "2026-11-09T10:00:01Z",
+                    "2026-11-10T00:00:01Z",
                     "w1",
                     "claim",
                     "refuse",
-                    "taken by w2\\nmore"
-                ),
-                "not json",
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            &d2,
-            format!(
-                "{}\n{}\n",
-                line(
-                    "2026-11-10T00:00:01Z",
-                    "lane",
-                    "land",
-                    "landed",
-                    "landed w1 (zz-1)"
+                    "t one\\nmore"
                 ),
                 line("2026-11-10T00:00:02Z", "main", "status", "quiet", ""),
+                line("2026-11-10T00:00:03Z", "lane", "land", "landed", "t two"),
+                line(
+                    "2026-11-10T00:00:04Z",
+                    "w2",
+                    "capture",
+                    "captured",
+                    "t three"
+                ),
             ),
         )
         .unwrap();
-        let f = feed(None, &air, "now", 0);
-        let kinds: Vec<(&str, &str)> = f
-            .items
-            .iter()
-            .map(|i| (i.kind.as_str(), i.text.as_str()))
-            .collect();
+        let f = feed(None, &air, "now", None);
         assert_eq!(
-            kinds,
-            [("claim", "taken by w2"), ("land", "landed w1 (zz-1)")]
+            kinds(&f),
+            [
+                ("claim".to_string(), "t one".to_string()),
+                ("land".into(), "t two".into()),
+                ("capture".into(), "t three".into())
+            ],
+            "only today, no observed, quiet or unparsable line"
         );
-        assert_eq!(f.items[0].source, Source::Event);
-        let total = std::fs::metadata(&d1).unwrap().len() + std::fs::metadata(&d2).unwrap().len();
-        assert_eq!(f.next_offset, total);
-        // Nothing new: the offset comes back unchanged, and a partial line waits.
-        let again = feed(None, &air, "now", f.next_offset);
+        let t_len = std::fs::metadata(&t).unwrap().len();
+        assert_eq!(f.next_offset, format!("{today}:{t_len}"));
+        // The newest `cap` of today.
+        let two = feed_capped(None, &air, "now", None, 2);
+        assert_eq!(
+            kinds(&two),
+            [
+                ("land".to_string(), "t two".to_string()),
+                ("capture".into(), "t three".into())
+            ]
+        );
+        assert_eq!(two.next_offset, f.next_offset);
+        // Nothing new: the same offset back; a partial line waits; a whole one arrives.
+        let off = Offset::parse(&f.next_offset).unwrap();
+        let again = feed(None, &air, "now", Some(off.clone()));
         assert!(again.items.is_empty());
         assert_eq!(again.next_offset, f.next_offset);
-        let mut file = std::fs::OpenOptions::new().append(true).open(&d2).unwrap();
         use std::io::Write as _;
-        write!(file, "{{\"at\":\"2026-11-10T00:00:03Z\",\"worker\":\"w2\"").unwrap();
-        let partial = feed(None, &air, "now", f.next_offset);
+        let mut file = std::fs::OpenOptions::new().append(true).open(&t).unwrap();
+        write!(file, "{{\"at\":\"2026-11-10T00:00:05Z\",\"worker\":\"w2\"").unwrap();
+        let partial = feed(None, &air, "now", Some(off.clone()));
         assert!(partial.items.is_empty());
         assert_eq!(partial.next_offset, f.next_offset);
         writeln!(
             file,
-            ",\"command\":\"done\",\"decision\":\"done\",\"reason\":\"done: zz-2\"}}"
+            ",\"command\":\"done\",\"decision\":\"done\",\"reason\":\"t four\"}}"
         )
         .unwrap();
-        let newer = feed(None, &air, "now", f.next_offset);
-        assert_eq!(newer.items.len(), 1);
-        assert_eq!(newer.items[0].kind, "done");
+        let newer = feed(None, &air, "now", Some(off));
+        assert_eq!(kinds(&newer), [("done".to_string(), "t four".to_string())]);
         assert_eq!(
             newer.next_offset,
-            std::fs::metadata(&d1).unwrap().len() + std::fs::metadata(&d2).unwrap().len()
+            format!("{today}:{}", std::fs::metadata(&t).unwrap().len())
         );
-        // The cap stops at a whole line and the next call continues from there.
-        let capped = feed_capped(None, &air, "now", 0, 1);
-        assert_eq!(capped.items.len(), 1);
-        assert_eq!(capped.items[0].kind, "claim");
-        let rest = feed_capped(None, &air, "now", capped.next_offset, 10);
-        assert_eq!(rest.items.len(), 2);
-        assert_eq!(rest.items[0].kind, "land");
-        assert_eq!(since(Some("since=12")), 12);
-        assert_eq!(since(None), 0);
+        // An offset from yesterday, after its first line: the rest of yesterday, then today.
+        let from_y = Offset {
+            day: "2000-01-01".into(),
+            pos: u64::try_from(y1.len() + 1).unwrap(),
+        };
+        let rest = feed(None, &air, "now", Some(from_y.clone()));
+        let got: Vec<&str> = rest.items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(got, ["y three", "t one", "t two", "t three", "t four"]);
+        assert!(rest.next_offset.starts_with(&format!("{today}:")));
+        // The cap stops at a whole line, here at the start of today since yesterday was read
+        // out, and the next call continues there.
+        let capped = feed_capped(None, &air, "now", Some(from_y), 1);
+        assert_eq!(
+            kinds(&capped),
+            [("done".to_string(), "y three".to_string())]
+        );
+        assert_eq!(capped.next_offset, format!("{today}:0"));
+        let then = feed(None, &air, "now", Offset::parse(&capped.next_offset));
+        let got: Vec<&str> = then.items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(got, ["t one", "t two", "t three", "t four"]);
+        // The query: absent, 0, a bare number and junk all tail today; the page's encoding
+        // of the colon is undone.
+        assert_eq!(since(None), None);
+        assert_eq!(since(Some("since=0")), None);
+        assert_eq!(since(Some("since=12")), None);
+        assert_eq!(since(Some("since=bad:1")), None);
+        assert_eq!(
+            since(Some("x=1&since=2026-11-10%3A544163")),
+            Some(Offset {
+                day: "2026-11-10".into(),
+                pos: 544163
+            })
+        );
+        assert_eq!(
+            Offset::parse("2026-11-10:7").unwrap().text(),
+            "2026-11-10:7"
+        );
     }
 
-    /// Notices and messages are taken for the span the returned decisions cover: in the
-    /// first call up to the newest decision, in the next from there, so none repeats and
-    /// none is skipped.
+    /// Notices and messages ride the span of the decisions returned: on the first load from
+    /// the day before's last line, then from the old newest, so none repeats and none is
+    /// skipped.
     #[test]
     fn notices_and_messages_ride_the_span_of_the_decisions_returned() {
         let (_tmp, air) = air_dir();
-        let d = air.join("events/2026-11-10.ndjson");
+        let today = crate::cmd::today();
+        let d = air.join(format!("events/{today}.ndjson"));
         std::fs::write(
             &d,
             format!(
-                "{}\n{}\n",
+                "{}\n{}\n{}\n",
+                line("2026-11-10T00:00:02Z", "w1", "hook.Stop", "observed", "old"),
                 line(
                     "2026-11-10T00:00:10Z",
                     "w1",
@@ -431,9 +604,14 @@ mod tests {
         let l = Ledger::open_in(&air).unwrap();
         for (at, kind, text) in [
             (
+                "2026-11-10T00:00:01Z",
+                "beads-ready",
+                "today, before any decision",
+            ),
+            (
                 "2026-11-10T00:00:05Z",
                 "beads-ready",
-                "early: before any decision",
+                "today, after the observed line",
             ),
             (
                 "2026-11-10T00:00:15Z",
@@ -449,7 +627,7 @@ mod tests {
             l.conn()
                 .execute(
                     "INSERT INTO deliveries (to_worker, kind, key, subject, content, created_at) \
-                     VALUES ('w1', ?1, ?1, '', ?2, ?3)",
+                     VALUES ('w1', ?1, ?3, '', ?2, ?3)",
                     rusqlite::params![kind, text, at],
                 )
                 .unwrap();
@@ -462,24 +640,26 @@ mod tests {
             )
             .unwrap();
         let ro = Ledger::open_read_only(&air).unwrap();
-        let first = feed(Some(&ro), &air, "now", 0);
-        let got: Vec<(&str, &str)> = first
-            .items
-            .iter()
-            .map(|i| (i.kind.as_str(), i.text.as_str()))
-            .collect();
+        let first = feed(Some(&ro), &air, "now", None);
         assert_eq!(
-            got,
+            kinds(&first),
             [
-                ("beads-ready", "early: before any decision"),
-                ("claim", "claimed zz-1"),
-                ("message", "to w1: hold it"),
-                ("batch-ready", "inside the first span"),
-                ("land", "landed"),
+                (
+                    "beads-ready".to_string(),
+                    "today, before any decision".to_string()
+                ),
+                (
+                    "beads-ready".into(),
+                    "today, after the observed line".into()
+                ),
+                ("claim".into(), "claimed zz-1".into()),
+                ("message".into(), "to w1: hold it".into()),
+                ("batch-ready".into(), "inside the first span".into()),
+                ("land".into(), "landed".into()),
             ]
         );
-        assert_eq!(first.items[2].source, Source::Message);
-        assert_eq!(first.items[2].worker, "coordinator");
+        assert_eq!(first.items[3].source, Source::Message);
+        assert_eq!(first.items[3].worker, "coordinator");
         // A later decision: the next call carries the notice after the old newest and
         // nothing from before it.
         let mut file = std::fs::OpenOptions::new().append(true).open(&d).unwrap();
@@ -490,11 +670,14 @@ mod tests {
             line("2026-11-10T00:00:30Z", "w1", "done", "done", "done zz-1")
         )
         .unwrap();
-        let next = feed(Some(&ro), &air, "now", first.next_offset);
+        let next = feed(Some(&ro), &air, "now", Offset::parse(&first.next_offset));
         let got: Vec<&str> = next.items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(got, ["after the newest decision", "done zz-1"]);
         // No new decision: no notices either, whatever the table holds.
-        let none = feed(Some(&ro), &air, "now", next.next_offset);
+        let none = feed(Some(&ro), &air, "now", Offset::parse(&next.next_offset));
         assert!(none.items.is_empty());
+        // A first load keeps the newest `cap` of the merged set.
+        let one = feed_capped(Some(&ro), &air, "now", None, 1);
+        assert_eq!(kinds(&one), [("done".to_string(), "done zz-1".to_string())]);
     }
 }
