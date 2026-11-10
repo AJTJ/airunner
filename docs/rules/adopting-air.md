@@ -238,21 +238,34 @@ Air changes under a repo that already has it, so each release carries notices in
 `install::SURFACE`, and `air install` shows the ones this repo has not seen. Releases are cut
 once per round, so notices arrive in batches.
 
+A repo with a live fleet settles one thing before step 1. In an unpinned repo the hooks call
+`air` through `PATH` at every event, and so does every command a session runs, so the fleet
+switches binaries the moment the `air` on `PATH` changes. Only the roles text, the launcher's
+`--settings` and the `air mcp` process stay old until each session restarts. An adopter's
+fleet ran that way for about ten minutes on 2026-11-09: the new binary refused a worker's
+`air close` naming `air done`, the worker followed the refusal, and nothing in the repo said the
+flow had changed. The coordinator closes the window with `air fleet stop --reason "upgrade"`
+before step 1 and `air fleet resume` after step 6; a stop survives the binary change, since it
+is a ledger row. A pinned repo (`--pin` below) switches at step 4 instead of step 1, because its
+hooks and sessions run `.air/bin/air` and only the re-pin replaces that copy, so the window
+there is the commit and the restart.
+
 1. In the Air checkout, `cargo install --path crates/cli`, then check `which air`.
 
 2. `air selftest`, then `air doctor`.
 
 3. In the repo's main checkout, run `air install`. It writes nothing and prints the surface
    diff against `.air/installed.json`, each change with what to do. Changes marked `!!` alter
-   behaviour without an error; do those first.
+   behaviour without an error; read those first.
 
 4. `air install --write`. It merges into `.claude/settings.json` and `.mcp.json`, and
    overwrites `.air/roles.md`, `.air/docs/`, `.claude/skills/air-*/SKILL.md` and
-   `.air/installed.json`. It removes each `air-*` skill directory Air once installed and no
-   longer ships, naming it. It never touches `.claude/air.json`, `.gitignore`, the ledger,
-   `.beads/`, a skill whose name does not start with `air-`, or any other file. It refuses to
-   write when the `air` on `PATH` is not the binary being run, because the hooks call `air`
-   through `PATH`.
+   `.air/installed.json`. A line the repo added to an `air-*` skill is lost here, so a repo
+   that wants its own text beside Air's keeps it in a skill of another name or in `CLAUDE.md`.
+   It removes each `air-*` skill directory Air once installed and no longer ships, naming it.
+   It never touches `.claude/air.json`, `.gitignore`, the ledger, `.beads/`, a skill whose
+   name does not start with `air-`, or any other file. It refuses to write when the `air` on
+   `PATH` is not the binary being run, because the hooks call `air` through `PATH`.
 
    To run a different build in one repo without replacing the `air` on `PATH`, use
    `air install --write --pin`. It copies the binary being run to `.air/bin/air` and points the
@@ -267,17 +280,37 @@ once per round, so notices arrive in batches.
    commands hold an absolute path, so a pin suits a scratch copy or one machine rather than a
    repo others clone.
 
-5. Commit `.claude/settings.json`, `.mcp.json` and `.claude/skills/air-*` on main. A new
-   worktree gets only committed files, so `air worker` and `air lane` refuse, naming the files,
-   while any of them is uncommitted in the main checkout.
+5. Commit `.claude/settings.json`, `.mcp.json` and `.claude/skills/air-*` on main. In a fleet
+   repo this is the owner's commit in the main checkout, since no launched session works
+   there. A new worktree gets only committed files, so `air worker`, `air lane` and `air fleet
+   up` refuse, naming the files, while any of them is uncommitted in the main checkout.
 
-6. Restart every session. A running session keeps the old roles text and hooks.
+6. Restart every session. For a tmux fleet that means, in each `<project>-<name>` session,
+   ending `claude` and running the launcher again, or `air fleet up` once the old sessions
+   have exited, since it leaves a running session alone. A session reads `.air/roles.md` from
+   the main checkout when it starts. A worktree is reused, not recreated, so a worker sees the
+   refreshed `air-*` skills only after `git merge main` in it. In an unpinned repo the restart
+   changes less than it looks: hooks, gates and commands have run the new binary since step 1,
+   and the restart replaces the roles text, the launcher's `--settings` and the `air mcp`
+   process. Four notices reach a session only when it is launched again:
+   `launch-no-startup-prompts` (the pre-answered start-up prompts and `--add-dir`),
+   `launch-caffeinate` (the `caffeinate -i` wrapper on a Mac), `coordinator-send-keys-allow`
+   (the coordinator's `tmux send-keys` allow rule) and `worker-run-record-allow` (a worker's
+   `air run` and `air record` allow rules).
 
-7. Grep the repo's Makefile, scripts and `CLAUDE.md` for `air ` and check each use against the
-   notices. Air cannot see what the repo built on top of it.
+7. Grep the repo for what it built on top of Air, which Air cannot see: `air ` in the Makefile,
+   scripts and `CLAUDE.md`, and in `docs/`, `.claude/skills/` and the root notes the phrases
+   of notices that changed meaning or were removed (`batch green`, `beads are ready`,
+   `closed-not-landed`, `handover-not-green`). Check each use against the notices.
+
+Two settings go with a fleet. Set `"verify_lane": true` in `.claude/air.json` when a lane
+runs: the gates infer a lane from a lane session row, but `.air/roles.md` tells a worker to
+pick its closing sequence by that key. Add `.claude/air.local.json` to `.gitignore` before
+giving any session a `targets` entry, since that file names machines.
 
 Between upgrades, `air doctor` and `air status` print one line when `.air/installed.json` lags
-the binary the hooks run.
+the binary the hooks run: `install record lags the binary: installed <v> / surface <n>,
+running <v> / surface <n>, <k> notice(s) unread; fix: air install --write`.
 
 After a Claude Code upgrade, `air worker <name> --print` shows the exact `claude` command line,
 which is the thing to check if a flag is rejected. After a bd upgrade, run `air doctor`.
