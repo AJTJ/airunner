@@ -3,7 +3,9 @@
 //! `bd ready --json`, through `crates/bd` so the per-process timeout and the JSON reading are
 //! the ones every command uses; never `bd serve`. The ledger's claims and landings are joined
 //! in, read-only. Every open bead lands in exactly one column, and `fetched_at` says how old
-//! the bd answer is.
+//! the bd answer is. bd's ready list and Air's claimable set differ by the epics and the
+//! owner-labelled beads, which `air claim` refuses to workers; those go to `not_claimable`,
+//! never to `ready` (air-o6x.8: the live-UI epic itself sat in the ready column).
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -27,8 +29,11 @@ pub struct Beads {
     pub at: String,
     /// When bd was last asked, or none before the first answer.
     pub fetched_at: Option<String>,
-    /// Claimable now.
+    /// Claimable now: bd's ready list minus the epics and the owner-labelled beads.
     pub ready: Vec<Bead>,
+    /// bd lists as ready, but no worker may claim: epics and owner-labelled beads
+    /// (`ready_cache::split`, the same rule `air claim` and the `ready:` line use).
+    pub not_claimable: Vec<Bead>,
     /// Held and not yet declared done.
     pub in_progress: Vec<Bead>,
     /// Declared done, waiting for the landing that carries the declared head.
@@ -119,6 +124,7 @@ fn empty(at: &str) -> Beads {
         at: at.to_string(),
         fetched_at: None,
         ready: Vec::new(),
+        not_claimable: Vec::new(),
         in_progress: Vec::new(),
         done_waiting: Vec::new(),
         closed_recent: Vec::new(),
@@ -175,9 +181,10 @@ fn fetched(repo: &Path, at: &str) -> Option<Fetched> {
 
 /// Pure: the columns from bd's answer and the ledger's rows. Every open bead goes to exactly
 /// one column, decided in this order: a claim declared done waits for its landing; an open
-/// claim or bd's `in_progress` is in progress; bd's ready list is ready; everything else open
-/// is blocked, with the open `blocks` edges bd listed. A closed bead is recent when bd
-/// updated it in the last 24 hours before `at`.
+/// claim or bd's `in_progress` is in progress; bd's ready list is ready, except an epic or an
+/// owner-labelled bead, which is not claimable; everything else open is blocked, with the
+/// open `blocks` edges bd listed. A closed bead is recent when bd updated it in the last 24
+/// hours before `at`.
 pub fn join(
     f: &Fetched,
     claims: &[air_ledger::claims::Claim],
@@ -191,6 +198,13 @@ pub fn join(
         .filter(|i| i.status == "closed")
         .map(|i| i.id.as_str())
         .collect();
+    let ready_issues: Vec<Issue> = f
+        .issues
+        .iter()
+        .filter(|i| f.ready.contains(&i.id))
+        .cloned()
+        .collect();
+    let split = crate::cmd::ready_cache::split(&ready_issues);
     let mut out = empty(at);
     out.fetched_at = Some(f.at.clone());
     for i in &f.issues {
@@ -238,8 +252,10 @@ pub fn join(
             out.done_waiting.push(bead);
         } else if bead.claim.is_some() || i.status == "in_progress" {
             out.in_progress.push(bead);
-        } else if f.ready.contains(&i.id) {
+        } else if split.claimable.contains(&i.id) {
             out.ready.push(bead);
+        } else if split.epics.contains(&i.id) || split.owner.contains(&i.id) {
+            out.not_claimable.push(bead);
         } else {
             out.blocked.push(bead);
         }
@@ -291,7 +307,9 @@ mod tests {
     }
 
     /// Six beads, one per column plus one open bead offered by nothing, each in exactly one
-    /// column; the closed one carries its landing and the blocked one its open blocker.
+    /// column; the closed one carries its landing and the blocked one its open blocker. bd's
+    /// ready list also names an epic and an owner-labelled bead (air-o6x.8): neither is
+    /// ready, both are not claimable.
     #[test]
     fn every_open_bead_lands_in_exactly_one_column() {
         let at = "2026-11-10T12:00:00Z";
@@ -313,6 +331,10 @@ mod tests {
                 dependency_type: "parent-child".into(),
             },
         ];
+        let mut epic = issue("zz-8", "open", "2026-11-10T01:00:00Z");
+        epic.issue_type = "epic".into();
+        let mut owner = issue("zz-9", "open", "2026-11-10T01:00:00Z");
+        owner.labels = vec![crate::cmd::claim::OWNER_LABEL.into()];
         let f = Fetched {
             at: at.into(),
             issues: vec![
@@ -323,8 +345,10 @@ mod tests {
                 blocked,
                 issue("zz-6", "open", "2026-11-10T01:00:00Z"),
                 issue("zz-7", "closed", "2026-11-01T00:00:00Z"),
+                epic,
+                owner,
             ],
-            ready: vec!["zz-1".into()],
+            ready: vec!["zz-1".into(), "zz-8".into(), "zz-9".into()],
         };
         let claims = vec![
             claim("zz-2", "worker-1", None),
@@ -350,7 +374,12 @@ mod tests {
         }];
         let b = join(&f, &claims, &landings, at);
         let ids = |v: &[Bead]| v.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
-        assert_eq!(ids(&b.ready), vec!["zz-1"]);
+        assert_eq!(
+            ids(&b.ready),
+            vec!["zz-1"],
+            "the epic and the owner bead are not ready"
+        );
+        assert_eq!(ids(&b.not_claimable), vec!["zz-8", "zz-9"]);
         assert_eq!(ids(&b.in_progress), vec!["zz-2"]);
         assert_eq!(ids(&b.done_waiting), vec!["zz-3"]);
         assert_eq!(
@@ -369,8 +398,12 @@ mod tests {
         assert_eq!(b.in_progress[0].claim.as_ref().unwrap().worker, "worker-1");
         assert_eq!(b.closed_recent[0].landed.as_ref().unwrap().sha, "mmmm");
         assert_eq!(b.fetched_at.as_deref(), Some(at));
-        let total = b.ready.len() + b.in_progress.len() + b.done_waiting.len() + b.blocked.len();
-        assert_eq!(total, 5, "every open bead once");
+        let total = b.ready.len()
+            + b.not_claimable.len()
+            + b.in_progress.len()
+            + b.done_waiting.len()
+            + b.blocked.len();
+        assert_eq!(total, 7, "every open bead once");
     }
 
     /// A ledger beside no `.beads/` asks bd nothing and answers the empty shape.

@@ -232,6 +232,14 @@ not idle-sleep under an hour-long command and may once the session ends. `AIR_CA
 names another binary, and an empty value turns the wrapper off. `air status` prints the
 idle-sleep setting when `pmset -g` reports under ten minutes (air-1ye).
 
+## Watching the fleet in a browser
+
+`air ui [--port N]` serves a read-only page of the fleet on 127.0.0.1, port 7311 by default
+(`--port 0` takes a free one), and prints the URL once. It reads the ledger read-only, asks
+`bd` at most twice every 30 seconds, and writes nothing, so it changes nothing the fleet does.
+It shows each session's transcript text and pane as they are, so it is for the owner's own
+machine, not a page to expose. Ctrl-C stops it.
+
 ## Upgrading an existing installation
 
 Air changes under a repo that already has it, so each release carries notices in
