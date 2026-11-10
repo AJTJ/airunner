@@ -1,13 +1,15 @@
 //! `/api/fleet`: one card per session, from four sources, each named (air-o6x.1, air-o6x.2):
 //! the ledger's `sessions` and `claims` rows; git for the worktree head; Claude Code's own
 //! session file (`~/.claude/sessions/<pid>.json`) for busy, idle or waiting; the transcript's
-//! last 64 KiB for the call in flight, the last text and the context size; and the tmux pane
+//! tail, read in steps up to 1 MiB until it holds an assistant record (air-o6x.7), for the
+//! call in flight, the last text and the context size; and the tmux pane
 //! for its last lines. A source that is missing or unreadable leaves its fields null and the
 //! card at the ledger's facts. Nothing here errors and nothing is written.
 //!
 //! Cost per poll: one `ps` for every session's pid at once, one `git rev-parse` per worktree
-//! at most every ten seconds (a process-wide cache), one `stat` and a 64 KiB read per
-//! transcript, one `tmux capture-pane` per pane. The research measured the tail read at
+//! at most every ten seconds (a process-wide cache), one `stat` and one to three reads (64 KiB,
+//! 256 KiB, 1 MiB) per transcript, one `tmux capture-pane` per pane. The research measured the
+//! 64 KiB tail read at
 //! 0.03 ms and the capture at 8.8 ms (`docs/research/live-ui.md` §2b, §3). The command text
 //! comes from the transcript because Air's own hook lines carry only the tool's name.
 
@@ -20,8 +22,17 @@ use std::time::{Duration, Instant};
 use air_ledger::Ledger;
 use serde::Serialize;
 
-/// How much of a transcript is read per poll: the tail that holds the newest records.
+/// How much of a transcript is read per poll: the tail that holds the newest records. The
+/// first step; [`TAIL_STEPS`] has the rest.
 pub const TAIL_BYTES: u64 = 64 * 1024;
+/// The tail sizes tried in turn until the tail holds an assistant record (air-o6x.7). Claude
+/// Code writes several non-message records per turn (api-request, attachment, last-prompt,
+/// mode, system), and an api-request record can carry the whole request, so on 2026-11-10 the
+/// coordinator's last 64 KiB held 33 such lines and no assistant record while a 256 KiB tail
+/// held twelve tool calls; every card showed no current tool. The hook's `model_of` made the
+/// same mistake from the other end (air-06k7). Capped at 1 MiB: a transcript with no assistant
+/// record in that much yields nulls, as before.
+pub const TAIL_STEPS: [u64; 3] = [TAIL_BYTES, 256 * 1024, 1024 * 1024];
 /// How long a worktree head is trusted before git is asked again.
 const HEAD_TTL: Duration = Duration::from_secs(10);
 /// The longest `detail` line a card carries.
@@ -193,7 +204,7 @@ fn card(
     if let Some(text) = r
         .transcript
         .as_deref()
-        .and_then(|p| tail(Path::new(p), TAIL_BYTES))
+        .and_then(|p| transcript_tail(Path::new(p)))
     {
         let f = transcript_facts(&text);
         s.current_tool = f.current_tool;
@@ -359,10 +370,17 @@ pub fn session_file_facts(text: &str) -> Option<HarnessFacts> {
 }
 
 /// The last `max` bytes of a file as text, starting at the first whole line when the read
-/// began mid-file. None when the file cannot be read.
+/// began mid-file. None when the file cannot be read. The card reads through
+/// [`transcript_tail`]; this one-step read is the tests' fixture.
+#[cfg(test)]
 pub fn tail(path: &Path, max: u64) -> Option<String> {
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
+    tail_of(&mut f, len, max)
+}
+
+/// The last `max` of `len` bytes of an open file, as [`tail`] cuts them.
+fn tail_of(f: &mut std::fs::File, len: u64, max: u64) -> Option<String> {
     let start = len.saturating_sub(max);
     f.seek(SeekFrom::Start(start)).ok()?;
     let mut buf = Vec::new();
@@ -378,6 +396,31 @@ pub fn tail(path: &Path, max: u64) -> Option<String> {
         };
     }
     Some(text)
+}
+
+/// Whether a tail holds an assistant record, by the same cheap test `transcript_facts` uses
+/// before it parses a line.
+pub fn holds_assistant(text: &str) -> bool {
+    text.contains("\"type\":\"assistant\"")
+}
+
+/// The transcript's tail for the card (air-o6x.7): each size in [`TAIL_STEPS`] in turn, one
+/// stat and at most three reads, stopping at the first tail that holds an assistant record or
+/// reaches the start of the file. The last step's tail is returned whatever it holds. None
+/// when the file cannot be read.
+pub fn transcript_tail(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut last = None;
+    for step in TAIL_STEPS {
+        let text = tail_of(&mut f, len, step)?;
+        let whole = step >= len;
+        if holds_assistant(&text) || whole {
+            return Some(text);
+        }
+        last = Some(text);
+    }
+    last
 }
 
 /// Pure over a transcript tail: the newest `tool_use` with no `tool_result` for its id is the
@@ -608,6 +651,60 @@ mod tests {
         assert!(!alive.contains(&34), "a reused pid is dead");
         assert!(!alive.contains(&56), "not listed");
         assert!(alive_from_ps("", &pids).is_empty());
+    }
+
+    /// air-o6x.7: a tool call without its result sits before 100 KiB of non-assistant records.
+    /// The 64 KiB tail holds no assistant record, so the read grows and the card names the call;
+    /// a small file is read once, and a file with no assistant record in 1 MiB yields nulls.
+    #[test]
+    fn the_tail_grows_past_non_assistant_records_until_it_holds_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("t.jsonl");
+        let call = assistant(
+            "2026-11-10T01:00:00Z",
+            r#"{"type":"tool_use","id":"A","name":"Bash","input":{"command":"python3 -c 'import time; time.sleep(12)'"}}"#,
+            r#"{"input_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}"#,
+        );
+        let filler = format!(
+            r#"{{"type":"api-request","timestamp":"t","data":"{}"}}"#,
+            "x".repeat(1000)
+        );
+        let mut text = format!("{call}\n");
+        for _ in 0..105 {
+            text.push_str(&filler);
+            text.push('\n');
+        }
+        std::fs::write(&p, &text).unwrap();
+        assert!(text.len() > 100 * 1024);
+        let short = tail(&p, TAIL_BYTES).unwrap();
+        assert!(
+            !holds_assistant(&short),
+            "the first step alone misses the call"
+        );
+        let grown = transcript_tail(&p).unwrap();
+        assert!(holds_assistant(&grown));
+        let f = transcript_facts(&grown);
+        let t = f.current_tool.unwrap();
+        assert_eq!(t.name, "Bash");
+        assert_eq!(
+            t.detail.as_deref(),
+            Some("python3 -c 'import time; time.sleep(12)'")
+        );
+        assert_eq!(f.context_tokens, Some(4));
+        // A small file comes back whole on the first step.
+        let small = tmp.path().join("s.jsonl");
+        std::fs::write(&small, format!("{call}\n")).unwrap();
+        assert_eq!(
+            transcript_tail(&small).as_deref(),
+            Some(format!("{call}\n").as_str())
+        );
+        // No assistant record at all: the whole file, and nulls from it.
+        let none = tmp.path().join("n.jsonl");
+        std::fs::write(&none, &text[call.len() + 1..]).unwrap();
+        let got = transcript_tail(&none).unwrap();
+        assert!(!holds_assistant(&got));
+        assert_eq!(transcript_facts(&got), TranscriptFacts::default());
+        assert_eq!(transcript_tail(&tmp.path().join("missing")), None);
     }
 
     #[test]
