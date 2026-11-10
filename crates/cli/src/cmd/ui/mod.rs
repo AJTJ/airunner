@@ -415,6 +415,7 @@ mod tests {
                 "at",
                 "fetched_at",
                 "ready",
+                "not_claimable",
                 "in_progress",
                 "done_waiting",
                 "closed_recent",
