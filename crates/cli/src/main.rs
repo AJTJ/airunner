@@ -375,6 +375,14 @@ enum Cmd {
     },
     /// MCP server over stdio: the coordinator's channel (push) plus tools and resources.
     Mcp,
+    /// A read-only view of the fleet for a browser, on 127.0.0.1 only (air-o6x.1). It opens
+    /// the ledger read-only, writes nothing, and runs from `/` so it is no worktree's reader.
+    /// Prints the URL once; Ctrl-C stops it.
+    Ui {
+        /// The port on 127.0.0.1; 7311 by default, 0 takes a free one.
+        #[arg(long, default_value_t = cmd::ui::DEFAULT_PORT)]
+        port: u16,
+    },
     /// Give a project everything Air needs: gate on bd/claude, git init, bd init, .gitignore,
     /// .claude/air.json (deny patterns from a scan), hooks, MCP, roles, skills, and the
     /// empty-but-ready scaffold (a failing Makefile verify target, .worktreeinclude, and a
@@ -759,6 +767,7 @@ fn main() -> ExitCode {
         } => cmd::land::run(&repo, &bead, &worker, all, despite_inflight, cli.json),
         Cmd::Status { attention } => cmd::status::run(&repo, attention, cli.json),
         Cmd::Mcp => cmd::mcp::run(&repo),
+        Cmd::Ui { port } => cmd::ui::run(&repo, port, cli.json),
         Cmd::Init { prefix, write } => cmd::init::run(&repo, prefix.as_deref(), write, cli.json),
         Cmd::Install {
             write,
