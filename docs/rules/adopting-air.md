@@ -300,7 +300,7 @@ there is the commit and the restart.
 
 7. Grep the repo for what it built on top of Air, which Air cannot see: `air ` in the Makefile,
    scripts and `CLAUDE.md`, and in `docs/`, `.claude/skills/` and the root notes the phrases
-   of notices that changed meaning or went away (`batch green`, `beads are ready`,
+   of notices that changed meaning or were removed (`batch green`, `beads are ready`,
    `closed-not-landed`, `handover-not-green`). Check each use against the notices.
 
 Two settings go with a fleet. Set `"verify_lane": true` in `.claude/air.json` when a lane
